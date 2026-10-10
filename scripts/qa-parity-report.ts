@@ -1,4 +1,3 @@
-// Qa Parity Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 
 type Options = Parameters<

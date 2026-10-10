@@ -5,11 +5,9 @@ import { pathToFileURL } from "node:url";
 import { transformSync } from "esbuild";
 import { resolve as resolvePackageImport } from "import-meta-resolve";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { readNativeTypeScriptConfig } from "./native-typescript-config.mts";
-import {
-  createNativeTypeScriptParser,
-  createNativeTypeScriptProject,
-} from "./native-typescript.mts";
+import { createNativeTypeScriptProject } from "./native-typescript.mts";
 import { visitModuleSpecifiers } from "./ts-guard-utils.mts";
 
 const sourceFilePattern = /\.[cm]?[jt]sx?$/;
@@ -123,7 +121,7 @@ export function createRuntimeImportGraph(
       verbatimModuleSyntax: options.verbatimModuleSyntax,
     },
   });
-  const parser = createNativeTypeScriptParser({ cwd: root });
+  const parser = new API({ cwd: root });
   const references = new Map<string, ImportReference[]>();
   const isDeclaration = (file: string) => /\.d\.[cm]?ts$/.test(file);
   let session;
@@ -169,7 +167,7 @@ export function createRuntimeImportGraph(
                 target: "esnext",
                 tsconfigRaw: transformConfig,
               }).code;
-          const source = parser.parseSourceFile(file, sourceText);
+          const source = parser.createSourceFile(file, sourceText);
           const selected: ImportReference[] = [];
           visitModuleSpecifiers(
             source,

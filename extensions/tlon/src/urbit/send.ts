@@ -3,14 +3,11 @@ import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { UrbitSSEClient } from "./sse-client.js";
 import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
-type TlonPokeApi = {
-  poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
-};
-
 type SendStoryParams = {
-  api: TlonPokeApi;
+  api: { poke: (...args: Parameters<UrbitSSEClient["poke"]>) => Promise<unknown> };
   fromShip: string;
   toShip: string;
   story: Story;
@@ -83,14 +80,10 @@ export async function sendDmWithStory({
   };
 }
 
-type SendGroupStoryParams = {
-  api: TlonPokeApi;
-  fromShip: string;
+type SendGroupStoryParams = Omit<SendStoryParams, "toShip"> & {
   hostShip: string;
   channelName: string;
-  story: Story;
   replyToId?: string | null;
-  kind?: MessageReceiptPartKind;
 };
 
 export async function sendGroupMessage({
@@ -121,38 +114,15 @@ export async function sendGroupMessageWithStory({
     }
   }
 
+  const memo = { content: story, author: fromShip, sent: sentAt };
   const action = {
     channel: {
       nest: `chat/${hostShip}/${channelName}`,
-      action: formattedReplyId
-        ? {
-            // Thread reply - needs post wrapper around reply action
-            // ReplyActionAdd takes Memo: {content, author, sent} - no kind/blob/meta
-            post: {
-              reply: {
-                id: formattedReplyId,
-                action: {
-                  add: {
-                    content: story,
-                    author: fromShip,
-                    sent: sentAt,
-                  },
-                },
-              },
-            },
-          }
-        : {
-            post: {
-              add: {
-                content: story,
-                author: fromShip,
-                sent: sentAt,
-                kind: "/chat",
-                blob: null,
-                meta: null,
-              },
-            },
-          },
+      action: {
+        post: formattedReplyId
+          ? { reply: { id: formattedReplyId, action: { add: memo } } }
+          : { add: { ...memo, kind: "/chat", blob: null, meta: null } },
+      },
     },
   };
 

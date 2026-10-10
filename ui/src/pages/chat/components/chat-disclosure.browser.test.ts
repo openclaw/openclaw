@@ -126,7 +126,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
       draw();
       const button = container.querySelector<HTMLButtonElement>(".chat-inline-disclosure")!;
       const label = (button.querySelector<HTMLElement>(
-        ".chat-activity-group__label, .chat-tool-msg-summary__label",
+        ".chat-activity-group__label, .chat-tool-msg-summary__label, .chat-tool-msg-summary__names",
       ) ?? button.querySelector<HTMLElement>("span"))!;
       expect(button.getAttribute("aria-expanded")).toBe("false");
       // Real pointer events exercise browser word selection before the second click.

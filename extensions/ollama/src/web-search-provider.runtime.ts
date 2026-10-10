@@ -61,12 +61,8 @@ type OllamaWebSearchAttempt = {
 };
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
-  try {
-    const parsed = new URL(baseUrl);
-    return parsed.protocol === "https:" && parsed.hostname === "ollama.com";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(baseUrl);
+  return parsed?.protocol === "https:" && parsed.hostname === "ollama.com";
 }
 
 function normalizeOllamaWebSearchApiKey(value: unknown): string | undefined {
@@ -251,8 +247,7 @@ async function runOllamaWebSearch(params: {
       params.signal?.throwIfAborted();
       break;
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      throw lastError;
+      throw error instanceof Error ? error : new Error(String(error));
     } finally {
       // The 401/403 branches throw before the stream is touched, leaving release
       // to force-close the active dispatcher. Start cancellation first; awaiting
@@ -341,7 +336,7 @@ export function createOllamaWebSearchProvider(): Pick<
   "runSetup" | "createTool"
 > {
   return {
-    runSetup: async (ctx) => await warnOllamaWebSearchPrereqs(ctx),
+    runSetup: warnOllamaWebSearchPrereqs,
     createTool: (ctx) => ({
       description: OLLAMA_WEB_SEARCH_TOOL_DESCRIPTION,
       parameters: OLLAMA_WEB_SEARCH_TOOL_PARAMETERS,

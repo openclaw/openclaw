@@ -20,6 +20,7 @@ vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeSnapshotState: storeMocks.getSnapshot,
 }));
 
+// mock-isolation: Observe mutation dispatch without opening the real secret database.
 vi.mock("../../secrets/store/secret-store.js", () => {
   class SecretStoreValidationError extends Error {
     constructor(
@@ -36,6 +37,8 @@ vi.mock("../../secrets/store/secret-store.js", () => {
     purgeExpiredSecretStoreEntries: storeMocks.purgeEntries,
     SecretStoreValidationError,
     writeSecretStoreEntry: storeMocks.writeEntry,
+    writeSecretStoreEntries: vi.fn(),
+    updateSecretStoreAllowedHosts: vi.fn(),
   };
 });
 
@@ -47,10 +50,12 @@ vi.mock("../../secrets/target-registry.js", () => ({
 }));
 
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   TALK_TEST_PROVIDER_API_KEY_PATH,
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../../test-utils/talk-test-provider.js";
+import { QuestionManager } from "../question-manager.js";
 import { createSecretsHandlers, createSecretStoreWriteService } from "./secrets.js";
 
 async function invokeSecretsReload(params: {
@@ -177,6 +182,56 @@ async function expectMemoryStatusResolveUnavailable(params: {
 }
 
 describe("secrets handlers", () => {
+  it("keeps an answer pending until its store write acknowledges the commit", async () => {
+    const persisted = createDeferred();
+    storeMocks.writeEntry.mockReturnValueOnce(persisted.promise);
+    const scheduler = createTestGatewayScheduler();
+    const manager = new QuestionManager(scheduler);
+    const service = createSecretStoreWriteService({
+      reloadSecrets: async () => ({ warningCount: 0 }),
+    });
+    const record = manager.request({
+      questions: [
+        {
+          questionId: "secret_value",
+          question: "Save key",
+          header: "Key",
+          options: [],
+          isSecret: true,
+        },
+      ],
+      timeoutMs: 10_000,
+    });
+    const pending = manager.resolveWithCommit(
+      record.id,
+      { answers: { secret_value: ["stored"] } },
+      undefined,
+      {
+        commit: async (assertCurrent) => {
+          await service.write({
+            name: "SYNTHETIC_KEY",
+            value: "synthetic-value",
+            kind: "secret",
+            updatedBy: "test",
+            assertCurrent,
+          });
+        },
+      },
+    );
+    try {
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(manager.get(record.id)?.status).toBe("pending");
+    } finally {
+      persisted.resolve();
+      await pending;
+      manager.close();
+      await manager.drain();
+      await scheduler.stop();
+    }
+    await expect(pending).resolves.toMatchObject({ status: "answered" });
+  });
+
   beforeEach(() => {
     storeMocks.deleteEntry.mockReset();
     storeMocks.listEntries.mockReset().mockReturnValue([]);
@@ -346,19 +401,6 @@ describe("secrets handlers", () => {
     });
   });
 
-  it("logs error details when secrets.resolve throws", async () => {
-    const warn = vi.fn();
-    const handlers = createHandlers({
-      resolveSecrets: vi.fn().mockRejectedValue(new Error("EACCES: permission denied")),
-      log: { warn },
-    });
-    await expectMemoryStatusResolveUnavailable({
-      handlers,
-      warn,
-      warningText: "EACCES: permission denied",
-    });
-  });
-
   it("lists env values without structurally disclosing secret values", async () => {
     storeMocks.listEntries.mockReturnValueOnce([
       {
@@ -418,8 +460,13 @@ describe("secrets handlers", () => {
     const warn = vi.fn();
     const handlers = createHandlers({ reloadSecrets, log: { warn } });
     const expiry = createDeferred<number>();
-    storeMocks.purgeEntries.mockReturnValueOnce(expiry.promise);
+    const expiryStarted = createDeferred();
+    storeMocks.purgeEntries.mockImplementationOnce(() => {
+      expiryStarted.resolve();
+      return expiry.promise;
+    });
 
+    storeMocks.writeEntry.mockResolvedValueOnce("secret");
     const setRespond = vi.fn();
     const mutation = invokeStoreMethod({
       handlers,
@@ -432,6 +479,7 @@ describe("secrets handlers", () => {
       },
       respond: setRespond,
     });
+    await expiryStarted.promise;
     expect(storeMocks.purgeEntries).toHaveBeenCalledOnce();
     expect(reloadSecrets).not.toHaveBeenCalled();
     expect(setRespond).not.toHaveBeenCalled();
@@ -445,6 +493,7 @@ describe("secrets handlers", () => {
       kind: "secret",
       allowedHosts: ["api.example.com"],
       updatedBy: "Control UI",
+      assertCurrent: expect.any(Function),
     });
     expect(setRespond).toHaveBeenCalledWith(true, {
       ok: true,

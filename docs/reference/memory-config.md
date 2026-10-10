@@ -118,6 +118,13 @@ automatically re-embedding everything. Rebuild when you are ready with
 `openclaw memory index --force --agent <id>`.
 </Warning>
 
+If an outage activates a fallback that cannot read the existing index, later
+searches retry the configured primary, with a 30-second cooldown between recovery
+attempts. Once the primary responds and matches the stored provider, model, and
+provider settings, search resumes without restarting the Gateway or rebuilding
+the index. An index already built with the fallback stays on that compatible
+provider; recovery never silently replaces its embeddings.
+
 When `provider` is unset, legacy `provider: "auto"` is present, or
 `provider: "none"` intentionally selects FTS-only mode, memory recall can still
 use lexical FTS ranking when embeddings are unavailable.
@@ -157,7 +164,7 @@ provider/auth configuration, switch to a reachable provider, or set
 
 ### API key resolution
 
-Remote embeddings require an API key. Bedrock uses the AWS SDK default credential chain instead (instance roles, SSO, access keys, or a Bedrock API key).
+Remote embedding authentication depends on the provider. Bedrock uses the AWS SDK default credential chain (instance roles, SSO, access keys, or a Bedrock API key).
 
 | Provider       | Env var                                             | Config key                          |
 | -------------- | --------------------------------------------------- | ----------------------------------- |
@@ -176,7 +183,9 @@ such as `my-embeddings:default`. Literal keys keep their configured value even
 when other profiles are saved for the provider. Empty keys do not select a saved profile.
 
 <Note>
-Codex OAuth covers chat/completions only and does not satisfy embedding requests.
+OpenAI embeddings can use a stored Codex OAuth profile when the account grants
+embedding access. The separate Sign in with ChatGPT token-sharing grant does not
+authorize embeddings. Run `openclaw memory status --deep` to check your account.
 </Note>
 
 ---
@@ -532,11 +541,18 @@ Index session transcripts and surface them via `memory_search`:
 | Key                           | Type       | Default                                                    | Description                              |
 | ----------------------------- | ---------- | ---------------------------------------------------------- | ---------------------------------------- |
 | `rememberAcrossConversations` | `boolean`  | On for personal installs; off with configured DM isolation | Permit private cross-conversation recall |
-| `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to include transcripts  |
+| `sources`                     | `string[]` | `["memory"]`                                               | Add `"sessions"` to request transcripts  |
 
 <Warning>
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Active transcripts live in the agent's SQLite database, while retained transcript artifacts can live on disk. Treat access to both as part of the same trust boundary.
 </Warning>
+
+Requesting `"sessions"` in `sources` does not enable transcript indexing by
+itself. Set `memory.search.experimental.sessionMemory: true` to index sessions,
+or enable `memory.search.rememberAcrossConversations` for private
+cross-conversation recall. `openclaw memory status` and `openclaw doctor` report
+when an explicit `"sessions"` source is excluded by this gate.
+This informational Doctor note does not fail `openclaw doctor --lint`.
 
 Internal dreaming-narrative, cron, and heartbeat session transcripts are not
 indexed, including retained compressed narrative archives whose live session

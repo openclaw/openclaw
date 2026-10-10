@@ -156,10 +156,15 @@ async function openMemoryTable(params: {
   const lancedb = await import("@lancedb/lancedb");
   const storageOptions = resolveStorageOptions(params.config, params.env);
   const connection = await lancedb.connect(dbPath, storageOptions ? { storageOptions } : {});
-  const table = (await connection.tableNames()).includes(MEMORY_TABLE_NAME)
-    ? await connection.openTable(MEMORY_TABLE_NAME)
-    : null;
-  return { connection, table, dbPath };
+  try {
+    const table = (await connection.tableNames()).includes(MEMORY_TABLE_NAME)
+      ? await connection.openTable(MEMORY_TABLE_NAME)
+      : null;
+    return { connection, table, dbPath };
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
 }
 
 type StateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];

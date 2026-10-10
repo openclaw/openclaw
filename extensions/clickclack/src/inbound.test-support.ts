@@ -18,12 +18,9 @@ import type {
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
   const runtime = createPluginRuntimeMock({
     agent: {
-      runEmbeddedAgent: vi.fn().mockResolvedValue({
-        payloads: [{ text: "service bot online" }],
-        meta: {},
-      }),
       session: {
         getSessionEntry: vi.fn(() => ({ sessionId: "session-id", updatedAt: 1 })),
+        getSessionEntryAsync: vi.fn(async () => ({ sessionId: "session-id", updatedAt: 1 })),
       },
     },
     channel: {
@@ -91,14 +88,7 @@ export function createInboundMessage(
     body: "/fast on",
     body_format: "markdown",
     created_at: "2026-05-09T12:00:00.000Z",
-    author: {
-      id: "usr_owner",
-      kind: "human",
-      display_name: "Peter",
-      handle: "steipete",
-      avatar_url: "",
-      created_at: "2026-05-09T12:00:00.000Z",
-    },
+    author: createInboundAuthor(),
     ...overrides,
   };
 }

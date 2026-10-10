@@ -4,11 +4,14 @@
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyRuntimeMethod } from "../shared/lazy-runtime.js";
-import { buildMcpOAuthHttpFetch, withoutMcpAuthorizationHeader } from "./mcp-http-fetch.js";
-import type { McpOAuthConfig } from "./mcp-oauth.js";
+import {
+  buildMcpOAuthAuthorizationFetch,
+  withoutMcpAuthorizationHeader,
+} from "./mcp-http-fetch.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 type McpAuthProfileOptions = {
@@ -21,10 +24,7 @@ export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined 
   if (!isRecord(rawServer) || rawServer.auth !== "oauth" || !isRecord(rawServer.oauth)) {
     return undefined;
   }
-  const authProfileId = rawServer.oauth.authProfileId;
-  return typeof authProfileId === "string" && authProfileId.trim().length > 0
-    ? authProfileId.trim()
-    : undefined;
+  return normalizeOptionalString(rawServer.oauth.authProfileId);
 }
 
 /** Returns whether a server needs an OpenClaw-managed bearer projected externally. */
@@ -67,20 +67,10 @@ async function resolveMcpBearerToken(params: {
     import("./mcp-oauth-identity.js"),
     import("./mcp-oauth.js"),
   ]);
-  const fetchFn = buildMcpOAuthHttpFetch({
-    sslVerify: resolved.sslVerify,
-    clientCert: resolved.clientCert,
-    clientKey: resolved.clientKey,
-    resourceUrl: resolved.url,
-    // External bearer projection performs only OAuth discovery/token work,
-    // so the configured deadline can own the full short-lived response.
-    timeoutMs: resolved.requestTimeoutMs,
-    headers: resolved.headers,
-  });
   return await resolveMcpOAuthAccessToken({
     identity: operatorMcpOAuthIdentity(params.serverName, resolved.url),
-    config: resolved.oauth as McpOAuthConfig | undefined,
-    fetchFn,
+    config: resolved.oauth,
+    fetchFn: buildMcpOAuthAuthorizationFetch(resolved),
   });
 }
 
@@ -120,13 +110,6 @@ export function withMcpAuthProfileBearer(
 function buildTokenEnvVarName(serverName: string): string {
   const hash = crypto.createHash("sha256").update(serverName).digest("hex").slice(0, 12);
   return `OPENCLAW_MCP_AUTH_${hash.toUpperCase()}_TOKEN`;
-}
-
-function stripOpenClawOnlyOAuthConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
-  const next = { ...server };
-  delete next.auth;
-  delete next.oauth;
-  return next;
 }
 
 /** Resolves OAuth-backed MCP servers into bearer headers for external runtimes. */
@@ -177,13 +160,14 @@ export async function resolveMcpBearerBundleConfig(
     }
     const headers = withoutMcpAuthorizationHeader(filterStringRecord(server.headers));
     nextServers ??= { ...params.config.mcpServers };
-    nextServers[serverName] = stripOpenClawOnlyOAuthConfig({
-      ...server,
+    const { auth: _auth, oauth: _oauth, ...externalServer } = server;
+    nextServers[serverName] = {
+      ...externalServer,
       headers: {
         ...headers,
         Authorization: authorization,
       },
-    });
+    };
   }
 
   return {

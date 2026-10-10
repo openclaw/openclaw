@@ -186,38 +186,6 @@ export async function withSessionRepositoryCheckpoint<T>(
   });
 }
 
-async function stagePublication(params: {
-  root: string;
-  assertCurrent: () => void;
-  candidateRef: string;
-  publicationStagingRoot: string;
-  publicationDigest: string;
-  currentManifestRef: string;
-  baseCommit: string;
-}) {
-  params.assertCurrent();
-  const { raw: metadata, snapshot } = await readGitHubRepositoryPublicationMetadata(
-    params.publicationStagingRoot,
-    params.publicationDigest,
-  );
-  if (snapshot.baseCommit !== params.baseCommit) {
-    throw new Error("Repository publication checkpoint base changed");
-  }
-  params.assertCurrent();
-  return await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-    assertCurrent: params.assertCurrent,
-    root: params.root,
-    stagingRoot: params.publicationStagingRoot,
-    stagedResultRef: params.candidateRef,
-    publication: {
-      metadata,
-      publicationDigest: params.publicationDigest,
-      currentManifestRef: params.currentManifestRef,
-      baseCommit: params.baseCommit,
-    },
-  });
-}
-
 export async function recoverSessionRepositoryCheckpoint(
   params: CheckpointOwner & {
     checkpointRef: string;
@@ -322,14 +290,27 @@ export async function stageSessionRepositoryCheckpoint(
         if (!params.publicationStagingRoot || !params.publicationDigest) {
           throw new Error("Repository publication checkpoint is incomplete");
         }
-        companionId = await stagePublication({
+        const { publicationStagingRoot, publicationDigest, currentManifestRef } = params;
+        assertRevision();
+        const { raw: metadata, snapshot } = await readGitHubRepositoryPublicationMetadata(
+          publicationStagingRoot,
+          publicationDigest,
+        );
+        if (snapshot.baseCommit !== baseCommit) {
+          throw new Error("Repository publication checkpoint base changed");
+        }
+        assertRevision();
+        companionId = await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
           root,
           assertCurrent: assertRevision,
-          candidateRef: companionCandidate,
-          publicationStagingRoot: params.publicationStagingRoot,
-          publicationDigest: params.publicationDigest,
-          currentManifestRef: params.currentManifestRef,
-          baseCommit,
+          stagedResultRef: companionCandidate,
+          stagingRoot: publicationStagingRoot,
+          publication: {
+            metadata,
+            publicationDigest,
+            currentManifestRef,
+            baseCommit,
+          },
         });
       } catch (error) {
         // A rejected publication payload cannot discard independently validated

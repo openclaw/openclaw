@@ -137,21 +137,26 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     params.logger.warn(`${params.logScope} ${label} failed: ${formatErrorMessage(error)}`);
     signalFatal();
   };
-  const attachOutputProcessHandlers = (proc: BridgeProcess) => {
-    proc.on("error", (error) => {
-      if (proc === outputProcess) {
-        fail("audio output command")(error);
-      }
-    });
-    proc.stdin?.on?.("error", (error: Error) => {
-      if (proc === outputProcess) {
-        fail("audio output command")(error);
-      }
-    });
+  const attachAudioProcessHandlers = (proc: BridgeProcess, role: "input" | "output") => {
+    const isCurrent = () => role === "input" || proc === outputProcess;
+    const onError =
+      (suffix = "") =>
+      (error: Error) => {
+        if (isCurrent()) {
+          fail(`audio ${role} command${suffix}`)(error);
+        }
+      };
+    proc.on("error", onError());
+    if (role === "output") {
+      proc.stdin?.on?.("error", onError());
+    } else {
+      proc.stdout?.on("error", onError(" stdout"));
+    }
+    proc.stderr?.on("error", onError(" stderr"));
     proc.on("exit", (code, signal) => {
-      if (proc === outputProcess && !stopped) {
+      if (isCurrent() && !stopped) {
         params.logger.warn(
-          `${params.logScope} audio output command exited (${code ?? signal ?? "done"})`,
+          `${params.logScope} audio ${role} command exited (${code ?? signal ?? "done"})`,
         );
         signalFatal();
       }
@@ -159,12 +164,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     attachStderrLineLogger({
       stderr: proc.stderr,
       logger: params.logger,
-      prefix: `${params.logScope} audio output`,
-    });
-    proc.stderr?.on("error", (error: Error) => {
-      if (proc === outputProcess) {
-        fail("audio output command stderr")(error);
-      }
+      prefix: `${params.logScope} audio ${role}`,
     });
   };
   const releaseOutputWriteWaiters = (proc?: BridgeProcess) => {
@@ -194,23 +194,8 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
     })();
     return stopPromise;
   };
-  attachOutputProcessHandlers(outputProcess);
-  inputProcess.on("error", fail("audio input command"));
-  inputProcess.on("exit", (code, signal) => {
-    if (!stopped) {
-      params.logger.warn(
-        `${params.logScope} audio input command exited (${code ?? signal ?? "done"})`,
-      );
-      signalFatal();
-    }
-  });
-  attachStderrLineLogger({
-    stderr: inputProcess.stderr,
-    logger: params.logger,
-    prefix: `${params.logScope} audio input`,
-  });
-  inputProcess.stdout?.on("error", fail("audio input command stdout"));
-  inputProcess.stderr?.on("error", fail("audio input command stderr"));
+  attachAudioProcessHandlers(outputProcess, "output");
+  attachAudioProcessHandlers(inputProcess, "input");
 
   const transport: MeetingRealtimeAudioTransport = {
     onFatal: (handler) => {
@@ -262,7 +247,7 @@ export function createLocalMeetingRealtimeAudioTransport(params: {
       outputLoopbackVerifier.cancelOutput();
       const previousOutput = outputProcess;
       outputProcess = spawnOutputProcess();
-      attachOutputProcessHandlers(outputProcess);
+      attachAudioProcessHandlers(outputProcess, "output");
       releaseOutputWriteWaiters(previousOutput);
       params.logger.debug?.(
         `${params.logScope} cleared realtime audio output buffer by restarting playback command`,

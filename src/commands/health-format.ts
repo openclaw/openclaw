@@ -1,4 +1,3 @@
-/** Shared CLI formatting for gateway health failures, channels, and delivery queues. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -8,6 +7,22 @@ import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/heal
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+
+export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
+  const quarantined = summary.contextEngines?.quarantined ?? [];
+  if (quarantined.length === 0) {
+    return null;
+  }
+  const engines = quarantined.map((entry) => entry.engineId).join(", ");
+  return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+export function formatConfigReloadHealthLine(summary: HealthSummary): string | null {
+  if (summary.configReload?.hotReloadStatus !== "disabled") {
+    return null;
+  }
+  return "Config hot reload: disabled (watcher retries exhausted; restart the gateway to restore it)";
+}
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
   if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
@@ -34,7 +49,6 @@ const formatKv = (line: string, rich: boolean) => {
   return `${colorize(rich, theme.muted, `${key}:`)} ${colorize(rich, valueColor, value)}`;
 };
 
-/** Formats thrown health errors with rich detail lines when terminal color is enabled. */
 export function formatHealthCheckFailure(err: unknown, opts: { rich?: boolean } = {}): string {
   const rich = opts.rich ?? isRich();
   const raw = String(err);
@@ -73,6 +87,10 @@ const formatProbeLine = (
   if (!record) {
     return null;
   }
+  if (record.timedOut === true) {
+    const error = typeof record.error === "string" ? record.error : "health collection timed out";
+    return `warning - ${sanitizeTerminalText(error)}`;
+  }
   const ok = typeof record.ok === "boolean" ? record.ok : undefined;
   if (ok === undefined) {
     return null;
@@ -84,19 +102,13 @@ const formatProbeLine = (
   }
 
   const elapsedMs = typeof record.elapsedMs === "number" ? record.elapsedMs : null;
-  const bot = asNullableRecord(record.bot);
-  const botUsername = bot && typeof bot.username === "string" ? bot.username : null;
   const webhook = asNullableRecord(record.webhook);
   const webhookUrl = webhook && typeof webhook.url === "string" ? webhook.url : null;
   const usernames = new Set<string>();
-  if (botUsername) {
-    usernames.add(botUsername);
-  }
-  for (const account of accounts ?? []) {
-    const accountProbe = asNullableRecord(account.probe);
-    const accountBot = accountProbe ? asNullableRecord(accountProbe.bot) : null;
-    if (accountBot && typeof accountBot.username === "string" && accountBot.username) {
-      usernames.add(accountBot.username);
+  for (const candidate of [probe, ...(accounts ?? []).map((account) => account.probe)]) {
+    const bot = asNullableRecord(asNullableRecord(candidate)?.bot);
+    if (bot && typeof bot.username === "string" && bot.username) {
+      usernames.add(bot.username);
     }
   }
 
@@ -143,7 +155,6 @@ function formatPluginDiagnostic(text: string, maxChars: number): string {
   return truncateUtf16Safe(redactToolPayloadText(normalized), maxChars);
 }
 
-/** Formats terse channel and actionable plugin health lines for shared CLI surfaces. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -226,9 +237,11 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    const failedSummary = activeSummaries.find(
-      (account) => asNullableRecord(account.probe)?.ok === false,
-    );
+    const failedSummary =
+      activeSummaries.find((account) => {
+        const probe = asNullableRecord(account.probe);
+        return probe?.ok === false && probe.timedOut !== true;
+      }) ?? activeSummaries.find((account) => asNullableRecord(account.probe)?.timedOut === true);
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe);
       if (failureLine) {
@@ -301,7 +314,6 @@ export const formatHealthChannelLines = (
   return lines;
 };
 
-/** Formats dead-lettered and pressured delivery queue entries for text health output. */
 export function formatDeliveryQueueHealthLine(
   summary: HealthSummary,
   now = Date.now(),

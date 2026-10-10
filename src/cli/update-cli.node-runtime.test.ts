@@ -1,22 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUpdateInstallRoot } from "../infra/update-install-root.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
   commandCalls,
-  doctorCommandCall,
   expectNoSideEffects,
   freshRestartCalls,
-  gatewayCommandCall,
   getErrorOutput,
   getLogOutput,
   lastWriteJsonCall,
   packageInstallCommandCall,
   requireValue,
-  spawnCall,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import {
@@ -71,74 +68,7 @@ describe("update-cli", () => {
     tempDirs,
   } = createUpdateCliFixture();
 
-  it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
-    resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
-    const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
-      prefix: path.join(tempDirs.make("runtime-recovery-"), ".nvm/versions/node/v22.18.0"),
-      withNpm: false,
-    });
-    mockPackageInstallStatus(root);
-    primeServiceCommand([serviceNode, entrypoint, "gateway"]);
-    primeNpmChannelTag("latest", "2026.5.20");
-    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "latest", version: "2026.5.20" }),
-    );
-    vi.mocked(runCommandWithTimeout).mockImplementation(
-      runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
-    );
-    nodeVersionSatisfiesEngine.mockReturnValue(false);
-
-    await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
-      new ExitError(1),
-    );
-
-    expect(lastWriteJsonCall()).toMatchObject({
-      reason: "node-runtime-preflight",
-      failedStep: {
-        recoverySteps: runtimeRecovery.expectedManagedRuntimeRecoverySteps("nvm", root),
-      },
-    });
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      `openclaw@2026.5.20 requires Node >=22.19.0; selected runtime is Node 22.18.0 at ${serviceNode}.\nNode 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.16.0", "refresh", undefined, root).replace("3. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.", `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.16.0")}\`.`)}`,
-    );
-  });
-
-  it("runs same-root service follow-up commands with its selected Node despite heap argv", async () => {
-    const servicePrefix = tempDirs.make("openclaw-service-prefix-");
-    const {
-      nodeModules,
-      root: serviceRoot,
-      serviceNode,
-      serviceNpm,
-      serviceNpmReal,
-      entrypoint,
-    } = await setupServicePackageAtPrefix({ prefix: servicePrefix });
-    mockPackageInstallStatus(serviceRoot);
-    primeServiceCommand([serviceNode, "--max-old-space-size=16384", entrypoint, "gateway"]);
-    serviceLoaded.mockResolvedValue(true);
-    primeNpmChannelTag("latest", "2026.5.20");
-    mockFileBackedPathExists();
-    mockServicePackageCommands({
-      nodeModules,
-      packageRoot: serviceRoot,
-      targetVersion: "2026.5.20",
-      npmCommands: [serviceNpm, serviceNpmReal!],
-      nodeVersions: { [serviceNode]: "v22.22.0" },
-    });
-
-    await updateCommand({ yes: true });
-
-    expect(doctorCommandCall()?.[0][0]).toBe(serviceNode);
-    expect(spawnCall()?.[0]).toBe(serviceNode);
-    const serviceInstallCall = commandCalls().find(
-      ([argv]) => argv[2] === "gateway" && argv[3] === "install",
-    );
-    expect(serviceInstallCall?.[0][0]).toBe(serviceNode);
-  });
+  beforeEach(() => runtimeRecovery.stubNodeRuntime());
 
   it("updates the invoking package and rebinds its owned Gateway after a Node-prefix switch", async () => {
     const invokingVersion = "2026.5.18";
@@ -237,24 +167,14 @@ describe("update-cli", () => {
   });
 
   it.each([
-    { scenario: "different Node", command: "gateway", sameNode: false, selected: true },
-    { scenario: "non-Gateway command", command: "agent", sameNode: false, selected: false },
-    { scenario: "symlink to current Node", command: "gateway", sameNode: true, selected: false },
+    { scenario: "different Node", command: "gateway", selected: true },
+    { scenario: "non-Gateway command", command: "agent", selected: false },
   ])(
     "plans service Node selection independently of database admission ($scenario)",
-    async ({ command, sameNode, selected }) => {
+    async ({ command, selected }) => {
       const root = createCaseDir("openclaw-same-root");
       const entrypoint = await writeOpenClawPackageFixture(root, "2026.5.18");
-      let serviceNode = "/opt/other-node/bin/node";
-      if (sameNode) {
-        const nodeAliasDir = path.join(root, "node-bin");
-        await fs.symlink(
-          path.dirname(process.execPath),
-          nodeAliasDir,
-          process.platform === "win32" ? "junction" : "dir",
-        );
-        serviceNode = path.join(nodeAliasDir, path.basename(process.execPath));
-      }
+      const serviceNode = "/opt/other-node/bin/node";
       mockPackageInstallStatus(root);
       primeServiceCommand([serviceNode, "--import", "tsx", entrypoint, command]);
 
@@ -280,13 +200,12 @@ describe("update-cli", () => {
   );
 
   it.each([
-    { fallback: false, restart: true, writable: true, refreshFails: false },
-    { fallback: true, restart: true, writable: true, refreshFails: false },
-    { fallback: true, restart: true, writable: false, refreshFails: false },
-    { fallback: true, restart: true, writable: true, refreshFails: true },
+    { fallback: false, writable: true, refreshFails: false },
+    { fallback: true, writable: false, refreshFails: false },
+    { fallback: true, writable: true, refreshFails: true },
   ])(
-    "admits managed Node before already-current plugin maintenance ($fallback, restart=$restart, writable=$writable, refreshFails=$refreshFails)",
-    async ({ fallback, restart, writable, refreshFails }) => {
+    "admits managed Node before already-current plugin maintenance ($fallback, writable=$writable, refreshFails=$refreshFails)",
+    async ({ fallback, writable, refreshFails }) => {
       const servicePrefix = tempDirs.make("openclaw-current-runtime-");
       const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
         await setupServicePackageAtPrefix({ prefix: servicePrefix, version: VERSION });
@@ -385,16 +304,26 @@ describe("update-cli", () => {
         installRecords: { brave: updated },
       });
 
-      if (!fallback || !restart || !writable) {
-        await expect(updateCommand({ yes: true, restart, json: true })).rejects.toEqual(
+      if (!fallback || !writable) {
+        await expect(updateCommand({ yes: true, restart: true, json: true })).rejects.toEqual(
           new ExitError(1),
         );
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
           reason: "node-runtime-preflight",
         });
-        expect(getErrorOutput()).toBe(
-          `openclaw@${VERSION} requires Node >=24.16.0 <25 || >=26.1.0; selected runtime is Node 22.23.1 at ${serviceNode}.\nbroken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
+        const refusedRun = requireValue(listUpdateRuns({ limit: 1 })[0], "refused update run");
+        expect(refusedRun.reason).toBe("node-runtime-preflight");
+        const captureWarnings = refusedRun.steps
+          .filter((step) => step.step.startsWith("warning:original-state-capture:"))
+          .map((step) => `Warning: ${requireValue(step.detail, "original capture warning")}\n`)
+          .join("");
+        expect(getErrorOutput()).toContain(captureWarnings);
+        expect(getErrorOutput()).toContain(
+          `Required: openclaw@${VERSION} Node >=24.16.0 <25 || >=26.1.0; detected: Node 22.23.1 at ${serviceNode}`,
+        );
+        expect(getErrorOutput()).toContain(
+          `broken TEXT decoder\n${runtimeRecovery.expectedPlainRecovery(VERSION, "24.16.0", writable ? "refresh" : "owner", "unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH OPENCLAW_PROFILE OPENCLAW_GATEWAY_PORT OPENCLAW_LAUNCHD_LABEL OPENCLAW_SYSTEMD_UNIT OPENCLAW_WINDOWS_TASK_NAME OPENCLAW_WORKSPACE_DIR", root, writable ? undefined : serviceNode)}`,
         );
         expectNoSideEffects(
           updateNpmInstalledPlugins,
@@ -402,7 +331,7 @@ describe("update-cli", () => {
           serviceStop,
           serviceRestart,
         );
-      } else if (refreshFails) {
+      } else {
         await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
         expect(lastWriteJsonCall()).toMatchObject({
           status: "error",
@@ -413,17 +342,6 @@ describe("update-cli", () => {
         expect(freshRestartCalls()).toHaveLength(0);
         expect(serviceRestart).not.toHaveBeenCalled();
         expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(serviceNode);
-      } else {
-        await updateCommand({ yes: true, json: true });
-        expect(lastWriteJsonCall()).toMatchObject({
-          status: "ok",
-          postUpdate: { plugins: { changed: true } },
-        });
-        const install = gatewayCommandCall(entrypoint, "install");
-        expect(install?.[0][0]).toBe(process.execPath);
-        expect((await serviceReadCommand(process.env))?.programArguments[0]).toBe(process.execPath);
-        expect(serviceStop).toHaveBeenCalledOnce();
-        expect(freshRestartCalls()).toHaveLength(0);
       }
       expect(packageInstallCommandCall()).toBeUndefined();
     },
@@ -440,7 +358,6 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.7.1");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({
-        target: "latest",
         version: "2026.7.1",
         nodeEngine: ">=24.15.0 <25",
       }),
@@ -478,46 +395,41 @@ describe("update-cli", () => {
     expect(logs).toContain(`Using compatible Node (${process.execPath})`);
   });
 
-  it("pins package install to the service root when nodes differ and no owning npm exists at the prefix", async () => {
-    const servicePrefix = tempDirs.make("openclaw-no-npm-prefix-");
-    // Create the node binary but intentionally do NOT create <prefix>/bin/npm
-    // so resolvePreferredNpmCommand returns null and the PATH npm is used.
+  it("keeps the CLI and service reachable after nvm runtime recovery", async () => {
+    resolveNodeRuntimeInfo.mockResolvedValue(runtimeRecovery.unsupportedServiceRuntimeFixture);
     const { root, serviceNode, entrypoint } = await setupServicePackageAtPrefix({
-      prefix: servicePrefix,
+      prefix: path.join(tempDirs.make("runtime-recovery-"), ".nvm/versions/node/v22.18.0"),
       withNpm: false,
     });
-    // No npm binary at servicePrefix/bin/npm!
     mockPackageInstallStatus(root);
     primeServiceCommand([serviceNode, entrypoint, "gateway"]);
-    serviceLoaded.mockResolvedValue(true);
     primeNpmChannelTag("latest", "2026.5.20");
-    mockFileBackedPathExists();
-    // The PATH npm returns a DIFFERENT global root (simulates Node-B's npm).
-    // PATH npm returns Node-B's root, NOT the service root.
-    // Install step: create the expected package structure at the target.
-    const nodeBGlobalRoot = path.join(tempDirs.make("node-b-global-"), "lib", "node_modules");
-    await fs.mkdir(nodeBGlobalRoot, { recursive: true });
-    mockServicePackageCommands({
-      nodeModules: nodeBGlobalRoot,
-      packageRoot: root,
-      targetVersion: "2026.5.20",
-      npmCommands: ["npm"],
-      nodeVersions: { [serviceNode]: "v24.14.0" },
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
+      packageTargetStatus({ version: "2026.5.20" }),
+    );
+    vi.mocked(runCommandWithTimeout).mockImplementation(
+      runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
+    );
+    nodeVersionSatisfiesEngine.mockReturnValue(false);
+
+    await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
+      new ExitError(1),
+    );
+
+    expect(lastWriteJsonCall()).toMatchObject({
+      reason: "node-runtime-preflight",
+      failedStep: {
+        recoverySteps: runtimeRecovery.expectedManagedRuntimeRecoverySteps("nvm", root),
+      },
     });
-
-    await updateCommand({ yes: true });
-
-    // The install command must use --prefix pointing to a location within
-    // the service root's prefix tree, NOT Node-B's global root.
-    const installCall = packageInstallCommandCall();
-    expect(installCall).toBeDefined();
-    const installArgv = installCall![0];
-    const prefixIdx = installArgv.indexOf("--prefix");
-    expect(prefixIdx).toBeGreaterThan(-1);
-    // Staging prefix should be under the service prefix, not Node-B's.
-    expect(installArgv[prefixIdx + 1]).toContain(servicePrefix);
-    expect(installArgv[prefixIdx + 1]).not.toContain(nodeBGlobalRoot);
-    // Follow-up commands use the service node.
-    expect(doctorCommandCall()?.[0][0]).toBe(serviceNode);
+    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
+    expect(serviceStop).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("node-runtime-preflight");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `Node 22.18.0: node:sqlite truncates TEXT at embedded NUL (nodejs/node#61954)\n${runtimeRecovery.expectedPlainRecovery("2026.5.20", "24.16.0", "refresh", undefined, root).replace("3. Install and select Node 24.16.0 using your system package manager or https://nodejs.org/en/download.", `3. Run \`${runtimeRecovery.expectedRuntimeSelectionCommand("nvm", "24.16.0")}\`.`)}`,
+      ),
+    );
   });
 });

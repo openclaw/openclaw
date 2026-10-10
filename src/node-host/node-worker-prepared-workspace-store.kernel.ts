@@ -5,7 +5,10 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
@@ -18,6 +21,7 @@ import type {
   NodeWorkerPreparedWorkspaceBinding,
   NodeWorkerPreparedWorkspaceRegistration,
 } from "../worker/node-workspace-prepared-protocol.js";
+import { nodePreparedWorkspacePublication } from "./node-worker-prepared-workspace-publication.js";
 
 type PreparedDatabase = Pick<DB, "node_worker_prepared_workspaces">;
 export type NodeWorkerPreparedWorkspaceRow = Selectable<DB["node_worker_prepared_workspaces"]>;
@@ -47,6 +51,31 @@ function requireUnchanged(
 /** One fresh dedicated node owns one immutable registration and one session binding. */
 export class NodeWorkerPreparedWorkspaceKernel {
   constructor(private readonly options: OpenClawStateDatabaseOptions) {}
+
+  private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({
+          stage: "transaction",
+          facts: { kind: "node-worker-journal" },
+        });
+        const { result, receipt } = nodePreparedWorkspacePublication.capture(db, () =>
+          operation(db),
+        );
+        deferSqliteWorkerCommitReceipt(
+          db,
+          {
+            kind: "node-prepared-workspace",
+            receipt: nodePreparedWorkspacePublication.bound(receipt),
+          },
+          receipt.facts.size === 0 ? "settlement" : "commit",
+        );
+        return result;
+      },
+      this.options,
+      { operationLabel },
+    );
+  }
 
   find(environmentId: string): NodeWorkerPreparedWorkspaceRow | undefined {
     return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
@@ -79,171 +108,141 @@ export class NodeWorkerPreparedWorkspaceKernel {
   }
 
   register(input: NodeWorkerPreparedWorkspaceRegistration): NodeWorkerPreparedWorkspaceRow {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({
-          stage: "transaction",
-          facts: { kind: "node-worker-journal" },
-        });
-        ensureNodeWorkerPreparedWorkspaceSchema(db);
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          query(db).selectFrom(TABLE).selectAll().limit(1),
-        );
-        if (existing) {
-          if (
-            existing.state !== "available" ||
-            existing.preparation_key !== input.preparationKey ||
-            existing.cache_key !== input.cacheKey ||
-            existing.gateway_namespace !== input.gatewayNamespace ||
-            existing.environment_id !== input.environmentId ||
-            existing.workspace_dir !== input.workspaceDir ||
-            existing.home_dir !== input.homeDir ||
-            existing.source_manifest_ref !== input.sourceManifestRef ||
-            existing.prepared_manifest_ref !== input.preparedManifestRef
-          ) {
-            throw new Error("INVALID_REQUEST: this node already owns a prepared workspace");
-          }
-          return existing;
+    return this.write("prepared-workspace.register", (db) => {
+      ensureNodeWorkerPreparedWorkspaceSchema(db);
+      const existing = executeSqliteQueryTakeFirstSync(
+        db,
+        query(db).selectFrom(TABLE).selectAll().limit(1),
+      );
+      if (existing) {
+        if (
+          existing.state !== "available" ||
+          existing.preparation_key !== input.preparationKey ||
+          existing.cache_key !== input.cacheKey ||
+          existing.gateway_namespace !== input.gatewayNamespace ||
+          existing.environment_id !== input.environmentId ||
+          existing.workspace_dir !== input.workspaceDir ||
+          existing.home_dir !== input.homeDir ||
+          existing.source_manifest_ref !== input.sourceManifestRef ||
+          existing.prepared_manifest_ref !== input.preparedManifestRef
+        ) {
+          throw new Error("INVALID_REQUEST: this node already owns a prepared workspace");
         }
-        const row = {
-          preparation_key: input.preparationKey,
-          cache_key: input.cacheKey,
-          gateway_namespace: input.gatewayNamespace,
-          environment_id: input.environmentId,
-          workspace_dir: input.workspaceDir,
-          home_dir: input.homeDir,
-          source_manifest_ref: input.sourceManifestRef,
-          prepared_manifest_ref: input.preparedManifestRef,
-          state: "available",
-          session_id: null,
-          session_key: null,
-          owner_epoch: null,
-          created_at_ms: Date.now(),
-          bound_at_ms: null,
-          retired_at_ms: null,
-        };
-        executeSqliteQuerySync(db, query(db).insertInto(TABLE).values(row));
-        return selectRow(db, input.preparationKey)!;
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.register" },
-    );
+        return existing;
+      }
+      const row = {
+        preparation_key: input.preparationKey,
+        cache_key: input.cacheKey,
+        gateway_namespace: input.gatewayNamespace,
+        environment_id: input.environmentId,
+        workspace_dir: input.workspaceDir,
+        home_dir: input.homeDir,
+        source_manifest_ref: input.sourceManifestRef,
+        prepared_manifest_ref: input.preparedManifestRef,
+        state: "available",
+        session_id: null,
+        session_key: null,
+        owner_epoch: null,
+        created_at_ms: Date.now(),
+        bound_at_ms: null,
+        retired_at_ms: null,
+      };
+      executeSqliteQuerySync(db, query(db).insertInto(TABLE).values(row));
+      const registered = selectRow(db, input.preparationKey)!;
+      nodePreparedWorkspacePublication.stagePostimages(db, [registered]);
+      return registered;
+    });
   }
 
   bind(input: NodeWorkerPreparedWorkspaceBinding): NodeWorkerPreparedWorkspaceRow {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({
-          stage: "transaction",
-          facts: { kind: "node-worker-journal" },
-        });
-        if (!tableExists(db, TABLE)) {
-          throw new Error("INVALID_REQUEST: prepared workspace registration is missing");
-        }
-        const row = selectRow(db, input.preparationKey);
-        if (
-          !row ||
-          row.cache_key !== input.cacheKey ||
-          row.gateway_namespace !== input.gatewayNamespace ||
-          row.environment_id !== input.environmentId
-        ) {
-          throw new Error(
-            "INVALID_REQUEST: prepared workspace registration does not match this environment",
-          );
-        }
-        if (
-          row.state === "bound" &&
-          row.session_id === input.sessionId &&
-          row.session_key === input.sessionKey &&
-          row.owner_epoch === input.ownerEpoch
-        ) {
-          return row;
-        }
-        if (
-          row.state !== "available" ||
-          row.session_id !== null ||
-          row.session_key !== null ||
-          row.owner_epoch !== null ||
-          row.bound_at_ms !== null
-        ) {
-          throw new Error("INVALID_REQUEST: prepared workspace has already been consumed");
-        }
-        const bound = {
-          ...row,
-          state: "bound",
-          session_id: input.sessionId,
-          session_key: input.sessionKey,
-          owner_epoch: input.ownerEpoch,
-          bound_at_ms: Math.max(Date.now(), row.created_at_ms),
-        };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable(TABLE)
-            .set(bound)
-            .where("preparation_key", "=", input.preparationKey),
+    return this.write("prepared-workspace.bind", (db) => {
+      if (!tableExists(db, TABLE)) {
+        throw new Error("INVALID_REQUEST: prepared workspace registration is missing");
+      }
+      const row = selectRow(db, input.preparationKey);
+      if (
+        !row ||
+        row.cache_key !== input.cacheKey ||
+        row.gateway_namespace !== input.gatewayNamespace ||
+        row.environment_id !== input.environmentId
+      ) {
+        throw new Error(
+          "INVALID_REQUEST: prepared workspace registration does not match this environment",
         );
-        return bound;
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.bind" },
-    );
+      }
+      if (
+        row.state === "bound" &&
+        row.session_id === input.sessionId &&
+        row.session_key === input.sessionKey &&
+        row.owner_epoch === input.ownerEpoch
+      ) {
+        return row;
+      }
+      if (
+        row.state !== "available" ||
+        row.session_id !== null ||
+        row.session_key !== null ||
+        row.owner_epoch !== null ||
+        row.bound_at_ms !== null
+      ) {
+        throw new Error("INVALID_REQUEST: prepared workspace has already been consumed");
+      }
+      const bound = {
+        ...row,
+        state: "bound",
+        session_id: input.sessionId,
+        session_key: input.sessionKey,
+        owner_epoch: input.ownerEpoch,
+        bound_at_ms: Math.max(Date.now(), row.created_at_ms),
+      };
+      executeSqliteQuerySync(
+        db,
+        query(db).updateTable(TABLE).set(bound).where("preparation_key", "=", input.preparationKey),
+      );
+      nodePreparedWorkspacePublication.stagePostimages(db, [bound]);
+      return bound;
+    });
   }
 
   completeMutation(retiring: NodeWorkerPreparedWorkspaceRow): void {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({
-          stage: "transaction",
-          facts: { kind: "node-worker-journal" },
-        });
-        requireUnchanged(selectRow(db, retiring.preparation_key), retiring);
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable(TABLE)
-            .set({ state: "bound" })
-            .where("preparation_key", "=", retiring.preparation_key),
-        );
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.finish-mutation" },
-    );
+    this.write("prepared-workspace.finish-mutation", (db) => {
+      requireUnchanged(selectRow(db, retiring.preparation_key), retiring);
+      executeSqliteQuerySync(
+        db,
+        query(db)
+          .updateTable(TABLE)
+          .set({ state: "bound" })
+          .where("preparation_key", "=", retiring.preparation_key),
+      );
+      nodePreparedWorkspacePublication.stagePostimages(db, [{ ...retiring, state: "bound" }]);
+    });
   }
 
   retire(
     expected: NodeWorkerPreparedWorkspaceRow,
     completed = false,
   ): NodeWorkerPreparedWorkspaceRow {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        requestSqliteWorkerOperationAdmission({
-          stage: "transaction",
-          facts: { kind: "node-worker-journal" },
-        });
-        const row = requireUnchanged(selectRow(db, expected.preparation_key), expected);
-        if (row.state === "retired") {
-          return row;
-        }
-        const retired = {
-          ...row,
-          state: completed ? "retired" : "retiring",
-          retired_at_ms: completed
-            ? Math.max(Date.now(), row.bound_at_ms ?? row.created_at_ms)
-            : null,
-        };
-        executeSqliteQuerySync(
-          db,
-          query(db)
-            .updateTable(TABLE)
-            .set(retired)
-            .where("preparation_key", "=", row.preparation_key),
-        );
-        return retired;
-      },
-      this.options,
-      { operationLabel: "prepared-workspace.retire" },
-    );
+    return this.write("prepared-workspace.retire", (db) => {
+      const row = requireUnchanged(selectRow(db, expected.preparation_key), expected);
+      if (row.state === "retired") {
+        return row;
+      }
+      const retired = {
+        ...row,
+        state: completed ? "retired" : "retiring",
+        retired_at_ms: completed
+          ? Math.max(Date.now(), row.bound_at_ms ?? row.created_at_ms)
+          : null,
+      };
+      executeSqliteQuerySync(
+        db,
+        query(db)
+          .updateTable(TABLE)
+          .set(retired)
+          .where("preparation_key", "=", row.preparation_key),
+      );
+      nodePreparedWorkspacePublication.stagePostimages(db, [retired]);
+      return retired;
+    });
   }
 }

@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { sendHttpRequestRejection } from "../../infra/http-request-lifecycle.js";
+import { SystemEventQueueFullError } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveHookExternalContentSource as resolveHookExternalContentSourceFromSession } from "../../security/external-content.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
@@ -42,6 +43,7 @@ import { resolveRequestClientIpFromHeaders } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import {
   HOOK_FAN_OUT_RESPONSE_DEADLINE_MS,
+  HookWakeUnavailableError,
   sendAgentResult,
   sendFanOutResult,
   settleFanOutDispatches,
@@ -69,7 +71,8 @@ type HookDispatchers = {
   dispatchWakeHook: (
     value: { text: string; mode: "now" | "next-heartbeat"; sessionKey?: string },
     agentId: string,
-  ) => WakeResult;
+    isHooksConfigCurrent?: () => boolean,
+  ) => WakeResult | null | Promise<WakeResult | null>;
   dispatchAgentHook: (
     value: HookAgentDispatchPayload,
   ) => HookAgentDispatchResult | Promise<HookAgentDispatchResult>;
@@ -86,13 +89,6 @@ type HookReplayScope = {
   idempotencyKey?: string;
   dispatchScope: Record<string, unknown>;
 };
-
-function resolveMappedHookExternalContentSource(params: { subPath: string; sessionKey: string }) {
-  if (params.subPath === "gmail") {
-    return "gmail" as const;
-  }
-  return resolveHookExternalContentSourceFromSession(params.sessionKey) ?? "webhook";
-}
 
 export function createHooksRequestHandler(
   opts: {
@@ -359,11 +355,11 @@ export function createHooksRequestHandler(
       return resolution;
     };
     // Callers own the success response so mappings can dispatch several wakes first.
-    const dispatchWake = (
+    const dispatchWake = async (
       value: Parameters<HookDispatchers["dispatchWakeHook"]>[0],
       targetAgentId: string,
       source: HookSessionKeySource,
-    ): WakeResult | null => {
+    ): Promise<WakeResult | null> => {
       let dispatchSessionKey: string | undefined;
       if (value.sessionKey) {
         const sessionKey = resolveHookSessionKey({
@@ -388,7 +384,21 @@ export function createHooksRequestHandler(
       if (rejectChangedHooksConfig()) {
         return null;
       }
-      return dispatchWakeHook(dispatchValue, targetAgentId);
+      try {
+        return await dispatchWakeHook(
+          dispatchValue,
+          targetAgentId,
+          () => !rejectChangedHooksConfig(),
+        );
+      } catch (error) {
+        if (
+          !(error instanceof SystemEventQueueFullError || error instanceof HookWakeUnavailableError)
+        ) {
+          throw error;
+        }
+        sendJson(res, 503, { ok: false, error: error.message, ...wakeResult });
+        return null;
+      }
     };
 
     if (subPath === "wake") {
@@ -401,7 +411,11 @@ export function createHooksRequestHandler(
       if (!target) {
         return true;
       }
-      const directWakeResult = dispatchWake(normalized.value, target.effectiveAgentId, "request");
+      const directWakeResult = await dispatchWake(
+        normalized.value,
+        target.effectiveAgentId,
+        "request",
+      );
       if (!directWakeResult) {
         return true;
       }
@@ -496,6 +510,7 @@ export function createHooksRequestHandler(
           sourcePath: `${basePath}/agent`,
           agentId: target.selectedAgentId,
           externalContentSource: "webhook",
+          replayKey,
         });
       });
       await sendAgentResult(res, dispatched, undefined, waitForCompletion === true);
@@ -601,7 +616,7 @@ export function createHooksRequestHandler(
               dispatchScope.occurrence = occurrence;
             }
             const replayKey = buildHookReplayCacheKey({
-              pathKey: subPath || "mapping",
+              pathKey: subPath,
               token,
               // Fan-out producers (gog gmail) send no idempotency key, yet a
               // non-2xx batch response makes them redeliver the same batch.
@@ -637,10 +652,12 @@ export function createHooksRequestHandler(
                   mappingId: action.mappingId,
                   allowUnsafeExternalContent: action.allowUnsafeExternalContent,
                   ...(mapped.fanout ? { admissionMode: "background" as const } : {}),
-                  externalContentSource: resolveMappedHookExternalContentSource({
-                    subPath,
-                    sessionKey: sessionKey.value,
-                  }),
+                  replayKey,
+                  externalContentSource:
+                    subPath === "gmail"
+                      ? "gmail"
+                      : (resolveHookExternalContentSourceFromSession(sessionKey.value) ??
+                        "webhook"),
                 });
               });
           };
@@ -659,7 +676,7 @@ export function createHooksRequestHandler(
               if (!target) {
                 return true;
               }
-              const dispatched = dispatchWake(
+              const dispatched = await dispatchWake(
                 { text: action.text, mode: action.mode, sessionKey: action.sessionKey },
                 target.effectiveAgentId,
                 action.sessionKeySource === "static" ? "mapping-static" : "mapping-templated",

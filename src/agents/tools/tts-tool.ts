@@ -26,10 +26,7 @@ function sanitizeTranscriptForToolContent(text: string): string {
   return text
     .replace(/\[\[/g, "[\u2060[")
     .replace(/^(\s*)(MEDIA:)/gim, "$1\u2060$2")
-    .replace(/^([ \t]*)(`{3,})/gm, (_match, indent: string, fence: string) => {
-      const [first = "", ...rest] = fence;
-      return `${indent}${first}\u2060${rest.join("")}`;
-    });
+    .replace(/^([ \t]*)(`)(`{2,})/gm, "$1$2\u2060$3");
 }
 
 export function createTtsTool(opts?: {

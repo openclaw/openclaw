@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Selector } from "postcss-selector-parser";
 import * as ts from "typescript/unstable/ast";
+import { groupBy } from "./lib/group-by.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
@@ -61,17 +62,6 @@ type DeadClassFinding = {
   startLine: number;
   testOnlyFiles: string[];
 };
-
-function groupBy<T, K>(values: Iterable<T>, keyFor: (value: T) => K): Map<K, T[]> {
-  const groups = new Map<K, T[]>();
-  for (const value of values) {
-    const key = keyFor(value);
-    const group = groups.get(key) ?? [];
-    group.push(value);
-    groups.set(key, group);
-  }
-  return groups;
-}
 
 function walkFiles(rootDir: string, accepts: (fileName: string) => boolean): string[] {
   const files: string[] = [];
@@ -130,7 +120,6 @@ function classMapPropertyName(node: ts.ObjectLiteralElementLike): string | null 
   return getPropertyNameText(node.name);
 }
 
-/** Collect literal class tokens and dynamic class stems from TypeScript source. */
 export function collectControlUiClassReferences(sourceFile: ts.SourceFile): SourceReferences {
   const literalClasses = new Set<string>();
   const stems = new Set<string>();

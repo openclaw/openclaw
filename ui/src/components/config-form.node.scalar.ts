@@ -37,12 +37,7 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import {
-  configFieldId,
-  hintForPath,
-  redactedPlaceholder,
-  schemaType,
-} from "./config-form.shared.ts";
+import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
 
 function coerceTextInputValue(
   value: string,
@@ -139,10 +134,31 @@ function applyNumericInputState(
   }
 }
 
+function createScalarValueCommitter(
+  { value, path, onPatch }: Pick<ConfigNodeRenderParams, "value" | "path" | "onPatch">,
+  renderedValue: string,
+  revalidate: (target: HTMLInputElement) => void,
+) {
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
+  return (target: HTMLInputElement, candidate: unknown, skipUnchanged = false): boolean => {
+    if (skipUnchanged && configValuesEqual(patchedValue, candidate)) {
+      return true;
+    }
+    if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
+      return true;
+    }
+    target.value = renderedValue;
+    revalidate(target);
+    return false;
+  };
+}
+
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
 ): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch, inputType } = params;
+  const { schema, value, path, hints, disabled, inputType } = params;
   const hint = hintForPath(path, hints);
   const field = resolveConfigFieldPresentation(params);
   const { label, helpId } = field;
@@ -162,7 +178,7 @@ export function renderTextInput(
         : t("configForm.structuredSecretFile")
       : masked
         ? "••••••••"
-        : redactedPlaceholder()
+        : t("configForm.redactedPlaceholder")
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
@@ -207,38 +223,23 @@ export function renderTextInput(
     };
   };
   const revalidate = (target: HTMLInputElement) => {
-    if (effectiveRedacted) {
-      setControlValidity(target, "");
-      return;
-    }
-    if (inputType === "number") {
-      setControlValidity(target, resolveNumericInputState(target, params).message);
-      return;
-    }
     setControlValidity(
       target,
-      textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
+      effectiveRedacted
+        ? ""
+        : inputType === "number"
+          ? resolveNumericInputState(target, params).message
+          : textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
-    }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
-  };
+  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
 
   const commitChange = (target: HTMLInputElement) => {
     if (effectiveRedacted) {
       return;
     }
     // Change follows input on blur; only a newly normalized value needs another patch.
-    const commit = (candidate: unknown) =>
-      configValuesEqual(patchedValue, candidate) || commitScalarValue(target, candidate);
+    const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
     if (inputType === "number") {
       applyNumericInputState(target, resolveNumericInputState(target, params), commit);
       return;
@@ -246,22 +247,18 @@ export function renderTextInput(
     const editHint = beginScalarEdit(target, initialBranch);
     const raw = target.value;
     const rawState = textInputState(raw, editHint);
-    if (!rawState.message && !isPhonePresentation) {
-      setControlValidity(target, "");
-      commit(rawState.candidate);
-      finishScalarEdit(target);
-      return;
+    let nextState = rawState;
+    if (rawState.message || isPhonePresentation) {
+      const normalized = raw.trim();
+      nextState = textInputState(normalized, editHint);
+      if (!nextState.message) {
+        target.value = normalized;
+      }
     }
-    const normalized = raw.trim();
-    const normalizedState = textInputState(normalized, editHint);
-    if (normalizedState.message) {
-      setControlValidity(target, rawState.message);
-      finishScalarEdit(target);
-      return;
+    setControlValidity(target, nextState.message ? rawState.message : "");
+    if (!nextState.message) {
+      commit(nextState.candidate);
     }
-    target.value = normalized;
-    setControlValidity(target, "");
-    commit(normalizedState.candidate);
     finishScalarEdit(target);
   };
 
@@ -289,7 +286,12 @@ export function renderTextInput(
       ?disabled=${disabled}
       ?readonly=${effectiveRedacted}
       @click=${() => {
-        if (sensitiveState.isRedacted && !isStructuredSecretRef && params.onToggleSensitivePath) {
+        if (
+          !masked &&
+          sensitiveState.isRedacted &&
+          !isStructuredSecretRef &&
+          params.onToggleSensitivePath
+        ) {
           params.onToggleSensitivePath(path);
         }
       }}
@@ -338,7 +340,11 @@ export function renderTextInput(
         disabled,
         onToggleSensitivePath: params.onToggleSensitivePath,
       });
-  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const wrappedInput = wrapSensitiveControl(
+    inputControl,
+    revealToggle,
+    sensitiveState.isSensitiveField && params.onToggleSensitivePath !== undefined,
+  );
   const presentedInput = isPhonePresentation
     ? html`
         <span class="settings-phone-presentation">
@@ -379,16 +385,18 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   const revalidate = (target: HTMLInputElement) => {
     setControlValidity(target, resolveNumericInputState(target, params).message);
   };
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
+  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
+
+  const commitChange = (target: HTMLInputElement, allowClear: boolean) => {
+    const state = resolveNumericInputState(target, params);
+    if (state.parsed !== undefined) {
+      state.parsed = normalizeNumericValue(state.parsed, schema);
+      state.message = numericConstraintMessage(state.parsed, schema);
+      target.value = formatConfigValueText(state.parsed);
     }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
+    if (setControlValidity(target, state.message) && (allowClear || state.parsed !== undefined)) {
+      commitScalarValue(target, state.parsed, true);
+    }
   };
 
   // Touch devices and some browsers hide native number spinners; keep explicit
@@ -470,41 +478,16 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         );
       }}
       @change=${(event: Event) => {
-        if (params.commitOnBlur) {
-          return;
-        }
-        const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, params);
-        if (state.parsed === undefined) {
-          setControlValidity(target, state.message);
-          return;
-        }
-        const normalized = normalizeNumericValue(state.parsed, schema);
-        target.value = formatConfigValueText(normalized);
-        if (
-          setControlValidity(target, numericConstraintMessage(normalized, schema)) &&
-          !configValuesEqual(patchedValue, normalized)
-        ) {
-          commitScalarValue(target, normalized);
+        if (!params.commitOnBlur) {
+          commitChange(event.target as HTMLInputElement, false);
         }
       }}
       @blur=${(event: FocusEvent) => {
         // SAFETY: Lit binds this handler directly to the native number input.
         const target = event.target as HTMLInputElement;
-        if (!params.commitOnBlur || target.value === renderedValue) {
-          return;
+        if (params.commitOnBlur && target.value !== renderedValue) {
+          commitChange(target, true);
         }
-        const state = resolveNumericInputState(target, params);
-        if (state.parsed !== undefined) {
-          state.parsed = normalizeNumericValue(state.parsed, schema);
-          state.message = numericConstraintMessage(state.parsed, schema);
-          target.value = formatConfigValueText(state.parsed);
-        }
-        applyNumericInputState(target, state, (candidate) => {
-          if (!configValuesEqual(patchedValue, candidate)) {
-            commitScalarValue(target, candidate);
-          }
-        });
       }}
     />
     ${renderStepButton(1)}

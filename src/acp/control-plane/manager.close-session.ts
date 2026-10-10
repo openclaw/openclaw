@@ -1,4 +1,3 @@
-/** Close/reset path for ACP runtime sessions and persisted manager metadata. */
 import {
   identityHasStableSessionId,
   resolveSessionIdentityFromMeta,
@@ -29,7 +28,6 @@ import {
   resolveAcpSessionResolutionError,
 } from "./manager.utils.js";
 
-/** Closes an ACP session runtime handle and optionally discards persistent state/meta. */
 export async function runManagerCloseSession(params: {
   input: AcpCloseSessionInput;
   sessionKey: string;

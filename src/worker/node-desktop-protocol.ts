@@ -12,14 +12,6 @@ import { decodeWorkerRequest, hasExactOwnKeys } from "./protocol-record.js";
 const REQUEST_MAX_BYTES = 16 * 1024;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 
-type NodeWorkerDesktopStreamInput = {
-  ticket: string;
-  attachPath: string;
-  port: number;
-  passwordFilePath?: string;
-  username?: string;
-};
-
 function isValidPort(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= 65_535;
 }
@@ -31,9 +23,7 @@ function requireAbsolutePath(value: unknown, label: string): string {
   return value;
 }
 
-export function parseNodeWorkerDesktopStreamInput(
-  raw?: string | null,
-): NodeWorkerDesktopStreamInput {
+export function parseNodeWorkerDesktopStreamInput(raw?: string | null) {
   const value = decodeWorkerRequest(raw, REQUEST_MAX_BYTES, "node worker desktop");
   if (
     !isRecord(value) ||

@@ -12,7 +12,7 @@ import {
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { cronStoreKey } from "../store/key.js";
-import { recordCronRun } from "../store/run-history.js";
+import { recordCronRun, type CronRunHistorySource } from "../store/run-history.js";
 import type { CronRunHistoryWrite } from "../store/run-history.types.js";
 import { bindCronRunReceiptExecution } from "../store/run-receipt-execution-binding.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
@@ -138,6 +138,7 @@ export async function finishCronRun(
   state: CronServiceState,
   result: {
     taskRunId?: string;
+    historySource?: CronRunHistorySource;
     job?: CronJob;
     event: CronEvent & { action: "finished" };
     ownerlessRun?: true;
@@ -153,39 +154,48 @@ export async function finishCronRun(
   );
   const startedAt = entry.runAtMs ?? entry.ts;
   const job = result.job ?? result.event.job;
-  const storeKey = cronStoreKey(state.deps.storePath);
-  await persistCronOutcome(state, {
-    storeKey,
-    jobId: entry.jobId,
-    runId:
-      result.taskRunId ?? createCronHistoryRunId(entry.jobId, startedAt, undefined, entry.runId),
-    agentId:
-      !result.ownerlessRun && job
-        ? tryResolveCronJobEffectiveAgentId(
-            job,
-            state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-          )
-        : undefined,
-    startedAt,
-    endedAt: entry.ts,
-    status: cronRunStorageStatus(entry),
-    sessionKey: entry.sessionKey,
-    error: entry.error,
-    summary: entry.summary,
-    detail: cronRunLogEntryToDetail(entry, {
+  const source = result.historySource;
+  source?.assertCurrent();
+  const storeKey = source?.storeKey ?? cronStoreKey(state.deps.storePath);
+  await persistCronOutcome(
+    state,
+    {
       storeKey,
-      scriptResult: result.scriptResult,
-      triggerEval: result.triggerEval,
-    }),
-  });
+      jobId: entry.jobId,
+      runId:
+        result.taskRunId ?? createCronHistoryRunId(entry.jobId, startedAt, undefined, entry.runId),
+      agentId:
+        !result.ownerlessRun && job
+          ? tryResolveCronJobEffectiveAgentId(
+              job,
+              source
+                ? source.defaultAgentId
+                : (state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId),
+            )
+          : undefined,
+      startedAt,
+      endedAt: entry.ts,
+      status: cronRunStorageStatus(entry),
+      sessionKey: entry.sessionKey,
+      error: entry.error,
+      summary: entry.summary,
+      detail: cronRunLogEntryToDetail(entry, {
+        storeKey,
+        scriptResult: result.scriptResult,
+        triggerEval: result.triggerEval,
+      }),
+    },
+    source,
+  );
 }
 
 async function persistCronOutcome(
   state: CronServiceState,
   input: CronRunHistoryWrite,
+  source?: CronRunHistorySource,
 ): Promise<void> {
   try {
-    await recordCronRun(input);
+    await recordCronRun(input, source);
   } catch (error) {
     state.deps.log.warn(
       { jobId: input.jobId, runId: input.runId, error },

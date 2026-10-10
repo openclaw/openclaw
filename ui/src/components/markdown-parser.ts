@@ -1,5 +1,6 @@
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
@@ -22,8 +23,10 @@ import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
-import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
+import {
+  markdownInlineChildren,
+  replaceMarkdownTextMatches,
+} from "./markdown-text-replacements.ts";
 
 const DISALLOWED_LINK_SCHEME_RE = /^(?!(?:https?|mailto):)[a-z][a-z0-9+.-]*:/i;
 // Raw CJK suffixes delimit autolinks; percent-encoded URL content stays intact.
@@ -38,14 +41,6 @@ const BARE_URL_CLASS = "markdown-bare-url";
 // Code-span URLs use the same generated labels as autolinks.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
 const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
-
-// Core rules classify file links before the code_inline renderer consumes them.
-type MarkdownFileLinkMeta = {
-  path: string;
-  line: number | null;
-  // Full original reference, set only when the visible label was shortened.
-  title: string | null;
-};
 
 // Label shortening needs every file target before applying any label.
 type MarkdownFileLinkDecoration = {
@@ -73,7 +68,7 @@ function renderRawMarkdownHtml(
   if (/^<br\s*\/?>$/iu.test(content.trim())) {
     return block ? "<br>\n" : "<br>";
   }
-  return escapeMarkdownHtml(content) + (block ? "\n" : "");
+  return escapeHtml(content) + (block ? "\n" : "");
 }
 
 /** Authored labels differ from labels that merely repeat the reference. */
@@ -89,6 +84,17 @@ function linkLabelText(children: readonly Token[], openIndex: number): string {
     }
   }
   return label.trim();
+}
+
+function decorateFileLink(token: Token, target: { path: string; line: number | null }): void {
+  token.attrJoin("class", "markdown-file-link");
+  token.attrSet("role", "button");
+  token.attrSet("tabindex", "0");
+  token.attrSet("data-file-path", target.path);
+  token.attrSet("data-file-kind", fileKindForPath(target.path));
+  if (target.line !== null) {
+    token.attrSet("data-file-line", String(target.line));
+  }
 }
 
 function parseWebLinkHref(href: string): URL | null {
@@ -126,8 +132,6 @@ export function createMarkdownParser(): MarkdownItParser {
     linkify: true,
   });
   markdownParser.use(markdownItCjkFriendly);
-  const defaultCodeInlineRenderer = markdownParser.renderer.rules.code_inline!;
-
   markdownParser.enable("strikethrough");
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
@@ -224,11 +228,7 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.validateLink = () => true;
 
   markdownParser.core.ruler.after("linkify", "disallowed-link-schemes", (state) => {
-    for (const blockToken of state.tokens) {
-      const children = blockToken.children;
-      if (blockToken.type !== "inline" || !children) {
-        continue;
-      }
+    for (const children of markdownInlineChildren(state.tokens)) {
       let hideClose = false;
       for (const token of children) {
         if (
@@ -247,11 +247,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   // Linkify can swallow adjacent CJK prose; return only its suffix to plain text.
   markdownParser.core.ruler.after("linkify", "linkify-cjk-trim", (state) => {
-    for (const blockToken of state.tokens) {
-      if (blockToken.type !== "inline" || !blockToken.children) {
-        continue;
-      }
-      const children = blockToken.children;
+    for (const children of markdownInlineChildren(state.tokens)) {
       for (let index = children.length - 1; index >= 0; index--) {
         const token = children[index];
         if (!token || token.type !== "link_open") {
@@ -302,11 +298,29 @@ export function createMarkdownParser(): MarkdownItParser {
       return;
     }
     const decorations: MarkdownFileLinkDecoration[] = [];
-    for (const blockToken of state.tokens) {
-      if (blockToken.type !== "inline" || !blockToken.children) {
-        continue;
-      }
-      const children = blockToken.children;
+    const fileLinkTokens = (
+      label: Token,
+      target: { path: string; line: number | null },
+      reference: string,
+    ): Token[] => {
+      const open = new state.Token("link_open", "a", 1);
+      const close = new state.Token("link_close", "a", -1);
+      open.markup = "file-link";
+      close.markup = "file-link";
+      decorateFileLink(open, target);
+      decorations.push({
+        path: target.path,
+        reference,
+        applyLabel: (text) => {
+          label.content = text;
+          if (text !== reference) {
+            open.attrSet("title", reference);
+          }
+        },
+      });
+      return [open, label, close];
+    };
+    for (const children of markdownInlineChildren(state.tokens)) {
       let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
         const token = children[index];
@@ -330,14 +344,7 @@ export function createMarkdownParser(): MarkdownItParser {
                   : null);
               if (target) {
                 token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
-                token.attrJoin("class", "markdown-file-link");
-                token.attrSet("role", "button");
-                token.attrSet("tabindex", "0");
-                token.attrSet("data-file-path", target.path);
-                token.attrSet("data-file-kind", fileKindForPath(target.path));
-                if (target.line !== null) {
-                  token.attrSet("data-file-line", String(target.line));
-                }
+                decorateFileLink(token, target);
                 // Keep authored labels; expose their reference only when different.
                 const reference = decodedHref.trim();
                 if (linkLabelText(children, index) !== reference) {
@@ -359,21 +366,8 @@ export function createMarkdownParser(): MarkdownItParser {
         if (token.type === "code_inline") {
           const target = parseMarkdownFileLinkTarget(token.content);
           if (target) {
-            const reference = token.content.trim();
-            const meta: MarkdownFileLinkMeta = {
-              path: target.path,
-              line: target.line,
-              title: null,
-            };
-            token.meta = { ...token.meta, fileLink: meta };
-            decorations.push({
-              path: target.path,
-              reference,
-              applyLabel: (label) => {
-                token.content = label;
-                meta.title = label === reference ? null : reference;
-              },
-            });
+            children.splice(index, 1, ...fileLinkTokens(token, target, token.content.trim()));
+            index += 2;
           }
           continue;
         }
@@ -398,31 +392,8 @@ export function createMarkdownParser(): MarkdownItParser {
             if (!target) {
               return null;
             }
-            const open = new state.Token("link_open", "a", 1);
-            open.markup = "file-link";
-            open.attrSet("class", "markdown-file-link");
-            open.attrSet("role", "button");
-            open.attrSet("tabindex", "0");
-            open.attrSet("data-file-path", target.path);
-            open.attrSet("data-file-kind", fileKindForPath(target.path));
-            if (target.line !== null) {
-              open.attrSet("data-file-line", String(target.line));
-            }
             const label = new state.Token("text", "", 0);
-            label.content = matched;
-            const close = new state.Token("link_close", "a", -1);
-            close.markup = "file-link";
-            decorations.push({
-              path: target.path,
-              reference: matched,
-              applyLabel: (text) => {
-                label.content = text;
-                if (text !== matched) {
-                  open.attrSet("title", matched);
-                }
-              },
-            });
-            return [open, label, close];
+            return fileLinkTokens(label, target, matched);
           },
         );
       }
@@ -440,11 +411,7 @@ export function createMarkdownParser(): MarkdownItParser {
 
   // Give bare and code-span GitHub URLs the same label; image-only links get no mark.
   markdownParser.core.ruler.after("linkify", "web-link-classes", (state) => {
-    for (const blockToken of state.tokens) {
-      if (blockToken.type !== "inline" || !blockToken.children) {
-        continue;
-      }
-      const children = blockToken.children;
+    for (const children of markdownInlineChildren(state.tokens)) {
       let linkDepth = 0;
       for (let index = 0; index < children.length; index++) {
         let open = children[index];
@@ -586,32 +553,26 @@ export function createMarkdownParser(): MarkdownItParser {
   markdownParser.renderer.rules.link_favicon = (tokens, index) => {
     const hostname: unknown = tokens[index]?.meta?.hostname;
     return typeof hostname === "string"
-      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeMarkdownHtml(hostname)}" alt="" role="presentation">`
+      ? `<img class="markdown-link-favicon" data-link-favicon-host="${escapeHtml(hostname)}" alt="" role="presentation">`
       : "";
   };
-  markdownParser.renderer.rules.code_inline = (tokens, index, options, env, self) => {
-    const rendered = defaultCodeInlineRenderer(tokens, index, options, env, self);
-    const target = tokens[index]?.meta?.fileLink as MarkdownFileLinkMeta | undefined;
-    if (target) {
-      const lineAttribute =
-        target.line === null ? "" : ` data-file-line="${escapeMarkdownHtml(String(target.line))}"`;
-      const titleAttribute =
-        target.title === null ? "" : ` title="${escapeMarkdownHtml(target.title)}"`;
-      return `<a class="markdown-file-link" role="button" tabindex="0" data-file-path="${escapeMarkdownHtml(target.path)}" data-file-kind="${fileKindForPath(target.path)}"${lineAttribute}${titleAttribute}>${rendered}</a>`;
-    }
-    return rendered;
-  };
-
   // Fenced and indented blocks share one interaction and overflow surface.
-  markdownParser.renderer.rules.fence = (tokens, index, _options, env) => {
+  markdownParser.renderer.rules.fence = markdownParser.renderer.rules.code_block = (
+    tokens,
+    index,
+    _options,
+    env,
+  ) => {
     const token = tokens[index];
     if (!token) {
       return "";
     }
-    const language = token.info.trim().split(/\s+/)[0] || "";
+    const fenced = token.type === "fence";
+    const language = fenced ? token.info.trim().split(/\s+/)[0] || "" : "";
     // An unfinished fence consumes the remaining input; only container closers can
     // follow it. Invalid fence-looking prose must not de-highlight an earlier block.
     const openFence =
+      fenced &&
       env?.streamingOpenFence === true &&
       tokens.findLastIndex(({ nesting }) => nesting !== -1) === index;
     const code = renderMarkdownCodeBlock(token.content, language, env, {
@@ -624,16 +585,6 @@ export function createMarkdownParser(): MarkdownItParser {
       ? `<div class="markdown-mermaid">${code}</div>`
       : code;
   };
-  markdownParser.renderer.rules.code_block = (tokens, index, _options, env) => {
-    const content = tokens[index]?.content;
-    if (content === undefined) {
-      return "";
-    }
-    return renderMarkdownCodeBlock(content, "", env, {
-      copyText: markdownCodeBlockCopyText(content),
-    });
-  };
-
   installMarkdownHumanMentions(markdownParser);
   return markdownParser;
 }

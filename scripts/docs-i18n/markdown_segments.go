@@ -11,7 +11,7 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
-func extractSegments(body, relPath string) ([]Segment, error) {
+func extractSegments(body, relPath string) []Segment {
 	source := []byte(body)
 	r := text.NewReader(source)
 	md := goldmark.New(
@@ -23,7 +23,7 @@ func extractSegments(body, relPath string) ([]Segment, error) {
 	skipDepth := 0
 	var lastBlock ast.Node
 
-	err := ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
 		switch n.(type) {
 		case *ast.CodeBlock, *ast.FencedCodeBlock, *ast.CodeSpan, *ast.HTMLBlock, *ast.RawHTML:
 			if entering {
@@ -66,9 +66,6 @@ func extractSegments(body, relPath string) ([]Segment, error) {
 		lastBlock = block
 		return ast.WalkContinue, nil
 	})
-	if err != nil {
-		return nil, err
-	}
 
 	for index := range segments {
 		seg := &segments[index]
@@ -81,22 +78,27 @@ func extractSegments(body, relPath string) ([]Segment, error) {
 		return segments[i].Start < segments[j].Start
 	})
 
-	return segments, nil
+	return segments
+}
+
+func visitMarkdownNodes(doc ast.Node, visit func(ast.Node)) {
+	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering {
+			visit(node)
+		}
+		return ast.WalkContinue, nil
+	})
 }
 
 func extractMarkdownHeadingLevels(body string) []int {
 	source := []byte(stripDocComponentTagsForHeadingParse(body))
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
 	levels := []int{}
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		heading, ok := node.(*ast.Heading)
 		if ok {
 			levels = append(levels, heading.Level)
 		}
-		return ast.WalkContinue, nil
 	})
 	return levels
 }
@@ -113,13 +115,10 @@ func extractMarkdownListShapes(body string) []markdownListShape {
 	parseSource := []byte(normalizeDocComponentsForMarkdownParse(body))
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))
 	shapes := []markdownListShape{}
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		list, ok := node.(*ast.List)
 		if !ok {
-			return ast.WalkContinue, nil
+			return
 		}
 		depth := 0
 		for parent := list.Parent(); parent != nil; parent = parent.Parent() {
@@ -140,7 +139,6 @@ func extractMarkdownListShapes(body string) []markdownListShape {
 			items:          items,
 			parentItemPath: markdownListParentItemPath(list),
 		})
-		return ast.WalkContinue, nil
 	})
 	return shapes
 }
@@ -180,18 +178,14 @@ func extractMarkdownInlineCodeValues(body string) []string {
 	fencedRanges := markdownClosedLiteralFenceByteRanges(string(parseSource))
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(parseSource))
 	values := []string{}
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		span, ok := node.(*ast.CodeSpan)
 		if ok {
 			if byteRange, found := markdownCodeSpanContentRange(span); found && rangeOverlapsAny(byteRange, fencedRanges) {
-				return ast.WalkContinue, nil
+				return
 			}
 			values = append(values, string(span.Text(parseSource)))
 		}
-		return ast.WalkContinue, nil
 	})
 	values = append(values, extractFallbackBacktickValues(string(parseSource))...)
 	return values
@@ -222,30 +216,16 @@ func extractMarkdownFencedLiteralValues(body string) ([]string, []string, []stri
 	directiveTokens := []string{}
 	allSquareTokens := []string{}
 	state := markdownLiteralFenceState{}
-	lines := []string{}
-	flush := func(info string) {
-		for _, line := range lines {
-			if info != "mermaid" {
-				allSquareTokens = append(allSquareTokens, extractSquareBracketValues(line)...)
-				directiveTokens = append(directiveTokens, extractDoubleBracketValues(line)...)
-			}
-			placeholders = append(placeholders, extractAngleBracketValues(line)...)
-		}
-		lines = lines[:0]
-	}
-
 	for _, line := range strings.Split(body, "\n") {
-		previous := state
 		if !state.consumeLine(line) {
-			if previous.delimiter != "" {
-				flush(previous.info)
-			}
 			continue
 		}
-		lines = append(lines, strings.TrimSpace(stripMarkdownQuotePrefix(line, state.quoteDepth)))
-	}
-	if state.delimiter != "" {
-		flush(state.info)
+		line = strings.TrimSpace(stripMarkdownQuotePrefix(line, state.quoteDepth))
+		if state.info != "mermaid" {
+			allSquareTokens = append(allSquareTokens, extractSquareBracketValues(line)...)
+			directiveTokens = append(directiveTokens, extractDoubleBracketValues(line)...)
+		}
+		placeholders = append(placeholders, extractAngleBracketValues(line)...)
 	}
 	closingNames := map[string]struct{}{}
 	for _, token := range allSquareTokens {
@@ -663,19 +643,15 @@ func markdownFencedCodeRanges(body string) [][2]int {
 	source := []byte(body)
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
 	ranges := [][2]int{}
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		block, ok := node.(*ast.FencedCodeBlock)
 		if !ok {
-			return ast.WalkContinue, nil
+			return
 		}
 		for index := 0; index < block.Lines().Len(); index++ {
 			segment := block.Lines().At(index)
 			ranges = append(ranges, [2]int{segment.Start, segment.Stop})
 		}
-		return ast.WalkContinue, nil
 	})
 	return ranges
 }
@@ -879,18 +855,14 @@ func markdownCodeSpanRanges(body string) [][2]int {
 	source := []byte(body)
 	doc := goldmark.New(goldmark.WithExtensions(extension.GFM)).Parser().Parse(text.NewReader(source))
 	ranges := [][2]int{}
-	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
-		if !entering {
-			return ast.WalkContinue, nil
-		}
+	visitMarkdownNodes(doc, func(node ast.Node) {
 		span, ok := node.(*ast.CodeSpan)
 		if !ok {
-			return ast.WalkContinue, nil
+			return
 		}
 		if byteRange, found := markdownCodeSpanContentRange(span); found {
 			ranges = append(ranges, byteRange)
 		}
-		return ast.WalkContinue, nil
 	})
 	return ranges
 }

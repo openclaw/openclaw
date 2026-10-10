@@ -316,10 +316,10 @@ describe("models.list", () => {
       agentId: "writer",
       runtimeConfig: {
         agents: {
-          list: [
-            { id: "main", default: true },
-            { id: "writer", model: "test/writer-model" },
-          ],
+          entries: {
+            main: {},
+            writer: { model: "test/writer-model" },
+          },
         },
       },
       loadGatewayModelCatalog,
@@ -336,7 +336,7 @@ describe("models.list", () => {
     const runtimeConfig = {
       agents: {
         ownership: "explicit" as const,
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
       },
     };
     const missing = requestModelsList({
@@ -1456,9 +1456,7 @@ describe("models.list", () => {
                     },
                     available,
                     tags: ["configured"],
-                    ...(!authenticated && catalogComplete
-                      ? { unavailableReason: "missing-auth" }
-                      : {}),
+                    ...(authenticated ? {} : { unavailableReason: "missing-auth" }),
                   },
                 ],
               },
@@ -2164,13 +2162,9 @@ describe("models.list", () => {
           defaults: {
             models: { "openai/gpt-5.6-luna": { params: { fastMode: modelDefault } } },
           },
-          list: [
-            {
-              id: "main",
-              default: true,
-              ...(agentDefault === undefined ? {} : { fastModeDefault: agentDefault }),
-            },
-          ],
+          entries: {
+            main: agentDefault === undefined ? {} : { fastModeDefault: agentDefault },
+          },
         },
       },
       loadGatewayModelCatalog: catalogLoader([

@@ -12,10 +12,18 @@ import type { ClawHubSkillDetail } from "../../../lib/skills/index.ts";
 import { loadSkillStatusReport } from "../../../lib/skills/status-report.ts";
 import { GatewayPageController } from "../../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
-import { renderPluginOfficialBadge } from "../../plugins/plugin-card.ts";
-import { PluginIconController } from "../../plugins/plugin-icon-controller.ts";
+import { renderPluginAuthor, renderPluginOfficialBadge } from "../../plugins/plugin-card.ts";
+import {
+  PluginIconController,
+  pluginIconFetchContext,
+} from "../../plugins/plugin-icon-controller.ts";
 import { resolvePluginCatalogIconUrl } from "../../plugins/presentation.ts";
 import "../../../styles/chat/clawhub-card.css";
+
+type CardPresentation = Pick<
+  ClawHubRecommendation,
+  "id" | "kind" | "name" | "description" | "iconUrl"
+> & { registry?: string; pluginId?: string; author?: string; official: boolean };
 
 /** The transcript identifies the listing; its current catalog owner supplies status and actions. */
 class ChatClawHubCard extends OpenClawLightDomElement {
@@ -29,7 +37,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
   @state() private pluginIconUrls: Record<string, string> = {};
   @state() private loadedImage?: string;
   @state() private failedImages: ReadonlySet<string> = new Set();
-  private iconPluginId?: string;
+  @state() private presentation?: CardPresentation;
 
   private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
@@ -41,42 +49,38 @@ class ChatClawHubCard extends OpenClawLightDomElement {
     },
   });
 
-  private get iconFetchContext() {
-    return {
-      resourceBasePath: this.context.resourceBasePath,
-      gatewayUrl: this.context.gateway.connection.gatewayUrl,
-      auth: {
-        hello: this.context.gateway.snapshot.hello,
-        settings: { token: this.context.gateway.connection.token },
-        password: this.context.gateway.connection.password,
+  private readonly catalogIcons = this.createIconController("iconUrls");
+  private readonly pluginIcons = this.createIconController("pluginIconUrls");
+
+  private createIconController(key: "iconUrls" | "pluginIconUrls") {
+    return new PluginIconController({
+      kind: key === "iconUrls" ? "catalog" : undefined,
+      getFetchContext: () => pluginIconFetchContext(this.context),
+      isConnected: () => this.isConnected && this.gateway.connected,
+      onUrlsChange: (urls) => {
+        this[key] = urls;
       },
-    };
+      onLoadingChange: () => this.requestUpdate(),
+    });
   }
-
-  private readonly catalogIcons = new PluginIconController({
-    kind: "catalog",
-    getFetchContext: () => this.iconFetchContext,
-    isConnected: () => this.isConnected && this.gateway.connected,
-    onUrlsChange: (urls) => {
-      this.iconUrls = urls;
-    },
-    onLoadingChange: () => this.requestUpdate(),
-  });
-
-  private readonly pluginIcons = new PluginIconController({
-    getFetchContext: () => this.iconFetchContext,
-    isConnected: () => this.isConnected && this.gateway.connected,
-    onUrlsChange: (urls) => {
-      this.pluginIconUrls = urls;
-    },
-    onLoadingChange: () => this.requestUpdate(),
-  });
 
   private resetIcons(): void {
     this.catalogIcons.reset();
     this.pluginIcons.reset();
     this.loadedImage = undefined;
     this.failedImages = new Set();
+    this.presentation = undefined;
+  }
+
+  private presentCard(card: CardPresentation): void {
+    if (card.pluginId !== this.presentation?.pluginId) {
+      this.pluginIcons.reset();
+    }
+    this.presentation = card;
+    if (card.pluginId) {
+      this.pluginIcons.load(card.pluginId);
+    }
+    this.catalogIcons.syncCatalog([], card.iconUrl ? [card.iconUrl] : []);
   }
 
   private readonly statusTask = new Task(this, {
@@ -97,11 +101,25 @@ class ChatClawHubCard extends OpenClawLightDomElement {
       if (!client || !card) {
         return initialState;
       }
+      const previous = this.presentation;
+      if (
+        !previous ||
+        previous.id !== card.id ||
+        previous.kind !== card.kind ||
+        (previous.kind === "skill" && card.kind === "skill" && previous.registry !== card.registry)
+      ) {
+        this.resetIcons();
+        // Transcript artwork can load while status is revalidated. Same-card
+        // refreshes retain decoded artwork; only current status authorizes actions.
+        this.presentCard(card);
+      }
       if (card.kind === "plugin") {
         const { plugin } = await loadPluginDiscoveryDetail(client, card.id, signal);
+        signal.throwIfAborted();
         return {
           ...card,
           name: plugin.catalog.name,
+          author: plugin.catalog.author,
           description: plugin.catalog.summary,
           iconUrl: plugin.catalog.imageUrl,
           pluginId: plugin.local.pluginId,
@@ -117,6 +135,7 @@ class ChatClawHubCard extends OpenClawLightDomElement {
         client.request<ClawHubSkillDetail>("skills.detail", { slug: card.id }, { signal }),
         loadSkillStatusReport(client, agentId),
       ]);
+      signal.throwIfAborted();
       if (!detail.skill || !report) {
         throw new Error("Skill details are unavailable.");
       }
@@ -131,26 +150,27 @@ class ChatClawHubCard extends OpenClawLightDomElement {
       return {
         ...card,
         name: detail.skill.displayName,
+        author: detail.owner?.handle ?? undefined,
         pluginId: undefined,
-        description: detail.skill.summary,
+        description: detail.skill.summary ?? undefined,
         official: detail.skill.isOfficial === true,
         installed,
         canInstall: detail.skill.isOfficial === true && !installed,
       };
     },
     onComplete: (card) => {
-      if (card.pluginId !== this.iconPluginId) {
-        this.pluginIcons.reset();
-        this.iconPluginId = card.pluginId;
+      if (card.iconUrl && !this.iconUrls[card.iconUrl]) {
+        // After a Gateway restart, detail admission can authorize an old
+        // transcript URL. Replace even pending reads: an earlier rejection may
+        // arrive after admission and otherwise remain cached as a miss.
+        this.catalogIcons.invalidate(card.iconUrl);
       }
-      if (card.pluginId) {
-        this.pluginIcons.load(card.pluginId);
-      }
-      this.catalogIcons.syncCatalog([], card.iconUrl ? [card.iconUrl] : []);
+      this.presentCard(card);
     },
   });
 
   override disconnectedCallback(): void {
+    this.statusTask.abort();
     this.resetIcons();
     super.disconnectedCallback();
   }
@@ -179,24 +199,19 @@ class ChatClawHubCard extends OpenClawLightDomElement {
       return nothing;
     }
     const ready = this.statusTask.status === TaskStatus.COMPLETE;
-    const card = ready ? this.statusTask.value : this.recommendation;
-    if (!card) {
-      return nothing;
-    }
+    const card: CardPresentation = this.presentation ?? this.recommendation;
     const failed = this.statusTask.status === TaskStatus.ERROR;
-    const resolved = ready ? this.statusTask.value : undefined;
     const icon = resolvePluginCatalogIconUrl(
-      { pluginId: resolved?.pluginId, imageUrl: card.iconUrl },
+      { pluginId: card.pluginId, imageUrl: card.iconUrl },
       { pluginIconUrls: this.pluginIconUrls, iconUrls: this.iconUrls },
       this.failedImages,
     );
     // A decoded source stays visible while lower-priority artwork is still fetching.
-    const iconPending =
-      (!ready && !failed) ||
-      (icon
-        ? this.loadedImage !== icon
-        : Boolean(resolved?.pluginId && this.pluginIcons.isLoading(resolved.pluginId)) ||
-          Boolean(card.iconUrl && this.catalogIcons.isLoading(card.iconUrl)));
+    const iconPending = icon
+      ? this.loadedImage !== icon
+      : Boolean(card.pluginId && this.pluginIcons.isLoading(card.pluginId)) ||
+        Boolean(card.iconUrl && this.catalogIcons.isLoading(card.iconUrl)) ||
+        (!ready && !failed && !card.pluginId && !card.iconUrl);
     const statusPending = !ready && !failed;
     return html`
       <div
@@ -226,14 +241,15 @@ class ChatClawHubCard extends OpenClawLightDomElement {
           </span>
           <span class="chat-clawhub-card__identity">
             <span class="card-title chat-clawhub-card__name"
-              >${card.name} ${card.official ? renderPluginOfficialBadge() : nothing}
+              ><span>${card.name}</span> ${renderPluginAuthor(card.author)}
+              ${card.official ? renderPluginOfficialBadge() : nothing}
             </span>
             ${card.description ? html`<span class="card-sub">${card.description}</span>` : nothing}
           </span>
         </button>
         <div class="chat-clawhub-card__actions" aria-live="polite">
           ${
-            ready && card.installed
+            ready && this.statusTask.value?.installed
               ? html`<span class="chip chip-ok chat-clawhub-card__installed"
                   >${icons.check}<span>${t("pluginsPage.installed")}</span></span
                 >`

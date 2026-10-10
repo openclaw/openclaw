@@ -1,7 +1,5 @@
-import type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import { enforceMessageActionAllowlist } from "./outbound-policy.js";
 

@@ -1,3 +1,4 @@
+import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
@@ -6,9 +7,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import { renderSessionMenuItem } from "../pages/new-session/cloud-target.ts";
-import { folderDisplayName } from "../pages/new-session/path.ts";
 import { PlaceBrowserState } from "../pages/new-session/place-browser-state.ts";
 import { renderPlaceBrowser } from "../pages/new-session/place-browser.ts";
 import "../styles/new-session.css";
@@ -16,6 +18,8 @@ import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { syncPopoverLabel } from "./web-awesome-popover.ts";
 import { syncDropdownItemRadio } from "./web-awesome.ts";
+
+registerSessionOrganizationEnglish();
 
 registerNewSessionSetupEnglish();
 
@@ -39,7 +43,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
   return withPromiseModalHost<void>(undefined, ({ host, render, finish: settle }) => {
     let cwd = options.defaults.cwd;
     let worktree = false;
-    let repositoryStatus: WorktreeRepositoryStatus | "checking" = "checking";
+    let repositoryStatus: WorktreeRepositoryStatus | "checking" | "restricted" = "checking";
     let repositoryRequestToken = 0;
     let submitting = false;
     let failure: string | null = null;
@@ -55,7 +59,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const handleSubmit = async (event: Event) => {
       event.preventDefault();
-      if (submitting || repositoryStatus === "checking" || repositoryStatus === "unavailable") {
+      if (submitting || (repositoryStatus !== "git" && repositoryStatus !== "not_git")) {
         return;
       }
       submitting = true;
@@ -112,12 +116,15 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
         }
         repositoryStatus = status;
         worktree = status === "git" && restoreSavedWorktree && options.defaults.worktree;
-      } catch {
+      } catch (error) {
         if (requestToken !== repositoryRequestToken) {
           return;
         }
-        repositoryStatus = "unavailable";
         worktree = false;
+        // A path-authorization denial is not a repository status: collapsing it
+        // into "couldn't verify Git" would present a retry that can never
+        // succeed while the connection still lacks the required operator scope.
+        repositoryStatus = readMissingScopeError(error) ? "restricted" : "unavailable";
       }
       paint();
     };
@@ -154,16 +161,22 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     const showBrowser = () => {
       browserVisible = true;
-      void browser.navigate(cwd || undefined);
+      void browser.navigate(cwd || undefined, "initial");
     };
 
     function paint() {
       const trimmedCwd = cwd.trim();
       const folderLabel = trimmedCwd
-        ? folderDisplayName(trimmedCwd)
+        ? pathDisplayName(trimmedCwd)
         : t("sessionsView.groupDefaultsCwdPlaceholder");
       const environmentState =
-        repositoryStatus === "checking" ? "checking" : repositoryStatus === "git" ? "git" : "local";
+        repositoryStatus === "checking"
+          ? "checking"
+          : repositoryStatus === "git"
+            ? "git"
+            : repositoryStatus === "restricted"
+              ? "restricted"
+              : "local";
       const environmentOptions = [
         {
           value: "local",
@@ -366,9 +379,11 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                                     ? nothing
                                     : html`<small
                                         >${
-                                          repositoryStatus === "unavailable"
-                                            ? t("newSession.gitCheckUnavailable")
-                                            : t("newSession.checkoutCurrentNote")
+                                          repositoryStatus === "restricted"
+                                            ? t("sessionsView.groupDefaultsRequiresAdmin")
+                                            : repositoryStatus === "unavailable"
+                                              ? t("newSession.gitCheckUnavailable")
+                                              : t("newSession.checkoutCurrentNote")
                                         }</small
                                       >`
                                 }
@@ -391,13 +406,14 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   ?disabled=${
                     submitting ||
                     repositoryStatus === "checking" ||
-                    repositoryStatus === "unavailable"
+                    repositoryStatus === "unavailable" ||
+                    repositoryStatus === "restricted"
                   }
                 >
                   ${t("common.save")}
                 </button>
                 ${
-                  repositoryStatus === "unavailable"
+                  repositoryStatus === "unavailable" || repositoryStatus === "restricted"
                     ? html`
                         <button
                           type="button"

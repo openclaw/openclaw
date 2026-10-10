@@ -30,10 +30,7 @@ export function applyQaSetup(params: {
   }
   nextCfg.channels ??= {};
   if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    nextCfg.channels["qa-channel"] = {
-      ...section,
-      ...target,
-    };
+    nextCfg.channels["qa-channel"] = target;
   } else {
     accounts[params.accountId] = target;
     nextCfg.channels["qa-channel"] = {

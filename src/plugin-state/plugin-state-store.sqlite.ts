@@ -1,16 +1,19 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { ExpressionBuilder } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { pluginStatePublication } from "./plugin-state-publication.js";
 import {
   runWriteTransaction,
   withPluginStateDatabaseReadOnly,
@@ -26,7 +29,6 @@ import {
   countLivePluginStateNamespaceEntries,
   lookupPluginStateEntry,
   type PluginStateDatabase,
-  type PluginStateReadRow,
 } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
@@ -38,7 +40,6 @@ import {
   listPluginStateEntries,
   lookupPluginStateEntries,
   validatePluginStateKeyRange,
-  type PluginStateKeyRangeParams,
 } from "./plugin-state-store.reads.js";
 import {
   countLivePluginStateEntries,
@@ -310,6 +311,22 @@ export function pluginStateDeleteIf(params: {
   );
 }
 
+export function observedPluginStateRow(
+  eb: ExpressionBuilder<Pick<DB, "plugin_state_entries">, "plugin_state_entries">,
+  scope: { pluginId: string; namespace: string },
+  entry: PluginDoctorRawStateEntry,
+) {
+  return eb
+    .and({
+      plugin_id: scope.pluginId,
+      namespace: scope.namespace,
+      entry_key: entry.key,
+      value_json: entry.valueJson,
+      created_at: entry.createdAt,
+    })
+    .and("expires_at", entry.expiresAt === null ? "is" : "=", entry.expiresAt);
+}
+
 /** Deletes one bounded set of exact observed rows in a single synchronous transaction. */
 export function pluginStateDeleteEntriesIfUnchanged(params: {
   pluginId: string;
@@ -334,18 +351,13 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
       params.assertOwnedInTransaction(db);
       let deleted = 0;
       for (const entry of observed) {
-        let query = getPluginStateKysely(db)
+        const query = getPluginStateKysely(db)
           .deleteFrom("plugin_state_entries")
-          .where("plugin_id", "=", params.pluginId)
-          .where("namespace", "=", params.namespace)
-          .where("entry_key", "=", entry.key)
-          .where("value_json", "=", entry.valueJson)
-          .where("created_at", "=", entry.createdAt);
-        query =
-          entry.expiresAt === null
-            ? query.where("expires_at", "is", null)
-            : query.where("expires_at", "=", entry.expiresAt);
-        deleted += Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0);
+          .where((eb) => observedPluginStateRow(eb, params, entry))
+          .returning(["plugin_id", "namespace", "entry_key"]);
+        const result = executeSqliteQuerySync(db, query);
+        pluginStatePublication.stageDeletions(db, result.rows);
+        deleted += result.rows.length;
       }
       return { deleted, changed: observed.length - deleted };
     },
@@ -363,7 +375,6 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
   env?: NodeJS.ProcessEnv;
 }): PluginDoctorRawStateEntry[] {
   if (
-    !params.prefix ||
     !Number.isSafeInteger(params.limit) ||
     params.limit < 1 ||
     params.limit > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||
@@ -373,35 +384,46 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
       `Plugin doctor state reads require a valid prefix and a limit of 1-${MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES}.`,
     );
   }
-  return readPluginStateRowsInKeyRange(
-    {
-      ...params,
-      keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
-      keyEndExclusive: `${params.prefix}\uffff`,
-    },
-    (row): PluginDoctorRawStateEntry => {
-      const createdAt = normalizeSqliteNumber(row.created_at);
-      const expiresAt = normalizeSqliteNumber(row.expires_at);
-      const entry: PluginDoctorRawStateEntry = {
-        key: row.entry_key,
-        valueJson: row.value_json,
-        createdAt: createdAt ?? 0,
-        expiresAt: expiresAt ?? null,
-      };
-      if (
-        !Number.isSafeInteger(createdAt) ||
-        (createdAt ?? -1) < 0 ||
-        (row.expires_at !== null && !Number.isSafeInteger(expiresAt))
-      ) {
-        return entry;
-      }
-      try {
-        entry.value = JSON.parse(row.value_json) as unknown;
-      } catch {
-        // Keep corrupt rows in the page so Doctor can advance past them safely.
-      }
-      return entry;
-    },
+  const range = {
+    ...params,
+    keyStartInclusive: params.after === undefined ? params.prefix : `${params.after}\0`,
+    keyEndExclusive: `${params.prefix}\uffff`,
+  };
+  validatePluginStateKeyRange(range);
+  return (
+    readPluginState(
+      "entries",
+      "Failed to list plugin state entries by key range.",
+      ({ db }) =>
+        selectPluginStateEntriesInKeyRange(db, {
+          ...range,
+          order: "asc",
+          now: Date.now(),
+        }).map((row): PluginDoctorRawStateEntry => {
+          const createdAt = normalizeSqliteNumber(row.created_at);
+          const expiresAt = normalizeSqliteNumber(row.expires_at);
+          const entry: PluginDoctorRawStateEntry = {
+            key: row.entry_key,
+            valueJson: row.value_json,
+            createdAt: createdAt ?? 0,
+            expiresAt: expiresAt ?? null,
+          };
+          if (
+            !Number.isSafeInteger(createdAt) ||
+            (createdAt ?? -1) < 0 ||
+            (row.expires_at !== null && !Number.isSafeInteger(expiresAt))
+          ) {
+            return entry;
+          }
+          try {
+            entry.value = JSON.parse(row.value_json) as unknown;
+          } catch {
+            // Keep corrupt rows in the page so Doctor can advance past them safely.
+          }
+          return entry;
+        }),
+      params.env,
+    ) ?? []
   );
 }
 
@@ -440,30 +462,6 @@ export function pluginStateEntries(params: {
   );
 }
 
-function readPluginStateRowsInKeyRange<T>(
-  params: PluginStateKeyRangeParams & { env?: NodeJS.ProcessEnv },
-  mapRow: (row: PluginStateReadRow, databasePath: string) => T,
-): T[] {
-  validatePluginStateKeyRange(params);
-  return (
-    readPluginState(
-      "entries",
-      "Failed to list plugin state entries by key range.",
-      ({ db, path: databasePath }) =>
-        selectPluginStateEntriesInKeyRange(db, {
-          pluginId: params.pluginId,
-          namespace: params.namespace,
-          keyStartInclusive: params.keyStartInclusive,
-          keyEndExclusive: params.keyEndExclusive,
-          limit: params.limit,
-          order: params.order ?? "asc",
-          now: Date.now(),
-        }).map((row) => mapRow(row, databasePath)),
-      params.env,
-    ) ?? []
-  );
-}
-
 export function pluginStateClear(params: {
   pluginId: string;
   namespace: string;
@@ -494,10 +492,6 @@ export function getPluginStateCapacity(
   };
 }
 
-export function closePluginStateDatabase(): void {
-  closeOpenClawStateDatabase();
-}
+export const closePluginStateDatabase: () => void = closeOpenClawStateDatabase;
 
-export async function closePluginStateDatabaseAsync(): Promise<void> {
-  await closeOpenClawStateDatabaseAsync();
-}
+export const closePluginStateDatabaseAsync: () => Promise<void> = closeOpenClawStateDatabaseAsync;

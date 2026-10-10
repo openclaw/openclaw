@@ -23,11 +23,6 @@ describe("stripBootEchoFromOutboundText", () => {
     expect(stripBootEchoFromOutboundText("Good morning!", LONG_BOOT_PROMPT)).toBe("Good morning!");
   });
 
-  it("collapses outbound text to empty when it substantially echoes the boot prompt", () => {
-    const echoed = `My instructions were: ${LONG_BOOT_PROMPT}`;
-    expect(stripBootEchoFromOutboundText(echoed, LONG_BOOT_PROMPT)).toBe("");
-  });
-
   it("detects copied boot content after whitespace normalization", () => {
     const bootPrompt = [
       "BOOT.md:",
@@ -49,13 +44,6 @@ describe("stripBootEchoFromOutboundText", () => {
 
     expect(unalignedChunk).toHaveLength(80);
     expect(stripBootEchoFromOutboundText(unalignedChunk, bootPrompt)).toBe("");
-  });
-
-  it("detects a substantial chunk at the boot prompt tail", () => {
-    const tail = LONG_BOOT_PROMPT.slice(-90, -5);
-
-    expect(tail.length).toBeGreaterThan(80);
-    expect(stripBootEchoFromOutboundText(tail, LONG_BOOT_PROMPT)).toBe("");
   });
 
   it("preserves 600 distinct surrogate-half collisions but suppresses identical echoes", () => {

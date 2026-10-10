@@ -47,15 +47,13 @@ internal class MessageSpeechClient(
 ) : MessageSpeechSynthesizing {
   override suspend fun synthesize(text: String): TalkSpeakAudio? {
     val response =
-      try {
+      runCatchingCancellable {
         requestDetailed(
           "tts.speak",
           buildJsonObject { put("text", text) }.toString(),
           60_000,
         )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
+      }.getOrElse { err ->
         Log.d(TAG, "tts.speak request failed: ${err.message ?: err::class.simpleName}")
         return null
       }
@@ -81,9 +79,7 @@ internal class MessageSpeechClient(
     if (bytes.isEmpty()) return null
     return TalkSpeakAudio(
       bytes = bytes,
-      provider = payload.provider,
       outputFormat = payload.outputFormat,
-      voiceCompatible = null,
       mimeType = payload.mimeType,
       fileExtension = payload.fileExtension,
     )
@@ -121,22 +117,6 @@ internal class MessageSpeechController(
       stop()
       return
     }
-    start(messageId = messageId, text = text)
-  }
-
-  fun stop() {
-    generation.incrementAndGet()
-    job?.cancel()
-    job = null
-    player.stop()
-    localSpeech.stop()
-    _state.value = null
-  }
-
-  private fun start(
-    messageId: String,
-    text: String,
-  ) {
     stop()
     val spoken = text.trim()
     if (spoken.isEmpty()) return
@@ -162,14 +142,21 @@ internal class MessageSpeechController(
       }
   }
 
+  fun stop() {
+    generation.incrementAndGet()
+    job?.cancel()
+    job = null
+    player.stop()
+    localSpeech.stop()
+    _state.value = null
+  }
+
   private suspend fun playClip(clip: TalkSpeakAudio?): Boolean {
     if (clip == null) return false
-    return try {
+    return runCatchingCancellable {
       player.play(clip)
       true
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
+    }.getOrElse { err ->
       Log.w(TAG, "clip playback failed: ${err.message ?: err::class.simpleName}")
       false
     }

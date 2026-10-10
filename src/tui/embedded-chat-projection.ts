@@ -3,6 +3,11 @@ import {
   classifyAgentRunTerminalOutcome,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
+import {
+  normalizeLiveAssistantBufferedText,
+  projectLiveAssistantBufferedText,
+} from "../gateway/live-chat-projector.js";
+import type { LocalRunState } from "./embedded-local-run.js";
 
 const TUI_STATE_BY_TERMINAL_CLASSIFICATION = {
   success: undefined,
@@ -17,6 +22,19 @@ export function resolveTerminalChatState(outcome: AgentRunTerminalOutcome) {
 
 export function assistantChatMessage(text: string) {
   return { role: "assistant", content: [{ type: "text", text }], timestamp: Date.now() };
+}
+
+export function projectLocalRunText(
+  run: Pick<LocalRunState, "buffer" | "managedMediaUrls">,
+  final = false,
+) {
+  return projectLiveAssistantBufferedText(
+    normalizeLiveAssistantBufferedText(run.buffer, {
+      final,
+      managedMediaUrls: [...run.managedMediaUrls],
+    }).trim(),
+    { suppressLeadFragments: !final },
+  );
 }
 
 export function payloadText(parts: unknown): string {

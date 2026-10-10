@@ -1,4 +1,3 @@
-// Resolves the configured default agent route shared by OpenClaw inference calls.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -60,7 +59,7 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 
 export type DefaultInferenceRouteProjection = {
   route: DistributiveOmit<SystemAgentConfiguredRoute, "runConfig" | "sourceConfig"> | null;
-  defaultSelection: { explicitIds: string[]; fallbackId?: string };
+  defaultSelection: { explicitIds: string[] };
   auth: unknown;
   models: unknown;
   defaults: unknown;
@@ -87,11 +86,10 @@ function projectSystemAgentExecutionConfig(
       ...(routeAgent?.tools !== undefined ? { tools: structuredClone(routeAgent.tools) } : {}),
     },
   ];
-  const { list: _legacyList, ...agentsConfig } = config.agents ?? {};
   const projected = {
     ...config,
     agents: {
-      ...agentsConfig,
+      ...config.agents,
       entries: toAgentEntriesRecord(projectedAgents),
     },
   };
@@ -233,14 +231,6 @@ function projectRelevantModelMap(params: {
   return Object.keys(relevant).length > 0 ? relevant : undefined;
 }
 
-/** Project every config input that can change the configured default-agent route. */
-export async function projectDefaultInferenceRoute(
-  config: OpenClawConfig,
-  deps: SystemAgentRouteProjectionDeps = {},
-): Promise<DefaultInferenceRouteProjection> {
-  return await projectInferenceRoute(config, undefined, deps);
-}
-
 /** Project every config input that can change one configured agent route. */
 export async function projectInferenceRoute(
   config: OpenClawConfig,
@@ -312,7 +302,6 @@ export async function projectInferenceRoute(
           modelId: route?.model,
           rawModel,
         }),
-        agentRuntime: structuredClone(agent.agentRuntime),
       }
     : undefined;
   const hasAgentRouteOverrides =
@@ -348,7 +337,6 @@ export async function projectInferenceRoute(
         modelId: route?.model,
         rawModel,
       }),
-      agentRuntime: structuredClone(defaults?.agentRuntime),
     },
     ...(agent && hasAgentRouteOverrides
       ? {
@@ -376,13 +364,6 @@ export async function projectInferenceRoute(
   };
 }
 
-export function sameDefaultInferenceRoute(
-  left: DefaultInferenceRouteProjection,
-  right: DefaultInferenceRouteProjection,
-): boolean {
-  return isDeepStrictEqual(left, right);
-}
-
 function withoutAgentIdentity(projection: DefaultInferenceRouteProjection): unknown {
   const agent = isRecord(projection.agent)
     ? { ...projection.agent, id: "<agent>" }
@@ -404,7 +385,7 @@ export function sameSetupInferenceRoute(
 ): boolean {
   return ignoreAgentIdentity
     ? isDeepStrictEqual(withoutAgentIdentity(left), withoutAgentIdentity(right))
-    : sameDefaultInferenceRoute(left, right);
+    : isDeepStrictEqual(left, right);
 }
 
 export function sameSetupConfiguredRoute(

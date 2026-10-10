@@ -12,6 +12,7 @@ import {
   type PinnedDispatcherPolicy,
 } from "../infra/net/ssrf.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
+import type { ResolvedHttpMcpTransportConfig } from "./mcp-transport-config.js";
 
 /** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 const fetchWithUndici: FetchLike = async (url, init) =>
@@ -65,28 +66,6 @@ function resolveFetchRequest(input: RequestInfo | URL, init?: RequestInit) {
   };
 }
 
-async function buildManagedMcpResponse(
-  response: Response,
-  release: () => Promise<void>,
-  refreshTimeout?: () => void,
-): Promise<Response> {
-  if (!response.body) {
-    void release();
-  }
-  // A body-less foreign Response exposes no bounded reader. Never materialize it
-  // with text() or arrayBuffer() before the transport's response cap can apply.
-  return new Response(
-    response.body
-      ? wrapGuardedBodyStream({ body: response.body, cleanup: release, refreshTimeout })
-      : null,
-    {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    },
-  );
-}
-
 function buildMcpHttpFetchWithRedirectPolicy(
   params: McpHttpFetchParams,
   redirectPolicy: "replay" | "reject",
@@ -129,8 +108,22 @@ function buildMcpHttpFetchWithRedirectPolicy(
       ...(policy ? { policy } : {}),
       ...(needsCustomDispatcher ? { resolveDispatcherPolicy: resolveCustomDispatcherPolicy } : {}),
     };
-    const guarded = await fetchWithSsrFGuard(guardedFetchOptions);
-    return await buildManagedMcpResponse(guarded.response, guarded.release, guarded.refreshTimeout);
+    const { response, release, refreshTimeout } = await fetchWithSsrFGuard(guardedFetchOptions);
+    if (!response.body) {
+      void release();
+    }
+    // A body-less foreign Response exposes no bounded reader. Never materialize it
+    // with text() or arrayBuffer() before the transport's response cap can apply.
+    return new Response(
+      response.body
+        ? wrapGuardedBodyStream({ body: response.body, cleanup: release, refreshTimeout })
+        : null,
+      {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      },
+    );
   };
 }
 
@@ -180,4 +173,20 @@ export function withSameOriginMcpHttpHeaders(params: {
     }
     return params.fetchFn(url, { ...(init as RequestInit), headers });
   };
+}
+
+/** OAuth discovery and token responses are short-lived, so the deadline covers their bodies. */
+export function buildMcpOAuthAuthorizationFetch(
+  config: ResolvedHttpMcpTransportConfig,
+  beforeRequest?: () => void,
+): FetchLike {
+  return buildMcpOAuthHttpFetch({
+    sslVerify: config.sslVerify,
+    clientCert: config.clientCert,
+    clientKey: config.clientKey,
+    resourceUrl: config.url,
+    timeoutMs: config.requestTimeoutMs,
+    beforeRequest,
+    headers: config.headers,
+  });
 }

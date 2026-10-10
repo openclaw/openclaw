@@ -6,20 +6,29 @@ import { tryReadDiskSpace } from "./disk-space.js";
 import { hasErrnoCode } from "./errno.js";
 import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
 import type { RunStepOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const LARGE_CANDIDATE_PACK_WARNING_BYTES = 256 * 1024 * 1024;
 
-function recordStagingFailure(
+function reportStep(step: RunStepOptions, result: UpdateStepResult, cleanup = false) {
+  step.results?.push(result);
+  return reportUpdateStepCompletion(step.progress, {
+    ...result,
+    index: cleanup ? 0 : step.stepIndex,
+    total: cleanup ? 0 : step.totalSteps,
+  });
+}
+
+async function recordStagingFailure(
   step: RunStepOptions,
   name: string,
   command: string,
   message: string,
   durationMs = 0,
-): undefined {
+): Promise<undefined> {
   const failure: UpdateStepResult = {
     name,
     command,
@@ -28,8 +37,7 @@ function recordStagingFailure(
     exitCode: 1,
     stderrTail: message,
   };
-  step.results?.push(failure);
-  step.progress?.onStepComplete?.({ ...failure, index: step.stepIndex, total: step.totalSteps });
+  await reportStep(step, failure);
   return undefined;
 }
 
@@ -142,6 +150,13 @@ export async function prepareGitCandidateTransfer(params: {
     if (local === undefined) {
       return undefined;
     }
+    const invalidInventory = () =>
+      recordStagingFailure(
+        { ...step, cwd: installedRoot },
+        "git-retained-object-inventory",
+        "verify retained Git object availability",
+        "Incomplete retained Git object availability inventory",
+      );
     const pending = new Set(beforeTree.split("\n"));
     for (const line of local.split("\n")) {
       const [oid, type, ...extra] = line.split(" ");
@@ -152,24 +167,14 @@ export async function prepareGitCandidateTransfer(params: {
         !pending.delete(oid) ||
         !["blob", "tree", "missing"].includes(type)
       ) {
-        return recordStagingFailure(
-          { ...step, cwd: installedRoot },
-          "git-retained-object-inventory",
-          "verify retained Git object availability",
-          "Incomplete retained Git object availability inventory",
-        );
+        return await invalidInventory();
       }
       if (type !== "missing") {
         retained.add(oid);
       }
     }
     if (pending.size) {
-      return recordStagingFailure(
-        { ...step, cwd: installedRoot },
-        "git-retained-object-inventory",
-        "verify retained Git object availability",
-        "Incomplete retained Git object availability inventory",
-      );
+      return await invalidInventory();
     }
   }
   // Only physically available retained-HEAD objects are safe to borrow. Objects
@@ -203,7 +208,7 @@ export async function prepareGitCandidateTransfer(params: {
     pack = stagedPack.use(await openLocalFileSafely({ filePath: packPath }));
     requiredBytes = pack.stat.size + (await fs.stat(`${prefix}-${hash}.idx`)).size;
   } catch (error) {
-    return recordStagingFailure(
+    return await recordStagingFailure(
       step,
       "git-update-pack-read",
       `read update pack ${packPath}`,
@@ -225,7 +230,7 @@ export async function prepareGitCandidateTransfer(params: {
   const capacity = tryReadDiskSpace(objectDirectory);
   if (capacity && capacity.availableBytes < requiredBytes) {
     const reason = "snapshot-capacity-insufficient" as const;
-    recordStagingFailure(
+    await recordStagingFailure(
       step,
       "git update pack capacity",
       "measure Git update pack capacity",
@@ -252,8 +257,7 @@ export async function prepareGitCandidateTransfer(params: {
     stdoutTail: `Git update pack and index: ${requiredBytes} bytes; ${capacity ? `${capacity.availableBytes} bytes available` : "free space unknown"} in ${objectDirectory}.`,
     ...(warnings.length ? { warnings } : {}),
   };
-  step.results?.push(measured);
-  step.progress?.onStepComplete?.({ ...measured, index: step.stepIndex, total: step.totalSteps });
+  await reportStep(step, measured);
   const keepMessage = `openclaw-update-${randomUUID()}`;
   const retainedPack = stagedPack.move();
   return {
@@ -327,8 +331,7 @@ export async function prepareGitCandidateTransfer(params: {
             message: `Git update pack could not be removed: ${String(error)}`,
           },
         };
-        target.results?.push(warning);
-        target.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
+        await reportStep(target, warning, true);
       }
     },
   };

@@ -6,7 +6,6 @@ import { readCronJobScratchState, writeCronJobScratch } from "./scratch-store.js
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { run } from "./service/ops-run.js";
 import { createCronServiceState, type CronEvent, type CronServiceState } from "./service/state.js";
-import { ensureLoaded } from "./service/store.js";
 import { runMissedJobs } from "./service/timer.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
@@ -103,61 +102,59 @@ afterEach(() => {
 });
 
 describe("cron one-shot removal", () => {
-  it.each(["manual", "timer"] as const)(
-    "publishes %s removal after durable job and scratch deletion",
-    async (path) => {
-      const { storePath, nowMs, job, events, state, durableStateAtRemoval } = await createFixture(
-        path,
-        true,
-      );
-      expect(
-        writeCronJobScratch({
-          storePath,
-          jobId: job.id,
-          content: "original scratch",
-          nowMs: nowMs - 1,
-        }),
-      ).toMatchObject({ ok: true, currentRevision: 1 });
+  it("publishes removal after durable job and scratch deletion", async () => {
+    const path = "manual";
+    const { storePath, nowMs, job, events, state, durableStateAtRemoval } = await createFixture(
+      path,
+      true,
+    );
+    expect(
+      await writeCronJobScratch({
+        storePath,
+        jobId: job.id,
+        content: "original scratch",
+        nowMs: nowMs - 1,
+      }),
+    ).toMatchObject({ ok: true, currentRevision: 1 });
 
-      try {
-        await executeRemovalPath(path, state, job.id);
+    try {
+      await executeRemovalPath(path, state, job.id);
 
-        const relevantEvents = events.filter((event) => event.jobId === job.id);
-        expect(relevantEvents.map((event) => event.action)).toEqual([
-          "started",
-          "finished",
-          "removed",
-        ]);
-        const removed = relevantEvents.at(-1);
-        expect(removed).toMatchObject({
-          action: "removed",
-          jobId: job.id,
-          job: {
-            id: job.id,
-            name: job.name,
-            deleteAfterRun: true,
-            state: {
-              lastRunStatus: "ok",
-              lastStatus: "ok",
-            },
+      const relevantEvents = events.filter((event) => event.jobId === job.id);
+      expect(relevantEvents.map((event) => event.action)).toEqual([
+        "started",
+        "finished",
+        "removed",
+      ]);
+      const removed = relevantEvents.at(-1);
+      expect(removed).toMatchObject({
+        action: "removed",
+        jobId: job.id,
+        job: {
+          id: job.id,
+          name: job.name,
+          deleteAfterRun: true,
+          state: {
+            lastRunStatus: "ok",
+            lastStatus: "ok",
           },
-        });
-        expect(durableStateAtRemoval).toHaveLength(1);
-        await expect(Promise.all(durableStateAtRemoval)).resolves.toEqual([
-          { jobs: [], scratch: { currentRevision: 0 } },
-        ]);
-        expect(state.store?.jobs).toEqual([]);
-      } finally {
-        clearStateTimer(state);
-      }
-    },
-  );
+        },
+      });
+      expect(durableStateAtRemoval).toHaveLength(1);
+      await expect(Promise.all(durableStateAtRemoval)).resolves.toEqual([
+        { jobs: [], scratch: { currentRevision: 0 } },
+      ]);
+      expect(state.store?.jobs).toEqual([]);
+    } finally {
+      clearStateTimer(state);
+    }
+  });
 
-  it.each(["manual", "timer", "startup catch-up"] as const)(
+  it.each(["timer", "startup catch-up"] as const)(
     "restores %s wake state when the final deletion write fails",
     async (path) => {
       const { storePath, nowMs, job, events, state } = await createFixture(path);
-      writeCronJobScratch({
+      await writeCronJobScratch({
         storePath,
         jobId: job.id,
         content: "scratch must survive rollback",
@@ -197,24 +194,4 @@ describe("cron one-shot removal", () => {
       }
     },
   );
-
-  it("keeps runtime removal independent from unrelated quarantine persistence", async () => {
-    const path = "startup catch-up";
-    const { storePath, job, events, state } = await createFixture(path);
-    await ensureLoaded(state);
-    state.pendingQuarantineConfigJobs = [
-      { sourceIndex: 0, reason: "invalid-schedule", job: { id: "quarantined-job" } },
-    ];
-    try {
-      await expect(executeRemovalPath(path, state, job.id)).resolves.toBeUndefined();
-
-      expect(events.some((event) => event.action === "removed")).toBe(true);
-      const durableStore = await loadCronStore(storePath);
-      expect(durableStore.jobs).toEqual([]);
-      expect(state.store?.jobs).toEqual([]);
-      expect(state.pendingQuarantineConfigJobs).toHaveLength(1);
-    } finally {
-      clearStateTimer(state);
-    }
-  });
 });

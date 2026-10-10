@@ -2,11 +2,48 @@ import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { markGatewayRestartTrace } from "../../gateway/restart-trace.js";
 import type { GatewayServerOptions, GatewayStartupOperation } from "../../gateway/server-public.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
 import { SqliteIntegrityWorkerInterruptedError } from "../../infra/sqlite-integrity-worker-error.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { formatCliCommand } from "../command-format.js";
+import { measureGatewayBootstrapStep } from "../startup-trace.js";
+
+const lifecycleRuntimeLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
+
+/** Prime lifecycle code and acquire initial custody before installing signal handlers. */
+export async function prepareGatewayRunLoop(params: {
+  lockPort?: number;
+  lifecycleLockDeadlineMs?: number;
+}) {
+  // Updates rotate dist chunks; signal handling must retain this exact runtime.
+  const lifecycleRuntime = await measureGatewayBootstrapStep(
+    "cli.bootstrap.lifecycle-runtime",
+    () => lifecycleRuntimeLoader.load(),
+  );
+  const supervisor = lifecycleRuntime.detectGatewayRespawnSupervisorIdentity(
+    process.env,
+    process.platform,
+    { includeLinuxOpenClawGatewayServiceMarker: true },
+  );
+  const supervisorMode = supervisor?.kind ?? null;
+  const restartDecision = lifecycleRuntime.resolveGatewayRestartDecision();
+  const lock = await measureGatewayBootstrapStep("cli.bootstrap.gateway-lock", () =>
+    acquireGatewayLock({
+      port: params.lockPort,
+      listenerMode: supervisorMode ? "supervised" : "foreground",
+      supervisor,
+      ...(params.lifecycleLockDeadlineMs !== undefined
+        ? { lifecycleDeadlineMs: params.lifecycleLockDeadlineMs }
+        : {}),
+    }),
+  );
+  return { lifecycleRuntime, supervisor, supervisorMode, restartDecision, lock };
+}
 
 export type GatewayRunLoopStartOptions = Pick<
   GatewayServerOptions,
@@ -20,14 +57,41 @@ export type GatewayRunLoopStartOptions = Pick<
 export type GatewayRestartStartupFailureHandler = (
   error: unknown,
   signal: AbortSignal,
-) => Promise<"completed" | void>;
+) => Promise<"completed" | "failed" | void>;
 
 export function createGatewayRestartRecovery(
-  onFailure: GatewayRestartStartupFailureHandler | undefined,
-  logger: Pick<SubsystemLogger, "info">,
+  {
+    onRestartStartupFailure: onFailure,
+  }: {
+    onRestartStartupFailure?: GatewayRestartStartupFailureHandler;
+  },
+  logger: Pick<SubsystemLogger, "info" | "error">,
+  supervisor: GatewayOwnerSupervisor | null,
 ) {
-  let work: { controller: AbortController; settled: Promise<"completed" | void> } | undefined;
+  let work:
+    | { controller: AbortController; settled: ReturnType<GatewayRestartStartupFailureHandler> }
+    | undefined;
   return {
+    reportStartupFailure(error: unknown, retryFailed: boolean) {
+      const stack = error instanceof Error && error.stack ? `\n${error.stack}` : "";
+      logger.error(
+        `gateway startup failed: ${formatErrorMessage(error)}. ` +
+          `${onFailure && !retryFailed ? "Attempting automatic triage before recovery." : "Automatic recovery is unavailable."}${stack}`,
+      );
+    },
+    reportManualRecovery() {
+      const resume =
+        supervisor?.kind === "external"
+          ? "use your external supervisor to restart the Gateway"
+          : process.platform === "win32"
+            ? supervisor
+              ? `restart with: ${formatCliCommand("openclaw gateway restart")}`
+              : "press Ctrl+C, then rerun your original Gateway command"
+            : `reload with: kill -USR2 ${process.pid}`;
+      logger.error(
+        `Process will stay alive for manual recovery. Fix the startup refusal above, run ${formatCliCommand("openclaw doctor --fix")}, then ${resume}`,
+      );
+    },
     abort() {
       work?.controller.abort();
     },
@@ -48,12 +112,25 @@ export function createGatewayRestartRecovery(
         if (controller.signal.aborted) {
           return false;
         }
-        if (completion !== "completed") {
+        if (completion === "failed") {
           throw error;
+        }
+        if (completion !== "completed") {
+          logger.info("Automatic triage did not complete a repair; awaiting manual recovery.");
+          return false;
         }
         // Completion proves triage cleanup, not Gateway health. Startup owns that proof.
         logger.info("Automatic triage completed; retrying Gateway startup once.");
         return true;
+      } catch (triageError) {
+        if (controller.signal.aborted) {
+          return false;
+        }
+        logger.error(`Automatic triage failed: ${formatErrorMessage(triageError)}`);
+        if (supervisor) {
+          throw triageError;
+        }
+        return false;
       } finally {
         work = undefined;
       }
@@ -113,11 +190,7 @@ export async function prepareGatewayRestartIteration(
   runtime: typeof import("./lifecycle.runtime.js"),
   logger: Pick<SubsystemLogger, "warn">,
 ): Promise<void> {
-  // After an in-process restart (SIGUSR2), reset command-queue lane state.
-  // Interrupted tasks from the previous lifecycle may have left `active`
-  // counts elevated (their finally blocks never ran), permanently blocking
-  // new work from draining. The same boundary also discards stale restart
-  // deferral timers. Execution owners restore only their own durable work.
+  // Retire stale activity counts and timers; execution owners restore durable work.
   const {
     abortActiveCronTaskRuns,
     advanceCronActiveJobGeneration,
@@ -149,8 +222,7 @@ export async function prepareGatewayRestartIteration(
   resetAllLanes();
   clearRuntimeConfigSnapshot();
   resetGatewayRestartStateForInProcessRestart();
-  // Rent: a failed startup has no server close handle, and restart hooks can
-  // recreate shared slots after close. Reset the same lifecycle before boot.
+  // Failed startup has no close handle; restart hooks can also recreate shared slots.
   try {
     await drainGlobalSingletonLifecycleState("restart");
   } catch (error) {

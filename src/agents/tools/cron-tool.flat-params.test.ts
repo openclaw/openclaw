@@ -150,4 +150,72 @@ describe("cron shorthand recovery", () => {
       "enabled ": true,
     });
   });
+
+  it("merges sibling dotted keys under one recovered object (#120616)", async () => {
+    // The first field creates the payload object; the second meets that parent
+    // and must continue into it instead of being kept as a literal key.
+    await execute({
+      action: "update",
+      jobId: "job-dotted-siblings",
+      "job.payload.message": "after",
+      "job.payload.kind": "agentTurn",
+    });
+
+    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
+    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+  });
+
+  it("keeps the explicit structured value authoritative over a conflicting dotted key (#120616)", async () => {
+    // The explicit payload is a valid update on its own. Forwarding the extra
+    // dotted key as well made the whole update fail a strict gateway patch, so
+    // the canonical value stands and the redundant key is dropped.
+    await execute({
+      action: "update",
+      jobId: "job-dotted-conflict",
+      payload: { kind: "agentTurn", message: "before" },
+      "job.payload.message": "after",
+    });
+
+    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
+    expect(params.patch).toHaveProperty("payload.message", "before");
+    expect(params.patch).not.toHaveProperty("job.payload.message");
+  });
+
+  it("recovers quoted dotted job keys (#120616)", async () => {
+    // The report includes literal quote characters around the dotted name.
+    await execute({
+      action: "update",
+      jobId: "job-dotted-quoted",
+      '"job.payload.message"': "after",
+    });
+
+    const params = gateway.mock.calls[0]?.[2] as { patch?: Record<string, unknown> };
+    expect(params.patch).toEqual({ payload: { kind: "agentTurn", message: "after" } });
+  });
+
+  it("does not nest dotted keys rooted at a scalar cron field (#120616)", async () => {
+    // Only object-typed cron fields are containers in the gateway schema, so a
+    // dot inside a scalar such as a job name stays a plain unrecognized key
+    // instead of being reshaped into a path.
+    await expect(
+      execute({
+        action: "update",
+        jobId: "job-dotted-name",
+        "job.name": "nightly.report",
+      }),
+    ).rejects.toThrow("job required");
+    expect(gateway).not.toHaveBeenCalled();
+  });
+
+  it("does not nest dotted keys that would reach Object.prototype (#120616)", async () => {
+    await expect(
+      execute({
+        action: "update",
+        jobId: "job-dotted-proto",
+        "job.payload.__proto__.polluted": "yes",
+      }),
+    ).rejects.toThrow("job required");
+    expect(gateway).not.toHaveBeenCalled();
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 });

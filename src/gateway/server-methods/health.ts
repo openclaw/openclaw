@@ -5,7 +5,6 @@ import { readChildRuntimeViability } from "../../infra/child-runtime-viability.j
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
-import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
@@ -21,101 +20,49 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 
-function cachedLifecycleDiffersFromRuntime(params: {
-  cachedAccount: ChannelHealthSummary | undefined;
-  runtimeSnapshot: ChannelAccountSnapshot;
-}): boolean {
-  for (const key of ["running", "connected", "lifecycle"] as const) {
-    const runtimeValue = params.runtimeSnapshot[key];
-    if (runtimeValue !== undefined && params.cachedAccount?.[key] !== runtimeValue) {
-      return true;
-    }
-  }
-  return params.cachedAccount === undefined;
+function cachedLifecycleDiffersFromRuntime(
+  cached: ChannelHealthSummary | undefined,
+  runtime: ChannelAccountSnapshot,
+): boolean {
+  return (
+    cached === undefined ||
+    (["running", "connected", "lifecycle"] as const).some(
+      (key) => runtime[key] !== undefined && cached[key] !== runtime[key],
+    )
+  );
 }
 
 function cachedHealthDiffersFromRuntime(
   cached: HealthSummary,
   runtime: ChannelRuntimeSnapshot,
 ): boolean {
-  for (const [channelId, runtimeSnapshot] of Object.entries(runtime.channels)) {
-    if (!runtimeSnapshot) {
-      continue;
-    }
-    const cachedChannel = cached.channels[channelId];
-    if (
-      cachedLifecycleDiffersFromRuntime({
-        cachedAccount: cachedChannel,
-        runtimeSnapshot,
-      })
-    ) {
-      return true;
-    }
-  }
-
-  for (const [channelId, accounts] of Object.entries(runtime.channelAccounts)) {
-    if (!accounts) {
-      continue;
-    }
-    const cachedChannel = cached.channels[channelId];
-    const cachedAccounts = cachedChannel?.accounts;
-    if (
-      Object.keys(cachedAccounts ?? {}).some((accountId) => !Object.hasOwn(accounts, accountId))
-    ) {
-      return true;
-    }
-    for (const [accountId, runtimeSnapshot] of Object.entries(accounts)) {
-      if (!runtimeSnapshot) {
-        continue;
+  return (
+    Object.entries(runtime.channels).some(
+      ([channelId, snapshot]) =>
+        snapshot && cachedLifecycleDiffersFromRuntime(cached.channels[channelId], snapshot),
+    ) ||
+    Object.entries(runtime.channelAccounts).some(([channelId, accounts]) => {
+      if (!accounts) {
+        return false;
       }
-      if (
-        cachedLifecycleDiffersFromRuntime({
-          cachedAccount: cachedAccounts?.[accountId],
-          runtimeSnapshot,
-        })
-      ) {
-        return true;
-      }
-    }
-  }
-
-  // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
-  return Object.keys(cached.channels).some(
-    (channelId) =>
-      !Object.hasOwn(runtime.channels, channelId) &&
-      !Object.hasOwn(runtime.channelAccounts, channelId),
+      const cachedAccounts = cached.channels[channelId]?.accounts;
+      return (
+        Object.keys(cachedAccounts ?? {}).some(
+          (accountId) => !Object.hasOwn(accounts, accountId),
+        ) ||
+        Object.entries(accounts).some(
+          ([accountId, snapshot]) =>
+            snapshot && cachedLifecycleDiffersFromRuntime(cachedAccounts?.[accountId], snapshot),
+        )
+      );
+    }) ||
+    // Hot-unloaded plugins vanish from both runtime maps before cached health expires.
+    Object.keys(cached.channels).some(
+      (channelId) =>
+        !Object.hasOwn(runtime.channels, channelId) &&
+        !Object.hasOwn(runtime.channelAccounts, channelId),
+    )
   );
-}
-
-async function mergeCachedHealthRuntimeState(params: {
-  cached: HealthSummary;
-  getEventLoopHealth?: () => HealthSummary["eventLoop"];
-  configReloadHotReloadStatus?: GatewayHotReloadStatus;
-}): Promise<HealthSummary> {
-  const {
-    contextEngines: _cachedContextEngines,
-    deliveryQueues: _cachedDeliveryQueues,
-    eventLoop: _cachedEventLoop,
-    ...cached
-  } = params.cached;
-  // Dead-letter counts are cheap live reads. Preserve the grouped pressure
-  // aggregate for the cache interval so routine health RPCs do not amplify it.
-  const deliveryQueues = await buildDeliveryQueueHealthSummary(
-    _cachedDeliveryQueues?.ingressPressure ?? [],
-  );
-  const contextEngines = buildContextEngineHealthSummary();
-  // A reset sampler has no current window; never revive the cached reading.
-  const eventLoop = params.getEventLoopHealth?.();
-  return {
-    ...cached,
-    modelRuntime: getPreparedModelRuntimeStartupStatus(),
-    ...(eventLoop ? { eventLoop } : {}),
-    ...(contextEngines ? { contextEngines } : {}),
-    ...(deliveryQueues ? { deliveryQueues } : {}),
-    ...(params.configReloadHotReloadStatus
-      ? { configReload: { hotReloadStatus: params.configReloadHotReloadStatus } }
-      : {}),
-  };
 }
 
 export const healthHandlers: GatewayRequestHandlers = {
@@ -144,14 +91,33 @@ export const healthHandlers: GatewayRequestHandlers = {
       !isFutureDateTimestampMs(cached.ts, { nowMs: now }) &&
       now - cached.ts < HEALTH_REFRESH_INTERVAL_MS
     ) {
+      const getEventLoopHealth = context.getEventLoopHealth;
+      const configReloadHotReloadStatus = context.getConfigReloaderHotReloadStatus?.();
+      const {
+        contextEngines: _cachedContextEngines,
+        deliveryQueues: _cachedDeliveryQueues,
+        eventLoop: _cachedEventLoop,
+        ...cachedState
+      } = cached;
+      // Dead-letter counts are cheap live reads. Preserve the grouped pressure
+      // aggregate for the cache interval so routine health RPCs do not amplify it.
+      const deliveryQueues = await buildDeliveryQueueHealthSummary(
+        _cachedDeliveryQueues?.ingressPressure ?? [],
+      );
+      const contextEngines = await buildContextEngineHealthSummary();
+      // A reset sampler has no current window; never revive the cached reading.
+      const eventLoop = getEventLoopHealth?.();
       respond(
         true,
         {
-          ...(await mergeCachedHealthRuntimeState({
-            cached,
-            getEventLoopHealth: context.getEventLoopHealth,
-            configReloadHotReloadStatus: context.getConfigReloaderHotReloadStatus?.(),
-          })),
+          ...cachedState,
+          modelRuntime: getPreparedModelRuntimeStartupStatus(),
+          ...(eventLoop ? { eventLoop } : {}),
+          ...(contextEngines ? { contextEngines } : {}),
+          ...(deliveryQueues ? { deliveryQueues } : {}),
+          ...(configReloadHotReloadStatus
+            ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
+            : {}),
           // Live check. The cache must not keep a path that disappeared after it was stored.
           childRuntime: readChildRuntimeViability(),
         },

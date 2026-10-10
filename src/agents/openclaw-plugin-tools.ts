@@ -1,9 +1,3 @@
-/**
- * OpenClaw plugin tool resolver.
- *
- * This module builds runtime plugin tools from config/options, delivery context,
- * auth profiles, and the current runtime config snapshot.
- */
 import { getRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -45,16 +39,6 @@ type ResolveOpenClawPluginToolsOptions = OpenClawPluginToolOptions & {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  sandboxRoot?: string;
-  modelHasVision?: boolean;
-  modelProvider?: string;
-  modelId?: string;
-  allowMediaInvokeCommands?: boolean;
-  requesterAgentIdOverride?: string;
-  requireExplicitMessageTarget?: boolean;
-  disableMessageTool?: boolean;
   disablePluginTools?: boolean;
   clientCaps?: string[];
   authProfileStore?: AuthProfileStore;
@@ -94,16 +78,15 @@ function createPluginToolDelivery(params: {
   // Capabilities bind the source policy session, even when plugins execute in
   // a shared or durable session. Keep validation separate from execution identity.
   const policySessionKey = params.options?.agentSessionKey ?? sessionKey;
-  if (
-    resolveMessageActionTurnAuthorization({
-      token,
-      agentId,
-      runId,
-      sessionKey: policySessionKey,
-      sessionId,
-    })?.scheduled
-  ) {
-    // Scheduled grants are consumed by individual message actions. They do not
+  const messageActionAuthorization = resolveMessageActionTurnAuthorization({
+    token,
+    agentId,
+    runId,
+    sessionKey: policySessionKey,
+    sessionId,
+  });
+  if (messageActionAuthorization?.scheduled || messageActionAuthorization?.deliveryAttempt) {
+    // Cron capabilities are consumed by individual message actions. They do not
     // delegate the source conversation's plugin delivery capability.
     return undefined;
   }
@@ -207,7 +190,6 @@ function createPluginToolDelivery(params: {
   };
 }
 
-/** Resolves plugin tools and their delivery context for an agent run. */
 export function resolveOpenClawPluginToolsForOptions(params: {
   options?: ResolveOpenClawPluginToolsOptions;
   resolvedConfig?: OpenClawConfig;

@@ -1,4 +1,3 @@
-/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
@@ -22,9 +21,6 @@ import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
 
-const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
-  clackMultiselect(styleSelectParams(params));
-
 function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeEnv): T {
   if (typeof value === "symbol") {
     cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
@@ -34,33 +30,17 @@ function guardPromptCancel<T>(value: T | typeof CANCEL_SYMBOL, runtime: RuntimeE
   return value;
 }
 
-function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
+function sortScanResults(
+  results: ModelScanResult[],
+  capability: "tool" | "image" = "tool",
+): ModelScanResult[] {
   return results.toSorted((a, b) => {
-    const aImage = a.image.ok ? 1 : 0;
-    const bImage = b.image.ok ? 1 : 0;
-    if (aImage !== bImage) {
-      return bImage - aImage;
+    if (capability === "tool" && a.image.ok !== b.image.ok) {
+      return Number(b.image.ok) - Number(a.image.ok);
     }
-
-    const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aToolLatency !== bToolLatency) {
-      return aToolLatency - bToolLatency;
-    }
-
-    return compareScanMetadata(a, b);
-  });
-}
-
-function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
-  return results.toSorted((a, b) => {
-    const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
-    if (aLatency !== bLatency) {
-      return aLatency - bLatency;
-    }
-
-    return compareScanMetadata(a, b);
+    const aLatency = a[capability].latencyMs ?? Number.POSITIVE_INFINITY;
+    const bLatency = b[capability].latencyMs ?? Number.POSITIVE_INFINITY;
+    return aLatency === bLatency ? compareScanMetadata(a, b) : aLatency - bLatency;
   });
 }
 
@@ -73,27 +53,17 @@ function compareScanMetadata(a: ModelScanResult, b: ModelScanResult): number {
 
   const aParams = a.inferredParamB ?? 0;
   const bParams = b.inferredParamB ?? 0;
-  if (aParams !== bParams) {
-    return bParams - aParams;
-  }
-
-  return a.modelRef.localeCompare(b.modelRef);
+  return aParams === bParams ? a.modelRef.localeCompare(b.modelRef) : bParams - aParams;
 }
 
 function buildScanHint(result: ModelScanResult): string {
-  const toolLabel = result.tool.skipped
-    ? "tool skip"
-    : result.tool.ok
-      ? `tool ${formatMs(result.tool.latencyMs)}`
-      : "tool fail";
-  const imageLabel = result.image.skipped
-    ? "img skip"
-    : result.image.ok
-      ? `img ${formatMs(result.image.latencyMs)}`
-      : "img fail";
+  const capabilities = (["tool", "image"] as const).map((key) => {
+    const probe = result[key];
+    return `${key === "tool" ? "tool" : "img"} ${probe.skipped ? "skip" : probe.ok ? formatMs(probe.latencyMs) : "fail"}`;
+  });
   const ctxLabel = result.contextLength ? `ctx ${formatTokenK(result.contextLength)}` : "ctx ?";
   const paramLabel = result.inferredParamB ? `${result.inferredParamB}b` : null;
-  return [toolLabel, imageLabel, ctxLabel, paramLabel].filter(Boolean).join(" | ");
+  return [...capabilities, ctxLabel, paramLabel].filter(Boolean).join(" | ");
 }
 
 function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
@@ -103,21 +73,6 @@ function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   const imageOnly = imageOk.filter((r) => !r.tool.ok);
   runtime.log(
     `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}, image only ${imageOnly.length}`,
-  );
-}
-
-function printMetadataOnlyNotice(params: {
-  results: ModelScanResult[];
-  runtime: RuntimeEnv;
-  autoDowngraded: boolean;
-}) {
-  if (params.autoDowngraded) {
-    params.runtime.log(
-      "OpenRouter free models still require OPENROUTER_API_KEY for live probes and inference. Listing public catalog metadata only.",
-    );
-  }
-  params.runtime.log(
-    `Found ${params.results.length} OpenRouter free models (metadata only; configure OPENROUTER_API_KEY to test tools/images).`,
   );
 }
 
@@ -150,24 +105,17 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
-function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+function parseOptionalFiniteOption(
+  raw: unknown,
+  label: string,
+  allowZero = false,
+): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed < 0) {
-    throw new Error(`${label} must be >= 0`);
-  }
-  return parsed;
-}
-
-function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be > 0`);
+  if (parsed === undefined || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`${label} must be ${allowZero ? ">=" : ">"} 0`);
   }
   return parsed;
 }
@@ -183,7 +131,6 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
-/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -201,10 +148,10 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
-  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const minParams = parseOptionalFiniteOption(opts.minParams, "--min-params", true);
+  const maxAgeDays = parseOptionalFiniteOption(opts.maxAgeDays, "--max-age-days", true);
   const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
-  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const timeout = parseOptionalFiniteOption(opts.timeout, "--timeout");
   const concurrency =
     opts.concurrency === undefined
       ? undefined
@@ -213,7 +160,7 @@ export async function modelsScanCommand(
   const requestedProbe = opts.probe ?? true;
   if (!requestedProbe && (opts.setDefault || opts.setImage)) {
     throw new Error(
-      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+      "Cannot apply metadata-only OpenRouter scan results. Remove --no-probe or configure OPENROUTER_API_KEY and rerun with checks before changing defaults.",
     );
   }
   let probe = requestedProbe;
@@ -235,7 +182,7 @@ export async function modelsScanCommand(
     if (!storedKey) {
       if (opts.setDefault || opts.setImage) {
         throw new Error(
-          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with probes before changing defaults.",
+          "Cannot apply metadata-only OpenRouter scan results. Configure OPENROUTER_API_KEY and rerun with checks before changing defaults.",
         );
       }
       // Without a key, keep the command useful as catalog discovery only; writes
@@ -262,7 +209,7 @@ export async function modelsScanCommand(
           if (phase !== "probe") {
             return;
           }
-          const labelBase = probe ? "Probing models" : "Scanning models";
+          const labelBase = probe ? "Checking models" : "Scanning models";
           update({
             completed,
             total,
@@ -275,11 +222,14 @@ export async function modelsScanCommand(
 
   if (!probe) {
     if (!opts.json) {
-      printMetadataOnlyNotice({
-        results,
-        runtime,
-        autoDowngraded: requestedProbe,
-      });
+      if (requestedProbe) {
+        runtime.log(
+          "OpenRouter free models still require OPENROUTER_API_KEY for live checks and inference. Listing public catalog metadata only.",
+        );
+      }
+      runtime.log(
+        `Found ${results.length} OpenRouter free models (metadata only; configure OPENROUTER_API_KEY to test tools/images).`,
+      );
       printScanTable(sorted, runtime);
     } else {
       writeRuntimeJson(runtime, sorted);
@@ -290,13 +240,13 @@ export async function modelsScanCommand(
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
     throw new Error(
-      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before probing.`,
+      `No tool-capable OpenRouter free models found. Try ${formatCliCommand("openclaw models scan --no-probe")} to inspect metadata-only candidates, or configure OPENROUTER_API_KEY before checking.`,
     );
   }
 
   const toolSorted = sortScanResults(toolOk);
   const imageOk = results.filter((entry) => entry.image.ok);
-  const imageSorted = sortImageResults(imageOk);
+  const imageSorted = sortScanResults(imageOk, "image");
   const imagePreferred = toolSorted.filter((entry) => entry.image.ok);
   const preselectPool = imagePreferred.length > 0 ? imagePreferred : toolSorted;
   const preselected = preselectPool
@@ -317,29 +267,32 @@ export async function modelsScanCommand(
   let selectedImages: string[] = imagePreselected;
 
   if (canPrompt) {
-    const selection = await multiselect({
-      message: "Select fallback models (ordered)",
-      options: toolSorted.map((entry) => ({
-        value: entry.modelRef,
-        label: entry.modelRef,
-        hint: buildScanHint(entry),
-      })),
-      initialValues: preselected,
-    });
-
-    selected = guardPromptCancel(selection, runtime);
+    const choose = async (
+      message: string,
+      candidates: ModelScanResult[],
+      initialValues: string[],
+    ) =>
+      guardPromptCancel(
+        await clackMultiselect(
+          styleSelectParams({
+            message,
+            options: candidates.map((entry) => ({
+              value: entry.modelRef,
+              label: entry.modelRef,
+              hint: buildScanHint(entry),
+            })),
+            initialValues,
+          }),
+        ),
+        runtime,
+      );
+    selected = await choose("Select fallback models (ordered)", toolSorted, preselected);
     if (imageSorted.length > 0) {
-      const imageSelection = await multiselect({
-        message: "Select image fallback models (ordered)",
-        options: imageSorted.map((entry) => ({
-          value: entry.modelRef,
-          label: entry.modelRef,
-          hint: buildScanHint(entry),
-        })),
-        initialValues: imagePreselected,
-      });
-
-      selectedImages = guardPromptCancel(imageSelection, runtime);
+      selectedImages = await choose(
+        "Select image fallback models (ordered)",
+        imageSorted,
+        imagePreselected,
+      );
     }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");
@@ -359,33 +312,31 @@ export async function modelsScanCommand(
         nextModels[entry] = {};
       }
     }
-    const existingImageModel = toAgentModelListLike(cfg.agents?.defaults?.imageModel);
+    const withFallbacks = (
+      field: "model" | "imageModel",
+      fallbacks: string[],
+      setPrimary?: boolean,
+    ) => {
+      const existing = toAgentModelListLike(cfg.agents?.defaults?.[field]);
+      return {
+        ...(existing?.primary ? { primary: existing.primary } : {}),
+        fallbacks,
+        ...(setPrimary ? { primary: fallbacks[0] } : {}),
+      };
+    };
     const nextImageModel =
       selectedImages.length > 0
-        ? {
-            ...(existingImageModel?.primary ? { primary: existingImageModel.primary } : undefined),
-            fallbacks: selectedImages,
-            ...(opts.setImage ? { primary: selectedImages[0] } : {}),
-          }
+        ? withFallbacks("imageModel", selectedImages, opts.setImage)
         : cfg.agents?.defaults?.imageModel;
-    const existingModel = toAgentModelListLike(cfg.agents?.defaults?.model);
-    const defaults = {
-      ...cfg.agents?.defaults,
-      model: {
-        ...(existingModel?.primary ? { primary: existingModel.primary } : undefined),
-        fallbacks: selected,
-        ...(opts.setDefault ? { primary: selected[0] } : {}),
-      },
+    const nextModel = withFallbacks("model", selected, opts.setDefault);
+    cfg.agents ??= {};
+    cfg.agents.defaults = {
+      ...cfg.agents.defaults,
+      model: nextModel,
       ...(nextImageModel ? { imageModel: nextImageModel } : {}),
       models: nextModels,
-    } satisfies NonNullable<NonNullable<typeof cfg.agents>["defaults"]>;
-    return {
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults,
-      },
     };
+    return cfg;
   });
 
   if (opts.json) {

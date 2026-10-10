@@ -1,10 +1,12 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty as normalizePolicyChannelId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicyIngressEvidence } from "../policy-state.js";
 import { ingressPolicyShapeFinding } from "./access-shapes.js";
 import { CHECK_IDS } from "./check-ids.js";
-import { policyEvidenceFinding as ingressFinding } from "./policy-evidence-finding.js";
-import { normalizePolicyChannelId } from "./policy-runtime.js";
+import { policyEvidenceRuleFindings, type PolicyEvidenceRule } from "./policy-evidence-finding.js";
 import { channelScopedPolicyTargets } from "./policy-scope.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
 import { ocPathSegment, readPolicyBoolean, readPolicyPathString, readStringList } from "./utils.js";
@@ -30,16 +32,7 @@ export function ingressFindings(
   }
   if (hasValidScopedPolicy(policy, policyPath, policyDocName)) {
     for (const target of channelScopedPolicyTargets(policy)) {
-      if (
-        ingressPolicyShapeFinding(target.overlay.ingress, {
-          policyDocName,
-          policyPath,
-          targetPrefix: `scopes/${ocPathSegment(target.scopeName)}/ingress`,
-          propertyPrefix: `scopes.${target.scopeName}.ingress`,
-          allowSession: false,
-        }) !== undefined ||
-        !isRecord(target.overlay.ingress)
-      ) {
+      if (!isRecord(target.overlay.ingress)) {
         continue;
       }
       findings.push(
@@ -74,7 +67,7 @@ function ingressFindingsForRule(
       violates: (entry) => entry.value !== requiredDmScope,
       checkId: CHECK_IDS.policyIngressDmScopeUnapproved,
       message: (entry) => `session.dmScope '${entry.value ?? ""}' does not match policy.`,
-      path: "session/requireDmScope",
+      path: ["session", "requireDmScope"],
       fixHint: "Set session.dmScope to the required isolation scope or update policy after review.",
     },
     {
@@ -85,7 +78,7 @@ function ingressFindingsForRule(
       checkId: CHECK_IDS.policyIngressDmPolicyUnapproved,
       message: (entry) =>
         `${ingressLabel(entry)} uses unapproved DM policy '${entry.value ?? ""}'.`,
-      path: "channels/allowDmPolicies",
+      path: ["channels", "allowDmPolicies"],
       fixHint: "Set the channel DM policy to an allowed value or update policy after review.",
     },
     {
@@ -94,7 +87,7 @@ function ingressFindingsForRule(
       violates: (entry) => entry.value !== "allowlist" && entry.value !== "disabled",
       checkId: CHECK_IDS.policyIngressOpenGroupsDenied,
       message: (entry) => `${ingressLabel(entry)} allows open group ingress.`,
-      path: "channels/denyOpenGroups",
+      path: ["channels", "denyOpenGroups"],
       fixHint: "Set groupPolicy to allowlist or disabled, or update policy after review.",
     },
     {
@@ -103,31 +96,15 @@ function ingressFindingsForRule(
       violates: (entry) => !isGroupIngressDisabled(entry, groupPolicies) && entry.value !== true,
       checkId: CHECK_IDS.policyIngressGroupMentionRequired,
       message: (entry) => `${ingressLabel(entry)} does not require group mentions.`,
-      path: "channels/requireMentionInGroups",
+      path: ["channels", "requireMentionInGroups"],
       fixHint: "Set requireMention=true for the channel/group entry or update policy after review.",
     },
-  ] satisfies readonly {
-    kind: PolicyIngressEvidence["kind"];
-    enabled: boolean;
-    violates: (entry: PolicyIngressEvidence) => boolean;
-    checkId: Parameters<typeof ingressFinding>[1]["checkId"];
-    message: (entry: PolicyIngressEvidence) => string;
-    path: string;
-    fixHint: string;
-  }[];
-  return rules.flatMap((rule) =>
-    rule.enabled
-      ? entries
-          .filter((entry) => entry.kind === rule.kind && rule.violates(entry))
-          .map((entry) =>
-            ingressFinding(entry, {
-              checkId: rule.checkId,
-              message: rule.message(entry),
-              requirement: `oc://${policyDocName}/${requirementBase}/${rule.path}`,
-              fixHint: rule.fixHint,
-            }),
-          )
-      : [],
+  ] satisfies readonly (PolicyEvidenceRule<PolicyIngressEvidence> & { enabled: boolean })[];
+  return policyEvidenceRuleFindings(
+    entries,
+    rules.filter((rule) => rule.enabled),
+    policyDocName,
+    requirementBase,
   );
 }
 

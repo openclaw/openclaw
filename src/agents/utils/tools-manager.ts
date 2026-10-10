@@ -8,7 +8,6 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
-import chalk from "chalk";
 import { extractArchive } from "../../infra/archive.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { type FileLockOptions, withFileLock } from "../../infra/file-lock.js";
@@ -50,7 +49,6 @@ interface ToolConfig {
   binaryName: string; // Name of the binary inside the archive
   systemBinaryNames?: string[]; // Alternative system command names to try before downloading
   tagPrefix: string; // Prefix for tags (e.g., "v" for v1.0.0, "" for 1.0.0)
-  getAssetName: (version: string, plat: string, architecture: string) => string | null;
 }
 
 const TOOLS: Record<"fd" | "rg", ToolConfig> = {
@@ -60,40 +58,12 @@ const TOOLS: Record<"fd" | "rg", ToolConfig> = {
     binaryName: "fd",
     systemBinaryNames: ["fd", "fdfind"],
     tagPrefix: "v",
-    getAssetName: (version, plat, architecture) => {
-      if (plat === "darwin") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `fd-v${version}-${archStr}-apple-darwin.tar.gz`;
-      } else if (plat === "linux") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
-      } else if (plat === "win32") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `fd-v${version}-${archStr}-pc-windows-msvc.zip`;
-      }
-      return null;
-    },
   },
   rg: {
     name: "ripgrep",
     repo: "BurntSushi/ripgrep",
     binaryName: "rg",
     tagPrefix: "",
-    getAssetName: (version, plat, architecture) => {
-      if (plat === "darwin") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `ripgrep-${version}-${archStr}-apple-darwin.tar.gz`;
-      } else if (plat === "linux") {
-        if (architecture === "arm64") {
-          return `ripgrep-${version}-aarch64-unknown-linux-gnu.tar.gz`;
-        }
-        return `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`;
-      } else if (plat === "win32") {
-        const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-        return `ripgrep-${version}-${archStr}-pc-windows-msvc.zip`;
-      }
-      return null;
-    },
   },
 };
 
@@ -242,10 +212,17 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     version = "10.3.0";
   }
 
-  const assetName = config.getAssetName(version, plat, architecture);
-  if (!assetName) {
+  const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
+  const targets: Partial<Record<NodeJS.Platform, string>> = {
+    darwin: "apple-darwin.tar.gz",
+    linux: `unknown-linux-${tool === "rg" && architecture !== "arm64" ? "musl" : "gnu"}.tar.gz`,
+    win32: "pc-windows-msvc.zip",
+  };
+  const target = targets[plat];
+  if (!target) {
     throw new Error(`Unsupported platform: ${plat}/${architecture}`);
   }
+  const assetName = `${config.name}-${config.tagPrefix}${version}-${archStr}-${target}`;
 
   mkdirSync(toolsDir, { recursive: true });
 
@@ -266,11 +243,7 @@ async function downloadTool(tool: "fd" | "rg", toolsDir: string): Promise<string
     const stagingRoot = await fsRoot(stagingDir);
     await downloadFile(downloadUrl, stagingRoot, assetName);
 
-    if (assetName.endsWith(".tar.gz") || assetName.endsWith(".zip")) {
-      await extractArchiveSafe(archivePath, extractDir, assetName);
-    } else {
-      throw new Error(`Unsupported archive format: ${assetName}`);
-    }
+    await extractArchiveSafe(archivePath, extractDir, assetName);
 
     // Find the binary in extracted files. Some archives contain files directly
     // at root, others nest under a versioned subdirectory.
@@ -330,71 +303,31 @@ function installTool(tool: "fd" | "rg", toolsDir: string): Promise<string> {
   );
 }
 
-// Termux package names for tools
-const TERMUX_PACKAGES: Record<string, string> = {
-  fd: "fd",
-  rg: "ripgrep",
-};
-
-// Ensure a tool is available, downloading if necessary
-// Returns the path to the tool, or null if unavailable
-export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<string | undefined> {
+/** Returns the existing or installed binary path, or undefined when unavailable. */
+export async function ensureTool(tool: "fd" | "rg"): Promise<string | undefined> {
   const toolsDir = getBinDir();
   const existingPath = getToolPath(tool, toolsDir);
   if (existingPath) {
     return existingPath;
   }
 
-  const config = TOOLS[tool];
-
   if (!toolsDir) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `${config.name} not found. Install it on PATH or select an agent owner before downloading.`,
-        ),
-      );
-    }
     return undefined;
   }
 
   if (isTruthyEnvValue(process.env.OPENCLAW_OFFLINE)) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
-      );
-    }
     return undefined;
   }
 
   // On Android/Termux, Linux binaries don't work due to Bionic libc incompatibility.
   // Users must install via pkg.
   if (platform() === "android") {
-    const pkgName = TERMUX_PACKAGES[tool] ?? tool;
-    if (!silent) {
-      console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
-    }
     return undefined;
   }
 
-  if (!silent) {
-    console.log(chalk.dim(`${config.name} not found. Downloading...`));
-  }
-
   try {
-    const path = await installTool(tool, toolsDir);
-    if (!silent) {
-      console.log(chalk.dim(`${config.name} installed to ${path}`));
-    }
-    return path;
-  } catch (e) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
-    }
+    return await installTool(tool, toolsDir);
+  } catch {
     return undefined;
   }
 }

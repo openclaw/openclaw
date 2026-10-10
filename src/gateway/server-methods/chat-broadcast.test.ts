@@ -23,7 +23,7 @@ function createContext(seq = 0) {
       agentRunSeq,
       broadcast,
       nodeSendToSession,
-      getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+      getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     },
     order,
     deleteSpy,
@@ -64,6 +64,7 @@ describe("chat terminal broadcasts", () => {
       );
 
       broadcastChatFinal({
+        terminalEntry: undefined,
         ...request,
         message: { role: "assistant", content: [{ type: "text", text: "done" }] },
       });
@@ -109,6 +110,7 @@ describe("chat terminal broadcasts", () => {
     };
 
     broadcastChatFinal({
+      terminalEntry: undefined,
       context,
       runId: "run-1",
       sessionKey: "global",
@@ -141,6 +143,7 @@ describe("chat terminal broadcasts", () => {
     const { context } = createContext(2);
 
     broadcastChatError({
+      terminalEntry: undefined,
       context,
       runId: "run-1",
       sessionKey: "agent:main:main",
@@ -178,6 +181,7 @@ describe("chat terminal broadcasts", () => {
 
     expect(() =>
       broadcastChatFinal({
+        terminalEntry: undefined,
         context,
         runId: "run-1",
         sessionKey: "agent:main:main",
@@ -197,6 +201,7 @@ describe("chat terminal broadcasts", () => {
 
     expect(() =>
       broadcastChatError({
+        terminalEntry: undefined,
         context,
         runId: "run-1",
         sessionKey: "agent:main:main",
@@ -230,6 +235,7 @@ describe("global chat broadcast ownership", () => {
     };
 
     broadcastChatFinal({
+      terminalEntry: undefined,
       context,
       runId: "run-ops-global",
       sessionKey: "global",

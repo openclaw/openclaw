@@ -29,8 +29,12 @@ function resolveLegacyChannelAccount(
 function patchLegacyChannelConfig(params: {
   cfg: OpenClawConfig;
   channel: string;
+  accountId?: string;
   patch: Record<string, unknown>;
 }): OpenClawConfig {
+  if (params.accountId !== undefined && params.accountId !== DEFAULT_ACCOUNT_ID) {
+    return patchChannelConfigForAccount({ ...params, accountId: params.accountId });
+  }
   const channelConfig = resolveLegacyChannelConfig(params.cfg, params.channel);
   const dmConfig = asObjectRecord(channelConfig.dm) ?? {};
   return writeChannelSection(params.cfg, params.channel, {
@@ -49,21 +53,19 @@ export function createLegacyCompatChannelDmPolicy(params: {
   channel: string;
   promptAllowFrom?: ChannelSetupDmPolicy["promptAllowFrom"];
 }): ChannelSetupDmPolicy {
+  const configKeys = (accountId?: string) => {
+    const accountPath =
+      accountId && accountId !== DEFAULT_ACCOUNT_ID ? `.accounts.${accountId}` : "";
+    return {
+      policyKey: `channels.${params.channel}${accountPath}.dmPolicy`,
+      allowFromKey: `channels.${params.channel}${accountPath}.allowFrom`,
+    };
+  };
   return {
     label: params.label,
     channel: params.channel,
-    policyKey: `channels.${params.channel}.dmPolicy`,
-    allowFromKey: `channels.${params.channel}.allowFrom`,
-    resolveConfigKeys: (_cfg, accountId) =>
-      accountId && accountId !== DEFAULT_ACCOUNT_ID
-        ? {
-            policyKey: `channels.${params.channel}.accounts.${accountId}.dmPolicy`,
-            allowFromKey: `channels.${params.channel}.accounts.${accountId}.allowFrom`,
-          }
-        : {
-            policyKey: `channels.${params.channel}.dmPolicy`,
-            allowFromKey: `channels.${params.channel}.allowFrom`,
-          },
+    ...configKeys(),
+    resolveConfigKeys: (_cfg, accountId) => configKeys(accountId),
     getCurrent: (cfg, accountId) => {
       const channelConfig = resolveLegacyChannelConfig(cfg, params.channel);
       const accountConfig =
@@ -92,18 +94,12 @@ export function createLegacyCompatChannelDmPolicy(params: {
             )
           : undefined;
       const patch = { dmPolicy: policy, ...(allowFrom ? { allowFrom } : {}) };
-      return namedAccountId
-        ? patchChannelConfigForAccount({
-            cfg,
-            channel: params.channel,
-            accountId: namedAccountId,
-            patch,
-          })
-        : patchLegacyChannelConfig({
-            cfg,
-            channel: params.channel,
-            patch,
-          });
+      return patchLegacyChannelConfig({
+        cfg,
+        channel: params.channel,
+        accountId: namedAccountId,
+        patch,
+      });
     },
     ...(params.promptAllowFrom ? { promptAllowFrom: params.promptAllowFrom } : {}),
   };
@@ -145,16 +141,10 @@ export async function promptLegacyChannelAllowFromForAccount<TAccount>(params: {
     invalidWithoutTokenNote: params.invalidWithoutTokenNote,
     resolveEntries: params.resolveEntries,
   });
-  return accountId !== DEFAULT_ACCOUNT_ID
-    ? patchChannelConfigForAccount({
-        cfg: params.cfg,
-        channel: params.channel,
-        accountId,
-        patch: { allowFrom },
-      })
-    : patchLegacyChannelConfig({
-        cfg: params.cfg,
-        channel: params.channel,
-        patch: { allowFrom },
-      });
+  return patchLegacyChannelConfig({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId,
+    patch: { allowFrom },
+  });
 }

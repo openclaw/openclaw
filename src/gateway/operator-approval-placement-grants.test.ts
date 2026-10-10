@@ -1,6 +1,9 @@
 // Process-local placement-grant retention and final-boundary revalidation.
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -16,6 +19,11 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
+import {
+  resolveNodeInvokePlacementGrant,
+  retainResolvedNodeInvokePlacementGrant,
+  type NodeInvokePlacementGrantAuthorization,
+} from "./node-invoke-placement-grant.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import {
   createApprovalClientLookup,
@@ -31,6 +39,7 @@ import {
 import {
   createPlacementStandingGrantRuntime,
   type PlacementStandingGrantMintSpec,
+  type PlacementStandingGrantRuntime,
 } from "./operator-approval-placement-grants.js";
 import { insertOperatorApproval, resolveOperatorApproval } from "./operator-approval-store.js";
 
@@ -67,19 +76,23 @@ afterEach(async () => {
   databasePaths.clear();
 });
 
-function seedActivePlacement(databaseOptions: OpenClawStateDatabaseOptions): void {
+function seedActivePlacement(
+  databaseOptions: OpenClawStateDatabaseOptions,
+  sessionId = SESSION_ID,
+  environmentId = ENVIRONMENT_ID,
+): void {
   const database = openOpenClawStateDatabase(databaseOptions);
   const stateDb = getNodeSqliteKysely<PlacementTestDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
     stateDb.insertInto("worker_environments").values({
-      environment_id: ENVIRONMENT_ID,
+      environment_id: environmentId,
       provider_id: "test-provider",
       profile_id: "test-profile",
       profile_snapshot_json: "{}",
-      provision_operation_id: "provision-1",
-      lease_id: "lease-1",
-      node_setup_id: "setup-1",
+      provision_operation_id: `provision-${environmentId}`,
+      lease_id: `lease-${environmentId}`,
+      node_setup_id: `setup-${environmentId}`,
       node_device_id: NODE_ID,
       ssh_host: null,
       ssh_port: null,
@@ -94,7 +107,7 @@ function seedActivePlacement(databaseOptions: OpenClawStateDatabaseOptions): voi
       bootstrap_install_kind: "test",
       owner_epoch: 7,
       teardown_terminal_state: null,
-      attached_session_ids_json: JSON.stringify([SESSION_ID]),
+      attached_session_ids_json: JSON.stringify([sessionId]),
       created_at_ms: NOW_MS,
       updated_at_ms: NOW_MS,
       state_changed_at_ms: NOW_MS,
@@ -107,12 +120,12 @@ function seedActivePlacement(databaseOptions: OpenClawStateDatabaseOptions): voi
   executeSqliteQuerySync(
     database.db,
     stateDb.insertInto("worker_session_placements").values({
-      session_id: SESSION_ID,
+      session_id: sessionId,
       agent_id: "main",
       session_key: SESSION_KEY,
       execution_mode: "remote-exec",
       state: "active",
-      environment_id: ENVIRONMENT_ID,
+      environment_id: environmentId,
       transition_generation: 4,
       active_owner_epoch: 7,
       workspace_base_manifest_ref: "manifest-1",
@@ -135,7 +148,7 @@ function seedActivePlacement(databaseOptions: OpenClawStateDatabaseOptions): voi
   );
 }
 
-function approval(id: string): NewOperatorApproval {
+function approval(id: string, sessionId = SESSION_ID): NewOperatorApproval {
   return {
     id,
     kind: "plugin",
@@ -154,7 +167,7 @@ function approval(id: string): NewOperatorApproval {
     source: {
       agentId: "main",
       sessionKey: SESSION_KEY,
-      sessionId: SESSION_ID,
+      sessionId,
       runId: "run-1",
       toolCallId: null,
       toolName: "codex.exec-server.stdio.v1",
@@ -166,10 +179,10 @@ function approval(id: string): NewOperatorApproval {
   };
 }
 
-function resolveBinding(
+async function resolveBinding(
   runtime: ReturnType<typeof createPlacementStandingGrantRuntime>,
-): PlacementStandingGrantMintSpec {
-  const binding = runtime.resolveBinding({
+): Promise<PlacementStandingGrantMintSpec> {
+  const binding = await runtime.resolveBindingAsync({
     pluginId: "codex",
     command: "codex.exec-server.stdio.v1",
     approvalScope: "codex.exec-server",
@@ -195,7 +208,7 @@ async function mintGrant(
     databaseOptions,
     now,
   });
-  const binding = resolveBinding(runtime);
+  const binding = await resolveBinding(runtime);
   await retainAllowedGrant(databaseOptions, runtime, binding);
   return { binding, runtime };
 }
@@ -204,12 +217,16 @@ async function retainAllowedGrant(
   databaseOptions: OpenClawStateDatabaseOptions,
   runtime: ReturnType<typeof createPlacementStandingGrantRuntime>,
   binding: PlacementStandingGrantMintSpec,
+  approvalId = "approval-1",
 ): Promise<void> {
-  await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
+  await insertOperatorApproval({
+    approval: approval(approvalId, binding.sessionId),
+    databaseOptions,
+  });
   expect(
     (
       await resolveOperatorApproval({
-        id: "approval-1",
+        id: approvalId,
         decision: "allow-always",
         resolver: { kind: "device", id: "reviewer-1" },
         nowMs: NOW_MS + 1_000,
@@ -218,9 +235,9 @@ async function retainAllowedGrant(
     ).outcome,
   ).toBe("resolved");
   expect(
-    runtime.retain({
+    await runtime.retainAsync({
       ...binding,
-      approvalId: "approval-1",
+      approvalId,
       nowMs: NOW_MS + 1_000,
       expiresAtMs: null,
     }),
@@ -228,6 +245,152 @@ async function retainAllowedGrant(
 }
 
 describe("placement standing grants", () => {
+  it("accepts the released synchronous SDK runtime at the node approval boundary", async () => {
+    const { binding, runtime } = await mintGrant(createDatabaseOptions());
+    const legacyRuntime: PlacementStandingGrantRuntime = {
+      resolveBinding: runtime.resolveBinding,
+      retain: runtime.retain,
+      validate: runtime.validate,
+      consume: runtime.consume,
+    };
+    const owner = { agentId: "main", sessionKey: SESSION_KEY, assertCurrent: () => {} };
+    expect(
+      await resolveNodeInvokePlacementGrant({
+        runtime: legacyRuntime,
+        requestedDecisions: ["allow-always"],
+        owner,
+        pluginId: binding.pluginId,
+        command: binding.command,
+        approvalScope: binding.approvalScope,
+        risk: { level: "high", family: "exec" },
+        nodeSession: { ...createNodeSession(), pairingGeneration: PAIRING_GENERATION },
+      }),
+    ).toEqual({ kind: "granted", binding, approvalId: "approval-1" });
+    const authorization: NodeInvokePlacementGrantAuthorization = {};
+    expect(
+      await retainResolvedNodeInvokePlacementGrant({
+        runtime: legacyRuntime,
+        decision: "allow-always",
+        binding,
+        owner,
+        authorization,
+      }),
+    ).toBe(true);
+    expect(authorization.binding).toEqual(binding);
+  });
+
+  it("retains each session's parent while selecting the current placement", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const { binding, runtime } = await mintGrant(databaseOptions);
+    const input = {
+      pluginId: binding.pluginId,
+      command: binding.command,
+      approvalScope: binding.approvalScope,
+      agentId: binding.agentId,
+      sessionKey: binding.sessionKey,
+      nodeId: binding.nodeId,
+      pairingGeneration: binding.pairingGeneration,
+    };
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const stateDb = getNodeSqliteKysely<PlacementTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      stateDb.updateTable("worker_session_placements").set({ state: "draining" }),
+    );
+    seedActivePlacement(databaseOptions, "session-placement-2", "environment-2");
+    const successor = await resolveBinding(runtime);
+    await retainAllowedGrant(databaseOptions, runtime, successor, "approval-2");
+    expect(await runtime.resolveAsync(input)).toEqual({
+      binding: successor,
+      approvalId: "approval-2",
+    });
+
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("worker_session_placements")
+        .set({ state: "draining" })
+        .where("session_id", "=", successor.sessionId),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      stateDb
+        .updateTable("worker_session_placements")
+        .set({ state: "active" })
+        .where("session_id", "=", binding.sessionId),
+    );
+    expect(await runtime.resolveAsync(input)).toEqual({ binding, approvalId: "approval-1" });
+  });
+
+  it("prepares a grant without host SQL and observes a foreign parent revocation", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const { binding, runtime } = await mintGrant(databaseOptions);
+    await runtime.resolveAsync(binding);
+    const hostSql = observeHostDataSql();
+    try {
+      const expired = {
+        ...binding,
+        approvalId: "approval-1",
+        nowMs: NOW_MS + 1_000,
+        expiresAtMs: NOW_MS,
+      };
+      const posted = vi.spyOn(Worker.prototype, "postMessage");
+      try {
+        expect(runtime.retain(expired)).toBe(false);
+        expect(await runtime.retainAsync(expired)).toBe(false);
+        expect(posted).not.toHaveBeenCalled();
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        posted.mockRestore();
+      }
+      expect(await runtime.resolveAsync(binding)).toMatchObject({
+        binding,
+        approvalId: "approval-1",
+      });
+      expect(await runtime.validateAsync(binding)).toMatchObject({ outcome: "consumed" });
+      expect(
+        await runtime.retainAsync({
+          ...binding,
+          approvalId: "approval-1",
+          nowMs: NOW_MS + 1_000,
+          expiresAtMs: null,
+        }),
+      ).toBe(true);
+      expect(hostSql.queries).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+    const foreign = new DatabaseSync(databaseOptions.path!);
+    try {
+      foreign
+        .prepare(
+          "UPDATE operator_approvals SET status = 'denied', decision = 'deny' WHERE approval_id = ?",
+        )
+        .run("approval-1");
+    } finally {
+      foreign.close();
+    }
+    expect(await runtime.validateAsync(binding)).toMatchObject({
+      outcome: "approval-not-allow-always",
+    });
+  });
+
+  it("rejects terminal metadata on an active placement before authorizing its grant", async () => {
+    const databaseOptions = createDatabaseOptions();
+    const { binding, runtime } = await mintGrant(databaseOptions);
+    const database = openOpenClawStateDatabase(databaseOptions);
+    executeSqliteQuerySync(
+      database.db,
+      getNodeSqliteKysely<PlacementTestDatabase>(database.db)
+        .updateTable("worker_session_placements")
+        .set({ terminal_reason: "retired", terminal_at_ms: NOW_MS })
+        .where("session_id", "=", SESSION_ID),
+    );
+    await expect(runtime.resolveAsync(binding)).rejects.toThrow(
+      "Worker session placement active cannot retain terminal facts",
+    );
+  });
+
   it("retains the exact binding only for the current Gateway runtime", async () => {
     const databaseOptions = createDatabaseOptions();
     seedActivePlacement(databaseOptions);
@@ -243,7 +406,7 @@ describe("placement standing grants", () => {
       databaseOptions,
       now: () => NOW_MS + 2_000,
     });
-    const binding = resolveBinding(runtime);
+    const binding = await resolveBinding(runtime);
     expect(binding).toEqual({
       pluginId: "codex",
       command: "codex.exec-server.stdio.v1",
@@ -289,10 +452,10 @@ describe("placement standing grants", () => {
       databaseOptions,
       now: () => NOW_MS + 2_000,
     });
-    const binding = resolveBinding(runtime);
+    const binding = await resolveBinding(runtime);
     await insertOperatorApproval({ approval: approval("approval-1"), databaseOptions });
     expect(
-      runtime.retain({
+      await runtime.retainAsync({
         ...binding,
         approvalId: "approval-1",
         nowMs: NOW_MS + 1_000,
@@ -398,7 +561,7 @@ describe("placement standing grants", () => {
       resolveAllowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions,
       resolveStandingGrantMint: (request) =>
         request.placementGrant ? { kind: "placement", ...request.placementGrant } : null,
-      retainPlacementStandingGrant: (grant) => placementStandingGrants.retain(grant),
+      retainPlacementStandingGrantAsync: (grant) => placementStandingGrants.retainAsync(grant),
       validateAgentRuntimeDelegatedAuthority: () => true,
     });
     const { manager, databaseOptions } = fixture;

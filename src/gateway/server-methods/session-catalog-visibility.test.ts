@@ -214,7 +214,7 @@ describe("session catalog caller visibility", () => {
     });
   });
 
-  it("rejects hidden targets before read, continue, or archive dispatch", async () => {
+  it("rejects hidden targets before read, import, continue, or archive dispatch", async () => {
     hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
     setActors([["agent:main:other", "profile-other"]]);
     const list = vi.fn(async () => [host([session("other-thread", "agent:main:other")])]);
@@ -231,6 +231,7 @@ describe("session catalog caller visibility", () => {
 
     for (const [method, params] of [
       ["sessions.catalog.read", {}],
+      ["sessions.catalog.import", {}],
       ["sessions.catalog.continue", {}],
       ["sessions.catalog.archive", { confirmNoOtherRunner: true }],
     ] as const) {

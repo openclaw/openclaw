@@ -36,9 +36,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { shortenHomePath } from "../utils.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
-
-const HEARTBEAT_TASK_MIGRATION_CHECK_ID = "core/doctor/heartbeat-task-cron-migration";
 
 type HeartbeatTaskMigrationResult = { changes: string[]; warnings: string[] };
 
@@ -65,35 +64,15 @@ function validateTasks(
     throw new Error("tasks: block contains an incomplete name/interval/prompt entry");
   }
   const occurrenceCounts = new Map<string, number>();
-  const validated: ValidatedHeartbeatTask[] = [];
-  for (const task of tasks) {
+  return tasks.map((task) => {
     const intervalMs = parseDurationMs(task.interval, { defaultUnit: "m" });
     if (intervalMs <= 0) {
       throw new Error(`task ${JSON.stringify(task.name)} interval must be greater than zero`);
     }
     const occurrenceIndex = occurrenceCounts.get(task.name) ?? 0;
     occurrenceCounts.set(task.name, occurrenceIndex + 1);
-    validated.push({ task, intervalMs, occurrenceIndex });
-  }
-  return validated;
-}
-
-function migrationFinding(params: {
-  storePath: string;
-  agentId: string;
-  message: string;
-  severity?: HealthFinding["severity"];
-  requirement: string;
-}): HealthFinding {
-  return {
-    checkId: HEARTBEAT_TASK_MIGRATION_CHECK_ID,
-    severity: params.severity ?? "warning",
-    message: params.message,
-    path: params.storePath,
-    target: params.agentId,
-    requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
-  };
+    return { task, intervalMs, occurrenceIndex };
+  });
 }
 
 /** Reports task blocks still owned by heartbeat scratch without changing them. */
@@ -101,22 +80,25 @@ export async function collectHeartbeatTaskMigrationFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<readonly HealthFinding[]> {
+  const MIGRATION_FINDING_DEFAULTS = {
+    checkId: "core/doctor/heartbeat-task-cron-migration",
+    severity: "warning",
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to convert heartbeat tasks into automations.`,
+  } as const;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const findings: HealthFinding[] = [];
   for (const agent of resolveHeartbeatTaskMigrationAgents(cfg)) {
+    const finding = { ...MIGRATION_FINDING_DEFAULTS, path: storePath, target: agent.agentId };
     let monitor: ReturnType<typeof readHeartbeatMonitorScratchReadOnly>;
     try {
       monitor = readHeartbeatMonitorScratchReadOnly(storePath, agent.agentId, { env });
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          storePath,
-          agentId: agent.agentId,
-          requirement: "heartbeat-task-migration-blocked",
-          severity: "error",
-          message: `Agent "${agent.agentId}" heartbeat scratch cannot be inspected: ${errorMessage(error)}`,
-        }),
-      );
+      findings.push({
+        ...finding,
+        requirement: "heartbeat-task-migration-blocked",
+        severity: "error",
+        message: `Agent "${agent.agentId}" heartbeat scratch cannot be inspected: ${errorMessage(error)}`,
+      });
       continue;
     }
     const content = monitor?.state.scratch?.content;
@@ -129,24 +111,18 @@ export async function collectHeartbeatTaskMigrationFindings(
     }
     try {
       validateTasks(document.tasks, document.taskEntryCount);
-      findings.push(
-        migrationFinding({
-          storePath,
-          agentId: agent.agentId,
-          requirement: "heartbeat-tasks-in-scratch",
-          message: `Agent "${agent.agentId}" has ${document.tasks.length} heartbeat task${document.tasks.length === 1 ? "" : "s"} that must become cron jobs.`,
-        }),
-      );
+      findings.push({
+        ...finding,
+        requirement: "heartbeat-tasks-in-scratch",
+        message: `Agent "${agent.agentId}" has ${document.tasks.length} heartbeat task${document.tasks.length === 1 ? "" : "s"} that must become cron jobs.`,
+      });
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          storePath,
-          agentId: agent.agentId,
-          requirement: "heartbeat-task-migration-blocked",
-          severity: "error",
-          message: `Agent "${agent.agentId}" heartbeat tasks cannot be migrated: ${errorMessage(error)}`,
-        }),
-      );
+      findings.push({
+        ...finding,
+        requirement: "heartbeat-task-migration-blocked",
+        severity: "error",
+        message: `Agent "${agent.agentId}" heartbeat tasks cannot be migrated: ${errorMessage(error)}`,
+      });
     }
   }
   return findings;
@@ -155,45 +131,12 @@ export async function collectHeartbeatTaskMigrationFindings(
 type TaskJobInput = {
   agentId: string;
   task: LegacyHeartbeatTask;
-  occurrenceIndex: number;
+  declarationKey: string;
   intervalMs: number;
   lastRunAtMs?: number;
   existing?: CronJob;
   nowMs: number;
 };
-
-function taskJobInput(params: TaskJobInput) {
-  const existingAnchor =
-    params.existing?.schedule.kind === "every" &&
-    params.existing.schedule.everyMs === params.intervalMs
-      ? params.existing.schedule.anchorMs
-      : undefined;
-  const nextDueMs =
-    params.lastRunAtMs === undefined || params.lastRunAtMs + params.intervalMs <= params.nowMs
-      ? params.nowMs + 1
-      : params.lastRunAtMs + params.intervalMs;
-  return {
-    declarationKey: heartbeatTaskDeclarationKey(
-      params.agentId,
-      params.task.name,
-      params.occurrenceIndex,
-    ),
-    displayName: truncateUtf16Safe(`Heartbeat task: ${params.task.name}`, 200),
-    name: params.task.name,
-    description: "Migrated from heartbeat monitor scratch by openclaw doctor.",
-    agentId: params.agentId,
-    enabled: true,
-    schedule: {
-      kind: "every" as const,
-      everyMs: params.intervalMs,
-      anchorMs: existingAnchor ?? nextDueMs,
-    },
-    payload: { kind: "systemEvent" as const, text: params.task.prompt },
-    sessionTarget: "main" as const,
-    wakeMode: "next-heartbeat" as const,
-    ...(params.lastRunAtMs === undefined ? {} : { state: { lastRunAtMs: params.lastRunAtMs } }),
-  };
-}
 
 type TaskJobPlan = {
   declarationKey: string;
@@ -216,9 +159,7 @@ type CronPlanningSnapshot = {
   nextSortOrder: number;
 };
 
-type MigrationCommitResult =
-  | { ok: true; currentRevision: number }
-  | { ok: false; reason: "job-conflict" | "revision-conflict" };
+type MigrationCommitResult = "committed" | "job-conflict" | "revision-conflict";
 
 function taskDeclarativeFields(job: CronJob) {
   return {
@@ -233,26 +174,47 @@ function taskDeclarativeFields(job: CronJob) {
 }
 
 function convergeTaskJob(params: TaskJobInput): CronJob {
-  const input = taskJobInput(params);
-  if (!params.existing) {
-    const { state, ...fields } = input;
+  const { agentId, task, intervalMs, lastRunAtMs, existing: previous, nowMs } = params;
+  const existingAnchor =
+    previous?.schedule.kind === "every" && previous.schedule.everyMs === intervalMs
+      ? previous.schedule.anchorMs
+      : undefined;
+  const nextDueMs =
+    lastRunAtMs === undefined || lastRunAtMs + intervalMs <= nowMs
+      ? nowMs + 1
+      : lastRunAtMs + intervalMs;
+  const fields = {
+    displayName: truncateUtf16Safe(`Heartbeat task: ${task.name}`, 200),
+    schedule: {
+      kind: "every" as const,
+      everyMs: intervalMs,
+      anchorMs: existingAnchor ?? nextDueMs,
+    },
+    payload: { kind: "systemEvent" as const, text: task.prompt },
+    enabled: true,
+  };
+  if (!previous) {
     const job: CronJob = {
       id: randomUUID(),
-      ...fields,
-      createdAtMs: params.nowMs,
-      updatedAtMs: params.nowMs,
-      state: { ...state },
+      declarationKey: params.declarationKey,
+      displayName: fields.displayName,
+      name: task.name,
+      description: "Migrated from heartbeat monitor scratch by openclaw doctor.",
+      agentId,
+      enabled: fields.enabled,
+      schedule: fields.schedule,
+      payload: fields.payload,
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+      state: lastRunAtMs === undefined ? {} : { lastRunAtMs },
     };
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, params.nowMs);
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, nowMs);
     return job;
   }
 
-  const previous = params.existing;
-  const job = structuredClone(previous);
-  job.displayName = input.displayName;
-  job.schedule = structuredClone(input.schedule);
-  job.payload = structuredClone(input.payload);
-  job.enabled = true;
+  const job = Object.assign(structuredClone(previous), fields);
   delete job.pacing;
   delete job.trigger;
   delete job.delivery;
@@ -260,14 +222,14 @@ function convergeTaskJob(params: TaskJobInput): CronJob {
     return job;
   }
 
-  job.updatedAtMs = params.nowMs;
+  job.updatedAtMs = nowMs;
   if (!cronSchedulingInputsEqual(previous, job)) {
     job.state.startupCatchupAtMs = undefined;
     job.state.pacedNextRunAtMs = undefined;
     job.state.forcePreservedNextRunAtMs = undefined;
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, params.nowMs);
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, nowMs);
   } else if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
-    job.state.nextRunAtMs = computeJobNextRunAtMs(job, params.nowMs);
+    job.state.nextRunAtMs = computeJobNextRunAtMs(job, nowMs);
   }
   return job;
 }
@@ -283,16 +245,6 @@ async function loadCronPlanningSnapshot(
     sortOrderByJobId,
     nextSortOrder: rows.reduce((max, row) => Math.max(max, row.sort_order + 1), 0),
   };
-}
-
-function reserveSortOrder(snapshot: CronPlanningSnapshot, existing?: CronJob): number {
-  const persisted = existing ? snapshot.sortOrderByJobId.get(existing.id) : undefined;
-  if (persisted !== undefined) {
-    return persisted;
-  }
-  const sortOrder = snapshot.nextSortOrder;
-  snapshot.nextSortOrder += 1;
-  return sortOrder;
 }
 
 function readScratchRevision(db: DatabaseSync, storeKey: string, jobId: string): number {
@@ -315,12 +267,12 @@ function commitAgentTaskMigration(params: {
   plan: AgentTaskMigrationPlan;
 }): MigrationCommitResult {
   const storeKey = cronStoreKey(params.storePath);
-  return runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction<MigrationCommitResult>(
     ({ db }) => {
       if (
         readScratchRevision(db, storeKey, params.plan.monitorJobId) !== params.plan.scratchRevision
       ) {
-        return { ok: false, reason: "revision-conflict" } as const;
+        return "revision-conflict";
       }
 
       const rows = loadCronRows(db, storeKey);
@@ -336,10 +288,10 @@ function commitAgentTaskMigration(params: {
             !current ||
             !isDeepStrictEqual(current, jobPlan.previous)
           ) {
-            return { ok: false, reason: "job-conflict" } as const;
+            return "job-conflict";
           }
         } else if (matchingRows.length > 0 || rows.some((row) => row.job_id === jobPlan.job.id)) {
-          return { ok: false, reason: "job-conflict" } as const;
+          return "job-conflict";
         }
       }
 
@@ -369,7 +321,7 @@ function commitAgentTaskMigration(params: {
       // Like cadence materialization, doctor only commits durable rows. A live
       // gateway reloads the cron store through its normal reload path and arms
       // these persisted nextRunAtMs values; doctor never owns its timer.
-      return { ok: true, currentRevision: params.plan.scratchRevision + 1 } as const;
+      return "committed";
     },
     { env: params.env },
     { operationLabel: "doctor.heartbeat-task-migration" },
@@ -468,9 +420,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
   }
 
   if (!params.shouldRepair || candidates.length === 0) {
-    if (warnings.length > 0) {
-      note(warnings.join("\n"), "Doctor warnings");
-    }
+    noteDoctorMigrationResult({ warnings });
     return { changes, warnings };
   }
 
@@ -487,7 +437,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
 
   for (const candidate of candidates) {
     const { agent, document, monitor, scratchRevision, validatedTasks } = candidate;
-    const session = resolveHeartbeatSession(
+    const session = await resolveHeartbeatSession(
       params.cfg,
       agent.agentId,
       agent.heartbeat,
@@ -496,7 +446,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     );
     const legacyState = session.entry?.heartbeatTaskState ?? {};
     const jobPlans: TaskJobPlan[] = [];
-    let blocked = false;
     for (const { task, intervalMs, occurrenceIndex } of validatedTasks) {
       const declarationKey = heartbeatTaskDeclarationKey(agent.agentId, task.name, occurrenceIndex);
       const matches = snapshot.jobs.filter((job) => job.declarationKey === declarationKey);
@@ -511,7 +460,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         warnings.push(
           `Agent "${agent.agentId}" task ${JSON.stringify(task.name)} collides with an incompatible cron declaration; scratch was left unchanged.`,
         );
-        blocked = true;
         break;
       }
       const legacyLastRun = legacyState[task.name];
@@ -522,13 +470,15 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
       const job = convergeTaskJob({
         agentId: agent.agentId,
         task,
-        occurrenceIndex,
+        declarationKey,
         intervalMs,
         lastRunAtMs,
         existing,
         nowMs,
       });
-      const sortOrder = reserveSortOrder(snapshot, existing);
+      const sortOrder =
+        (existing ? snapshot.sortOrderByJobId.get(existing.id) : undefined) ??
+        snapshot.nextSortOrder++;
       jobPlans.push({
         declarationKey,
         ...(existing ? { previous: structuredClone(existing) } : {}),
@@ -536,7 +486,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
         sortOrder,
       });
     }
-    if (blocked) {
+    if (jobPlans.length !== validatedTasks.length) {
       continue;
     }
 
@@ -558,18 +508,18 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
       strippedContent: document.strippedContent,
       jobs: jobPlans,
     };
-    let committed: MigrationCommitResult;
+    let outcome: MigrationCommitResult;
     try {
-      committed = commitAgentTaskMigration({ storePath, env, nowMs, plan });
+      outcome = commitAgentTaskMigration({ storePath, env, nowMs, plan });
     } catch (error) {
       warnings.push(
         `Agent "${agent.agentId}" task migration could not be committed: ${errorMessage(error)}. Scratch and cron jobs were left unchanged.`,
       );
       continue;
     }
-    if (!committed.ok) {
+    if (outcome !== "committed") {
       warnings.push(
-        committed.reason === "revision-conflict"
+        outcome === "revision-conflict"
           ? `Agent "${agent.agentId}" scratch changed during task migration; no changes were committed.`
           : `Agent "${agent.agentId}" cron jobs changed during task migration; no changes were committed.`,
       );
@@ -606,11 +556,6 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     }
   }
 
-  if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
-  }
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorMigrationResult({ changes, warnings });
   return { changes, warnings };
 }

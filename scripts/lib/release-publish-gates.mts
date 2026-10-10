@@ -148,7 +148,7 @@ export function evaluateReleasePublishGates(input: {
     "selected-lanes",
     selectedLanesError === "",
     selectedLanesError,
-    "Use authenticated Full Release Validation evidence with only policy-derived Windows Node CI advisories and no waivers.",
+    "Use authenticated Full Release Validation evidence with every selected lane passing and no waivers.",
   );
   if (consumer === "stable-closeout") {
     for (const gate of gates) {
@@ -234,7 +234,10 @@ export function evaluateStableRollbackDrill(input: {
 
 function main() {
   const { values } = parseArgs({
-    options: { consumer: { type: "string" }, manifest: { type: "string" } },
+    options: {
+      consumer: { type: "string" },
+      manifest: { type: "string" },
+    },
   });
   const consumer = values.consumer;
   if (consumer !== "publisher" && consumer !== "core-npm" && consumer !== "stable-closeout") {

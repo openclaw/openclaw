@@ -14,6 +14,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import type { ExternalCliOverlayOptions } from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import {
   assertAuthProfileMigrationCandidates,
@@ -81,16 +82,9 @@ export type AuthProfileReadOwner = {
   readStore: () => AuthProfileStore | null;
 };
 
-export type ResolvedExternalCliOverlayOptions = {
-  allowKeychainPrompt?: boolean;
-  config?: OpenClawConfig;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
-};
-
 export function resolveExternalCliOverlayOptions(
   options: LoadAuthProfileStoreOptions | undefined,
-): ResolvedExternalCliOverlayOptions {
+): ExternalCliOverlayOptions {
   const discovery = options?.externalCli;
   const config = discovery?.config ?? options?.config;
   if (discovery?.mode === "none") {
@@ -150,6 +144,11 @@ type AsyncAuthProfileStoreOptions = Omit<
   "database" | "onReadOwner" | "syncExternalCli"
 >;
 
+type AuthProfileRowsReader = Pick<
+  ReturnType<typeof prepareAgentAuthProfileRowsRead>,
+  "read" | "assertCurrent"
+>;
+
 type PreparedAuthProfileStoreReads = {
   effectiveAgentDir: string | undefined;
   env: NodeJS.ProcessEnv;
@@ -163,6 +162,30 @@ type PreparedAuthProfileStoreReads = {
   assertCurrent: () => void;
 };
 
+function captureReadOptions(
+  options: LoadAuthProfileStoreOptions | undefined,
+): LoadAuthProfileStoreOptions {
+  const discovery = options?.externalCli;
+  return {
+    ...options,
+    readOnly: true,
+    externalCli:
+      discovery?.mode === "scoped"
+        ? {
+            ...discovery,
+            ...(discovery.providerIds ? { providerIds: [...discovery.providerIds] } : {}),
+            ...(discovery.profileIds ? { profileIds: [...discovery.profileIds] } : {}),
+          }
+        : discovery,
+    ...(options?.externalCliProviderIds
+      ? { externalCliProviderIds: [...options.externalCliProviderIds] }
+      : {}),
+    ...(options?.externalCliProfileIds
+      ? { externalCliProfileIds: [...options.externalCliProfileIds] }
+      : {}),
+  };
+}
+
 /** Bind to the canonical store scope; this reader owns no mutable runtime or lifecycle state. */
 export function createAuthProfileStoreRuntimeReader({
   isEnvOnlyAuthProfileRuntime,
@@ -173,18 +196,6 @@ export function createAuthProfileStoreRuntimeReader({
   loadRuntimeAuthProfileStore,
   captureScope,
 }: RuntimeReadHost) {
-  /**
-   * Synchronous SDK compatibility. Runtime callers should await loadAuthProfileStoreForRuntimeAsync;
-   * transaction-bound SDK callers retain this entrypoint until their own async cutover.
-   */
-  function loadAuthProfileStoreForRuntime(
-    agentDir?: string,
-    options?: LoadAuthProfileStoreOptions,
-    env?: NodeJS.ProcessEnv,
-  ): AuthProfileStore {
-    return loadRuntimeAuthProfileStore(agentDir, options, env);
-  }
-
   /** Capture sources once; the store owner decides which persisted facts it needs. */
   function withPreparedAuthProfileStoreReads(
     agentDir: string | undefined,
@@ -224,26 +235,10 @@ export function createAuthProfileStoreRuntimeReader({
     const inheritedAuthDir = inheritedDir
       ? path.dirname(resolveAgentAuthPath(inheritedDir))
       : undefined;
-    const externalCli = scopedOptions?.externalCli;
-    const capturedOptions: LoadAuthProfileStoreOptions = {
+    const capturedOptions = captureReadOptions({
       ...scopedOptions,
       inheritedAuthDir,
-      readOnly: true,
-      externalCli:
-        externalCli?.mode === "scoped"
-          ? {
-              ...externalCli,
-              ...(externalCli.providerIds ? { providerIds: [...externalCli.providerIds] } : {}),
-              ...(externalCli.profileIds ? { profileIds: [...externalCli.profileIds] } : {}),
-            }
-          : externalCli,
-      ...(scopedOptions?.externalCliProviderIds
-        ? { externalCliProviderIds: [...scopedOptions.externalCliProviderIds] }
-        : {}),
-      ...(scopedOptions?.externalCliProfileIds
-        ? { externalCliProfileIds: [...scopedOptions.externalCliProfileIds] }
-        : {}),
-    };
+    });
     const profileId = capturedOptions.profileId;
     const localMutationOwner: RuntimeAuthProfileStoreMutationOwner | undefined = selectedAgentPath
       ? {
@@ -304,20 +299,22 @@ export function createAuthProfileStoreRuntimeReader({
     let inheritedObservationPath: string | undefined;
     let active = true;
     let accepting = true;
+    const assertAccepting = () => {
+      if (!accepting) {
+        throw new Error("Auth profile read scope is no longer accepting reads");
+      }
+    };
     let sharedContextUsed = false;
     const readOwners: Array<{
       databasePath: string;
       options: LoadAuthProfileStoreOptions;
       owner?: AuthProfileReadOwner;
     }> = [];
-    const rowReaders = new Map<
-      string,
-      Pick<ReturnType<typeof prepareAgentAuthProfileRowsRead>, "read" | "assertCurrent">
-    >();
+    const rowReaders = new Map<string, AuthProfileRowsReader>();
     const readOwner = async (
       ownerAgentDir: string | undefined,
       databasePath: string,
-      reader: Pick<ReturnType<typeof prepareAgentAuthProfileRowsRead>, "read" | "assertCurrent">,
+      reader: AuthProfileRowsReader,
       requestOptions: LoadAuthProfileStoreOptions,
     ) => {
       const demand: (typeof readOwners)[number] = { databasePath, options: requestOptions };
@@ -344,26 +341,20 @@ export function createAuthProfileStoreRuntimeReader({
                   token?.known === true &&
                   currentLocalToken?.known === true &&
                   token.revision === currentLocalToken.revision;
-                const local = selectedAgentPath ? stores.get(selectedAgentPath) : undefined;
-                const localStore = local?.ok
-                  ? local.value
-                  : databasePath === selectedAgentPath &&
-                      capturedRows &&
-                      capturedRows.store.status !== "unreadable"
-                    ? loadPersistedAuthProfileStoreFromRows(capturedRows, databasePath)
-                    : undefined;
-                let localOwner: string | undefined;
-                if (localFactIsCurrent(localRowsToken) && profileId && localStore) {
-                  const inherited = inheritedObservationPath
-                    ? stores.get(inheritedObservationPath)
-                    : undefined;
-                  const inheritedStore = inherited?.ok
-                    ? inherited.value
-                    : databasePath === inheritedObservationPath &&
+                const observedStore = (sourcePath: string | undefined) => {
+                  const observed = sourcePath ? stores.get(sourcePath) : undefined;
+                  return observed?.ok
+                    ? observed.value
+                    : databasePath === sourcePath &&
                         capturedRows &&
                         capturedRows.store.status !== "unreadable"
                       ? loadPersistedAuthProfileStoreFromRows(capturedRows, databasePath)
                       : undefined;
+                };
+                const localStore = observedStore(selectedAgentPath);
+                let localOwner: string | undefined;
+                if (localFactIsCurrent(localRowsToken) && profileId && localStore) {
+                  const inheritedStore = observedStore(inheritedObservationPath);
                   // Actual rows take precedence over warm metadata after foreign writes.
                   if (inheritedStore && inheritedObservationPath !== selectedAgentPath) {
                     localOwner = listRuntimeLocalProfileIds(localStore, inheritedStore).includes(
@@ -450,9 +441,7 @@ export function createAuthProfileStoreRuntimeReader({
       }
     };
     const sharedPath = async () => {
-      if (!accepting) {
-        throw new Error("Auth profile read scope is no longer accepting reads");
-      }
+      assertAccepting();
       if (sharedPreparationFailure) {
         throw sharedPreparationFailure.error;
       }
@@ -463,9 +452,7 @@ export function createAuthProfileStoreRuntimeReader({
       sharedContext.maintenanceScope?.assertAdmission();
       sharedContext.admission.assertCurrent();
       await resolveSharedAuthStoreOwnershipAsync(sharedContext);
-      if (!accepting) {
-        throw new Error("Auth profile read scope is no longer accepting reads");
-      }
+      assertAccepting();
       sharedContext.maintenanceScope?.assertAdmission();
       sharedContext.admission.assertCurrent();
       return resolveSharedAuthPath(env);
@@ -474,38 +461,16 @@ export function createAuthProfileStoreRuntimeReader({
       ownerAgentDir,
       requestOptions,
     ) => {
-      if (!accepting) {
-        throw new Error("Auth profile read scope is no longer accepting reads");
-      }
+      assertAccepting();
       assertCurrent();
       const resolvedDir = inCapturedScope(() => resolveRuntimeAuthProfileAgentDir(ownerAgentDir));
       const directory = resolvedDir ? path.dirname(resolveAgentAuthPath(resolvedDir)) : undefined;
       const scopedRequest = inCapturedScope(() =>
         resolveRuntimeAuthProfileLoadOptions(requestOptions),
       );
-      const discovery = scopedRequest?.externalCli;
-      const requestedOptions: LoadAuthProfileStoreOptions = {
-        ...scopedRequest,
-        readOnly: true,
-        externalCli:
-          discovery?.mode === "scoped"
-            ? {
-                ...discovery,
-                ...(discovery.providerIds ? { providerIds: [...discovery.providerIds] } : {}),
-                ...(discovery.profileIds ? { profileIds: [...discovery.profileIds] } : {}),
-              }
-            : discovery,
-        ...(scopedRequest?.externalCliProviderIds
-          ? { externalCliProviderIds: [...scopedRequest.externalCliProviderIds] }
-          : {}),
-        ...(scopedRequest?.externalCliProfileIds
-          ? { externalCliProfileIds: [...scopedRequest.externalCliProfileIds] }
-          : {}),
-      };
+      const requestedOptions = captureReadOptions(scopedRequest);
       let databasePath: string;
-      let reader:
-        | Pick<ReturnType<typeof prepareAgentAuthProfileRowsRead>, "read" | "assertCurrent">
-        | undefined;
+      let reader: AuthProfileRowsReader | undefined;
       if (directory) {
         databasePath = resolveAgentAuthPath(directory);
         reader = agentReads.get(databasePath);
@@ -523,16 +488,12 @@ export function createAuthProfileStoreRuntimeReader({
       if (!reader) {
         throw new Error("Auth profile read requested an uncaptured database owner");
       }
-      if (!accepting) {
-        throw new Error("Auth profile read scope is no longer accepting reads");
-      }
+      assertAccepting();
       if (databasePath !== selectedAgentPath) {
         inheritedObservationPath = databasePath;
       }
       const store = await readOwner(directory, databasePath, reader, requestedOptions);
-      if (!accepting) {
-        throw new Error("Auth profile read scope is no longer accepting reads");
-      }
+      assertAccepting();
       assertCurrent();
       return store;
     };
@@ -683,7 +644,12 @@ export function createAuthProfileStoreRuntimeReader({
   }
 
   return {
-    loadAuthProfileStoreForRuntime,
+    // Transaction-bound SDK callers retain the synchronous owner until their async cutover.
+    loadAuthProfileStoreForRuntime: (
+      agentDir?: string,
+      options?: LoadAuthProfileStoreOptions,
+      env?: NodeJS.ProcessEnv,
+    ): AuthProfileStore => loadRuntimeAuthProfileStore(agentDir, options, env),
     loadAuthProfileStoreForRuntimeAsync,
     withPreparedAuthProfileStoreReads,
   };

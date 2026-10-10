@@ -2,10 +2,14 @@
 // tears both down together when its session or presentation changes.
 import { render } from "lit";
 import { icons } from "../../../components/icons.ts";
-import { syncScrollState } from "../../../components/scroll-state.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -259,6 +263,7 @@ export function showChatAnnotationEditor(options: {
   popup.addEventListener("keydown", (event) => {
     if (
       event.target === input &&
+      !isComposingKeyboardEvent(event) &&
       (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sendMessage, event) ||
         matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event))
     ) {
@@ -292,11 +297,12 @@ export function showChatAnnotationEditor(options: {
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
     input.scrollTop = scrollTop;
-    syncScrollState(input);
     positionPopup(popup, options.anchorElement?.getBoundingClientRect() ?? options.anchorRect);
   };
   input.addEventListener("input", resizeInput, { signal });
-  input.addEventListener("scroll", () => syncScrollState(input), { passive: true, signal });
+  input.addEventListener("compositionend", recordCompositionEnd, { signal });
+  input.addEventListener("keyup", clearCompositionEnd, { signal });
+  input.addEventListener("blur", clearCompositionEnd, { signal });
   window.addEventListener("resize", resizeInput, { signal });
   resizeInput();
   if (options.sourceRange && typeof Highlight !== "undefined") {

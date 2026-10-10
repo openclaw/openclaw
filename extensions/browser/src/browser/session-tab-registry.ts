@@ -1,5 +1,4 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 /**
  * Session-owned browser tabs. Host-local durable ownership is canonical in
  * plugin SQLite; all other tabs remain process-local.
@@ -16,6 +15,7 @@ import {
   closeDurableTab,
   isIgnorableTabCloseError,
 } from "./session-tab-cleanup-claim.js";
+import { resolveBrowserSessionKey } from "./session-tab-identity.js";
 import {
   deleteVolatileRegistrations,
   sameVolatileSessionTab,
@@ -49,6 +49,9 @@ function readVolatileTabs(sessionKeys?: ReadonlySet<string>): Map<string, Volati
   const current = volatileTabsBySession();
   const volatile = new Map<string, VolatileTab[]>();
   for (const sessionKey of sessionKeys ?? current.keys()) {
+    if (resolveBrowserSessionKey(sessionKey) !== sessionKey) {
+      continue;
+    }
     const tabs = current.get(sessionKey);
     if (tabs) {
       volatile.set(sessionKey, Array.from(tabs.values()));
@@ -101,7 +104,7 @@ async function performVolatileCleanup(
       let closeTab = params.closeTab;
       try {
         if (!closeTab && tab.route.kind === "browser-control") {
-          const { browserCloseTabByRawTargetId } = await import("./client.js");
+          const { browserCloseTabByRawTargetId } = await import("./client-tab-close.runtime.js");
           const latest = resolveCurrent();
           if (!latest) {
             // No dispatch occurred: a lifecycle joiner may retry a touched sweep.
@@ -197,11 +200,13 @@ async function prepareTrackedTabCleanup(
   params: CloseParams & { sessionKeys?: Array<string | undefined> },
 ) {
   let dashboardClosed = 0;
-  let durable = await readCurrentBrowserState(
-    params.authority?.runtime,
-    () => readDurableTabs(params.onWarn, params.authority),
-    params.isCurrent,
-  );
+  const readDurable = () =>
+    readCurrentBrowserState(
+      params.authority?.runtime,
+      () => readDurableTabs(params.onWarn, params.authority),
+      params.isCurrent,
+    );
+  let durable = await readDurable();
   if (!durable) {
     return { dashboardClosed, durable };
   }
@@ -220,16 +225,11 @@ async function prepareTrackedTabCleanup(
       return { dashboardClosed, durable: undefined };
     }
     dashboardClosed = await reconcileBrowserDashboards(params);
-    durable = await readCurrentBrowserState(
-      params.authority?.runtime,
-      () => readDurableTabs(params.onWarn, params.authority),
-      params.isCurrent,
-    );
+    durable = await readDurable();
   }
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }
 
-/** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(
   input: CloseParams & { sessionKeys: Array<string | undefined>; now?: number },
 ): Promise<number> {
@@ -243,9 +243,12 @@ export async function closeTrackedBrowserTabsForSessions(
   };
   const sessionKeys = new Set(
     params.sessionKeys
-      .map((key) => normalizeOptionalLowercaseString(key))
+      .map((key) => resolveBrowserSessionKey(key))
       .filter((key) => key !== undefined),
   );
+  if (sessionKeys.size === 0) {
+    return 0;
+  }
   const volatile = readVolatileTabs(sessionKeys);
   return await withTrackedTabCleanup(params.authority, async () => {
     if (params.isCurrent?.() === false) {
@@ -253,7 +256,7 @@ export async function closeTrackedBrowserTabsForSessions(
     }
     // Without durable state, preserve immediate dispatch of the captured registration.
     const { dashboardClosed, durable } = params.authority.runtime
-      ? await prepareTrackedTabCleanup(params)
+      ? await prepareTrackedTabCleanup({ ...params, sessionKeys: [...sessionKeys] })
       : { dashboardClosed: 0, durable: [] };
     if (!durable || !isCleanupCurrent(params)) {
       return dashboardClosed;
@@ -297,27 +300,23 @@ export async function sweepTrackedBrowserTabs(
     if (!durable || !isCleanupCurrent(params)) {
       return dashboardClosed;
     }
-    if (params.ordinaryCleanup === false) {
-      return (
-        dashboardClosed +
-        (await closeTrackedTabs(
-          durable.filter((tab) => !tab.dashboard && tab.cleanupKind === "lifecycle"),
-          { ...params, now, cleanupKind: "lifecycle" },
-        ))
-      );
-    }
-    return (
-      dashboardClosed +
-      (await closeTrackedTabs(
-        selectStaleTrackedTabs({
+    const lifecycleOnly = params.ordinaryCleanup === false;
+    const tabs = lifecycleOnly
+      ? durable.filter((tab) => !tab.dashboard && tab.cleanupKind === "lifecycle")
+      : selectStaleTrackedTabs({
           tabs: [...durable, ...volatile],
           now,
           idleMs: params.idleMs,
           maxTabsPerSession: params.maxTabsPerSession,
           sessionFilter: params.sessionFilter,
-        }),
-        { ...params, now, cleanupKind: "sweep" },
-      ))
+        });
+    return (
+      dashboardClosed +
+      (await closeTrackedTabs(tabs, {
+        ...params,
+        now,
+        cleanupKind: lifecycleOnly ? "lifecycle" : "sweep",
+      }))
     );
   });
 }

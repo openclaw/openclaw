@@ -1,15 +1,69 @@
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import {
   catalogPage,
   createGateway,
+  createGatewayHarness,
   createSessions,
   createSessionsHarness,
   mountSidebar,
 } from "../app-sidebar.ts";
+import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar catalog row lifecycle", () => {
+  it("keeps an adopted catalog row archived after it leaves the active roster", async () => {
+    const key = "agent:main:adopted-archive";
+    const row = {
+      key,
+      sessionId: "adopted-archive-id",
+      kind: "direct" as const,
+      label: "Completed catalog work",
+      updatedAt: 1,
+    };
+    let archived = false;
+    const request = createGatewayRequestMock(async (method, params) => {
+      if (method === "sessions.list") {
+        return sessionsResult(archived ? [] : [row], archived ? 2 : 1);
+      }
+      if (method === "sessions.patch") {
+        expect(params).toMatchObject({ key, expectedSessionId: row.sessionId, archived: true });
+        archived = isRecord(params) && params.archived === true;
+        return { ok: true, key, entry: { sessionId: row.sessionId, updatedAt: 2, archivedAt: 2 } };
+      }
+      return {};
+    });
+    const gateway = createGatewayHarness(createTestGatewayClient(request));
+    const sessions = createTestSessionCapability(gateway.gateway);
+    await sessions.refresh({ agentId: "main", force: true });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions);
+    sidebar.connected = true;
+    sidebar.sessionData.sessionCatalogs = catalogPage([
+      { threadId: "archived-thread", name: row.label, sessionKey: key },
+    ]).catalogs;
+    sidebar.sessionData.requestSessionDataUpdate();
+    await sidebar.updateComplete;
+
+    const archive = sidebar.querySelector<HTMLButtonElement>(
+      `[data-session-key="${key}"] [data-sidebar-session-archive]`,
+    );
+    expect(archive?.disabled).toBe(false);
+    const operation = vi.spyOn(sidebar.sessionOrganizer, "archiveSessionWithUndo");
+    archive!.click();
+    await operation.mock.results[0]!.value;
+    await sidebar.updateComplete;
+
+    expect(archived).toBe(true);
+    expect(sessions.state.result?.sessions).toEqual([]);
+    expect(sessions.archiveVisibility(key)).toBe("archived");
+    expect(sidebar.querySelector(`[data-session-key="${key}"]`)).toBeNull();
+  });
+
   it.each([
     { label: undefined, expected: "Captured native title" },
     { label: "Operator chosen label", expected: "Operator chosen label" },

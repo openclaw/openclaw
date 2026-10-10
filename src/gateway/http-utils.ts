@@ -84,14 +84,16 @@ export function isAgentSelectionRequiredError(err: unknown): err is AgentSelecti
   return err instanceof AgentSelectionRequiredError;
 }
 
-export function isInvalidGatewayModelError(err: unknown): err is InvalidGatewayModelError {
-  return err instanceof InvalidGatewayModelError;
+export function isGatewayAgentRequestError(err: unknown): err is Error {
+  return (
+    isAgentSelectionRequiredError(err) ||
+    err instanceof InvalidGatewayModelError ||
+    isUnknownGatewayAgentError(err)
+  );
 }
 
-export function isGatewaySessionKeyOverrideError(
-  err: unknown,
-): err is GatewaySessionKeyOverrideError {
-  return err instanceof GatewaySessionKeyOverrideError;
+export function isGatewayRequestContextError(err: unknown): err is Error {
+  return isGatewayAgentRequestError(err) || err instanceof GatewaySessionKeyOverrideError;
 }
 
 function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
@@ -100,21 +102,6 @@ function assertKnownAgentId(agentId: string, cfg = getRuntimeConfig()): void {
   }
 }
 
-function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
-  const raw =
-    normalizeOptionalString(getHeader(req, "x-openclaw-agent-id")) ||
-    normalizeOptionalString(getHeader(req, "x-openclaw-agent")) ||
-    "";
-  if (!raw) {
-    return undefined;
-  }
-  if (!isValidAgentId(raw)) {
-    throw new UnknownGatewayAgentError(raw);
-  }
-  return normalizeAgentId(raw);
-}
-
-/** Resolves the target agent encoded by an OpenAI-compatible model id. */
 export function resolveAgentIdFromModel(
   model: string | undefined,
   cfg = getRuntimeConfig(),
@@ -219,10 +206,16 @@ export function resolveAgentIdForRequest(params: {
     throw new InvalidGatewayModelError();
   }
 
-  const fromHeader = resolveAgentIdFromHeader(params.req);
-  if (fromHeader) {
-    assertKnownAgentId(fromHeader, cfg);
-    return fromHeader;
+  const headerAgent =
+    normalizeOptionalString(getHeader(params.req, "x-openclaw-agent-id")) ||
+    normalizeOptionalString(getHeader(params.req, "x-openclaw-agent"));
+  if (headerAgent) {
+    if (!isValidAgentId(headerAgent)) {
+      throw new UnknownGatewayAgentError(headerAgent);
+    }
+    const agentId = normalizeAgentId(headerAgent);
+    assertKnownAgentId(agentId, cfg);
+    return agentId;
   }
 
   const fromModel = resolveAgentIdFromModel(params.model, cfg);
@@ -232,25 +225,6 @@ export function resolveAgentIdForRequest(params: {
   }
 
   return resolveDefaultAgentId(cfg);
-}
-
-function resolveSessionKey(params: {
-  req: IncomingMessage;
-  agentId: string;
-  user?: string | undefined;
-  prefix: string;
-}): string {
-  const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
-  if (explicit) {
-    if (isReservedSessionKeyOverride(explicit, params.agentId)) {
-      throw new GatewaySessionKeyOverrideError();
-    }
-    return explicit;
-  }
-
-  const user = params.user?.trim();
-  const mainKey = user ? `${params.prefix}-user:${user}` : `${params.prefix}:${randomUUID()}`;
-  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
 function isReservedSessionKeyOverride(sessionKey: string, agentId: string): boolean {
@@ -278,27 +252,30 @@ function isReservedSessionKeyOverride(sessionKey: string, agentId: string): bool
   );
 }
 
-/** Resolves gateway agent/session/channel context for OpenAI-compatible handlers. */
 export function resolveGatewayRequestContext(params: {
   req: IncomingMessage;
   model: string | undefined;
   user?: string | undefined;
   sessionPrefix: string;
-  defaultMessageChannel: string;
-  useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
-  const sessionKey = resolveSessionKey({
-    req: params.req,
-    agentId,
-    user: params.user,
-    prefix: params.sessionPrefix,
-  });
+  const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
+  let sessionKey: string;
+  if (explicit) {
+    if (isReservedSessionKeyOverride(explicit, agentId)) {
+      throw new GatewaySessionKeyOverrideError();
+    }
+    sessionKey = explicit;
+  } else {
+    const user = params.user?.trim();
+    const mainKey = user
+      ? `${params.sessionPrefix}-user:${user}`
+      : `${params.sessionPrefix}:${randomUUID()}`;
+    sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+  }
 
-  const messageChannel = params.useMessageChannelHeader
-    ? (normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ??
-      params.defaultMessageChannel)
-    : params.defaultMessageChannel;
+  const messageChannel =
+    normalizeMessageChannel(getHeader(params.req, "x-openclaw-message-channel")) ?? "webchat";
 
   return { agentId, sessionKey, messageChannel };
 }

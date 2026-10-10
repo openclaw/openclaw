@@ -35,8 +35,6 @@ import {
 
 const FOUNDRY_CONNECTION_TEST_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-export { listSubscriptions } from "./cli.js";
-
 function listFoundryResources(subscriptionId?: string): FoundryResourceOption[] {
   try {
     const accounts = JSON.parse(
@@ -321,7 +319,7 @@ async function promptFoundryClaudeModel(
   ).trim();
 }
 
-async function promptEndpointAndModelBase(
+export async function promptEndpointAndModelManually(
   ctx: ProviderAuthContext,
   options?: {
     endpointInitialValue?: string;
@@ -398,16 +396,10 @@ async function promptEndpointAndModelBase(
   };
 }
 
-export async function promptEndpointAndModelManually(
-  ctx: ProviderAuthContext,
-): Promise<FoundrySelection> {
-  return promptEndpointAndModelBase(ctx);
-}
-
 export async function promptApiKeyEndpointAndModel(
   ctx: ProviderAuthContext,
 ): Promise<FoundrySelection> {
-  return promptEndpointAndModelBase(ctx, {
+  return promptEndpointAndModelManually(ctx, {
     endpointInitialValue: process.env.AZURE_OPENAI_ENDPOINT,
     modelInitialValue: "gpt-4o",
     modelFamilyInitialValue: "other-chat",
@@ -437,25 +429,17 @@ function buildFoundryConnectionTest(params: {
       },
     };
   }
-  if (params.api === ANTHROPIC_MESSAGES_API) {
-    return {
-      url: `${baseUrl}/v1/messages`,
-      body: {
-        model: params.modelId,
-        messages: [{ role: "user", content: "hi" }],
-        max_tokens: 1,
-        ...(requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
-          ? { thinking: { type: "adaptive" } }
-          : {}),
-      },
-    };
-  }
+  const anthropic = params.api === ANTHROPIC_MESSAGES_API;
   return {
-    url: `${baseUrl}/chat/completions`,
+    url: `${baseUrl}/${anthropic ? "v1/messages" : "chat/completions"}`,
     body: {
       model: params.modelId,
       messages: [{ role: "user", content: "hi" }],
       max_tokens: 1,
+      ...(anthropic &&
+      requiresFoundryMandatoryAdaptiveClaudeThinking(params.modelNameHint ?? params.modelId)
+        ? { thinking: { type: "adaptive" } }
+        : {}),
     },
   };
 }
@@ -582,12 +566,7 @@ export async function testFoundryConnection(params: {
       subscriptionId: params.subscriptionId,
       tenantId: params.tenantId,
     });
-    const testRequest = buildFoundryConnectionTest({
-      endpoint: params.endpoint,
-      modelId: params.modelId,
-      modelNameHint: params.modelNameHint,
-      api: params.api,
-    });
+    const testRequest = buildFoundryConnectionTest(params);
     const { response: res, release } = await fetchWithSsrFGuard({
       url: testRequest.url,
       init: {

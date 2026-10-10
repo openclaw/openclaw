@@ -11,6 +11,7 @@ import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
+import { bindExecutionGuards } from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import * as verification from "./update-command-verification.js";
@@ -73,7 +74,7 @@ export function registerNativeAdmissionTests({
           mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
             admitExecutor(await executor.enter(dir));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
         expect(result?.result).toMatchObject({
           status: "error",
@@ -250,13 +251,12 @@ export function registerNativeAdmissionTests({
           ...(scenario.unreadableFirst
             ? [
                 {
-                  profile: "unreadable",
                   env: { OPENCLAW_PROFILE: "unreadable" },
                   scope: "user" as const,
                 },
               ]
             : []),
-          { profile: consumerEnv.OPENCLAW_PROFILE, env: consumerEnv, scope: "user" },
+          { env: consumerEnv, scope: "user" },
         ]);
         let running = scenario.running && !scenario.late && !scenario.startsDuringStop;
         let selectedRunning = scenario.selectedRunning ?? false;
@@ -359,7 +359,7 @@ export function registerNativeAdmissionTests({
           mocks.prepareMutableUpdate.mockImplementation(async (_env, _timeout, admitExecutor) => {
             admitExecutor(await executor.enter(root));
           });
-          return executeMutableUpdate(params);
+          return executeMutableUpdate(await bindExecutionGuards(params));
         });
         expect(execution?.result.status).toBe(scenario.refused ? "error" : "ok");
         expect(await fs.readFile(artifact, "utf8")).toBe(
@@ -379,7 +379,13 @@ export function registerNativeAdmissionTests({
           expect(execution?.result.steps).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
-                stderrTail: expect.stringContaining(consumerEnv.OPENCLAW_PROFILE),
+                stderrTail: expect.stringContaining(
+                  scenario.consumer === "same-profile-other-service"
+                    ? process.platform === "win32"
+                      ? "OpenClaw Other"
+                      : "openclaw-other"
+                    : consumerEnv.OPENCLAW_PROFILE,
+                ),
               }),
             ]),
           );

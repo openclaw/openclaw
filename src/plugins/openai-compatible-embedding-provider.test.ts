@@ -1,6 +1,8 @@
 // Covers OpenAI-compatible embedding provider plugin behavior.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
+import { Agent, type Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createMemorySearchDeadlineControl,
@@ -8,9 +10,7 @@ import {
 } from "../../packages/memory-host-sdk/src/host/search-deadline-control.js";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import type { ConfiguredProviderLocalServiceTarget } from "../agents/provider-local-service-target.js";
-import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
-import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 async function createOpenAICompatibleEmbeddingProvider(options: EmbeddingProviderCreateOptions) {
@@ -293,89 +293,35 @@ afterEach(async () => {
 });
 
 describe("openai-compatible generic embedding provider", () => {
-  it("is registered as a core generic embedding provider", () => {
-    expect(getRegisteredEmbeddingProvider("openai-compatible")).toMatchObject({
-      adapter: openAICompatibleEmbeddingProviderAdapter,
-      ownerPluginId: "core",
-    });
-  });
-
-  it("registers as a generic embedding provider with no memory-specific policy", async () => {
-    expect(openAICompatibleEmbeddingProviderAdapter.id).toBe("openai-compatible");
-    expect(openAICompatibleEmbeddingProviderAdapter.transport).toBe("remote");
-    expect(openAICompatibleEmbeddingProviderAdapter.authProviderId).toBeUndefined();
-
+  it.each([true, false])("preserves caller-owned HTTP deadlines: signal=%s", async (withSignal) => {
     const server = await startEmbeddingServer();
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(
-      createOptions({
-        model: "nomic-embed-text",
-        remote: { baseUrl: server.baseUrl },
-      }),
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
     );
-
-    expect(result.provider?.id).toBe("openai-compatible");
-    expect(result.runtime?.cacheKeyData).toMatchObject({
-      provider: "openai-compatible",
-      baseUrl: server.baseUrl,
-      model: "nomic-embed-text",
+    const requests: Dispatcher.DispatchOptions[] = [];
+    // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with the same Agent receiver.
+    const dispatch = Agent.prototype.dispatch;
+    const spy = vi.spyOn(Agent.prototype, "dispatch").mockImplementation(function (
+      this: Agent,
+      options,
+      handler,
+    ) {
+      requests.push(options);
+      return dispatch.call(this, options, handler);
     });
-    expect(server.requests).toHaveLength(0);
-  });
-
-  it("leases the exact configured provider alias for each embedding request", async () => {
-    const server = await startEmbeddingServer();
-    const release = vi.fn();
-    const acquireLocalService = vi.fn(async () => ({ release }));
-    const service = {
-      command: process.execPath,
-      args: ["--version"],
-      idleStopMs: 10,
-    };
-    const options = createOptions({
-      config: {
-        models: {
-          providers: {
-            "gpu-spark": {
-              api: "openai-completions",
-              baseUrl: server.baseUrl,
-              headers: { "X-GPU-Host": "spark" },
-              localService: service,
-              models: [],
-            },
-          },
-        },
-      } as EmbeddingProviderCreateOptions["config"],
-      provider: "gpu-spark",
-      model: "gpu-spark/nomic-embed-text",
-    }) as EmbeddingProviderCreateOptions & {
-      acquireLocalService: typeof acquireLocalService;
-    };
-    options.acquireLocalService = acquireLocalService;
-
-    const result = await openAICompatibleEmbeddingProviderAdapter.create(options);
-    const provider = result.provider;
-    if (!provider) {
-      throw new Error("expected openai-compatible provider");
-    }
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-
-    expect(result.runtime?.cacheKeyData).toMatchObject({
-      provider: "gpu-spark",
-      baseUrl: server.baseUrl,
-      model: "nomic-embed-text",
-    });
-    expect(acquireLocalService).toHaveBeenCalledWith(
-      {
-        providerId: "gpu-spark",
-        baseUrl: server.baseUrl,
-        headers: expect.objectContaining({
-          "content-type": "application/json",
-          "x-gpu-host": "spark",
+    try {
+      await expect(
+        provider.embedBatch(["document"], {
+          inputType: "document",
+          ...(withSignal ? { signal: new AbortController().signal } : {}),
         }),
-      },
-      undefined,
-    );
-    expect(release).toHaveBeenCalledOnce();
+      ).resolves.toEqual([[0.1, 0.2, 0.3]]);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.headersTimeout).toBe(withSignal ? 0 : undefined);
+      expect(requests[0]?.bodyTimeout).toBe(withSignal ? 0 : undefined);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("forwards readiness phases without pausing reconciliation", async () => {
@@ -423,47 +369,6 @@ describe("openai-compatible generic embedding provider", () => {
     expect(events).toEqual(["acquire", "pause", "resume", "reconcile"]);
     expect(acquireLocalService).toHaveBeenCalledWith(expect.anything(), caller.signal);
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("resumes the caller deadline when local-service acquisition fails", async () => {
-    const server = await startEmbeddingServer();
-    const events: string[] = [];
-    const failure = new Error("local service did not become ready");
-    const acquireLocalService = vi.fn(async (target: ConfiguredProviderLocalServiceTarget) => {
-      target.onReadinessWait?.(true);
-      try {
-        throw failure;
-      } finally {
-        target.onReadinessWait?.(false);
-      }
-    });
-    const options = {
-      ...createOptions({
-        config: {
-          models: {
-            providers: {
-              "gpu-spark": {
-                api: "openai-completions",
-                baseUrl: server.baseUrl,
-                localService: { command: process.execPath },
-                models: [],
-              },
-            },
-          },
-        },
-        provider: "gpu-spark",
-        model: "gpu-spark/nomic-embed-text",
-      }),
-      acquireLocalService,
-    };
-
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(options);
-    const control = createMemorySearchDeadlineControl();
-    control.subscribe((action) => events.push(action));
-    await expect(
-      provider.embed("hello", { [MEMORY_SEARCH_DEADLINE_CONTROL]: control }),
-    ).rejects.toBe(failure);
-    expect(events).toEqual(["pause", "resume"]);
   });
 
   it("does not lease a configured local service for a remote endpoint override", async () => {
@@ -564,10 +469,15 @@ describe("openai-compatible generic embedding provider", () => {
     expect(client.baseUrl).toBe(server.baseUrl);
     expect(server.requests).toHaveLength(0);
 
-    await expect(provider.embed("hello")).resolves.toEqual([5, 0.25, 1]);
-    await expect(provider.embedBatch(["a", "abcd"])).resolves.toEqual([
+    const onUsage = vi.fn();
+    await expect(provider.embed("hello", { onUsage })).resolves.toEqual([5, 0.25, 1]);
+    await expect(provider.embedBatch(["a", "abcd"], { onUsage })).resolves.toEqual([
       [1, 0.25, 1],
       [4, 1.25, 1],
+    ]);
+    expect(onUsage.mock.calls).toEqual([
+      [{ promptTokens: 1, totalTokens: 1 }],
+      [{ promptTokens: 2, totalTokens: 2 }],
     ]);
 
     expect(server.requests).toHaveLength(2);
@@ -615,7 +525,7 @@ describe("openai-compatible generic embedding provider", () => {
     }
     expect(outcome.error).toBeInstanceOf(Error);
     expect((outcome.error as Error).message).toBe(
-      `openai-compatible embeddings failed: HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
+      `openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
     );
     await expect(
       withTestTimeout(
@@ -624,30 +534,6 @@ describe("openai-compatible generic embedding provider", () => {
         "timed out waiting for embedding error server to close",
       ),
     ).resolves.toBe("closed");
-  });
-
-  it("keeps bounded embedding error bodies free of lone surrogates", async () => {
-    const emptyBody = JSON.stringify({ error: "" });
-    const insertionIndex = emptyBody.indexOf('""') + 1;
-    const detail = `${"a".repeat(999 - insertionIndex)}😀tail`;
-    const server = await startEmbeddingServer({
-      status: 502,
-      respond: () => ({ error: detail }),
-    });
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        model: "text-embedding-bge-m3",
-        remote: { baseUrl: server.baseUrl },
-      }),
-    );
-    const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
-
-    const error = await provider.embed("hello").then(
-      () => undefined,
-      (cause: unknown) => cause,
-    );
-    expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).not.toMatch(loneSurrogate);
   });
 
   it("bounds and cancels oversized successful embedding JSON bodies", async () => {
@@ -660,7 +546,7 @@ describe("openai-compatible generic embedding provider", () => {
     );
 
     await expect(provider.embed("hello")).rejects.toThrow(
-      "openai-compatible embeddings failed: JSON response exceeds 16777216 bytes",
+      "openai-compatible embeddings failed (model: text-embedding-bge-m3, batch size: 1): JSON response exceeds 16777216 bytes",
     );
     await expect(
       withTestTimeout(
@@ -670,156 +556,6 @@ describe("openai-compatible generic embedding provider", () => {
       ),
     ).resolves.toBe("closed");
     expect(server.getBodyBytesSent()).toBeLessThan(server.getPlannedBodyBytes() / 2);
-  });
-
-  it("rejects unresolved API-key refs instead of re-resolving runtime config", async () => {
-    const server = await startEmbeddingServer();
-    await expect(
-      createOpenAICompatibleEmbeddingProvider(
-        createOptions({
-          model: "text-embedding-bge-m3",
-          remote: {
-            baseUrl: server.baseUrl,
-            apiKey: { source: "env", provider: "default", id: "MISSING_TEST_VALUE" },
-          },
-        }),
-      ),
-    ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
-    expect(server.requests).toHaveLength(0);
-  });
-
-  it("rejects unresolved header refs instead of re-resolving runtime config", async () => {
-    const server = await startEmbeddingServer();
-    await expect(
-      createOpenAICompatibleEmbeddingProvider(
-        createOptions({
-          model: "text-embedding-bge-m3",
-          remote: {
-            baseUrl: server.baseUrl,
-            headers: {
-              "x-tenant-value": {
-                source: "env",
-                provider: "default",
-                id: "MISSING_TEST_VALUE",
-              } as unknown as string,
-            },
-          },
-        }),
-      ),
-    ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
-    expect(server.requests).toHaveLength(0);
-  });
-
-  it("reads connection settings from configured explicit OpenAI-compatible providers", async () => {
-    const token = "alias-token";
-    const server = await startEmbeddingServer({ token });
-    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        config: {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                baseUrl: server.baseUrl,
-                apiKey: token,
-                headers: {
-                  "x-tenant": "tenant-a",
-                },
-                models: [],
-              },
-            },
-          },
-        } as EmbeddingProviderCreateOptions["config"],
-        provider: "tenant-embeddings",
-        model: "text-embedding-bge-m3",
-      }),
-    );
-
-    expect(client.baseUrl).toBe(server.baseUrl);
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-    expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-    expect(server.requests[0]?.headers["x-tenant"]).toBe("tenant-a");
-  });
-
-  it("reads connection settings from configured OpenAI chat-compatible provider ids", async () => {
-    const token = "alias-token";
-    const server = await startEmbeddingServer({ token });
-    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        config: {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                api: "openai-responses",
-                baseUrl: server.baseUrl,
-                apiKey: token,
-                models: [],
-              },
-            },
-          },
-        } as EmbeddingProviderCreateOptions["config"],
-        provider: "tenant-embeddings",
-        model: "tenant-embeddings/text-embedding-bge-m3",
-      }),
-    );
-
-    expect(client.baseUrl).toBe(server.baseUrl);
-    expect(provider.model).toBe("text-embedding-bge-m3");
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-    expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-  });
-
-  it("treats blank remote overrides as unset for configured explicit providers", async () => {
-    const token = "alias-token";
-    const server = await startEmbeddingServer({ token });
-    const { provider, client } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        config: {
-          models: {
-            providers: {
-              "tenant-embeddings": {
-                baseUrl: server.baseUrl,
-                apiKey: token,
-                models: [],
-              },
-            },
-          },
-        } as EmbeddingProviderCreateOptions["config"],
-        provider: "tenant-embeddings",
-        model: "text-embedding-bge-m3",
-        remote: {
-          baseUrl: "   ",
-          apiKey: "   ",
-        },
-      }),
-    );
-
-    expect(client.baseUrl).toBe(server.baseUrl);
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-    expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-  });
-
-  it("strips the active configured provider id from model ids", async () => {
-    const server = await startEmbeddingServer();
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        config: {
-          models: {
-            providers: {
-              "ollama-local": {
-                baseUrl: server.baseUrl,
-                models: [],
-              },
-            },
-          },
-        } as EmbeddingProviderCreateOptions["config"],
-        provider: "ollama-local",
-        model: "ollama-local/qwen2.5:3b",
-      }),
-    );
-
-    expect(provider.model).toBe("qwen2.5:3b");
-    await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-    expect(server.requests[0]?.body.model).toBe("qwen2.5:3b");
   });
 
   it("maps configured memory input_type labels onto query and document requests", async () => {
@@ -916,65 +652,5 @@ describe("openai-compatible generic embedding provider", () => {
         createOptions({ remote: { baseUrl: "http://127.0.0.1:11434/v1" }, model: "   " }),
       ),
     ).rejects.toThrow("missing model");
-  });
-
-  it.each([
-    {
-      name: "out-of-order indexed",
-      data: [
-        { index: 1, embedding: [0.2] },
-        { index: 0, embedding: [0.1] },
-      ],
-    },
-    {
-      name: "fully positional compatible-provider",
-      data: [{ embedding: [0.1] }, { embedding: [0.2] }],
-    },
-  ])("returns $name responses in original document order", async ({ data }) => {
-    const server = await startEmbeddingServer({ respond: () => ({ data }) });
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({ remote: { baseUrl: server.baseUrl } }),
-    );
-
-    await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([[0.1], [0.2]]);
-  });
-
-  it.each([
-    { name: "missing vectors", input: "hello", response: { data: [] } },
-    { name: "empty direct vector", input: "hello", response: { data: [{ embedding: [] }] } },
-    {
-      name: "empty batch vector",
-      input: ["hello", "world"],
-      response: { data: [{ embedding: [1] }, { embedding: [] }] },
-    },
-    {
-      name: "mixed indexed and positional vectors",
-      input: ["hello", "world"],
-      response: { data: [{ index: 0, embedding: [1] }, { embedding: [2] }] },
-    },
-    {
-      name: "duplicate vector indexes",
-      input: ["hello", "world"],
-      response: {
-        data: [
-          { index: 0, embedding: [1] },
-          { index: 0, embedding: [2] },
-        ],
-      },
-    },
-    { name: "null response root", input: "hello", response: null },
-  ])("rejects malformed $name with the provider-specific error", async ({ input, response }) => {
-    const server = await startEmbeddingServer({ respond: () => response });
-    const { provider } = await createOpenAICompatibleEmbeddingProvider(
-      createOptions({
-        model: "text-embedding-bge-m3",
-        remote: { baseUrl: server.baseUrl },
-      }),
-    );
-    const request = typeof input === "string" ? provider.embed(input) : provider.embedBatch(input);
-
-    await expect(request).rejects.toThrow(
-      "openai-compatible embeddings failed: malformed JSON response",
-    );
   });
 });

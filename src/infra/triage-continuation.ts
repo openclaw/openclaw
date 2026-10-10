@@ -25,6 +25,7 @@ import {
 } from "./update-control-plane-sentinel.js";
 import {
   createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   triageFailureSchema as failureSchema,
   type ManagedHandoffLease,
 } from "./update-managed-service-handoff-lease.js";
@@ -36,6 +37,9 @@ import {
 
 // Reuse the handoff admission/shutdown budget; cleanup loss must return to the caller.
 const TRIAGE_HANDOFF_GRACE_MS = 30_000;
+
+/** An admitted triage process failed after its cleanup was confirmed. */
+export class TriageAttemptFailedError extends Error {}
 
 const readySchema = z.strictObject({ type: z.literal("triage-ready"), version: z.literal(2) });
 const continuationSchema = z.strictObject({
@@ -188,7 +192,8 @@ export async function continueTriageInFreshProcess(params: {
   if (failure.installationRoot !== root) {
     throw new Error("automatic triage installation root mismatch");
   }
-  const store = createManagedHandoffLeaseStore();
+  const store = await prepareManagedHandoffLeaseStore();
+  params.signal.throwIfAborted();
   const acquired = store.acquire(root, randomUUID(), {
     kind: "triage",
     phase: "reserved",
@@ -384,9 +389,12 @@ export async function continueTriageInFreshProcess(params: {
       );
     }
     params.signal.throwIfAborted();
-    if (!admitted || exit.code !== 0 || exit.signal) {
-      throw new Error(
-        `automatic triage candidate ${admitted ? `failed (exit ${exit.code ?? "signal"})` : "is incompatible"}; run openclaw triage manually`,
+    if (!admitted) {
+      throw new Error("automatic triage candidate is incompatible; run openclaw triage manually");
+    }
+    if (exit.code !== 0 || exit.signal) {
+      throw new TriageAttemptFailedError(
+        `automatic triage candidate failed (exit ${exit.code ?? "signal"}); run openclaw triage manually`,
       );
     }
     return "completed";
@@ -424,7 +432,7 @@ export async function acceptTriageContinuation(): Promise<
       "automatic triage requires its original connected owner; run openclaw triage manually",
     );
   }
-  const store = createManagedHandoffLeaseStore();
+  const store = await prepareManagedHandoffLeaseStore();
   const controller = new AbortController();
   const parent = store.processIdentity(process.ppid);
   let lease: ManagedHandoffLease | undefined;

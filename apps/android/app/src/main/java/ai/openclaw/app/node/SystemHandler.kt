@@ -34,10 +34,10 @@ private class AndroidSystemNotificationPoster(
 ) : SystemNotificationPoster {
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
+    // Android lint must see the platform check before notify().
     if (
       Build.VERSION.SDK_INT >= 33 &&
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
-      PackageManager.PERMISSION_GRANTED
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
       throw SecurityException("notifications permission missing")
     }

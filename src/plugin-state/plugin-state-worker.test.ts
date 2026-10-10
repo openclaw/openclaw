@@ -10,7 +10,10 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentRead } from "../config/sessions/session-entry-current-runtime.js";
-import type { SessionEntryCurrentFacts } from "../config/sessions/session-entry-current.types.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntryCurrentFacts,
+} from "../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_MAX_RESULT_BYTES } from "../infra/sqlite-worker-contract.js";
@@ -72,7 +75,7 @@ describe("worker plugin state", () => {
         assertCurrent: read.assertSourceCurrent,
         sessionEntryCurrent: {
           source: read.source,
-          assertCurrent(current) {
+          assertCurrent(current: SessionEntryCurrentFacts | undefined) {
             facts.push(current);
             if (current?.lifecycleRevision !== "original") {
               throw new Error("Session no longer owns this claim");
@@ -94,7 +97,84 @@ describe("worker plugin state", () => {
     });
   });
 
-  it.each(["register", "delete"] as const)(
+  it("keeps every captured session current through a compound native claim", async () => {
+    await withOpenClawTestState({ label: "plugin-state-compound-current" }, async (state) => {
+      const checks: SessionEntryCurrentCheck[] = [];
+      const targets = ["lease", "mutation"].map((key) => ({
+        agentId: "main",
+        sessionKey: `agent:main:${key}`,
+        env: state.env,
+      }));
+      for (const target of targets) {
+        await upsertSessionEntryCore(target, {
+          sessionId: target.sessionKey,
+          previousSessionId: "original",
+          updatedAt: 1,
+        });
+        const read = await withSessionEntryReadOnlyInWorker(
+          target,
+          () => {},
+          async (result, owner) => {
+            if (!result.ok) {
+              throw result.error;
+            }
+            return captureSessionEntryCurrentRead(target, owner);
+          },
+        );
+        if (!read.source) {
+          throw new Error("Expected a file-backed session");
+        }
+        checks.push({
+          source: read.source,
+          assertCurrent: (current: SessionEntryCurrentFacts | undefined) => {
+            read.assertSourceCurrent();
+            if (current?.previousSessionId !== "original") {
+              throw new Error("Session lineage changed");
+            }
+          },
+        });
+      }
+      const store = createPluginStateKeyedStore<string>("device-pair", {
+        namespace: "compound-claim",
+        maxEntries: 10,
+        env: state.env,
+      });
+      await store.register("tab", "open");
+      const guarded = store.withCurrent!({
+        assertCurrent: () => {},
+        sessionEntryCurrent: {
+          sources: checks.map((check) => check.source),
+          assertCurrent: (entries: readonly (SessionEntryCurrentFacts | undefined)[]) => {
+            checks.forEach((check, index) => check.assertCurrent(entries[index]));
+          },
+        },
+      });
+      const first = await store.observe!("tab");
+      await expect(
+        guarded.compareAndApply("tab", first.comparison, {
+          operation: "update",
+          action: "set",
+          value: "claimed",
+        }),
+      ).resolves.toEqual({ status: "applied" });
+      await upsertSessionEntryCore(targets[1]!, {
+        sessionId: targets[1]!.sessionKey,
+        previousSessionId: "successor",
+        updatedAt: 2,
+      });
+      const next = await store.observe!("tab");
+      await expect(
+        guarded.compareAndApply("tab", next.comparison, {
+          operation: "update",
+          action: "set",
+          value: "forbidden",
+        }),
+      ).rejects.toBeInstanceOf(PluginStateStoreError);
+      expect(await store.lookup("tab")).toBe("claimed");
+    });
+  });
+
+  it.each(["register", "delete", "delete-aborted"] as const)(
     "revalidates caller authority after asynchronous worker admission for %s",
     async (operation) => {
       await withOpenClawTestState({ label: "plugin-state-current-owner" }, async (state) => {
@@ -104,6 +184,7 @@ describe("worker plugin state", () => {
           env: state.env,
         });
         await store.register("subscription", "original");
+        const canceled = new AbortController();
         let current = true;
         const assertCurrent = () => {
           if (!current) {
@@ -113,8 +194,15 @@ describe("worker plugin state", () => {
         const pending =
           operation === "register"
             ? store.register("subscription", "replacement", { assertCurrent })
-            : store.delete("subscription", { assertCurrent });
-        current = false;
+            : store.delete("subscription", {
+                assertCurrent,
+                signal: operation === "delete-aborted" ? canceled.signal : undefined,
+              });
+        if (operation === "delete-aborted") {
+          canceled.abort(new Error("callback task deadline expired"));
+        } else {
+          current = false;
+        }
         await expect(pending).rejects.toThrow("plugin state");
         expect(await store.lookup("subscription")).toBe("original");
       });
@@ -277,32 +365,23 @@ describe("worker plugin state", () => {
       };
       const observation = observeHostDataSql();
       const sql = observation.calls;
-      const timings: Record<string, number> = {};
       try {
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([]);
         expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
-        let started = performance.now();
         await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
-        timings.coldAppendMs = performance.now() - started;
-        started = performance.now();
         await appendMemoryHostEvent(workspaceDir, event, { env: state.env });
-        timings.warmAppendMs = performance.now() - started;
-        started = performance.now();
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
           event,
           event,
         ]);
-        timings.warmReadMs = performance.now() - started;
         for (const method of sql) {
           expect(method).not.toHaveBeenCalled();
         }
         await closeOpenClawStateDatabaseAsync();
-        started = performance.now();
         expect(await readMemoryHostEventRecords({ workspaceDir, env: state.env })).toEqual([
           event,
           event,
         ]);
-        timings.coldReadMs = performance.now() - started;
         for (const method of sql) {
           expect(method).not.toHaveBeenCalled();
         }
@@ -333,7 +412,6 @@ describe("worker plugin state", () => {
           )
           .get("memory-core", "memory-host.event-cursors"),
       ).toEqual({ value_json: '{"kind":"cursor","lastSequence":2}' });
-      console.log("memory-journal-worker timings", JSON.stringify(timings));
     });
   });
 

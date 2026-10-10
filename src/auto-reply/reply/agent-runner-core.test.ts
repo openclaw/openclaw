@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -7,7 +8,6 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildSilentFallbackFailurePayload,
   handleReplyAgentRunError,
-  resolveAdmittedRunSessionFile,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
 import { createReplyOperation } from "./reply-run-registry.js";
@@ -44,23 +44,32 @@ it.each([false, true])(
   },
 );
 
-describe("resolveAdmittedRunSessionFile", () => {
-  it("uses the scoped session key when one is available", () => {
-    expect(
-      resolveAdmittedRunSessionFile({
-        sessionFile: "legacy-target",
-        sessionKey: " agent:main:session ",
-      }),
-    ).toBe("agent:main:session");
+it("renders restart recovery ownership changes as session guidance", async () => {
+  const replyOperation = createReplyOperation({
+    sessionKey: "agent:main:restart-claim-changed",
+    sessionId: "restart-claim-changed",
+    turnKind: "visible",
+    resetTriggered: false,
   });
+  try {
+    const reply = await handleReplyAgentRunError(createRestartRecoveryClaimChangedError(), {
+      resolveVisibleReplyDelivery: async () => false,
+      isHeartbeat: false,
+      replyExpectation: "required",
+      isRestartRecoveryArmed: async () => false,
+      replyOperation,
+      resolvedVerboseLevel: "off",
+      returnWithQueuedFollowupDrain: (value) => value,
+      sessionCtx: {},
+    });
 
-  it("preserves the admitted fallback when a persisted run has no session key", () => {
-    expect(
-      resolveAdmittedRunSessionFile({
-        sessionFile: "legacy-target",
-      }),
-    ).toBe("legacy-target");
-  });
+    expect(reply?.text).toBe(
+      "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
+    );
+    expect(reply?.text).not.toContain("restart recovery claim");
+  } finally {
+    replyOperation.complete();
+  }
 });
 
 describe("resolveReplyRunDeliveryContext", () => {

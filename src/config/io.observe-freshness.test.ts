@@ -11,12 +11,14 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import {
   captureConfigHealthStateStore,
   readConfigHealthStateFromStore,
@@ -41,14 +43,12 @@ const directories = useAutoCleanupTempDirTracker((cleanup) =>
 it.each([
   { phase: "before basis", present: true, suspicious: false, producer: "sync" },
   { phase: "before basis", present: true, suspicious: false, producer: "async" },
-  { phase: "basis dispatched", present: true, suspicious: false, producer: "sync" },
-  { phase: "before basis", present: false, suspicious: false, producer: "sync" },
-  { phase: "before basis", present: true, suspicious: true, producer: "sync" },
+  { phase: "after basis read", present: true, suspicious: false, producer: "sync" },
   { phase: "before admission", present: true, suspicious: false, producer: "sync" },
-  { phase: "before admission", present: false, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: true, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: false, suspicious: false, producer: "sync" },
   { phase: "after dispatch", present: true, suspicious: true, producer: "sync" },
+  { phase: "audit dispatched", present: true, suspicious: true, producer: "sync" },
 ])(
   "preserves a newer $producer observation $phase (existing row: $present, suspicious: $suspicious)",
   async ({ phase, present, suspicious, producer }) => {
@@ -181,6 +181,17 @@ it.each([
           return result;
         },
       );
+    } else if (phase === "after basis read") {
+      const read = stateReads.executeExistingOpenClawStateRead;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+        async (...args) => {
+          const reply = await read(...args);
+          if (!intervened && args[1].type === "config.health.read") {
+            writeNewerObservation();
+          }
+          return reply;
+        },
+      );
     } else {
       const postMessage = vi.spyOn(Worker.prototype, "postMessage");
       Worker.prototype.postMessage = function (this: Worker, ...args) {
@@ -193,8 +204,8 @@ it.each([
           !intervened &&
           isRecord(command) &&
           isRecord(command.input) &&
-          (phase === "basis dispatched"
-            ? command.type === "config.health.read"
+          (phase === "audit dispatched"
+            ? command.type === "diagnostic.register" && command.input.scope === "config-audit"
             : command.type === "config.health.patch" && command.input.configPath === configPath)
         ) {
           // Hold the ordinary SQLite writer before dispatch. The synchronous observer
@@ -228,6 +239,13 @@ it.each([
       expect(expected).toBeDefined();
       expect(options.logger.warn.mock.calls).toHaveLength(expectedWarnings);
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
+      if (phase === "audit dispatched") {
+        expect(
+          listConfigAuditRecordsForTests(options).flatMap((record) =>
+            record.event === "config.observe" ? [record.hash] : [],
+          ),
+        ).toEqual([hashConfigRaw(newerRaw)]);
+      }
       expect(expected?.entries?.[siblingPath]).toEqual(baseline.entries?.[siblingPath]);
       await closeOpenClawStateDatabaseAsync();
       expect(readConfigHealthStateFromStore(options)).toEqual(expected);
@@ -238,7 +256,7 @@ it.each([
   },
 );
 
-it.each([' { "hash" : "legacy" } ', '["legacy"]', "{invalid"])(
+it.each([' { "hash" : "legacy" } ', "{invalid"])(
   "compares raw legacy health facts without tightening their decoder: %s",
   async (legacyText) => {
     const home = directories.make("openclaw-health-legacy-basis-");

@@ -5,7 +5,10 @@ import {
   type AssistantMessageEvent,
 } from "openclaw/plugin-sdk/llm";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { createEmptyTransportUsage } from "openclaw/plugin-sdk/provider-transport-runtime";
+import {
+  buildAssistantMessage,
+  createEmptyTransportUsage,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
@@ -102,19 +105,18 @@ function wrapGroqOversizedRequestRecovery(
           }
         }
       } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
         output.push({
           type: "error",
           reason: "error",
           error: {
-            role: "assistant",
-            content: [],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createEmptyTransportUsage(),
-            stopReason: "error",
-            errorMessage: error instanceof Error ? error.message : String(error),
-            timestamp: Date.now(),
+            ...buildAssistantMessage({
+              model,
+              content: [],
+              usage: createEmptyTransportUsage(),
+              stopReason: "error",
+            }),
+            errorMessage,
           },
         });
       } finally {

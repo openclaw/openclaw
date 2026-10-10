@@ -17,6 +17,8 @@ import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 import { USER_PREFS_ENTRY_LIMIT } from "./user-profile-constants.js";
 import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
+export * from "./users-background.js";
+
 export {
   ChatAccountSelectionSchema,
   type ChatAccountSelection,
@@ -66,10 +68,32 @@ export const UserProfileSchema = closedObject({
   githubIdentity: Type.Union([UserProfileGitHubIdentitySchema, Type.Null()]),
   hasAvatar: Type.Boolean(),
   role: Type.Optional(UserProfileRoleSchema),
+  effectiveRole: Type.Optional(UserProfileRoleSchema),
+  roleSource: Type.Optional(
+    Type.Union([Type.Literal("assigned"), Type.Literal("githubLogin"), Type.Literal("default")]),
+  ),
 });
 
-export const UsersListParamsSchema = closedObject({});
-export const UsersListResultSchema = closedObject({ profiles: Type.Array(UserProfileSchema) });
+export const UsersListParamsSchema = closedObject({
+  githubAccountIds: Type.Optional(
+    Type.Array(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }), {
+      maxItems: 500,
+      uniqueItems: true,
+    }),
+  ),
+});
+export const UsersListResultSchema = closedObject({
+  profiles: Type.Array(UserProfileSchema),
+  githubProfiles: Type.Optional(
+    Type.Array(
+      closedObject({
+        accountId: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+        profileId: UserProfileIdSchema,
+      }),
+      { maxItems: 500 },
+    ),
+  ),
+});
 
 // The profile and relative path are derived from the authenticated connection.
 export const UsersPersonalFileGetParamsSchema = closedObject({ agentId: NonEmptyString });

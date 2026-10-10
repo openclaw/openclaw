@@ -1,5 +1,4 @@
 import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -9,78 +8,88 @@ import * as workerCpu from "./worker-cpu.js";
 /** Fault only the real import for this exact source; preserve admission messages and SQL. */
 export function observeLegacyMcpOAuthImport(
   sourceKey: string,
-  mode: "observe" | "post-commit-error" | "native-exit",
+  mode: "observe" | "publication-error" | "result-delivery-error" | "native-exit",
 ) {
   const exit = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
   let writerThreadId: number | undefined;
   let importCount = 0;
   let importInputBytes = 0;
   const restore: Array<() => void> = [];
-  if (mode !== "observe") {
-    const preload = `
+  const preload = `
       import { MessagePort, workerData, threadId } from "node:worker_threads";
       const post = MessagePort.prototype.postMessage;
       MessagePort.prototype.postMessage = function(message, ...args) {
         const result = Reflect.apply(post, this, [message, ...args]);
-        if (message?.kind === "native-commit" &&
-            message.committed?.facts?.sourceKey === workerData.mcpMigrationSourceKey) {
+        const deliveryFailure = workerData.mcpMigrationFaultMode === "result-delivery-error";
+        const committed = deliveryFailure
+          ? message?.kind === "native-settlement" &&
+            message.settlement?.kind === "completed" && message.settlement.committed
+          : message?.kind === "native-commit" && message.committed;
+        if (committed?.facts?.sourceKey === workerData.mcpMigrationSourceKey) {
           const exit = new Int32Array(workerData.mcpMigrationExit);
           Atomics.store(exit, 0, 1);
           Atomics.store(exit, 1, threadId);
-          // Forward the real receipt before disrupting this exact command's completion.
+          // Result delivery faults escape the shield around commit publication.
           if (workerData.mcpMigrationFaultMode === "native-exit") process.exit(0);
-          throw new Error("simulated MCP OAuth result delivery failure");
+          throw new Error(deliveryFailure
+            ? "simulated MCP OAuth result delivery failure"
+            : "simulated MCP OAuth receipt publication failure");
         }
         return result;
       };
     `;
-    const create = workerCpu.createCpuTrackedWorker;
-    const created = vi
-      .spyOn(workerCpu, "createCpuTrackedWorker")
-      .mockImplementation((filename, options) =>
-        create(filename, {
-          ...options,
-          execArgv: [
-            ...(options?.execArgv ?? []),
-            "--import",
-            `data:text/javascript,${encodeURIComponent(preload)}`,
-          ],
-          workerData: {
-            ...options?.workerData,
-            mcpMigrationSourceKey: sourceKey,
-            mcpMigrationFaultMode: mode,
-            mcpMigrationExit: exit.buffer,
-          },
-        }),
+  const create = workerCpu.createCpuTrackedWorker;
+  const created = vi
+    .spyOn(workerCpu, "createCpuTrackedWorker")
+    .mockImplementation((filename, options) => {
+      const worker = create(
+        filename,
+        mode === "observe"
+          ? options
+          : {
+              ...options,
+              execArgv: [
+                ...(options?.execArgv ?? []),
+                "--import",
+                `data:text/javascript,${encodeURIComponent(preload)}`,
+              ],
+              workerData: {
+                ...options?.workerData,
+                mcpMigrationSourceKey: sourceKey,
+                mcpMigrationFaultMode: mode,
+                mcpMigrationExit: exit.buffer,
+              },
+            },
       );
-    restore.push(() => created.mockRestore());
-  }
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply retains the original Worker receiver.
-  const post = Worker.prototype.postMessage;
-  const posted = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    ...args: Parameters<Worker["postMessage"]>
-  ) {
-    const message: unknown = args[0];
-    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-      const command: unknown = deserialize(message.input);
-      if (
-        isRecord(command) &&
-        command.type === "legacyMcpOAuth.import" &&
-        isRecord(command.input) &&
-        command.input.sourceKey === sourceKey
-      ) {
-        if (typeof message.id !== "number") {
-          throw new Error("Import request has no transport id");
+      const post = worker.postMessage.bind(worker);
+      const posted = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
+        const message: unknown = args[0];
+        if (
+          isRecord(message) &&
+          message.type === "execute" &&
+          message.input instanceof Uint8Array
+        ) {
+          const command: unknown = deserialize(message.input);
+          if (
+            isRecord(command) &&
+            command.type === "legacyMcpOAuth.import" &&
+            isRecord(command.input) &&
+            command.input.sourceKey === sourceKey
+          ) {
+            if (typeof message.id !== "number") {
+              throw new Error("Import request has no transport id");
+            }
+            writerThreadId = worker.threadId;
+            importInputBytes = message.input.byteLength;
+            importCount++;
+          }
         }
-        writerThreadId = this.threadId;
-        importInputBytes = message.input.byteLength;
-        importCount++;
-      }
-    }
-    return Reflect.apply(post, this, args);
-  });
-  restore.push(() => posted.mockRestore());
+        return post(...args);
+      });
+      restore.push(() => posted.mockRestore());
+      return worker;
+    });
+  restore.push(() => created.mockRestore());
 
   return {
     importCount: () => importCount,

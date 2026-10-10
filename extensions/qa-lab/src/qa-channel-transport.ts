@@ -2,6 +2,7 @@ import type { QaBusState } from "./bus-state.js";
 import { getQaProvider } from "./providers/index.js";
 import {
   createQaTransportStateMethods,
+  sendQaTransportNativeCommand,
   waitForQaTransportAccountReady,
   waitForQaTransportCondition,
   waitForQaTransportOutboundSequence,
@@ -9,11 +10,11 @@ import {
 import type {
   QaTransportAdapter,
   QaTransportGatewayConfig,
-  QaTransportNativeCommandInput,
   QaTransportOutboundSequenceMatch,
   QaTransportPolicy,
   QaTransportReportParams,
 } from "./qa-transport.js";
+import { waitForCompletedQaReply } from "./suite-runtime-transport.js";
 
 const QA_CHANNEL_ID = "qa-channel";
 const QA_CHANNEL_ACCOUNT_ID = "default";
@@ -94,6 +95,8 @@ export function createQaChannelTransport(state: QaBusState, transportPolicy?: Qa
     accountId: QA_CHANNEL_ACCOUNT_ID,
     requiredPluginIds: QA_CHANNEL_REQUIRED_PLUGIN_IDS,
     supportedActions: ["delete", "edit", "react", "thread-create"],
+    waitForCompletedReply: ({ inbound, timeoutMs }) =>
+      waitForCompletedQaReply(state, inbound, timeoutMs),
     async reset() {
       await waitForQaTransportCondition(() => {
         if (
@@ -127,14 +130,7 @@ export function createQaChannelTransport(state: QaBusState, transportPolicy?: Qa
       replyTo: target,
       ...(threadId ? { threadId } : {}),
     }),
-    async sendNativeCommand(input: QaTransportNativeCommandInput): Promise<void> {
-      const { command, ...message } = input;
-      await methods.sendInbound({
-        ...message,
-        text: `/${command}`,
-        nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
-      });
-    },
+    sendNativeCommand: (input) => sendQaTransportNativeCommand(methods, input),
     async waitForOutboundSequence(input: QaTransportOutboundSequenceMatch) {
       return await waitForQaTransportOutboundSequence({
         accountId: QA_CHANNEL_ACCOUNT_ID,

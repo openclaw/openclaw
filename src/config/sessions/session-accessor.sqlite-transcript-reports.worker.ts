@@ -14,12 +14,11 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
-import {
-  advanceCliHistoryBoundaryRangeInTransaction,
-  type CliHistoryWriterFacts,
-} from "./session-accessor.sqlite-cli-history-boundary.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
+  SessionTranscriptContextVersion,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -27,17 +26,17 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
   appendAbortedSessionTranscriptPartialInTransaction,
   appendSelectedTranscriptReportInTransaction,
   prepareTranscriptReportSelection,
-  type AbortedSessionTranscriptPartial,
-  type AbortedSessionTranscriptPartialResult,
-  type SelectedTranscriptReport,
-  type TranscriptReport,
-  type TranscriptReportSelection,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
+import type {
+  AbortedSessionTranscriptPartialResult,
+  PreparedTranscriptReport,
+  TranscriptReportCommit,
+  TranscriptReportWorkerOperations,
+} from "./session-accessor.sqlite-transcript-reports.types.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
 import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
@@ -49,38 +48,6 @@ export type TranscriptReportWorkerTarget = {
   cliWriter?: CliHistoryWriterFacts;
   sessionEntryCurrentSource?: SessionEntryCurrentSource;
   fence: Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
-};
-type PreparedReport = ReturnType<typeof prepareTranscriptReportSelection>;
-type ReportCommit = {
-  committed: boolean;
-  projectionNeedsReconcile: boolean;
-  cliHistoryChanged?: boolean;
-  abortedPartial?: AbortedSessionTranscriptPartialResult;
-  sessionEntryChanged?: boolean;
-};
-export type TranscriptReportWorkerOperations = {
-  abortedPartial: {
-    input: AbortedSessionTranscriptPartial & {
-      preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
-    };
-    output: Result<ReportCommit, TranscriptAppendRefusal>;
-  };
-  prepare: {
-    input: TranscriptReportSelection;
-    output: Result<PreparedReport, TranscriptAppendRefusal>;
-  };
-  append: {
-    input: Extract<SelectedTranscriptReport, { kind: "custom" }>;
-    output: Result<ReportCommit, TranscriptAppendRefusal>;
-  };
-  assistant: {
-    input: Extract<TranscriptReport, { kind: "assistant" }> & {
-      preparedMessage: PreparedTranscriptMessageAppend<
-        Extract<TranscriptReport, { kind: "assistant" }>["message"]
-      >;
-    };
-    output: Result<ReportCommit, TranscriptAppendRefusal>;
-  };
 };
 
 /** Domain binding borrows the existing SQLite broker's canonical writer. */
@@ -98,10 +65,12 @@ export function bindSqliteWorkerBackend(
   const { fence } = target;
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
-  if (
-    readDatabasePathIdentitySync(resolveOpenClawAgentSqlitePath(options)).canonicalPath !==
-    context.databasePath
-  ) {
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const sameOwner = context.database.location()
+    ? readDatabasePathIdentitySync(pathname).canonicalPath === context.databasePath
+    : pathname === context.databasePath &&
+      getOpenClawAgentDatabaseIfOpen(options)?.db === context.database;
+  if (!sameOwner) {
     throw new Error("Transcript report target changed its database owner");
   }
   resolved.path = context.databasePath;
@@ -134,31 +103,32 @@ export function bindSqliteWorkerBackend(
     );
   let prepared:
     | {
-        facts: PreparedReport;
-        version: ReturnType<typeof readTranscriptContextVersionInTransaction>;
+        facts: PreparedTranscriptReport;
+        version: SessionTranscriptContextVersion;
       }
     | undefined;
   return {
     execute(command) {
       assertOpen();
       if (command.type === "prepare") {
-        return runSqliteDeferredTransactionSync<Result<PreparedReport, TranscriptAppendRefusal>>(
-          database.db,
-          () => {
-            prepared = undefined;
-            const refusal = readRefusal();
-            if (refusal) {
-              return err(refusal);
-            }
-            prepared = {
-              facts: prepareTranscriptReportSelection(database, resolved, command.input),
-              version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
-            };
-            return ok(prepared.facts);
-          },
-        );
+        return runSqliteDeferredTransactionSync<
+          Result<PreparedTranscriptReport, TranscriptAppendRefusal>
+        >(database.db, () => {
+          prepared = undefined;
+          const refusal = readRefusal();
+          if (refusal) {
+            return err(refusal);
+          }
+          prepared = {
+            facts: prepareTranscriptReportSelection(database, resolved, command.input),
+            version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+          };
+          return ok(prepared.facts);
+        });
       }
-      return runOpenClawAgentWriteTransaction<Result<ReportCommit, TranscriptAppendRefusal>>(
+      return runOpenClawAgentWriteTransaction<
+        Result<TranscriptReportCommit, TranscriptAppendRefusal>
+      >(
         (current) => {
           if (current.db !== database.db) {
             throw new Error("Transcript report lost its canonical database owner");

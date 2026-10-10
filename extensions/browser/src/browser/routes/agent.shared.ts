@@ -33,19 +33,24 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
   return asNonArrayRecord(req.body);
 }
 
-export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
+export function handleRouteError(
+  res: BrowserResponse,
+  err: unknown,
+  options?: { formatMessage?: (err: unknown) => string; mapBrowserError?: boolean },
+) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
   }
-  const mapped = ctx.mapTabError(err);
-  if (mapped) {
-    return jsonBrowserError(res, mapped);
-  }
-  const browserMapped = toBrowserErrorResponse(err);
+  const browserMapped =
+    options?.mapBrowserError === false ? undefined : toBrowserErrorResponse(err);
   if (browserMapped) {
     return jsonBrowserError(res, browserMapped);
   }
-  jsonError(res, 500, redactCdpErrorText(String(err)));
+  jsonError(
+    res,
+    500,
+    options?.formatMessage ? options.formatMessage(err) : redactCdpErrorText(String(err)),
+  );
 }
 
 export function resolveProfileContext(
@@ -94,7 +99,7 @@ export async function requirePwAi(
   return null;
 }
 
-type RouteTabContext = {
+export type RouteTabContext = {
   profileCtx: ProfileContext;
   tab: Awaited<ReturnType<ProfileContext["ensureTabAvailable"]>>;
   cdpUrl: string;
@@ -173,7 +178,7 @@ export async function withRouteTabContext<T>(
       },
     });
   } catch (err) {
-    handleRouteError(params.ctx, params.res, err);
+    handleRouteError(params.res, err);
     return undefined;
   }
 }

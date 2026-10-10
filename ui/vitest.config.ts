@@ -7,7 +7,8 @@ import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import type { Vitest } from "vitest/node";
+import { experimental_getRunnerTask, type Reporter, type Vitest } from "vitest/node";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -34,92 +35,23 @@ import {
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
+import { webkitExpectedFailures } from "./test/webkit-expected-failures.ts";
+import { controlUiSolidPlugin } from "./vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
-    find: "@openclaw/gateway-client/browser",
-    replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
-  },
-  {
-    find: "@openclaw/gateway-client/scope-upgrade",
-    replacement: path.resolve(repoRoot, "packages/gateway-client/src/scope-upgrade.ts"),
-  },
-  {
-    find: /^@openclaw\/gateway-protocol\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/$1.ts"),
-  },
-  {
-    find: /^@openclaw\/(gateway-protocol|retry)$/u,
-    replacement: path.resolve(repoRoot, "packages/$1/src/index.ts"),
-  },
-  {
     find: "../logging/redact.js",
     replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
+  // Share package source projections without pulling Node-only dependency shims
+  // (such as zod and ws) into the browser projects.
   ...sharedVitestConfig.resolve.alias.filter(
-    (alias) => typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/"),
+    (alias) =>
+      alias.replacement.startsWith(`${path.join(repoRoot, "packages")}${path.sep}`) ||
+      (typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/")),
   ),
-  {
-    find: /^@openclaw\/model-catalog-core\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
-  },
-  {
-    find: "@openclaw/model-catalog-core",
-    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/index.ts"),
-  },
-  {
-    find: /^@openclaw\/normalization-core\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
-  },
-  {
-    find: "@openclaw/normalization-core",
-    replacement: path.resolve(repoRoot, "packages/normalization-core/src/index.ts"),
-  },
-  {
-    find: /^@openclaw\/media-core\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
-  },
-  {
-    find: "@openclaw/media-core",
-    replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/parse",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/share-build",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share-build.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/public-share",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/public-share.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/session-key-normalization",
-    replacement: path.resolve(
-      repoRoot,
-      "packages/session-url-contract/src/session-key-normalization.ts",
-    ),
-  },
-  {
-    find: "@openclaw/session-url-contract",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
-  },
-  {
-    find: "@openclaw/workboard-contract",
-    replacement: path.resolve(repoRoot, "packages/workboard-contract/src/index.ts"),
-  },
-  {
-    find: /^@openclaw\/net-policy\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
-  },
-  {
-    find: "@openclaw/net-policy",
-    replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
-  },
 ];
 function includeUiTests(patterns: string[], env = process.env): string[] {
   const selected = intersectIncludePatterns(
@@ -181,9 +113,73 @@ function resolveChromiumLaunchOptions(): { executablePath: string } | undefined 
 
 let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | null = null;
 
-export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
+// Re-add modal-dialog.browser (CDP media emulation) and web-awesome-accessibility.node
+// (CDP accessibility tree) after their browser-neutral replacements land.
+const webkitTestFiles = [
+  "src/components/web-awesome-dropdown.browser.test.ts",
+  "src/components/web-awesome-dropdown-owner.browser.test.ts",
+  "src/components/web-awesome-select-controls.browser.test.ts",
+  "src/components/web-awesome-select.browser.test.ts",
+  "src/components/web-awesome.test.ts",
+  "src/components/web-awesome-theme.browser.test.ts",
+  "src/components/menu-surface.browser.test.ts",
+  "src/components/modal-dialog.test.ts",
+  "src/components/tooltip.test.ts",
+  "src/components/tooltip.browser.test.ts",
+  "src/components/panel-tab-strip.test.ts",
+  "src/components/panel-tab-strip.browser.test.ts",
+  "src/components/tooltip-title.browser.test.ts",
+  "src/pages/chat/chat-composer-context.browser.test.ts",
+  "src/pages/chat/chat-composer-context.palette.browser.test.ts",
+  "src/pages/chat/chat-composer-overflow.browser.test.ts",
+  "src/pages/chat/components/chat-effort-picker.browser.test.ts",
+  "src/pages/chat/components/chat-model-picker.browser.test.ts",
+];
+
+const webkitExpectedFailureReporter: Reporter = {
+  onTestModuleCollected(module) {
+    if (module.project.name !== "webkit") {
+      return;
+    }
+    const entries = webkitExpectedFailures.filter((entry) =>
+      module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`),
+    );
+    for (const test of module.children.allTests()) {
+      if (entries.some((entry) => entry.name === test.fullName)) {
+        // Mirror the browser-side flag for native expected-failure reporting.
+        experimental_getRunnerTask(test).fails = true;
+      }
+    }
+  },
+  onTestRunEnd(modules) {
+    const webkitModules = modules.filter((module) => module.project.name === "webkit");
+    if (webkitModules.length === 0) {
+      return;
+    }
+    for (const entry of webkitExpectedFailures) {
+      const tests = webkitModules
+        .filter((module) => module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`))
+        .flatMap((module) => Array.from(module.children.allTests()))
+        .filter((test) => test.fullName === entry.name);
+      if (tests.length !== 1 || tests[0]?.result().state !== "passed") {
+        throw new Error(`WebKit expected failure did not execute as expected: ${entry.name}`);
+      }
+    }
+  },
+};
+
+export function createUiBrowserVitestConfig(
+  env = process.env,
+  browser: "chromium" | "webkit" = "chromium",
+): ViteUserConfig {
   const include = includeUiTests(
-    ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+    browser === "webkit"
+      ? webkitTestFiles
+      : [
+          "src/**/*.browser.test.ts",
+          "src/**/*.browser.test.tsx",
+          "../extensions/*/browser/**/*.browser.test.ts",
+        ],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -195,15 +191,18 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       nodeDrivenBrowserLayoutTests,
       matchesVitestGlob,
     ).length === 0;
-  if (!excludesBrowserFiles && chromiumLaunchOptions === null) {
+  if (browser === "chromium" && !excludesBrowserFiles && chromiumLaunchOptions === null) {
     chromiumLaunchOptions = resolveChromiumLaunchOptions();
   }
   const provider = playwright({
-    launchOptions: {
-      ...chromiumLaunchOptions,
-      // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
-      args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
-    },
+    launchOptions:
+      browser === "chromium"
+        ? {
+            ...chromiumLaunchOptions,
+            // Keep real canvas encoding without Chromium's idle-task watchdog in test pages.
+            args: ["--enable-blink-features=NoIdleEncodingForWebTests"],
+          }
+        : undefined,
   });
   if (excludesBrowserFiles) {
     // Keep browser discovery for native sharding; only skip its speculative launch.
@@ -212,6 +211,8 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [
+      controlUiSolidPlugin(),
+      mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),
@@ -231,7 +232,11 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@awesome.me/webawesome/dist/components/option/option.js",
         "@awesome.me/webawesome/dist/components/popover/popover.js",
         "@awesome.me/webawesome/dist/components/popup/popup.js",
+        "@awesome.me/webawesome/dist/components/radio-group/radio-group.js",
+        "@awesome.me/webawesome/dist/components/radio/radio.js",
         "@awesome.me/webawesome/dist/components/select/select.js",
+        "@awesome.me/webawesome/dist/components/switch/switch.js",
+        "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
         "@codemirror/state",
         "@codemirror/view",
@@ -239,6 +244,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
+        "@noble/hashes/utils.js",
         "@openclaw/normalization-core > libphonenumber-js/min",
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
@@ -248,23 +254,31 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "dompurify",
         "file-type",
         "highlight.js/lib/core",
-        "highlight.js/lib/languages/{bash,cpp,css,diff,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
+        "highlight.js/lib/languages/{bash,cpp,css,diff,go,java,javascript,json,markdown,python,rust,typescript,xml,yaml}",
         "ipaddr.js",
         "json5",
+        "jsonc-parser",
         "lit/async-directive.js",
         "lit/directive.js",
+        "lit/directive-helpers.js",
+        "lit/directives/guard.js",
         "lit/directives/if-defined.js",
         "lit/directives/keyed.js",
+        "lit/directives/live.js",
         "lit/directives/ref.js",
         "lit/directives/repeat.js",
         "lit/directives/style-map.js",
         "lit/directives/unsafe-html.js",
+        "lit/directives/until.js",
         "lit/static-html.js",
         "markdown-it",
+        "markdown-it-cjk-friendly",
+        "markdown-it-emoji/lib/data/full.mjs",
         "mdast-util-from-markdown",
         "mdast-util-gfm-table",
         "micromark-extension-gfm-table",
         "remend",
+        "string-width",
         "typebox/compile",
         "typebox/guard",
         "typebox/value",
@@ -280,16 +294,19 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
       // File-project loading overrides Vite's root with the config directory.
       // Keep discovery and setup paths rooted in the UI in every entrypoint.
       root: here,
-      name: "browser",
+      name: browser === "webkit" ? "webkit" : "browser",
       // No cleanup runner: it imports node:fs and repo server modules, which
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+      setupFiles: [
+        "./src/test-helpers/lit-warnings.setup.ts",
+        ...(browser === "webkit" ? ["./test/webkit-expected-failures.setup.ts"] : []),
+      ],
       browser: {
         enabled: true,
         provider,
-        instances: [{ browser: "chromium", name: "chromium" }],
+        instances: [{ browser, name: browser }],
         headless: true,
         ui: false,
       },
@@ -349,12 +366,19 @@ export default defineConfig({
   test: {
     ...sharedUiTestConfig,
     maxWorkers: sharedVitestConfig.test.maxWorkers,
-    reporters: sharedVitestConfig.test.reporters,
+    reporters: [
+      ...sharedVitestConfig.test.reporters,
+      ...(process.env.OPENCLAW_UI_WEBKIT === "1" ? [webkitExpectedFailureReporter] : []),
+    ],
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -368,11 +392,16 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests(["src/**/*.test.ts", "../extensions/*/browser/**/*.test.ts"]),
+          include: includeUiTests([
+            "src/**/*.test.ts",
+            "src/**/*.test.tsx",
+            "../extensions/*/browser/**/*.test.ts",
+          ]),
           exclude: [
-            "src/**/*.browser.test.ts",
-            "src/**/*.e2e.test.ts",
+            "src/**/*.browser.test.{ts,tsx}",
+            "src/**/*.e2e.test.{ts,tsx}",
             "src/**/*.node.test.ts",
+            "src/**/*.node.test.tsx",
             "../extensions/*/browser/**/*.browser.test.ts",
             "../extensions/*/browser/**/*.e2e.test.ts",
             "../extensions/*/browser/**/*.node.test.ts",
@@ -384,7 +413,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -402,7 +435,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -416,6 +453,7 @@ export default defineConfig({
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
             "src/**/*.node.test.ts",
+            "src/**/*.node.test.tsx",
             "../extensions/*/browser/**/*.node.test.ts",
             ...nodeDrivenBrowserLayoutTests,
           ]),
@@ -424,9 +462,16 @@ export default defineConfig({
         },
       },
       { ...createUiBrowserVitestConfig(), extends: false },
+      ...(process.env.OPENCLAW_UI_WEBKIT === "1"
+        ? [{ ...createUiBrowserVitestConfig(process.env, "webkit"), extends: false }]
+        : []),
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,

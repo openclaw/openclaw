@@ -1,9 +1,8 @@
-// Debug proxy runtime commands for capture sessions, validation, coverage, and blob reads.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
-import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
@@ -18,6 +17,7 @@ import {
   initializeDebugProxyCaptureAsync,
 } from "../proxy-capture/runtime.js";
 import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async.js";
+import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -169,95 +169,64 @@ function redactProxyUrl(value: string | undefined): string | undefined {
   }
 }
 
-function getProxyValidationTextColors() {
-  const rich = isRich();
-  const apply = (color: (value: string) => string) => (value: string) =>
-    colorize(rich, color, value);
-  return {
-    heading: apply(theme.heading),
-    success: apply(theme.success),
-    error: apply(theme.error),
-    muted: apply(theme.muted),
-    warn: apply(theme.warn),
-  };
-}
-
-function formatProxyCheckLine(
-  check: ProxyValidationResult["checks"][number],
-  colors: ReturnType<typeof getProxyValidationTextColors>,
-): string {
-  const icon = check.ok ? colors.success("✓") : colors.error("✗");
-  const paddedKind = colors.muted(check.kind.padEnd(7, " "));
+function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
+  const icon = check.ok ? theme.success("✓") : theme.error("✗");
+  const paddedKind = theme.muted(check.kind.padEnd(7, " "));
   const status =
     check.status === undefined
       ? ""
-      : ` ${check.ok ? colors.success(`HTTP ${check.status}`) : colors.error(`HTTP ${check.status}`)}`;
+      : ` ${check.ok ? theme.success(`HTTP ${check.status}`) : theme.error(`HTTP ${check.status}`)}`;
   const detail = check.error
-    ? ` — ${check.ok ? colors.muted(check.error) : colors.error(check.error)}`
+    ? ` — ${check.ok ? theme.muted(check.error) : theme.error(check.error)}`
     : "";
   return `  ${icon} ${paddedKind} ${check.url}${status}${detail}`;
 }
 
-function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
+function formatProxyValidationNextStep(result: ProxyValidationResult): string | undefined {
   if (result.ok) {
-    return [];
+    return undefined;
   }
   if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
-    return [
-      "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.",
-    ];
+    return "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.";
   }
   if (result.config.errors.length > 0) {
-    return [
-      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.",
-    ];
+    return "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.";
   }
   if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
-    return [
-      "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.",
-    ];
+    return "Confirm the proxy is reachable from this deployment context and permits the allowed destinations.";
   }
   if (result.checks.some((check) => !check.ok && check.kind === "denied")) {
-    return [
-      "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.",
-    ];
+    return "Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.";
   }
-  return [
-    "Review the failed checks above and update proxy configuration or validation destinations.",
-  ];
+  return "Review the failed checks above and update proxy configuration or validation destinations.";
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
-  const colors = getProxyValidationTextColors();
-  const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
-    result.ok ? colors.success("Proxy validation passed") : colors.error("Proxy validation failed"),
+    result.ok ? theme.success("Proxy validation passed") : theme.error("Proxy validation failed"),
     "",
-    colors.heading("Proxy"),
-    `  Source: ${colors.muted(result.config.source)}`,
-    `  URL:    ${redactedProxyUrl ?? colors.muted("not configured")}`,
+    theme.heading("Proxy"),
+    `  Source: ${theme.muted(result.config.source)}`,
+    `  URL:    ${result.config.proxyUrl ?? theme.muted("not configured")}`,
   ];
 
   if (result.config.errors.length > 0) {
-    lines.push("", colors.heading("Problems"));
+    lines.push("", theme.heading("Problems"));
     for (const error of result.config.errors) {
-      lines.push(`  - ${colors.error(error)}`);
+      lines.push(`  - ${theme.error(error)}`);
     }
   }
 
   if (result.checks.length > 0) {
-    lines.push("", colors.heading("Checks"));
+    lines.push("", theme.heading("Checks"));
     for (const check of result.checks) {
-      lines.push(formatProxyCheckLine(check, colors));
+      lines.push(formatProxyCheckLine(check));
     }
   }
 
-  const nextSteps = formatProxyValidationNextSteps(result);
-  if (nextSteps.length > 0) {
-    lines.push("", colors.heading("Next steps"));
-    for (const nextStep of nextSteps) {
-      lines.push(`  ${colors.warn(nextStep)}`);
-    }
+  const nextStep = formatProxyValidationNextStep(result);
+  if (nextStep) {
+    lines.push("", theme.heading("Next steps"), `  ${theme.warn(nextStep)}`);
   }
 
   return `${lines.join("\n")}\n`;
@@ -303,14 +272,20 @@ export async function runProxyValidateCommand(opts: {
   }
 }
 
-export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
+async function withCaptureStore(action: (store: AsyncDebugProxyCaptureStore) => Promise<void>) {
   const lease = await acquireDebugProxyCaptureStoreAsync();
   try {
-    const sessions = await lease.store.listSessions(opts.limit ?? 20);
-    writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
+    await action(lease.store);
   } finally {
     await lease.release();
   }
+}
+
+export async function runDebugProxySessionsCommand(opts: { json?: boolean; limit?: number }) {
+  await withCaptureStore(async (store) => {
+    const sessions = await store.listSessions(opts.limit ?? 20);
+    writeRuntimeJson(defaultRuntime, opts.json ? { sessions } : sessions);
+  });
 }
 
 export async function runDebugProxyQueryCommand(opts: {
@@ -318,13 +293,10 @@ export async function runDebugProxyQueryCommand(opts: {
   preset: CaptureQueryPreset;
   sessionId?: string;
 }) {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    const rows = await lease.store.queryPreset(opts.preset, opts.sessionId);
+  await withCaptureStore(async (store) => {
+    const rows = await store.queryPreset(opts.preset, opts.sessionId);
     writeRuntimeJson(defaultRuntime, opts.json ? { rows } : rows);
-  } finally {
-    await lease.release();
-  }
+  });
 }
 
 export async function runDebugProxyCoverageCommand() {
@@ -333,24 +305,18 @@ export async function runDebugProxyCoverageCommand() {
 }
 
 export async function runDebugProxyPurgeCommand() {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    const result = await lease.store.purgeAll();
+  await withCaptureStore(async (store) => {
+    const result = await store.purgeAll();
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-  } finally {
-    await lease.release();
-  }
+  });
 }
 
 export async function readDebugProxyBlobCommand(opts: { blobId: string }) {
-  const lease = await acquireDebugProxyCaptureStoreAsync();
-  try {
-    const content = await lease.store.readBlob(opts.blobId);
+  await withCaptureStore(async (store) => {
+    const content = await store.readBlob(opts.blobId);
     if (content == null) {
       throw new Error(`Unknown blob: ${opts.blobId}`);
     }
     process.stdout.write(content);
-  } finally {
-    await lease.release();
-  }
+  });
 }

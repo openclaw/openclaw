@@ -27,52 +27,37 @@ export function splitOpenAIFunctionCallPairing(id: string): {
   };
 }
 
-function shortOpenAIResponsesIdHash(id: string): string {
-  return sha256Hex(id).slice(0, 10);
-}
-
-function sanitizeOpenAIResponsesIdTail(value: string): string {
-  return value.replace(/[^A-Za-z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
-}
-
-function normalizeOpenAIResponsesIdPart(params: {
-  value: string;
-  prefix: "call_" | "fc_";
-  isValid: (value: string) => boolean;
-}): string {
-  const trimmed = params.value.trim();
-  if (params.isValid(trimmed)) {
+function normalizeOpenAIResponsesIdPart(value: string, prefix: "call_" | "fc_"): string {
+  const trimmed = value.trim();
+  const pattern =
+    prefix === "call_" ? OPENAI_RESPONSES_CALL_ID_RE : OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE;
+  if (pattern.test(trimmed)) {
     return trimmed;
   }
 
-  const rawTail = trimmed.startsWith(params.prefix) ? trimmed.slice(params.prefix.length) : trimmed;
-  const hash = shortOpenAIResponsesIdHash(trimmed || params.prefix);
-  const maxTailLength = OPENAI_RESPONSES_ID_MAX_LENGTH - params.prefix.length;
+  const rawTail = trimmed.startsWith(prefix) ? trimmed.slice(prefix.length) : trimmed;
+  const hash = sha256Hex(trimmed || prefix).slice(0, 10);
+  const maxTailLength = OPENAI_RESPONSES_ID_MAX_LENGTH - prefix.length;
   const hashSuffix = `_${hash}`;
-  const safeTail = sanitizeOpenAIResponsesIdTail(rawTail);
+  const safeTail = rawTail.replace(/[^A-Za-z0-9_-]/g, "_").replace(/^_+|_+$/g, "");
   const clippedBase = safeTail.slice(0, Math.max(1, maxTailLength - hashSuffix.length));
   const tail = `${clippedBase || "id"}${hashSuffix}`.slice(0, maxTailLength);
-  return `${params.prefix}${tail}`;
+  return `${prefix}${tail}`;
 }
 
 /** Same shaping `normalizeOpenAIResponsesToolCallIds` applies to a replayed `call_id`/`call_id|fc_id` pair. */
 export function normalizeOpenAIResponsesFunctionCallId(id: string): string {
   const { callId, itemId } = splitOpenAIFunctionCallPairing(id);
-  const normalizedCallId = normalizeOpenAIResponsesIdPart({
-    value: itemId ? `${callId}|${itemId}` : callId,
-    prefix: "call_",
-    isValid: (value) => OPENAI_RESPONSES_CALL_ID_RE.test(value),
-  });
+  const normalizedCallId = normalizeOpenAIResponsesIdPart(
+    itemId ? `${callId}|${itemId}` : callId,
+    "call_",
+  );
 
   if (!itemId) {
     return normalizedCallId;
   }
 
-  const normalizedItemId = normalizeOpenAIResponsesIdPart({
-    value: itemId,
-    prefix: "fc_",
-    isValid: (value) => OPENAI_RESPONSES_FUNCTION_CALL_ITEM_ID_RE.test(value),
-  });
+  const normalizedItemId = normalizeOpenAIResponsesIdPart(itemId, "fc_");
   return `${normalizedCallId}|${normalizedItemId}`;
 }
 
