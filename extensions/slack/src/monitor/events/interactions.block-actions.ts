@@ -13,7 +13,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -55,7 +54,11 @@ import { resolveSlackMonitorEventScope, type SlackEventScope } from "../event-sc
 import { escapeSlackMrkdwn } from "../mrkdwn.js";
 import { enqueueSlackInteractionEvent } from "./interaction-event.js";
 import { resolveSlackPluginApprovalSender } from "./interactions.approval-sender.js";
-import { summarizeAction, type SlackActionSummary } from "./modal-input-summary.js";
+import {
+  formatInteractionSelectionLabel,
+  summarizeAction,
+  type SlackActionSummary,
+} from "./modal-input-summary.js";
 
 type InteractionMessageBlock = {
   type?: string;
@@ -102,43 +105,6 @@ type SlackBlockActionContext = {
   parsed: ParsedSlackBlockAction;
   respond?: SlackBlockActionRespond;
 };
-
-function formatInteractionSelectionLabel(params: {
-  actionId: string;
-  summary: SlackActionSummary;
-  buttonText?: string;
-}): string {
-  if (params.summary.actionType === "button" && params.buttonText?.trim()) {
-    return params.buttonText.trim();
-  }
-  const selected = params.summary.selectedLabels?.length
-    ? params.summary.selectedLabels
-    : params.summary.selectedValues;
-  if (selected?.length) {
-    return selected.length <= 3
-      ? selected.join(", ")
-      : `${selected.slice(0, 3).join(", ")} +${selected.length - 3}`;
-  }
-  if (params.summary.selectedDate) {
-    return params.summary.selectedDate;
-  }
-  if (params.summary.selectedTime) {
-    return params.summary.selectedTime;
-  }
-  if (typeof params.summary.selectedDateTime === "number") {
-    const selectedDateTime = timestampMsToIsoString(params.summary.selectedDateTime * 1000);
-    if (selectedDateTime) {
-      return selectedDateTime;
-    }
-  }
-  if (params.summary.richTextPreview) {
-    return params.summary.richTextPreview;
-  }
-  if (params.summary.value?.trim()) {
-    return params.summary.value.trim();
-  }
-  return params.actionId;
-}
 
 function resolveSlackActionValue(summary: SlackActionSummary): string | undefined {
   return normalizeOptionalString(summary.value) ?? summary.selectedValues?.[0];
