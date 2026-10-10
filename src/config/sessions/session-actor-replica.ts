@@ -54,6 +54,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 const pool = resolveGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"), () => {
   const cells = new Map<string, ReplicaCell>();
   sessionChanges.subscribeFacts((change) => {
+    // oxlint-disable-next-line unicorn/no-useless-spread -- Receipt installation reorders the LRU map.
     for (const cell of [...cells.values()]) {
       const { database, sessionKey } = cell.target;
       if (
