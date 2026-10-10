@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
@@ -141,6 +142,75 @@ async function withActor(
       run(operation, authorize) {
         return runOpenClawAgentWorkerWrite(options, async () => {
           const held = epoch;
+          async function execute<Key extends keyof SessionActorOperations>(command: {
+            type: Key;
+            input: SessionActorOperations[Key]["input"];
+          }): Promise<SessionActorOperations[Key]["output"]>;
+          async function execute(
+            command: SqliteWorkerCommand<SessionActorOperations>,
+          ): Promise<SessionActorOperations[keyof SessionActorOperations]["output"]> {
+            commands.push(command.type);
+            const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
+            const retained = { settled: completion.promise };
+            const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+              grant();
+            });
+            const dropped = fault.reply === "unknown";
+            const postMessage = admission.port.postMessage.bind(admission.port);
+            const wire = vi
+              .spyOn(admission.port, "postMessage")
+              .mockImplementation((message, transferList) => {
+                if (
+                  dropped &&
+                  isRecord(message) &&
+                  (message.kind === "native-commit" || message.kind === "native-settlement")
+                ) {
+                  return;
+                }
+                postMessage(message, transferList);
+                // Native admission blocks synchronously; its host runs on this fixture's isolate.
+                admission.service();
+              });
+            const native: SqliteWorkerOperationContext = {
+              port: admission.port,
+            };
+            admit = (stage, publication) =>
+              authorize(
+                { stage, facts: { identity, publication } },
+                { admission, retained },
+                () => true,
+              );
+            try {
+              await kernel.prepare(command);
+              const value = withSqliteWorkerOperationAdmission(native, () =>
+                kernel.execute(command),
+              );
+              const finish = () => {
+                settleSqliteWorkerOperationContext(native, "completed");
+                admission.service();
+                completion.resolve(
+                  dropped
+                    ? { kind: "unknown", error: new Error("Native receipt lost") }
+                    : { kind: "completed" },
+                );
+              };
+              if (fault.drain) {
+                void fault.drain.then(finish);
+              } else {
+                finish();
+              }
+              fault.onExecuted?.();
+              if (fault.reply !== "normal") {
+                throw new Error("Ordinary reply lost");
+              }
+              return value;
+            } finally {
+              void completion.promise.then(() => {
+                wire.mockRestore();
+                admission.finish();
+              });
+            }
+          }
           return operation({
             captureGeneration: () => ({
               assertCurrent() {
@@ -149,73 +219,7 @@ async function withActor(
                 }
               },
             }),
-            async execute<Key extends keyof SessionActorOperations>(command: {
-              type: Key;
-              input: SessionActorOperations[Key]["input"];
-            }): Promise<SessionActorOperations[Key]["output"]> {
-              commands.push(command.type);
-              const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
-              const retained = { settled: completion.promise };
-              const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
-                grant();
-              });
-              const dropped = fault.reply === "unknown";
-              const postMessage = admission.port.postMessage.bind(admission.port);
-              const wire = vi
-                .spyOn(admission.port, "postMessage")
-                .mockImplementation((message, transferList) => {
-                  if (
-                    dropped &&
-                    isRecord(message) &&
-                    (message.kind === "native-commit" || message.kind === "native-settlement")
-                  ) {
-                    return;
-                  }
-                  postMessage(message, transferList);
-                  // Native admission blocks synchronously; its host runs on this fixture's isolate.
-                  admission.service();
-                });
-              const native: SqliteWorkerOperationContext = {
-                port: admission.port,
-              };
-              admit = (stage, publication) =>
-                authorize(
-                  { stage, facts: { identity, publication } },
-                  { admission, retained },
-                  () => true,
-                );
-              try {
-                await kernel.prepare(command);
-                const value = withSqliteWorkerOperationAdmission(native, () =>
-                  kernel.execute(command),
-                );
-                const finish = () => {
-                  settleSqliteWorkerOperationContext(native, "completed");
-                  admission.service();
-                  completion.resolve(
-                    dropped
-                      ? { kind: "unknown", error: new Error("Native receipt lost") }
-                      : { kind: "completed" },
-                  );
-                };
-                if (fault.drain) {
-                  void fault.drain.then(finish);
-                } else {
-                  finish();
-                }
-                fault.onExecuted?.();
-                if (fault.reply !== "normal") {
-                  throw new Error("Ordinary reply lost");
-                }
-                // The paired kernel dispatch preserves the operation's result contract.
-                return value as SessionActorOperations[Key]["output"];
-              } finally {
-                void completion.promise.then(() => {
-                  wire.mockRestore();
-                  admission.finish();
-                });
-              }
-            },
+            execute,
           });
         });
       },
@@ -225,6 +229,7 @@ async function withActor(
           outcome.receipt.commandId = "detached-follow-up-copy";
           return { value: outcome.value };
         }
+        return undefined;
       },
       async release() {},
     };
