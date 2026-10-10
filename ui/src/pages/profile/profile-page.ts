@@ -85,7 +85,9 @@ export class ProfilePage extends OpenClawLightDomElement {
   private subscriptions: Array<() => void> = [];
   constructor() {
     super();
-    new SubscriptionsController(this).watchStore(() => this.context?.config);
+    new SubscriptionsController(this)
+      .watchStore(() => this.context?.config)
+      .watchStore(() => this.context?.theme);
   }
   override connectedCallback() {
     super.connectedCallback();
