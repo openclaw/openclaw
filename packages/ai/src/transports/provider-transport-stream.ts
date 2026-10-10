@@ -100,7 +100,7 @@ export function createTransportAwareStreamFnForModel(
   }
   if (!SUPPORTED_TRANSPORT_APIS.has(model.api)) {
     throw new Error(
-      `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
+      `Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "${model.api}"`,
     );
   }
   const streamFn = createSupportedTransportStreamFn(model, ctx);

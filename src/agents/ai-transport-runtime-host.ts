@@ -110,7 +110,19 @@ export function configureAiTransportRuntimeHost(): void {
       }).headers,
     requiresManagedTransport: (model) => {
       const request = getModelProviderRequestTransport(model);
-      return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
+      const rateLimit = request?.rateLimit;
+      // Only active limits (RPM or minimum interval) select managed transport;
+      // an inert maxQueueSize-only block must not change transport routing.
+      const hasActiveRateLimit =
+        (typeof rateLimit?.requestsPerMinute === "number" &&
+          Number.isFinite(rateLimit.requestsPerMinute) &&
+          rateLimit.requestsPerMinute > 0) ||
+        (typeof rateLimit?.minIntervalMs === "number" &&
+          Number.isFinite(rateLimit.minIntervalMs) &&
+          rateLimit.minIntervalMs > 0);
+      return Boolean(
+        request?.proxy || request?.tls || hasActiveRateLimit || getModelProviderLocalService(model),
+      );
     },
     inheritManagedTransport: (source, target) =>
       inheritModelProviderRequestRouteFacts(

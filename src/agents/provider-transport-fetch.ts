@@ -40,6 +40,11 @@ import {
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
+  getProviderRequestRateLimitBucketCountForTests,
+  resetProviderRequestRateLimitBucketsForTests,
+  waitForProviderRequestRateLimit,
+} from "./provider-rate-limit.js";
+import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,
   getModelProviderRequestTransport,
@@ -353,6 +358,11 @@ export function resolveProviderTransportSsrFPolicy(params: {
   );
 }
 
+export const testing = {
+  getProviderRequestRateLimitBucketCountForTests,
+  resetProviderRequestRateLimitBucketsForTests,
+};
+
 function withModelProviderNetworkRemediation(
   error: unknown,
   params: {
@@ -390,6 +400,7 @@ export function buildGuardedModelFetch(
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
+  const rateLimitConfig = getModelProviderRequestTransport(model)?.rateLimit;
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
@@ -472,11 +483,31 @@ export function buildGuardedModelFetch(
         rawHeaders,
         localServiceSignal,
       );
-      result = await fetchWithSsrFGuard(
-        useEnvProxy
-          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-          : guardedFetchOptions,
-      );
+      // Admission is measured after local-service readiness so a slow startup
+      // cannot collapse separately paced requests into one dispatch burst.
+      let rateLimitResponse: Response | undefined;
+      if (rateLimitConfig) {
+        rateLimitResponse = await waitForProviderRequestRateLimit(
+          model,
+          rateLimitConfig,
+          localServiceSignal,
+        );
+      }
+      if (rateLimitResponse) {
+        localServiceLease?.release();
+        localServiceLease = undefined;
+        result = {
+          response: rateLimitResponse,
+          finalUrl: url,
+          release: async () => undefined,
+        };
+      } else {
+        result = await fetchWithSsrFGuard(
+          useEnvProxy
+            ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+            : guardedFetchOptions,
+        );
+      }
     } catch (error) {
       const remediatedError = withModelProviderNetworkRemediation(error, {
         baseUrl: model.baseUrl,

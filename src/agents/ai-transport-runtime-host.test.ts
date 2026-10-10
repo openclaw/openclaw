@@ -5,6 +5,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata
 import "./ai-transport-runtime-host.js";
 import {
   attachModelProviderRequestRouteFacts,
+  attachModelProviderRequestTransport,
   getModelProviderRequestRouteFacts,
   resolveProviderRequestPolicyConfig,
 } from "./provider-request-config.js";
@@ -94,5 +95,55 @@ describe("AI transport prepared provider routes", () => {
     expect(routeFacts?.providerMetadataOwners).toBe(owners);
     expect(routeFacts?.capabilities.endpointClass).toBe("anthropic-public");
     expect(routeFacts?.providerOwner).toBe("anthropic-public");
+  });
+});
+
+describe("AI transport managed transport selection", () => {
+  it("routes rate-limited models through the managed OpenClaw transport seam", () => {
+    const model = attachModelProviderRequestTransport(
+      makeProviderModelFixture<"openai-responses">({
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      {
+        rateLimit: { requestsPerMinute: 60, maxQueueSize: 2 },
+      },
+    );
+
+    expect(getAiTransportHost().requiresManagedTransport(model)).toBe(true);
+  });
+
+  it("routes minimum-interval rate limits through the managed transport seam", () => {
+    const model = attachModelProviderRequestTransport(
+      makeProviderModelFixture<"openai-responses">({
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      {
+        rateLimit: { minIntervalMs: 250 },
+      },
+    );
+
+    expect(getAiTransportHost().requiresManagedTransport(model)).toBe(true);
+  });
+
+  it("ignores maxQueueSize-only rate limits when choosing managed transport", () => {
+    const model = attachModelProviderRequestTransport(
+      makeProviderModelFixture<"openai-responses">({
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      {
+        rateLimit: { maxQueueSize: 2 },
+      },
+    );
+
+    expect(getAiTransportHost().requiresManagedTransport(model)).toBe(false);
   });
 });

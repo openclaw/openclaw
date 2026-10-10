@@ -200,13 +200,13 @@ describe("provider transport stream contracts", () => {
     expect(resolveTransportAwareSimpleApi(model.api)).toBeUndefined();
     expect(createBoundaryAwareStreamFnForModel(model)).toBeUndefined();
     expect(() => createTransportAwareStreamFnForModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "ollama"',
     );
     expect(() => buildTransportAwareSimpleStreamFn(model)).toThrow(
-      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "ollama"',
     );
     expect(() => prepareTransportAwareSimpleModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "ollama"',
     );
   });
 
