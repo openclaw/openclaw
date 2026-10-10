@@ -353,19 +353,27 @@ export async function readPlacementProjection(
   sessionId: string,
   read: () => Promise<WorkerSessionPlacementReadResult>,
 ): Promise<WorkerSessionPlacementReadResult> {
-  const prepared = await preparePlacementRead(
+  const { owner, observation, authority, assertUsable } = capturePlacementObservation(
     pathname,
     sessionId,
-    async (owner) => {
-      return owner.projections.get(sessionId) ?? (await read());
-    },
-    (value, { owner, authority }) => {
-      retainProjection(owner, sessionId, value);
-      return { value: structuredClone(value), release: authority.release };
-    },
   );
-  prepared.release();
-  return prepared.value;
+  try {
+    const signal = getAsyncWorkSignal();
+    signal?.throwIfAborted();
+    assertUsable();
+    // Snapshot reads must not wait for a delayed receipt from an earlier write.
+    const value = hasPendingPublication(owner, sessionId)
+      ? await read()
+      : (owner.projections.get(sessionId) ?? (await read()));
+    signal?.throwIfAborted();
+    assertUsable();
+    if (!observation.revoked && !hasPendingPublication(owner, sessionId)) {
+      retainProjection(owner, sessionId, value);
+    }
+    return structuredClone(value);
+  } finally {
+    authority.release();
+  }
 }
 
 export async function preparePlacementPreservationRead(
