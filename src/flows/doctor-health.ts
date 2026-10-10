@@ -42,6 +42,7 @@ import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral
 import type { RuntimeEnv } from "../runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
+import { exitDoctorHealthFlow } from "./doctor-health-startup.js";
 
 // Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
@@ -91,7 +92,7 @@ export async function runDoctorHealthFlow(
         const runDoctor = (capture?: DoctorConfigCapture) =>
           runDoctorHealthFlowWithResult(
             (selectedRuntime, code) => {
-              requestedExit = () => selectedRuntime.exit(code);
+              requestedExit = () => exitDoctorHealthFlow(selectedRuntime, code);
             },
             runtime,
             options,
@@ -176,6 +177,9 @@ async function runDoctorHealthFlowWithResult(
       outro,
     });
     if (admission !== "accepted") {
+      if (admission !== "handled") {
+        requestExit(effectiveRuntime, admission.diagnosticExitCode);
+      }
       return;
     }
     interactiveRepair = true;

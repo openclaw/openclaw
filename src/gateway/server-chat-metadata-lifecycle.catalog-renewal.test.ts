@@ -175,9 +175,15 @@ describe("catalog renewal metadata broadcasts", () => {
       const harness = await createRenewalLifecycle();
       const entered = createDeferred();
       const release = createDeferred();
+      const settled = createDeferred();
       const original = owner.readFullModelCatalog!()!;
-      const publications =
-        vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
+      const publications = vi.fn<
+        Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]
+      >((event) => {
+        if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
+          settled.resolve();
+        }
+      });
       const unregister = registerPreparedModelRuntimePublicationListener(publications);
       const next = structuredClone(harness.inventory);
       if (change === "removed") {
@@ -216,9 +222,8 @@ describe("catalog renewal metadata broadcasts", () => {
         expect.soft(harness.broadcast.mock.calls.length).toBe(0);
         expect.soft(buildCommands.mock.calls.length).toBe(0);
         expect.soft(buildProjection.mock.calls.length).toBe(0);
-        renewal = owner.loadFullModelCatalog!({ refresh: true, providerIds: ["custom"] }).catch(
-          (error: unknown) => error,
-        );
+        // Observe the expiry renewal; an explicit refresh requests another acquisition.
+        renewal = settled.promise;
         release.resolve();
         await renewal;
         await nextEventLoopTurn();

@@ -155,7 +155,7 @@ export function buildGroupChatContext(params: {
 }
 
 /** Builds system prompt context for direct conversations. */
-export function buildDirectChatContext(params: {
+function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): string {

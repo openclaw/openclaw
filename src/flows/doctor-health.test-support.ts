@@ -26,6 +26,7 @@ export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInsta
 const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
   confirm: vi.fn(async () => true),
+  lint: vi.fn<(typeof import("../commands/doctor-lint.js"))["runDoctorLintCli"]>(),
   config: vi.fn<() => OpenClawConfig>(),
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
@@ -211,6 +212,11 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
 
 vi.mock("../commands/doctor-update.js", () => ({
   maybeOfferUpdateBeforeDoctor: async () => ({ updated: false }),
+}));
+
+vi.mock("../commands/doctor-lint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-lint.js")>()),
+  runDoctorLintCli: mocks.lint,
 }));
 
 vi.mock("../commands/doctor-ui.js", () => ({

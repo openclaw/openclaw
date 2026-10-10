@@ -376,7 +376,7 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
             aria-expanded="false"
           >
             <span
-              ><strong>${model.title}</strong> ·
+              >${model.nonBlocking ? nothing : html`<strong>${model.title}</strong> ·`}
               ${model.collapsedLabel ? html`${model.collapsedLabel} · ${question.question}` : question.header}</span
             >
             ${model.collapsedLabel ? nothing : html`<span class="chat-question-panel__progress">${progress}</span>`}
@@ -395,8 +395,14 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
         tabindex="0"
         @keydown=${(event: KeyboardEvent) => this.handleKeyDown(event, model, question, disabled)}
       >
-        <div class="chat-question-panel__topline">
-          <div class="chat-question-panel__title">${model.title}</div>
+        <div
+          class="chat-question-panel__topline ${model.nonBlocking ? "chat-question-panel__topline--prompt" : ""}"
+        >
+          ${
+            model.nonBlocking
+              ? html`<span class="chat-question-panel__prompt">${question.question}</span>`
+              : html`<div class="chat-question-panel__title">${model.title}</div>`
+          }
           ${requestNavigation}
           <span class="chat-question-panel__progress">${progress}</span>
           <button
@@ -410,10 +416,13 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
           </button>
         </div>
 
-        <div class="chat-question-panel__heading">
-          <span class="chat-question-panel__prompt">${question.question}</span>
-        </div>
-
+        ${
+          model.nonBlocking
+            ? nothing
+            : html`<div class="chat-question-panel__heading">
+                <span class="chat-question-panel__prompt">${question.question}</span>
+              </div>`
+        }
         ${
           question.url
             ? html`<div class="chat-question-panel__external">

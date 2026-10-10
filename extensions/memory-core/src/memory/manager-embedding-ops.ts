@@ -2,7 +2,9 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  formatEmbeddingModelInput,
   isEmbeddingBatchUnavailableError,
+  resolveEmbeddingInputFormatVersion,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -34,6 +36,7 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
+  runMemoryEmbeddingBatchTimeoutRetry,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -72,12 +75,6 @@ type PreparedMemoryIndexEntry = {
   chunks: IndexedMemoryChunk[];
   structuredInputBytes?: number;
 };
-
-// Retry attempts are host control state. Provider-thrown values stay opaque so
-// they cannot override the counter or break accounting when they are immutable.
-type MemoryBatchRetryResult =
-  | { kind: "success"; value: number[][] | null }
-  | { kind: "failure"; error: unknown; attempts: 1 | 2 };
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -230,12 +227,27 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
     const missingChunks = missingCandidates.map((candidate) => candidate.chunk);
     const batchResult = this.batch.enabled
-      ? await this.runBatchWithTimeoutRetry({
-          provider: provider.id,
+      ? await runMemoryEmbeddingBatchTimeoutRetry({
+          onRetry: () =>
+            log.warn(`memory embeddings: ${provider.id} batch timed out; retrying once`),
           run: () =>
             batchEmbed({
               agentId: this.agentId,
-              chunks: missingChunks,
+              chunks: resolveEmbeddingInputFormatVersion(provider.model)
+                ? missingChunks.map((chunk) => ({
+                    ...chunk,
+                    ...formatEmbeddingModelInput(chunk, provider.model, "document"),
+                    ...(chunk.embeddingInput
+                      ? {
+                          embeddingInput: formatEmbeddingModelInput(
+                            chunk.embeddingInput,
+                            provider.model,
+                            "document",
+                          ),
+                        }
+                      : {}),
+                  }))
+                : missingChunks,
               wait: this.batch.wait,
               concurrency: this.batch.concurrency,
               pollIntervalMs: this.batch.pollIntervalMs,
@@ -326,7 +338,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
                 message: `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
                 run: async (signal) =>
                   await provider.embedBatch(
-                    batchItems.map((item) => item.input),
+                    batchItems.map((item) =>
+                      formatEmbeddingModelInput(item.input, provider.model, "document"),
+                    ),
                     { signal, inputType: "document" },
                   ),
               });
@@ -424,7 +438,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         deadlineControl,
         run: (signal) =>
           this.withProviderUse(provider, () =>
-            provider.embed("ping", {
+            provider.embed(formatEmbeddingModelInput("ping", provider.model, "query"), {
               signal,
               inputType: "query",
               [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
@@ -467,7 +481,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
                 signal,
                 deadlineControl,
                 run: async (opSignal) =>
-                  await provider.embed(text, {
+                  await provider.embed(formatEmbeddingModelInput(text, provider.model, "query"), {
                     signal: opSignal,
                     inputType: "query",
                     ...(deadlineControl
@@ -497,24 +511,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     message: string,
   ): Promise<T> {
     return await runEmbeddingOperationWithTimeout({ timeoutMs, message, run: () => promise });
-  }
-
-  private async runBatchWithTimeoutRetry(params: {
-    provider: string;
-    run: () => Promise<number[][] | null>;
-  }): Promise<MemoryBatchRetryResult> {
-    let attempts: 1 | 2 = 1;
-    while (true) {
-      try {
-        return { kind: "success", value: await params.run() };
-      } catch (error) {
-        if (attempts === 2 || !/timed out|timeout/i.test(formatErrorMessage(error))) {
-          return { kind: "failure", error, attempts };
-        }
-      }
-      log.warn(`memory embeddings: ${params.provider} batch timed out; retrying once`);
-      attempts = 2;
-    }
   }
 
   protected getIndexConcurrency(): number {
