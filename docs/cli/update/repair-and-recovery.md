@@ -139,7 +139,8 @@ so a slow copy does not block Doctor's main thread from processing cancellation.
 Standalone Doctor captures are retained for 30 days: the next standalone `doctor --fix`
 retires older sealed Doctor captures and reports each removal; incomplete captures
 and update captures are never retired automatically, so take a verified backup
-when you need a long-term copy.
+when you need a long-term copy. Review and retire superseded update captures with
+[`openclaw update cleanup`](#update-cleanup).
 
 On Linux filesystems that reject native no-replace rename, fs-safe uses exclusive
 hard-link publication followed by source removal in native `auto` mode. Existing
@@ -748,9 +749,9 @@ history, and checkpoint evidence.
 
 ## `update cleanup`
 
-Retire migration recovery originals after you have verified that the upgrade and
-session history work. Start with a preview, which can run while the Gateway is
-active:
+Retire migration recovery originals and superseded original-state update captures
+after you have verified that the upgrade and session history work. Start with a
+preview, which can run while the Gateway is active:
 
 ```bash
 openclaw update cleanup --dry-run
@@ -811,10 +812,39 @@ Private package, command-shim, and Git runtime backups remain owned by the updat
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.
 
+Original-state update captures in `<state-directory>.update-captures/` are listed
+as well, one artifact per capture directory with its logical bytes. The text
+summary adds an `Update captures:` line with their total, candidate, and protected
+bytes. Cleanup attributes a capture only through its run id in update history and
+never reads the captured payload:
+
+- `candidate` / `superseded-update-capture`: a sealed capture from a finished
+  update, when a later update succeeded.
+- `candidate` / `unsealed-update-capture`: a capture that never sealed (the
+  update reported `Original update capture failed`) from a finished update, when a
+  later update succeeded. Nothing can restore from an unsealed capture.
+- `protected` / `awaiting-later-completed-update`: the capture of the latest
+  successful update, or of any update that finished after it.
+- `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
+  still running, or its recorded rollback has not settled.
+- `protected` / `unresolved-failed-update`: a sealed capture from a failed update
+  that is neither restored nor repaired forward. It remains that update's manual
+  recovery source.
+- `protected` / `unmanifested-update-capture`: a directory without the capture
+  marker or without a matching update run, such as a standalone Doctor capture,
+  and any other file in the capture directory. `unreadable-update-history` also
+  keeps every capture protected.
+
+Retiring a capture deletes its whole directory, including any `candidate` and
+`prepared` recovery generations inside it, under the same exclusive ownership as
+the rest of cleanup. An interrupted removal leaves the remainder attributed to the
+same run, so rerunning cleanup finishes it.
+
 The JSON result contains `stateDir`, `status`, `artifacts`, and `totals`. Each
-artifact reports its path, run ids, logical bytes, outcome, and reason. Totals
-separate candidates, verification-required, protected, blocked, and removed
-bytes. Removal failures exit nonzero. Keep the recovery manifests and rerun
+artifact reports its path, run ids, logical bytes, outcome, and reason; update
+captures also carry `kind: "update-capture"`. Totals separate candidates,
+verification-required, protected, blocked, and removed bytes, including update
+captures. Removal failures exit nonzero. Keep the recovery manifests and rerun
 cleanup to finish recorded interrupted work; a retry does not delete a recreated
 file. Removed logical bytes do not promise
 equivalent physical space reclamation on cloned or snapshotted filesystems.

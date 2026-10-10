@@ -27,7 +27,10 @@ import {
   type SessionSqliteMigrationMove,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
-import { listUpdateRuns } from "../infra/update-run-reader.js";
+import {
+  collectUpdateCaptureInventory,
+  readCompletedUpdateHistory,
+} from "./update-capture-cleanup.js";
 
 type Outcome =
   | "candidate"
@@ -37,7 +40,9 @@ type Outcome =
   | "removed"
   | "disposed"
   | "failed";
-type RecoveryCleanupArtifact = {
+export type RecoveryCleanupArtifact = {
+  /** Absent for session migration originals; captures are whole update-capture directories. */
+  kind?: "update-capture";
   path: string;
   runs: string[];
   bytes: number;
@@ -158,16 +163,7 @@ export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: Nod
     }
   }
   if ([...references.values()].some((refs) => refs.some((ref) => ref.target.databaseIdentity))) {
-    try {
-      laterUpdateStartedAt = Math.max(
-        0,
-        ...listUpdateRuns({ limit: 100 }, { env: params.env })
-          .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
-          .map((run) => run.createdAtMs),
-      );
-    } catch {
-      // Missing/unreadable update history cannot release rollback originals.
-    }
+    laterUpdateStartedAt = readCompletedUpdateHistory(params.env)?.latestCompletedStartedAt ?? 0;
   }
   for (const [archivePath, refs] of references) {
     const evidence = resolveRecoveryArtifact(refs);
@@ -464,9 +460,30 @@ export function summarizeRecoveryCleanup(
   return { stateDir, artifacts, totals, status };
 }
 
+/** Update cleanup also reviews original-state captures; Doctor's session repair does not. */
+export function collectUpdateCleanupInventory(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}) {
+  const inventory = collectRecoveryInventory(params);
+  const captures = collectUpdateCaptureInventory({
+    stateDir: inventory.report.stateDir,
+    env: params.env,
+  });
+  return {
+    ...inventory,
+    captureIdentities: captures.identities,
+    report: summarizeRecoveryCleanup(
+      inventory.report.stateDir,
+      [...inventory.report.artifacts, ...captures.artifacts],
+      "preview",
+    ),
+  };
+}
+
 export function inspectSessionSqliteRecovery(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): RecoveryCleanupReport {
-  return collectRecoveryInventory(params).report;
+  return collectUpdateCleanupInventory(params).report;
 }
