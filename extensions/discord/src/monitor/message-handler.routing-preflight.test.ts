@@ -96,7 +96,7 @@ async function prepare(cfg: OpenClawConfig, adapter: SessionBindingAdapter, dire
 }
 
 it.each(["ambiguous", "main-session"])(
-  "resolves conversation bindings with %s routing",
+  "resolves conversation bindings with %s routing without synchronous persistence",
   async (routing) => {
     const mainSession = routing === "main-session";
     const record = binding(mainSession ? "agent:second:home" : "agent:second:acp:bound-session");
@@ -107,11 +107,16 @@ it.each(["ambiguous", "main-session"])(
       cfg.bindings = [{ agentId: "first", match: { channel: "discord" } }];
       cfg.session = { mainKey: "home" };
     }
+    const touch = vi.fn(() => {
+      throw new Error("Routing preflight must not perform synchronous persistence");
+    });
     const result = await prepare(cfg, {
       ...scope,
       listBySession: () => [record],
       resolveByConversation: (ref) => (ref.conversationId === channelId ? record : null),
+      touch,
     });
+    expect(touch).not.toHaveBeenCalled();
     expect(result.effectiveRoute.agentId).toBe("second");
     expect(result.baseSessionKey).toBe(record.targetSessionKey);
     expect(result.threadBinding).toEqual(record);

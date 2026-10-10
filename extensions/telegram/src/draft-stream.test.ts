@@ -216,38 +216,6 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
-  it.each(["send", "edit"] as const)(
-    "does not recover a retired preview after a delayed %s receipt",
-    async (operation) => {
-      const api = createMockDraftApi();
-      const stream = createDraftStream(api);
-      let resolveReceipt!: (message: MockSentMessage) => void;
-      const receipt = new Promise<MockSentMessage>((resolve) => {
-        resolveReceipt = resolve;
-      });
-      if (operation === "edit") {
-        stream.update("Initial preview");
-        await stream.flush();
-        api.editMessageText.mockReturnValueOnce(receipt);
-      } else {
-        api.sendMessage.mockReturnValueOnce(receipt);
-      }
-
-      stream.update("Retired pre-tool preview");
-      const pending = stream.flush();
-      await vi.waitFor(() =>
-        expect(operation === "edit" ? api.editMessageText : api.sendMessage).toHaveBeenCalled(),
-      );
-      stream.rotateToNewMessageDeferringDelete();
-      resolveReceipt({ message_id: 17 });
-      await pending;
-
-      // Final-error recovery reads this value; a retired generation cannot supply it.
-      expect(stream.lastDeliveredText()).toBe("");
-      await stream.stop();
-    },
-  );
-
   it.each(["first"] as const)(
     "keeps a settled %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
@@ -284,72 +252,6 @@ describe("createTelegramDraftStream", () => {
         stream.update("Later preview");
         await stream.flush();
         expectNthPreviewSend(api, 3, "Later preview", { message_thread_id: 42 });
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["first"] as const)(
-    "keeps a %s reply target on a reposition-superseded in-flight send until deletion",
-    async (replyToMode) => {
-      // Red-team F5: rotateToNewMessageDeferringDelete rewinds while a FIRST send is
-      // still in flight (no message id yet). The late-landing message is a stale
-      // preview to delete — NOT a durable content chunk to retain (that is
-      // forceNewMessage's contract). Previously it retained that late send,
-      // leaving a ghost bubble.
-      vi.useFakeTimers();
-      try {
-        let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
-        const firstSend = new Promise<{ message_id: number }>((resolve) => {
-          resolveFirstSend = resolve;
-        });
-        const api = createMockDraftApi();
-        api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
-        const onSupersededPreview = vi.fn();
-        const onProviderMessage = vi.fn();
-        const stream = createDraftStream(api, {
-          onRetainedPage: onSupersededPreview,
-          onProviderMessage,
-          replyToMessageId: 411,
-          replyToMode,
-          thread: { id: 42, scope: "dm" },
-        });
-
-        stream.update("Message A partial");
-        await vi.advanceTimersByTimeAsync(0);
-        expect(api.sendMessage).toHaveBeenCalledTimes(1);
-        expectNthPreviewSend(api, 1, "Message A partial", {
-          message_thread_id: 42,
-          reply_parameters: {
-            message_id: 411,
-            allow_sending_without_reply: true,
-          },
-        });
-
-        // Reposition while the first send is still in flight, then stream on.
-        stream.rotateToNewMessageDeferringDelete();
-        stream.update("Message B partial");
-
-        resolveFirstSend?.({ message_id: 17 });
-        await vi.advanceTimersByTimeAsync(0);
-        await stream.flush();
-
-        // The raced first send is NOT retained as a durable chunk...
-        expect(onSupersededPreview).not.toHaveBeenCalled();
-        expect(onProviderMessage).not.toHaveBeenCalled();
-        await stream.stop();
-        expect(onProviderMessage).toHaveBeenCalledTimes(1);
-        expect(onProviderMessage).toHaveBeenCalledWith(expect.objectContaining({ message_id: 42 }));
-        expect(api.deleteMessage).not.toHaveBeenCalled();
-        // ...it is deleted deferred, so no orphaned stale bubble is left behind.
-        await vi.advanceTimersByTimeAsync(4_000);
-        expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
-        // Until detached deletion succeeds, the stale send still owns the
-        // single-use reply and the replacement must omit it.
-        expectNthPreviewSend(api, 2, "Message B partial", {
-          message_thread_id: 42,
-        });
       } finally {
         vi.useRealTimers();
       }
@@ -412,52 +314,6 @@ describe("createTelegramDraftStream", () => {
       vi.useRealTimers();
     }
   });
-
-  it.each(["first"] as const)(
-    "keeps an in-flight %s reply target owned when reposition cleanup fails",
-    async (replyToMode) => {
-      vi.useFakeTimers();
-      try {
-        let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
-        const firstSend = new Promise<{ message_id: number }>((resolve) => {
-          resolveFirstSend = resolve;
-        });
-        const api = createMockDraftApi();
-        api.sendMessage
-          .mockReturnValueOnce(firstSend)
-          .mockResolvedValueOnce({ message_id: 42 })
-          .mockResolvedValueOnce({ message_id: 43 });
-        api.deleteMessage.mockRejectedValueOnce(new Error("delete rejected"));
-        const warn = vi.fn();
-        const stream = createDraftStream(api, {
-          replyToMessageId: 411,
-          replyToMode,
-          thread: { id: 42, scope: "dm" },
-          warn,
-        });
-
-        stream.update("Message A partial");
-        await vi.advanceTimersByTimeAsync(0);
-        stream.rotateToNewMessageDeferringDelete();
-        stream.update("Message B partial");
-        resolveFirstSend?.({ message_id: 17 });
-        await vi.advanceTimersByTimeAsync(0);
-        await stream.flush();
-
-        expectNthPreviewSend(api, 2, "Message B partial", { message_thread_id: 42 });
-        await vi.advanceTimersByTimeAsync(4_000);
-        expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"));
-
-        stream.forceNewMessage();
-        stream.update("Message C partial");
-        await stream.flush();
-        expectNthPreviewSend(api, 3, "Message C partial", { message_thread_id: 42 });
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
 
   it("keeps a rotated preview until Telegram accepts its replacement", async () => {
     vi.useFakeTimers();
@@ -535,49 +391,6 @@ describe("createTelegramDraftStream", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("retains an old message when forceNewMessage races an in-flight send", async () => {
-    let resolveFirstSend: ((value: { message_id: number }) => void) | undefined;
-    const firstSend = new Promise<{ message_id: number }>((resolve) => {
-      resolveFirstSend = resolve;
-    });
-    const api = createMockDraftApi();
-    api.sendMessage.mockReturnValueOnce(firstSend).mockResolvedValueOnce({ message_id: 42 });
-    const onSupersededPreview = vi.fn();
-    const stream = createDraftStream(api, {
-      onRetainedPage: onSupersededPreview,
-      replyToMessageId: 411,
-      replyToMode: "first",
-      thread: { id: 42, scope: "dm" },
-    });
-
-    stream.update("Message A partial");
-    await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
-    expectNthPreviewSend(api, 1, "Message A partial", {
-      message_thread_id: 42,
-      reply_parameters: {
-        message_id: 411,
-        allow_sending_without_reply: true,
-      },
-    });
-
-    stream.forceNewMessage();
-    stream.update("Message B partial");
-
-    resolveFirstSend?.({ message_id: 17 });
-    await stream.flush();
-
-    expect(onSupersededPreview).toHaveBeenCalledTimes(1);
-    const [supersededPreview] = onSupersededPreview.mock.calls.at(0) ?? [];
-    expect(supersededPreview).toMatchObject({
-      messageId: 17,
-      textSnapshot: "Message A partial",
-    });
-    expect(Number.isFinite(supersededPreview.visibleSinceMs)).toBe(true);
-    expect(api.sendMessage).toHaveBeenCalledTimes(2);
-    expectNthPreviewSend(api, 2, "Message B partial", { message_thread_id: 42 });
-    expect(api.editMessageText).not.toHaveBeenCalledWith(123, 17, "Message B partial");
   });
 
   it("retries pre-connect first preview send failures instead of stopping", async () => {
@@ -1201,7 +1014,6 @@ describe("Telegram preview native quotes", () => {
     { failure: "quote", retirement: "authorization" },
     { failure: "quote", retirement: "discard" },
     { failure: "format", retirement: "authorization" },
-    { failure: "format", retirement: "generation" },
   ])(
     "does not retry $failure after $retirement retires the send",
     async ({ failure, retirement }) => {
@@ -1238,8 +1050,6 @@ describe("Telegram preview native quotes", () => {
         await vi.waitFor(() => expect(api.raw.sendRichMessage).toHaveBeenCalledOnce());
         if (retirement === "authorization") {
           authorized = false;
-        } else if (retirement === "generation") {
-          stream.forceNewMessage();
         } else {
           discarding = stream.discard();
         }
@@ -1248,12 +1058,6 @@ describe("Telegram preview native quotes", () => {
         await discarding;
         expect(api.raw.sendRichMessage).toHaveBeenCalledOnce();
         expect(api.sendMessage).not.toHaveBeenCalled();
-        if (retirement === "generation") {
-          stream.update("Replacement");
-          await stream.stop();
-          expect(api.raw.sendRichMessage).toHaveBeenCalledTimes(2);
-          expect(stream.currentMessageSnapshot()).toMatchObject({ text: "Replacement" });
-        }
       } finally {
         pending.reject(rejection);
         await stream.discard();

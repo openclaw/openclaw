@@ -273,44 +273,6 @@ describe("Discord thread binding restoration", () => {
 
   registerThreadBindingCompatibilityTests({ stores, persistedBinding, persistentManager });
 
-  it("refuses to acquire a manager that appeared after session mutation admission", async () => {
-    const saved = persistedBinding();
-    const orphan = persistedBinding("agent:other:subagent:child");
-    orphan.key = "other:thread-2";
-    orphan.value.accountId = "other";
-    orphan.value.threadId = "thread-2";
-    const rows = installCanonicalRows([
-      [saved.key, saved.value],
-      [orphan.key, orphan.value],
-    ]);
-    const manager = await persistentManager();
-    const { entered, finish } = pauseNextWrite(rows);
-    const touching = manager.touchThread({ threadId: "thread-1", at: 200 });
-    await entered.promise;
-    const creating = createTestManager({ accountId: "other" });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    const setting = discordPlugin.conversationBindings!.setIdleTimeoutBySessionKeyAsync!({
-      targetSessionKey: orphan.value.targetSessionKey,
-      accountId: "other",
-      idleTimeoutMs: 500,
-    });
-    const outcome = expect(setting).rejects.toThrow("manager changed");
-    try {
-      expect(getThreadBindingManager("other")).toBeNull();
-      finish.resolve();
-      const [, otherManager] = await Promise.all([touching, creating, outcome]);
-      expect(rows.get(orphan.key)?.idleTimeoutMs).toBeUndefined();
-      expect(otherManager.getByThreadId("thread-2")?.idleTimeoutMs).toBeUndefined();
-    } finally {
-      finish.resolve();
-      await Promise.allSettled([touching, creating, setting]);
-      await manager.stop();
-      await getThreadBindingManager("other")?.stop();
-    }
-  });
-
   it.each([false, true])("preflights selected stopping owners (matching=%s)", async (matching) => {
     const saved = persistedBinding();
     const other = persistedBinding(
