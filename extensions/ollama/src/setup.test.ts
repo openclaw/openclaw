@@ -120,6 +120,38 @@ describe("ollama setup", () => {
     fetchWithSsrFGuardMock.mockClear();
   });
 
+  it.each(["interactive", "non-interactive"])(
+    "omits embedding-only chat rows in %s onboarding",
+    async (mode) => {
+      vi.stubGlobal(
+        "fetch",
+        createOllamaFetchMock({
+          tags: ["bge-m3:latest", "gemma4:latest", "dual-purpose", "nomic-embed-text:latest"],
+          show: { "gemma4:latest": 131_072 },
+          capabilities: {
+            "bge-m3:latest": ["embedding", "tools"],
+            "gemma4:latest": ["completion", "tools"],
+            "dual-purpose": ["embedding", "completion"],
+            "nomic-embed-text:latest": ["embedding"],
+          },
+        }),
+      );
+      const config =
+        mode === "interactive"
+          ? (await promptAndConfigureOllama({ cfg: {}, prompter: createLocalPrompter() })).config
+          : await configureOllamaNonInteractive({
+              nextConfig: {},
+              opts: {},
+              runtime: createRuntimeSpies(),
+            });
+
+      expect(config.models?.providers?.ollama?.models.map((model) => model.id)).toEqual([
+        "gemma4:latest",
+        "dual-purpose",
+      ]);
+    },
+  );
+
   it("Docker setup defaults to the host Ollama endpoint", async () => {
     vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
     const text = vi.fn().mockResolvedValueOnce("http://host.docker.internal:11434");
