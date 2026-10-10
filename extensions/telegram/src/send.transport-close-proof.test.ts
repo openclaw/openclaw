@@ -359,7 +359,7 @@ describe("telegram transport cache eviction over real sockets", () => {
     for (let i = 0; i < ACCOUNTS; i += 1) {
       sockets.push(await send(i));
       if (i >= 64) {
-        await vi.waitFor(() => expect(liveSockets.has(sockets[i - 64])).toBe(false), {
+        await vi.waitFor(() => expect(liveSockets).not.toContain(sockets[i - 64]), {
           timeout: 3000,
         });
       }
