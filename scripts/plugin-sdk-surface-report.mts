@@ -186,6 +186,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +2: approved released upstream-link writes retained during worker migration.
   "session-catalog": 2,
   "session-store-runtime": 4,
+  // Released binding inspection, routing, and adapters remain until the next Plugin SDK major.
+  "conversation-binding-inspection-runtime": 1,
+  "conversation-runtime": 3,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
   "reply-history": 6,
@@ -215,7 +218,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +1: async channel approval adapter for worker-backed account state.
       // +12: awaited command authorization and native approval contracts.
-      3657,
+      // +4: asynchronous conversation binding inspection, routing, and V2 adapters.
+      3661,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -230,7 +234,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: approved async upstream-link writes with released sync compatibility.
       // +3: approved async session entry reads and typed incognito refusal on the existing subpath.
       // +8: awaited command authorization and native approval operations.
-      2122,
+      // +3: asynchronous conversation binding inspection, routing, and registration.
+      2125,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
@@ -238,7 +243,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // Remove deprecated sync channel envelope helpers and their compat records at the next Plugin SDK major.
       // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
       // +1: synchronous session entry getter remains until the next Plugin SDK major.
-      148,
+      // +4: released synchronous conversation binding APIs remain until the next Plugin SDK major.
+      152,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
