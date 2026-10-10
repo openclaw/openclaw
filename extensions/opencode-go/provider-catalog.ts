@@ -68,8 +68,7 @@ function projectOpencodeGoListedRows(
         ...OPENCODE_GO_PROVIDER_ROUTE,
         provider: PROVIDER_ID,
       });
-      // SAFETY: Without template rows the shared classifier emits only text/image input,
-      // and normalization preserves the assigned Go route.
+      // SAFETY: Templateless listed rows carry only text/image input and keep the Go route.
       return listed as OpencodeGoModelDefinition;
     });
   return [...projectProviderCatalogSnapshotRows(rows, snapshot), ...unknown];
