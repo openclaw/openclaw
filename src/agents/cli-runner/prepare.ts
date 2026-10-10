@@ -1465,11 +1465,11 @@ async function prepareCliRunContextWithinReadFence(
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
         : await loadCliSessionPromptContext({
-            abortSignal: params.abortSignal,
-            sessionManager: params.sessionManager,
-            sessionTarget: params.sessionTarget,
+            ...params,
             allowRawTranscriptReseed,
             rawTranscriptReseedReason,
+            nativeSessionId: reusableCliSessionId,
+            tools: promptTools,
           });
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
@@ -1481,7 +1481,7 @@ async function prepareCliRunContextWithinReadFence(
           });
     const finalizedTranscriptPrompt =
       (params.finalizePromptForResolvedTools ||
-        sessionPromptContext?.durableContext ||
+        sessionPromptContext?.turnContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
@@ -1511,7 +1511,7 @@ async function prepareCliRunContextWithinReadFence(
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
-          sessionPromptContext?.durableContext,
+          sessionPromptContext?.turnContext,
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ],
