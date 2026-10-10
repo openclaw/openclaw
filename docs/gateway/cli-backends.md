@@ -35,7 +35,7 @@ Deprecated catalog models are not added at sign-in; an existing entry for one is
 
 `main` is the default agent id when no explicit agent list is configured. Swap in your own agent id otherwise.
 
-When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
+When you switch an existing chat away from Claude CLI and back, the first resumed turn includes a short count, time range, and model summary of messages since the last saved Claude CLI reply—not their contents. The note prefixes that native user prompt; OpenClaw's transcript keeps the original user text. When `sessions_history` is available, the note includes the current chat's session key and call shape so Claude can read those messages on demand. An empty Claude reply leaves no saved reply boundary, so the note can repeat on the following turn.
 
 The gateway service must have the CLI on its `PATH`. If a deployment needs a
 nonstandard executable path or arguments, register that adapter in a

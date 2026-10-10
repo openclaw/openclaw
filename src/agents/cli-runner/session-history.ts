@@ -563,7 +563,6 @@ export async function loadCliSessionPromptContext(
         reseedMessages: [],
         durableContext: undefined,
         sessionGapContext: undefined,
-        turnContext: undefined,
       };
     }
   }
@@ -585,7 +584,6 @@ export async function loadCliSessionPromptContext(
       reseedMessages: [],
       durableContext: undefined,
       sessionGapContext,
-      turnContext: sessionGapContext,
     };
   }
   // This freshly loaded branch is reseed-owned; use persistence rather than provider timestamps.
@@ -598,7 +596,6 @@ export async function loadCliSessionPromptContext(
   // CLI bindings have no local-history coverage cursor. Reference notes are
   // bounded at-least-once context, never evidence that a native turn consumed them.
   const durableContext = renderCliDurableContext(historyMessages);
-  const turnContext = [durableContext, sessionGapContext].filter(Boolean).join("\n\n") || undefined;
   const summary = historyMessages[0];
   const hasSummary = summary?.role === "compactionSummary" && summary.summary.trim().length > 0;
   if (
@@ -606,7 +603,7 @@ export async function loadCliSessionPromptContext(
     !params.sessionManager &&
     (params.allowRawTranscriptReseed !== true || !params.rawTranscriptReseedReason)
   ) {
-    return { reseedMessages: [], durableContext, sessionGapContext, turnContext };
+    return { reseedMessages: [], durableContext, sessionGapContext };
   }
   const history = historyMessages.filter(
     (message) =>
@@ -628,5 +625,5 @@ export async function loadCliSessionPromptContext(
           isError: message.role === "toolResult" ? message.isError : undefined,
         };
   });
-  return { reseedMessages, durableContext, sessionGapContext, turnContext };
+  return { reseedMessages, durableContext, sessionGapContext };
 }

@@ -687,7 +687,6 @@ describe("resumed Claude session gaps", () => {
         });
         expect(unknown).toMatchObject({
           sessionGapContext: context.sessionGapContext,
-          turnContext: context.sessionGapContext,
           durableContext: undefined,
           reseedMessages: [],
         });

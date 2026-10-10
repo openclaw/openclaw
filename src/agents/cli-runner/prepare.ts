@@ -1481,7 +1481,8 @@ async function prepareCliRunContextWithinReadFence(
           });
     const finalizedTranscriptPrompt =
       (params.finalizePromptForResolvedTools ||
-        sessionPromptContext?.turnContext ||
+        sessionPromptContext?.durableContext ||
+        sessionPromptContext?.sessionGapContext ||
         effectiveReplyGuidance) &&
       params.transcriptPrompt === undefined
         ? params.prompt
@@ -1497,6 +1498,7 @@ async function prepareCliRunContextWithinReadFence(
     if (!isControlOperation && params.skillsSnapshot?.librarySelections?.length) {
       preparedPrompt = remapSkillReferencePaths(preparedPrompt, preparedSkills.usagePaths);
     }
+    let historyPromptCurrentTurn = preparedPrompt;
     if (!skipsTurnPreparation) {
       ({
         prompt: preparedPrompt,
@@ -1511,7 +1513,7 @@ async function prepareCliRunContextWithinReadFence(
         deliveryGuidance: effectiveReplyGuidance,
         hookResult: promptBuildHookResult,
         prependContext: [
-          sessionPromptContext?.turnContext,
+          sessionPromptContext?.durableContext,
           promptBuildHookResult?.prependContext,
           authorizedPromptBuildResult?.prependContext,
         ],
@@ -1534,10 +1536,8 @@ async function prepareCliRunContextWithinReadFence(
       }));
       params.assertCurrent?.();
       params.abortSignal?.throwIfAborted();
-    }
-    let historyPromptCurrentTurn = preparedPrompt;
-    if (!skipsTurnPreparation) {
-      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession);
+      const gap = sessionPromptContext?.sessionGapContext;
+      const renderCurrentPrompt = createCliCurrentPromptRenderer(params, reusableCliSession, gap);
       const preferResumableText =
         params.currentInboundEventKind === "room_event" && Boolean(reusableCliSessionId);
       historyPromptCurrentTurn = renderCurrentPrompt(preparedPrompt);
