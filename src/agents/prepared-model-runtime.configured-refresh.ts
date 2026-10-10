@@ -342,7 +342,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
   const candidates = claims.map(({ input, generation }) => {
     const candidate = prepareModelRuntimeOwner(input, "configured", "static");
     candidate.generation = generation;
-    // Before commit no reader sees the candidate, so a lost Gateway loan restarts this attempt;
+    // Before commit no reader sees the candidate, so a lost Gateway loan cancels this attempt;
     // after commit it is a published configured owner and takes the normal recovery.
     candidate.onPluginGenerationRetired = () => {
       if (committed) {
