@@ -143,10 +143,11 @@ export async function prepareGitHubPublicationSource(params: {
       }
     }),
     onUserProfilesChanged(revoke),
-    observeUserGitHubConnectionAuthority(({ databasePath, changes }) => {
+    observeUserGitHubConnectionAuthority(({ databasePath, changedOwners }) => {
       if (
         databasePath === context.admission.databasePath &&
-        changes.some(({ owner }) => owner === params.selector.personalOwnerProfileId)
+        params.selector.personalOwnerProfileId !== undefined &&
+        changedOwners.includes(params.selector.personalOwnerProfileId)
       ) {
         revoke();
       }

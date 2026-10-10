@@ -103,10 +103,13 @@ and typed predicates authorize commit. It does not preserve arbitrary
 transaction-local callback visibility. A failed or uncertain worker operation
 never retries through the legacy route or replays an accepted external effect.
 
-Await deferral and reporting before dependent reads or shutdown. Recording an
-already-observed GitHub effect can still settle after action cancellation while
-the execution owner retains custody; it does not authorize another push or pull
-request. New external effects always require current caller and source authority.
+Await deferral and reporting before dependent reads or shutdown. Accepted
+bookkeeping, including recording an already-observed GitHub effect, can settle
+after action cancellation while the execution owner retains custody. The worker
+applies its request and execution predicates inside its transaction; it does not
+request another host grant for each bookkeeping commit. This grants no authority
+for another push or pull request. New external effects always require current
+caller and source authority at the point of effect.
 
 The deprecated methods retain their released signatures and completion timing;
 synchronous mutations still commit before returning. Actual legacy use emits one
