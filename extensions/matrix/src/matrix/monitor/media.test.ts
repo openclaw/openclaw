@@ -11,7 +11,6 @@ function createEncryptedClient() {
   return {
     client: {
       crypto: { decryptMedia },
-      mxcToHttp: vi.fn().mockReturnValue("https://example/mxc"),
     } as unknown as import("../sdk.js").MatrixClient,
     decryptMedia,
   };

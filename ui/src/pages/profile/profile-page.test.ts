@@ -1,34 +1,31 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
+import {
+  GIT_COAUTHOR_PREFERENCE_KEY,
+  type UserProfile,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { uploadsDisabledMessage } from "../../lib/uploads.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import * as avatarProcessing from "./avatar-processing.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
-import { createConnectedContext } from "./profile-page.test-support.ts";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+  type ProfilePageElement,
+} from "./profile-page.test-support.ts";
 import { ProfilePage } from "./profile-page.ts";
 
-const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
-const modelAccountProfile: UserProfile = {
-  id: "profile-1",
-  displayName: "Ada",
-  avatarMime: null,
-  mergedInto: null,
-  createdAt: 1,
-  updatedAt: 2,
-  emails: ["ada@example.test"],
-  githubIdentity: null,
-  hasAvatar: false,
-};
 const modelAccountCatalog = {
   providers: [
     { id: "openai", label: "OpenAI", methods: [{ id: "browser", label: "Browser sign-in" }] },
@@ -40,56 +37,6 @@ const modelAccountStep = {
   message: "Paste the redirect URL or wait for sign-in to finish.",
   externalUrl: "https://auth.openai.com/oauth/authorize?state=s",
 };
-// Keep the element class on the same post-reset i18n module as this test.
-if (!customElements.get(PROFILE_PAGE_TEST_TAG)) {
-  customElements.define(PROFILE_PAGE_TEST_TAG, class extends ProfilePage {});
-}
-
-type ProfilePageElement = HTMLElement & {
-  updateComplete: Promise<boolean>;
-};
-
-function mountProfilePage(context: ApplicationContext<RouteId>) {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
-  return page;
-}
-
-function createContext(
-  client: GatewayBrowserClient | null = null,
-  connected = false,
-): ApplicationContext<RouteId> {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client,
-    phase: connected ? "connected" : "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const subscribe = () => () => undefined;
-  return {
-    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
-    gateway: {
-      snapshot,
-      connection: {
-        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
-        token: "",
-        bootstrapToken: "",
-        password: "",
-      },
-      subscribe,
-    },
-    agents: { subscribe, ensureList: vi.fn(async () => null) },
-    agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
-  } as unknown as ApplicationContext<RouteId>;
-}
-
 function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
   class StubUrl extends URL {
     static override createObjectURL = vi.fn(() => "blob:avatar");
@@ -148,7 +95,10 @@ afterEach(async () => {
 });
 
 it("refreshes translated copy when the locale changes while mounted", async () => {
-  const page = mountProfilePage(createContext());
+  const { context } = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
+  context.gateway.snapshot.phase = "stopped";
+  context.gateway.snapshot.client = null;
+  const page = mountProfilePage(context);
   await page.updateComplete;
 
   const note = page.querySelector(".settings-empty");
@@ -161,79 +111,14 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it.each([
-  { id: "profile-1", emails: ["ada@example.test"], emailRows: 1, hint: "Refresh to retry" },
-  { id: "profile-1", emails: [], emailRows: 1, hint: "Refresh to retry" },
-  { id: "gateway-owner", emails: [], emailRows: 0, hint: "Cloudflare Access" },
-])(
-  "renders $id identity before Usage statistics with emails $emails",
-  async ({ id, emails, emailRows, hint }) => {
-    const profile: UserProfile = {
-      ...modelAccountProfile,
-      id,
-      emails,
-    };
-    const request = vi.fn(async (method: string) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: profile.id, accounts: [], links: [] };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-      id: profile.id,
-      email: profile.emails[0],
-      name: profile.displayName ?? undefined,
-    });
-    const page = mountProfilePage(harness.context);
-    await waitForFast(() =>
-      expect(page.querySelector("#settings-profile-identity")).not.toBeNull(),
-    );
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "users.self",
-      "users.listModelAccounts",
-    ]);
-    const identity = page.querySelector("#settings-profile-identity");
-    expect(identity?.textContent).toContain(hint);
-    expect(
-      [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
-        (node) => node.textContent?.trim() === "Linked emails",
-      ),
-    ).toHaveLength(emailRows);
-    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
-    expect(page.querySelector(".profile-stats")).toBeNull();
-    expect(page.querySelector(".profile-heatmap")).toBeNull();
-    const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
-    expect(usageRow?.textContent).toContain("Usage statistics");
-    expect(
-      page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!),
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-
-    usageRow?.click();
-    expect(harness.context.navigate).toHaveBeenCalledWith("usage");
-  },
-);
-
-it("shows the authenticated user in the profile hero when the default agent differs", async () => {
-  const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
-  };
+it("renders identity before Usage statistics and opens the usage page", async () => {
+  const profile = modelAccountProfile;
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
       return { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return { profileId: profile.id, accounts: [], links: [] };
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -242,180 +127,63 @@ it("shows the authenticated user in the profile hero when the default agent diff
     email: profile.emails[0],
     name: profile.displayName ?? undefined,
   });
-  (harness.context.agents as unknown as { state: unknown }).state = {
-    agentsList: {
-      defaultId: "clipper",
-      agents: [{ id: "clipper", name: "Clipper" }],
-    },
-  };
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
-
-  await waitForFast(() =>
-    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada"),
-  );
-
-  expect(page.querySelector(".profile-hero__handle")?.textContent).toContain("ada@example.test");
-  expect(page.querySelector(".profile-hero")?.textContent).not.toContain("Clipper");
-
-  harness.context.gateway.updateSelfUser?.({ name: "Ada Lovelace" });
-  await waitForFast(() =>
-    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace"),
-  );
-});
-
-it("loads and updates co-author consent separately from verified GitHub identity", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: "profile-1", accounts: [], links: [] };
-    }
-    if (method === "users.prefs.get") {
-      expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } };
-    }
-    if (method === "users.prefs.set") {
-      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } });
-      return { status: "ok" };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
   const page = mountProfilePage(harness.context);
+  await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
 
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-    ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "users.self",
+    "users.listModelAccounts",
+  ]);
+  const identity = page.querySelector("#settings-profile-identity");
+  expect(identity?.textContent).toContain("Refresh to retry");
+  expect(
+    [...(identity?.querySelectorAll(".settings-row__title") ?? [])].filter(
+      (node) => node.textContent?.trim() === "Linked emails",
+    ),
+  ).toHaveLength(1);
+  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+  expect(docsLink?.textContent?.trim()).toBe("Learn more");
+  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
+  expect(page.querySelector(".profile-stats")).toBeNull();
+  expect(page.querySelector(".profile-heatmap")).toBeNull();
+  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+  expect(usageRow?.textContent).toContain("Usage statistics");
+  expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING,
   );
-  expect(page.querySelector(".identity-github-form")).toBeNull();
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  expect(toggle?.checked).toBe(false);
 
-  toggle!.checked = true;
-  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
-  );
-  await waitForFast(() => expect(toggle?.checked).toBe(true));
-  expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-    ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
-  );
+  usageRow?.click();
+  expect(harness.context.navigate).toHaveBeenCalledWith("usage");
 });
 
-it("treats a malformed co-author preference as opted out", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.prefs.get") {
-      // The preference API stores arbitrary JSON; a non-boolean row must not publish a trailer.
-      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: "not-a-boolean" } };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  await waitForFast(() => expect(toggle?.checked).toBe(false));
-});
-
-it("keeps co-author credit on until the person opts out", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.prefs.get") {
-      // No stored row: the verified account is credited without an explicit opt-in.
-      return { status: "ok", entries: {} };
-    }
-    if (method === "users.prefs.set") {
-      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
-      return { status: "ok" };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  await waitForFast(() => expect(toggle?.checked).toBe(true));
-
-  toggle!.checked = false;
-  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+it("loads a read-only profile without enabling mutations", async () => {
+  const scope = "operator.read";
+  const request = vi.fn(async (method: string) =>
+    method === "users.self"
+      ? { profile: modelAccountProfile }
+      : {
+          personal: {
+            state: "disconnected",
+            generation: null,
+            account: null,
+            accessExpiresAtMs: null,
+            refreshState: "not_applicable",
+            pending: null,
+          },
+          system: {
+            source: "system-detected",
+            credentialKind: "native",
+            credentialState: "unavailable",
+            account: null,
+            gitAuthor: { name: null, email: null },
+            evidence: "none",
+            accessExpiresAtMs: null,
+            refreshState: "not_applicable",
+            oauthScopes: [],
+            repositoryGrants: "unknown",
+          },
+        },
   );
-  await waitForFast(() => expect(toggle?.checked).toBe(false));
-});
-
-it("renders a write-access note without calling users.self for read-only viewers", async () => {
-  const request = vi.fn(async () => ({
-    personal: {
-      state: "disconnected",
-      generation: null,
-      account: null,
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      pending: null,
-    },
-    system: {
-      source: "system-detected",
-      credentialKind: "native",
-      credentialState: "unavailable",
-      account: null,
-      gitAuthor: { name: null, email: null },
-      evidence: "none",
-      accessExpiresAtMs: null,
-      refreshState: "not_applicable",
-      oauthScopes: [],
-      repositoryGrants: "unknown",
-    },
-  }));
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: "profile-1",
     email: "ada@example.test",
@@ -424,15 +192,31 @@ it("renders a write-access note without calling users.self for read-only viewers
   harness.context.gateway.snapshot.hello = {
     type: "hello-ok",
     protocol: 1,
-    auth: { role: "operator", scopes: ["operator.read"] },
+    auth: { role: "operator", scopes: [scope] },
     features: { methods: ["users.self"] },
   } as ApplicationGatewaySnapshot["hello"];
   const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
-  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
-  expect(page.textContent).toContain("Profile editing requires operator.write access.");
-  expect(page.querySelector(".identity-name-control")).toBeNull();
+  await waitForFast(() =>
+    expect(page.querySelector(".identity-name-control input")).not.toBeNull(),
+  );
+  expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(true);
+  expect(page.textContent).toContain("Your current access does not allow profile editing.");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    scope,
+  );
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(true);
+  expect(page.querySelector<HTMLButtonElement>(".identity-name-control button")?.disabled).toBe(
+    true,
+  );
+  expect(page.querySelector('input[type="file"]')).toBeNull();
+  expect(page.querySelector(".profile-refresh")).not.toBeNull();
+  expect(
+    request.mock.calls.some(
+      ([method]) => method.startsWith("users.set") || method === "users.prefs.set",
+    ),
+  ).toBe(false);
 });
 
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {
@@ -459,7 +243,7 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   ).not.toBeNull();
   expect(page.querySelector(".identity-name-control")).toBeNull();
   expect(page.querySelector('input[type="file"]')).toBeNull();
-  expect(page.querySelector(".profile-refresh")).toBeNull();
+  expect(page.querySelector(".profile-refresh")).not.toBeNull();
   expect(page.querySelector('.profile-auth-add-account, input[type="password"]')).toBeNull();
   expect(page.textContent).toContain("ws://test.invalid");
   expect(page.textContent).toContain("Personal");
@@ -467,25 +251,6 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
     .find((button) => button.textContent?.trim() === "Connection settings")
     ?.click();
   expect(harness.context.navigate).toHaveBeenCalledWith("connection");
-});
-
-it("rerenders on connection transitions for unidentified connections", async () => {
-  const request = vi.fn();
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
-  const page = mountProfilePage(harness.context);
-
-  await page.updateComplete;
-  expect(page.querySelector(".profile-hero")).not.toBeNull();
-
-  // With no @state change (selfUser stays null), the snapshot handler must
-  // still invalidate the render branch that reads connected/client.
-  harness.emitConnected(false);
-  await page.updateComplete;
-  expect(page.querySelector(".profile-hero")).toBeNull();
-
-  harness.emitConnected(true);
-  await page.updateComplete;
-  expect(page.querySelector(".profile-hero")).not.toBeNull();
 });
 
 it("falls back to the text avatar when the hero image fails to load", async () => {
@@ -1010,69 +775,231 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   expect(page.querySelector<HTMLButtonElement>(".profile-auth-link-unlink")?.disabled).toBe(false);
 });
 
-it("uses the canonical self profile after a merge while presence still carries its old alias", async () => {
-  let profile = { ...modelAccountProfile, id: "profile-before-merge" };
-  const request = vi.fn(async (method: string, params?: unknown) => {
+it("rechecks avatar upload policy after processing and rerenders on config updates", async () => {
+  const profile = { ...modelAccountProfile };
+  const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
       return { profile };
     }
     if (method === "users.listModelAccounts") {
-      expect(params).toEqual({ profileId: profile.id });
       return { profileId: profile.id, accounts: [], links: [] };
-    }
-    if (method === "users.authConnect.start") {
-      expect(params).toEqual({
-        profileId: "profile-after-merge",
-        provider: "openai",
-        method: "browser",
-      });
-      return {
-        connectId: "connect-after-merge",
-        expiresAtMs: Date.now() + 60_000,
-      };
-    }
-    if (method === "users.authConnect.catalog") {
-      expect(params).toEqual({ profileId: "profile-after-merge" });
-      return modelAccountCatalog;
-    }
-    if (method === "users.authConnect.status") {
-      return { status: "pending", step: modelAccountStep };
     }
     throw new Error(`unexpected method: ${method}`);
   });
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: profile.id,
-    email: profile.emails[0],
     name: "Ada",
   });
-  const page = mountProfilePage(harness.context);
-  await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
-
-  // users.self resolves the merge immediately; profile-change events do not rewrite presence.
-  profile = { ...profile, id: "profile-after-merge", displayName: "Canonical person" };
-  page.querySelector<HTMLButtonElement>(".profile-refresh")!.click();
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
-      "Canonical person",
-    ),
+  const config = createApplicationConfigCapability({ resourceBasePath: "" });
+  const identityLoad = vi.spyOn(
+    ProfilePage.prototype as unknown as { loadIdentity(): Promise<void> },
+    "loadIdentity",
   );
-  expect(harness.context.gateway.snapshot.selfUser?.id).toBe("profile-before-merge");
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(
-      false,
-    ),
+  const page = mountProfilePage({ ...harness.context, config }) as ProfilePageElement & {
+    saveIdentity(change: { kind: "avatar"; file: File }): Promise<void>;
+  };
+  await identityLoad.mock.results[0]?.value;
+  await page.updateComplete;
+  const processed =
+    createDeferred<Awaited<ReturnType<typeof avatarProcessing.processProfileAvatar>>>();
+  const process = vi
+    .spyOn(avatarProcessing, "processProfileAvatar")
+    .mockReturnValue(processed.promise);
+  const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+  const saving = page.saveIdentity({ kind: "avatar", file });
+  expect(process).toHaveBeenCalledOnce();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(JSON.stringify({ uploadsEnabled: false }))),
   );
-  await waitForFast(() =>
-    expect(page.querySelector("openclaw-model-accounts")?.textContent).toContain(
-      "Canonical person",
-    ),
-  );
-  await startProfileSignIn(page);
-  await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("users.authConnect.start", {
-      profileId: "profile-after-merge",
-      provider: "openai",
-      method: "browser",
-    }),
+  await config.refresh();
+  await page.updateComplete;
+  expect(page.querySelector('input[type="file"]')).toBeNull();
+  processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  await saving;
+  await page.updateComplete;
+  expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(false);
+  expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage());
+  await page.saveIdentity({ kind: "avatar", file });
+  expect(process).toHaveBeenCalledOnce();
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled).toBe(
+    false,
   );
 });
+
+it("replaces a retired profile read when the same ID gains profile qualification", async () => {
+  const harness = createConnectedContext(
+    vi.fn(async () => ({})) as GatewayBrowserClient["request"],
+    { id: modelAccountProfile.id },
+  );
+  harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
+  const retired = createDeferred<null>();
+  const load = vi.fn(harness.context.gateway.loadSelfProfile);
+  load.mockReturnValueOnce(retired.promise).mockResolvedValue(modelAccountProfile);
+  harness.context.gateway.loadSelfProfile = load;
+  const page = mountProfilePage(harness.context);
+  await page.updateComplete;
+  harness.context.gateway.updateSelfUser?.({
+    identity: { type: "profile", id: modelAccountProfile.id },
+  });
+  retired.resolve(null);
+  await retired.promise;
+  await page.updateComplete;
+  expect(load).toHaveBeenCalledTimes(2);
+  expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
+    modelAccountProfile.displayName,
+  );
+});
+
+it.each([
+  { scopes: ["operator.read"], summary: "You have permission to view server information." },
+  { scopes: ["operator.write"], summary: "You have permission to send messages and make changes." },
+  {
+    scopes: ["operator.sessions.read"],
+    summary: "You have permission to view your own sessions.",
+  },
+  { scopes: ["operator.admin"], summary: "You have permission to manage this server." },
+  {
+    scopes: ["operator.approvals"],
+    summary: "This connection has a limited set of permissions.",
+  },
+  {
+    scopes: ["operator.read", "operator.sessions.write"],
+    summary: "You have permission to work in your own sessions.",
+  },
+])("explains $scopes with diagnostics collapsed", async ({ scopes, summary }) => {
+  const request = vi.fn(async () => ({}));
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
+  harness.emitHello(gatewayHelloForMethods([], scopes));
+  const page = mountProfilePage(harness.context);
+  await page.updateComplete;
+
+  const access = page.querySelector("#settings-profile-access");
+  expect(access?.querySelector(".settings-row__title")?.textContent).toBe(summary);
+  const details = access?.querySelector("details");
+  expect(details?.open).toBe(false);
+  expect(details?.querySelector("summary")?.textContent).toBe("Technical details");
+  expect(details?.querySelector(".settings-row__value")?.textContent).toBe(scopes.join(", "));
+  expect(access?.textContent).toContain(
+    "Sessions, browsers, and tools may have additional restrictions.",
+  );
+  expect(access?.textContent).toContain("Ask your server administrator to review your access.");
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("distinguishes unreported permissions from an explicit empty grant", async () => {
+  const harness = createConnectedContext(
+    vi.fn(async () => ({})) as GatewayBrowserClient["request"],
+  );
+  const page = mountProfilePage(harness.context);
+  await page.updateComplete;
+  expect(page.querySelector("#settings-profile-access")?.textContent).toContain(
+    "Your permissions could not be confirmed.",
+  );
+
+  harness.emitHello(gatewayHelloForMethods([], []));
+  await page.updateComplete;
+  expect(page.querySelector("#settings-profile-access")?.textContent).toContain(
+    "This connection has no permissions.",
+  );
+  expect(page.querySelector("#settings-profile-access")?.textContent).not.toContain(
+    "could not be confirmed",
+  );
+});
+
+it("reconnects through the connection owner, retiring grants and preserving the editor", async () => {
+  const scope = "operator.admin";
+  const harness = createConnectedContext(
+    vi.fn(async () => ({})) as GatewayBrowserClient["request"],
+  );
+  harness.emitHello(gatewayHelloForMethods([], [scope]));
+  vi.mocked(harness.context.gateway.connect).mockImplementation(() => harness.emitConnected(false));
+  const page = mountProfilePage(harness.context);
+  await page.updateComplete;
+  expect(page.querySelector(".settings-row__value")?.textContent).toBe(scope);
+
+  const reconnect = page.querySelector<HTMLButtonElement>("#settings-profile-access button");
+  const personalEditor = page.querySelector("openclaw-personal-instructions");
+  expect(personalEditor).not.toBeNull();
+  expect(reconnect?.textContent?.trim()).toBe("Reconnect");
+  reconnect?.click();
+  expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
+  await page.updateComplete;
+  expect(page.querySelector("#settings-profile-access")).toBeNull();
+  expect(page.textContent).not.toContain("You have permission to manage this server.");
+  expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+  expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
+
+  harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));
+  harness.emitConnected(true);
+  await page.updateComplete;
+  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.read");
+
+  // Narrow-grant updates do not change the profile editor's broad write permission.
+  harness.emitHello(gatewayHelloForMethods([], ["operator.sessions.read"]));
+  await page.updateComplete;
+  expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
+});
+
+it.each([
+  { stored: false, enabled: false, updated: true },
+  { stored: "not-a-boolean", enabled: false, updated: undefined },
+  { stored: undefined, enabled: true, updated: false },
+])(
+  "loads co-author consent $stored and saves changes without reloading",
+  async ({ stored, enabled, updated }) => {
+    const profile: UserProfile = {
+      ...modelAccountProfile,
+      emails: [],
+      githubIdentity: {
+        login: "octocat",
+        profileUrl: "https://github.com/octocat",
+        avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+      },
+    };
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "users.self") {
+        return { profile };
+      }
+      if (method === "users.listModelAccounts") {
+        return { profileId: "profile-1", accounts: [], links: [] };
+      }
+      if (method === "users.prefs.get") {
+        expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
+        return {
+          status: "ok",
+          entries: stored === undefined ? {} : { [GIT_COAUTHOR_PREFERENCE_KEY]: stored },
+        };
+      }
+      if (method === "users.prefs.set") {
+        expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: updated } });
+        return { status: "ok" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: profile.id,
+      name: profile.displayName ?? undefined,
+    });
+    const page = mountProfilePage(harness.context);
+    await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+    const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    await waitForFast(() => expect(toggle?.checked).toBe(enabled));
+    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
+      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
+    );
+    expect(page.querySelector(".identity-github-form")).toBeNull();
+    if (updated === undefined) {
+      return;
+    }
+    toggle!.checked = updated;
+    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+    await waitForFast(() =>
+      expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+    );
+    await waitForFast(() => expect(toggle?.checked).toBe(updated));
+    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
+      ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
+    );
+  },
+);

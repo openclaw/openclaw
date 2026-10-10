@@ -9,15 +9,14 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
+import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type CodexContextProjection = {
   developerInstructionAddition?: string;
   promptText: string;
   promptContextRange?: CodexProjectedContextRange;
-  assembledMessages: AgentMessage[];
-  prePromptMessageCount: number;
-  images?: ImageContent[];
+  imageGroups?: CodexProjectedImageGroup[];
 };
 
 type PrepareContextFile = (
@@ -33,6 +32,11 @@ export type CodexProjectedContextRange = {
   end: number;
 };
 
+/** Images follow their complete historical message span in the projected prompt. */
+export type CodexProjectedImageGroup = CodexProjectedContextRange & {
+  images: ImageContent[];
+};
+
 const CONTEXT_HEADER = "OpenClaw assembled context for this turn:";
 const CONTEXT_OPEN = "<conversation_context>";
 const CONTEXT_CLOSE = "</conversation_context>";
@@ -46,21 +50,55 @@ const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
-const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
-/** Default token reserve kept out of rendered context-engine prompt text. */
+export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
+const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
+
+/**
+ * This projection has no access to agent-core's private compaction helper, but
+ * must keep the same attribution contract: a stable ID is identity; display
+ * labels are optional metadata, never provenance on their own.
+ */
+function formatCodexContextSenderSuffix(message: AgentMessage): string {
+  if (message.role !== "user") {
+    return "";
+  }
+  const metadata = Reflect.get(message, "__openclaw");
+  if (!metadata || typeof metadata !== "object") {
+    return "";
+  }
+  const normalize = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const normalized = value.replaceAll("\0", "").trim();
+    return normalized
+      ? truncateUtf16Safe(normalized, CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS)
+      : undefined;
+  };
+  // SAFETY: object narrowing above guarantees a record; each sender field is validated below.
+  const record = metadata as Record<string, unknown>;
+  const id = normalize(record.senderId);
+  if (!id) {
+    return "";
+  }
+  const name = normalize(record.senderName);
+  const username = normalize(record.senderUsername);
+  return ` sender=${JSON.stringify({ id, ...(name ? { name } : {}), ...(username ? { username } : {}) })}`;
+}
 
 // Codex scans every turn text input byte-for-byte for explicit `$name` skill
-// mentions and `[@name](plugin://…)` links (codex-rs/skills/src/mentions.rs);
+// mentions and `[@name](plugin://…)` links (codex-rs/skills/src/mentions.rs),
+// including whitespace accepted between the label and link target;
 // quoted history must never count as a current explicit invocation, so swap
 // the sigils to same-length fullwidth lookalikes (same technique as
 // escapeCodexChatText). Only the raw current request stays selectable.
 export function neutralizeCodexExplicitMentionSigils(text: string): string {
   return text
     .replace(/\$(?=[A-Za-z0-9_:-])/gu, "＄")
-    .replace(/\[@(?=[A-Za-z0-9_:-]+\]\()/gu, "[＠");
+    .replace(/\[@(?=[A-Za-z0-9_:-]+\]\s*\()/gu, "[＠");
 }
 
 /** Hidden durable notes are context; transient runtime carriers are current-turn only. */
@@ -72,10 +110,8 @@ export function isCodexDurableCustomMessage(message: AgentMessage): boolean {
   );
 }
 
-/** Projects assembled OpenClaw context-engine messages into Codex prompt inputs. */
 export async function projectContextEngineAssemblyForCodex(params: {
   assembledMessages: AgentMessage[];
-  originalHistoryMessages: AgentMessage[];
   prompt: string;
   systemPromptAddition?: string;
   maxRenderedContextChars?: number;
@@ -90,7 +126,10 @@ export async function projectContextEngineAssemblyForCodex(params: {
       (message) => message.role !== "custom" || isCodexDurableCustomMessage(message),
     ),
     {
-      maxTextPartChars: resolveTextPartMaxChars(maxRenderedContextChars),
+      maxTextPartChars: Math.min(
+        MAX_TEXT_PART_CHARS,
+        Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
+      ),
       toolPayloadMode: params.toolPayloadMode ?? "elide",
       maxRenderedContextChars,
       prepareFileContext: params.prepareFileContext,
@@ -114,22 +153,24 @@ export async function projectContextEngineAssemblyForCodex(params: {
       : {}),
     promptText,
     ...(promptContextRange ? { promptContextRange } : {}),
-    assembledMessages: params.assembledMessages,
-    prePromptMessageCount: params.originalHistoryMessages.length,
-    ...(context.images.length ? { images: context.images } : {}),
+    ...(context.imageGroups.length && promptPrefix
+      ? {
+          imageGroups: context.imageGroups.map((group) => ({
+            images: group.images,
+            start: group.start + promptPrefix.length,
+            end: group.end + promptPrefix.length,
+          })),
+        }
+      : {}),
   };
 }
 
-/** Resolves rendered context size from a token budget and reserve. */
 export function resolveCodexContextEngineProjectionMaxChars(params: {
   contextTokenBudget?: number;
   reserveTokens?: number;
 }): number {
-  const contextTokenBudget =
-    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (!contextTokenBudget || contextTokenBudget <= 0) {
+  const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
+  if (contextTokenBudget <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   const scaledChars =
@@ -140,58 +181,28 @@ export function resolveCodexContextEngineProjectionMaxChars(params: {
   return normalizeRenderedContextMaxChars(scaledChars);
 }
 
-/** Returns the fixed reserve used for Codex context-engine projections. */
-export function resolveCodexContextEngineProjectionReserveTokens(): number {
-  return DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
-}
-
-// Continuity projections run without an active context engine, so nothing ever
-// compacts what they render: a projection sized near the whole window leaves the
-// fresh native thread at the rotation threshold, forcing the next turn to rotate
-// and re-project the transcript again. Reserving half the window keeps the
-// thread alive for later delta turns instead.
+// Reserve half the window so no-engine continuity leaves room for later delta turns.
 const CONTINUITY_PROJECTION_RESERVE_RATIO = 0.5;
-// Codex reports input tokens only after a turn (codex-rs/protocol/src/protocol.rs
-// TokenUsage.input_tokens) and bounds turn input by characters, not tokens
-// (codex-rs/protocol/src/user_input.rs MAX_USER_INPUT_TEXT_CHARS), so a projection cannot
-// be priced in verified tokens before it is sent. The remedy is feedback: each completed
-// turn records the density this session's content actually exhibited (prompt chars sent
-// vs provider-reported input tokens, persisted on the thread binding), and the next
-// continuity cap is sized from that observed ratio. capChars = budgetTokens × ratio means
-// real token cost ≈ budget for ANY density, which is the headroom invariant the fuse
-// needs. Before the first sample exists, the empirical default below applies — measured
-// on a real projection (703,134 chars for 226,146 input tokens = 3.11), where the shared
-// APPROX_RENDERED_CHARS_PER_TOKEN = 4 overshot by ~29%.
+// Native input tokens arrive after the turn; calibrate future character budgets from
+// observed density. The default rounds down a measured 703,134 chars / 226,146 tokens.
 const CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN = 3;
-// Calibration is monotone: an observed sample may only TIGHTEN the cap below the
-// empirical default, never loosen it. A session whose content later shifts denser, a
-// sample poisoned by a non-continuity turn, or a stale sample therefore degrades at
-// worst to the uncalibrated behavior, not past it. The numerator also undercounts the
-// native turn's full input (tools and base instructions are not in the prompt text),
-// which biases the measured ratio low - again the tighter, safe direction.
+// Samples only tighten the default cap. Uncounted tool/instruction overhead also
+// lowers the measured ratio, preserving conservative headroom.
 const CONTINUITY_MIN_CHARS_PER_TOKEN = 0.5;
 const CONTINUITY_MAX_CHARS_PER_TOKEN = CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
 // Only projection-dominated turns give a usable density sample; short prompts are
 // dominated by developer-instruction and tool overhead in the token count.
 const CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS = 50_000;
 
-/** Observed chars-vs-tokens sample from a completed Codex turn. */
 type CodexContinuityCalibration = {
   promptChars: number;
   inputTokens: number;
 };
 
-/** Builds a calibration sample from a completed turn, or undefined if unusable. */
-export function buildCodexContinuityCalibration(params: {
-  promptChars: number;
-  inputTokens: number;
-}): CodexContinuityCalibration | undefined {
-  if (
-    !Number.isFinite(params.promptChars) ||
-    !Number.isFinite(params.inputTokens) ||
-    params.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
-    params.inputTokens <= 0
-  ) {
+export function buildCodexContinuityCalibration(
+  params: CodexContinuityCalibration,
+): CodexContinuityCalibration | undefined {
+  if (resolveContinuityCharsPerToken(params) === undefined) {
     return undefined;
   }
   return {
@@ -202,7 +213,7 @@ export function buildCodexContinuityCalibration(params: {
 
 function resolveContinuityCharsPerToken(
   calibration: CodexContinuityCalibration | undefined,
-): number {
+): number | undefined {
   if (
     !calibration ||
     !Number.isFinite(calibration.promptChars) ||
@@ -210,7 +221,7 @@ function resolveContinuityCharsPerToken(
     calibration.promptChars < CONTINUITY_CALIBRATION_MIN_PROMPT_CHARS ||
     calibration.inputTokens <= 0
   ) {
-    return CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN;
+    return undefined;
   }
   return Math.min(
     CONTINUITY_MAX_CHARS_PER_TOKEN,
@@ -218,16 +229,12 @@ function resolveContinuityCharsPerToken(
   );
 }
 
-/** Resolves rendered context size for no-engine continuity projections. */
 export function resolveCodexContinuityProjectionMaxChars(params: {
   contextTokenBudget?: number;
   calibration?: CodexContinuityCalibration;
 }): number {
-  const contextTokenBudget =
-    typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-      ? Math.floor(params.contextTokenBudget)
-      : undefined;
-  if (!contextTokenBudget || contextTokenBudget <= 0) {
+  const contextTokenBudget = Math.floor(asFiniteNumber(params.contextTokenBudget) ?? 0);
+  if (contextTokenBudget <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   const continuityBudgetTokens = resolveProjectionPromptBudgetTokens({
@@ -238,24 +245,46 @@ export function resolveCodexContinuityProjectionMaxChars(params: {
     ),
   });
   return normalizeRenderedContextMaxChars(
-    continuityBudgetTokens * resolveContinuityCharsPerToken(params.calibration),
+    continuityBudgetTokens *
+      (resolveContinuityCharsPerToken(params.calibration) ?? CONTINUITY_EMPIRICAL_CHARS_PER_TOKEN),
   );
 }
 
-/** Fits projected context prompts under Codex app-server turn/start text limits. */
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;
   requestRange?: CodexProjectedContextRange;
   preservedRange?: CodexProjectedContextRange;
+  imageGroups?: CodexProjectedImageGroup[];
   maxChars?: number;
-}): string {
+}): { promptText: string; imageGroups?: CodexProjectedImageGroup[] } {
+  const slice = (start: number, end: number, budget = end - start) => {
+    const retained = truncateOlderContext(params.promptText.slice(start, end), budget);
+    return { ...retained, sourceStart: start + retained.retainedStart, sourceEnd: end };
+  };
+  const finish = (...parts: ReturnType<typeof slice>[]) => {
+    const imageGroups: CodexProjectedImageGroup[] = [];
+    let offset = 0;
+    for (const part of parts) {
+      for (const group of params.imageGroups ?? []) {
+        if (group.start >= part.sourceStart && group.end <= part.sourceEnd) {
+          const shift = offset + part.prefixLength - part.sourceStart;
+          imageGroups.push({ ...group, start: group.start + shift, end: group.end + shift });
+        }
+      }
+      offset += part.text.length;
+    }
+    return {
+      promptText: parts.map((part) => part.text).join(""),
+      ...(imageGroups.length ? { imageGroups } : {}),
+    };
+  };
   const maxChars =
     typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
       ? Math.max(0, Math.floor(params.maxChars))
       : CODEX_TURN_START_TEXT_INPUT_MAX_CHARS;
   if (params.promptText.length <= maxChars) {
-    return params.promptText;
+    return finish(slice(0, params.promptText.length));
   }
   const range = normalizeProjectedContextRange(params.contextRange, params.promptText.length);
   if (!range) {
@@ -264,21 +293,22 @@ export function fitCodexProjectedContextForTurnStart(params: {
       params.promptText.length,
     );
     if (!preservedRange) {
-      return params.promptText;
+      return finish(slice(0, params.promptText.length));
     }
     const preservedText = params.promptText.slice(preservedRange.start, preservedRange.end);
     if (!preservedText) {
-      return truncateOlderContext(params.promptText, maxChars);
+      return finish(slice(0, params.promptText.length, maxChars));
     }
     if (preservedText.length >= maxChars) {
-      return truncateOlderContext(preservedText, maxChars);
+      return finish(slice(preservedRange.start, preservedRange.end, maxChars));
     }
-    const beforeRange = params.promptText.slice(0, preservedRange.start);
-    return `${truncateOlderContext(beforeRange, maxChars - preservedText.length)}${preservedText}`;
+    return finish(
+      slice(0, preservedRange.start, maxChars - preservedText.length),
+      slice(preservedRange.start, preservedRange.end),
+    );
   }
 
   const beforeContext = params.promptText.slice(0, range.start);
-  const context = params.promptText.slice(range.start, range.end);
   const afterContext = params.promptText.slice(range.end);
   const requestRange = normalizeProjectedContextRange(
     params.requestRange,
@@ -291,31 +321,40 @@ export function fitCodexProjectedContextForTurnStart(params: {
   ) {
     const request = params.promptText.slice(requestRange.start, requestRange.end);
     if (request.length >= maxChars) {
-      return truncateOlderContext(request, maxChars);
+      return finish(slice(requestRange.start, requestRange.end, maxChars));
     }
-    const appendedContext = params.promptText.slice(requestRange.end);
-    // Hook-appended context is newer than the projected history. Retain it
-    // before trimming the projection, while the full current request remains
-    // the hard boundary that must survive a bounded turn/start input.
-    const fittedAppendedContext = truncateOlderContext(appendedContext, maxChars - request.length);
-    const contextBudget = maxChars - request.length - fittedAppendedContext.length;
-    const fittedContext = truncateOlderContext(context, contextBudget);
-    const beforeContextBudget =
-      maxChars - fittedContext.length - request.length - fittedAppendedContext.length;
-    return `${truncateOlderContext(beforeContext, beforeContextBudget)}${fittedContext}${request}${fittedAppendedContext}`;
+    // Keep current request and hook context ahead of history when they fit.
+    // If they exceed the limit, retain the existing request/tail-first priority.
+    const fittedAppendedContext = slice(
+      requestRange.end,
+      params.promptText.length,
+      maxChars - request.length,
+    );
+    const contextBudget = maxChars - request.length - fittedAppendedContext.text.length;
+    const prefixBudget = beforeContext.length <= contextBudget ? beforeContext.length : 0;
+    const fittedContext = slice(range.start, range.end, contextBudget - prefixBudget);
+    const beforeContextBudget = contextBudget - fittedContext.text.length;
+    return finish(
+      slice(0, range.start, beforeContextBudget),
+      fittedContext,
+      slice(requestRange.start, requestRange.end),
+      fittedAppendedContext,
+    );
   }
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
-  if (contextBudget > 0) {
-    const fittedContext = truncateOlderContext(context, contextBudget);
-    return `${beforeContext}${fittedContext}${afterContext}`;
+  if (contextBudget >= 0) {
+    return finish(
+      slice(0, range.start),
+      slice(range.start, range.end, contextBudget),
+      slice(range.end, params.promptText.length),
+    );
   }
   // Hook-added prefixes can make the non-context text exceed the limit. Keep
   // the current context tail before the user's request; dropping it would make
   // a duplicated earlier projection crowd out the newest assembled context.
-  const afterContextText = truncateOlderContext(afterContext, maxChars);
-  const contextBudgetAfterRequest = maxChars - afterContextText.length;
-  const fittedContext = truncateOlderContext(context, contextBudgetAfterRequest);
-  return `${fittedContext}${afterContextText}`;
+  const afterContextText = slice(range.end, params.promptText.length, maxChars);
+  const contextBudgetAfterRequest = maxChars - afterContextText.text.length;
+  return finish(slice(range.start, range.end, contextBudgetAfterRequest), afterContextText);
 }
 
 function normalizeProjectedContextRange(
@@ -336,7 +375,7 @@ function normalizeProjectedContextRange(
   return { start, end };
 }
 
-function resolveProjectionPromptBudgetTokens(params: {
+export function resolveProjectionPromptBudgetTokens(params: {
   contextTokenBudget: number;
   reserveTokens?: number;
 }): number {
@@ -366,9 +405,8 @@ async function renderMessagesForCodexContext(
     prepareFileContext?: PrepareContextFile;
     currentUserTurnIdempotencyKey?: string;
   },
-): Promise<{ text: string; images: ImageContent[] }> {
-  const tail: string[] = [];
-  const images: ImageContent[] = [];
+): Promise<{ text: string; imageGroups: CodexProjectedImageGroup[] }> {
+  const tail: Array<{ text: string; separatorLength: number; images?: ImageContent[] }> = [];
   let retainedImageChars = 0;
   let totalChars = 0;
   let retainedChars = 0;
@@ -406,67 +444,96 @@ async function renderMessagesForCodexContext(
     if (!text && acceptedImageChars === 0) {
       continue;
     }
-    const chunk = `[${message.role}]\n${text}${totalChars > 0 ? "\n\n" : ""}`;
+    const separator = totalChars > 0 ? "\n\n" : "";
+    // The context-engine path owns a second history projection. Keep its user
+    // labels aligned with generic compaction: only authenticated stable IDs
+    // establish speaker provenance; legacy/name-only rows remain anonymous.
+    const chunk = `[${message.role}${formatCodexContextSenderSuffix(message)}]\n${text}${separator}`;
     totalChars += chunk.length;
     if (remaining > 0) {
       // The final truncation below owns the surrogate-safe boundary after adding its marker.
       const retained = neutralizeCodexExplicitMentionSigils(chunk).slice(
         -(remaining - acceptedImageChars),
       );
-      tail.push(retained);
+      tail.push({
+        text: retained,
+        separatorLength: separator.length,
+        ...(imagesFit && files?.images.length && retained.length === chunk.length
+          ? { images: files.images }
+          : {}),
+      });
       retainedChars += retained.length + acceptedImageChars;
       retainedImageChars += acceptedImageChars;
-      if (imagesFit && files?.images.length) {
-        images.unshift(...files.images);
-      }
     }
   }
-  const retainedContext = tail.toReversed().join("");
+  const ordered = tail.toReversed();
+  const retainedContext = ordered.map((entry) => entry.text).join("");
+  const fitted = truncateOlderContext(
+    retainedContext,
+    options.maxRenderedContextChars - retainedImageChars,
+    totalChars,
+  );
+  const imageGroups: CodexProjectedImageGroup[] = [];
+  let offset = 0;
+  for (const entry of ordered) {
+    if (entry.images && offset >= fitted.retainedStart) {
+      const start = offset - fitted.retainedStart + fitted.prefixLength;
+      imageGroups.push({
+        start,
+        end: start + entry.text.length - entry.separatorLength,
+        images: entry.images,
+      });
+    }
+    offset += entry.text.length;
+  }
   return {
-    text: truncateOlderContext(
-      retainedContext,
-      options.maxRenderedContextChars - retainedImageChars,
-      totalChars,
-    ),
-    images,
+    text: fitted.text,
+    imageGroups,
   };
 }
 
-function renderMessageBody(
-  message: AgentMessage,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
-): string {
+type MessageRenderOptions = {
+  maxTextPartChars: number;
+  toolPayloadMode: "elide" | "preserve";
+  mediaPrepared?: boolean;
+};
+
+function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
-    return truncateText(message.summary.trim(), options.maxTextPartChars);
+    return message.summary.trim();
   }
-  if (!hasMessageContent(message)) {
+  if (!("content" in message)) {
     return "";
   }
-  if (typeof message.content === "string") {
-    return truncateText(message.content.trim(), options.maxTextPartChars);
+  const toolResult = message.role === "toolResult";
+  const toolResultLabel =
+    toolResult && message.toolCallId ? `tool result: ${message.toolCallId}` : "tool result";
+  if (toolResult && options.toolPayloadMode === "elide") {
+    return `${toolResultLabel} [content omitted]`;
   }
-  if (!Array.isArray(message.content)) {
-    return "[non-text content omitted]";
-  }
-  return message.content
-    .map((part: unknown) => renderMessagePart(part, options))
-    .filter((value): value is string => value.length > 0)
-    .join("\n")
-    .trim();
+  // The history window bounds conversation text; per-part caps apply only to payloads.
+  const body =
+    typeof message.content === "string"
+      ? message.content.trim()
+      : Array.isArray(message.content)
+        ? message.content
+            .map((part: unknown) => renderMessagePart(part, options, toolResult))
+            .filter((value): value is string => value.length > 0)
+            .join("\n")
+            .trim()
+        : "[non-text content omitted]";
+  return toolResult
+    ? redactToolPayloadText(
+        `${toolResultLabel}${message.toolName ? ` (${message.toolName})` : ""}\n${body}`,
+      )
+    : body;
 }
 
 function renderMessagePart(
   part: unknown,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
+  options: MessageRenderOptions,
+  toolResultBody: boolean,
 ): string {
   if (!part || typeof part !== "object") {
     return "";
@@ -474,33 +541,25 @@ function renderMessagePart(
   const record = part as Record<string, unknown>;
   const type = typeof record.type === "string" ? record.type : undefined;
   if (type === "text") {
-    return typeof record.text === "string"
-      ? truncateText(record.text.trim(), options.maxTextPartChars)
-      : "";
+    const text = typeof record.text === "string" ? record.text.trim() : "";
+    return toolResultBody ? truncateText(text, options.maxTextPartChars) : text;
   }
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
   }
-  if (type === "toolCall" || type === "tool_use") {
-    const label = `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`;
-    if (options.toolPayloadMode === "preserve") {
-      return truncateText(
-        `${label}\n${stableJson(renderToolCallPayload(record))}`,
-        options.maxTextPartChars,
-      );
+  const toolCall = type === "toolCall" || type === "tool_use";
+  if (toolCall || type === "toolResult" || type === "tool_result") {
+    const label = toolCall
+      ? `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`
+      : typeof record.toolUseId === "string"
+        ? `tool result: ${record.toolUseId}`
+        : "tool result";
+    if (options.toolPayloadMode !== "preserve") {
+      return `${label} [${toolCall ? "input" : "content"} omitted]`;
     }
-    return `${label} [input omitted]`;
-  }
-  if (type === "toolResult" || type === "tool_result") {
-    const label =
-      typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
-    if (options.toolPayloadMode === "preserve") {
-      return truncateText(
-        `${label}\n${stableJson(renderToolResultPayload(record))}`,
-        options.maxTextPartChars,
-      );
-    }
-    return `${label} [content omitted]`;
+    const renderPayload = toolCall ? renderToolCallPayload : renderToolResultPayload;
+    const prefix = !toolCall && toolResultBody ? "" : `${label}\n`;
+    return truncateText(`${prefix}${stableJson(renderPayload(record))}`, options.maxTextPartChars);
   }
   return `[${type ?? "non-text"} content omitted]`;
 }
@@ -509,20 +568,20 @@ function renderToolCallPayload(record: Record<string, unknown>): Record<string, 
   const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
   const input = record.input ?? record.arguments;
   if (input !== undefined) {
-    payload.inputShape = summarizeToolInputShape(input);
+    payload.inputShape = projectToolPayloadValue(input, "shape");
   }
   return payload;
 }
 
 function renderToolResultPayload(record: Record<string, unknown>): Record<string, unknown> {
-  const payload: Record<string, unknown> = pickToolPayloadMetadata(record);
-  for (const [key, value] of Object.entries(record)) {
-    if (TOOL_PAYLOAD_METADATA_KEYS.has(key)) {
-      continue;
-    }
-    payload[key] = redactPreservedToolValue(key, value);
-  }
-  return payload;
+  return {
+    ...pickToolPayloadMetadata(record),
+    ...Object.fromEntries(
+      Object.entries(record)
+        .filter(([key]) => !TOOL_PAYLOAD_METADATA_KEYS.has(key))
+        .map(([key, value]) => [key, projectToolPayloadValue(value, "content", key)]),
+    ),
+  };
 }
 
 const TOOL_PAYLOAD_METADATA_KEYS = new Set([
@@ -545,68 +604,39 @@ function pickToolPayloadMetadata(record: Record<string, unknown>): Record<string
   return payload;
 }
 
-// Tool-call inputs can contain shell commands and credentials. For bootstrap
-// continuity, retain object structure and primitive types instead of values.
-function summarizeToolInputShape(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (value === null) {
-    return null;
-  }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => summarizeToolInputShape(entry, seen));
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-      out[key] = summarizeToolInputShape(child, seen);
-    }
-    return out;
-  }
-  return `[${typeof value}]`;
-}
-
-// Tool results are the useful carried context for a fresh Codex thread, so keep
-// their content while applying the same text/field redaction used for tool logs.
-function redactPreservedToolValue(
-  key: string,
+// Inputs retain shape only; results retain useful content with log redaction.
+// Both projections preserve the same object order and repeated-reference marker.
+function projectToolPayloadValue(
   value: unknown,
+  mode: "shape" | "content",
+  key = "",
   seen = new WeakSet<object>(),
 ): unknown {
-  if (typeof value === "string") {
-    return redactSensitiveFieldValue(key, redactToolPayloadText(value));
-  }
   if (
-    value === null ||
-    value === undefined ||
-    typeof value === "number" ||
-    typeof value === "boolean"
+    mode === "content" &&
+    (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
   ) {
-    return value;
+    const text = String(value);
+    const redacted = redactSensitiveFieldValue(key, redactToolPayloadText(text));
+    return redacted === text ? value : redacted;
   }
-  if (Array.isArray(value)) {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    return value.map((entry) => redactPreservedToolValue(key, entry, seen));
+  if (value === null || (mode === "content" && value === undefined)) {
+    return value;
   }
   if (value && typeof value === "object") {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
-    const out: Record<string, unknown> = {};
-    for (const [childKey, child] of Object.entries(value as Record<string, unknown>)) {
-      out[childKey] = redactPreservedToolValue(childKey, child, seen);
+    if (Array.isArray(value)) {
+      return value.map((entry) => projectToolPayloadValue(entry, mode, key, seen));
     }
-    return out;
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, child]) => [
+        childKey,
+        projectToolPayloadValue(child, mode, childKey, seen),
+      ]),
+    );
   }
   return `[${typeof value}]`;
 }
@@ -619,22 +649,11 @@ function stableJson(value: unknown): string {
   }
 }
 
-function hasMessageContent(message: AgentMessage): message is AgentMessage & { content: unknown } {
-  return "content" in message;
-}
-
 function normalizeRenderedContextMaxChars(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_RENDERED_CONTEXT_CHARS;
   }
   return Math.min(MAX_RENDERED_CONTEXT_CHARS, Math.max(1, Math.floor(value)));
-}
-
-function resolveTextPartMaxChars(maxRenderedContextChars: number): number {
-  return Math.min(
-    MAX_TEXT_PART_CHARS,
-    Math.max(DEFAULT_TEXT_PART_CHARS, Math.floor(maxRenderedContextChars / 4)),
-  );
 }
 
 function truncateText(text: string, maxChars: number): string {
@@ -645,12 +664,16 @@ function truncateText(text: string, maxChars: number): string {
   return `${truncated}\n[truncated ${text.length - truncated.length} chars]`;
 }
 
-function truncateOlderContext(text: string, maxChars: number, totalChars = text.length): string {
+function truncateOlderContext(
+  text: string,
+  maxChars: number,
+  totalChars = text.length,
+): { text: string; retainedStart: number; prefixLength: number } {
   if (totalChars <= maxChars) {
-    return text;
+    return { text, retainedStart: 0, prefixLength: 0 };
   }
   if (maxChars <= 0) {
-    return "";
+    return { text: "", retainedStart: text.length, prefixLength: 0 };
   }
 
   const buildMarker = (omittedChars: number): string =>
@@ -659,8 +682,17 @@ function truncateOlderContext(text: string, maxChars: number, totalChars = text.
   let tailChars = Math.max(0, maxChars - marker.length);
   marker = buildMarker(totalChars - tailChars);
   if (marker.length >= maxChars) {
-    return marker.slice(0, maxChars);
+    return {
+      text: marker.slice(0, maxChars),
+      retainedStart: text.length,
+      prefixLength: maxChars,
+    };
   }
   tailChars = maxChars - marker.length;
-  return `${marker}${sliceUtf16Safe(text, -tailChars).trimStart()}`;
+  const tail = sliceUtf16Safe(text, -tailChars).trimStart();
+  return {
+    text: `${marker}${tail}`,
+    retainedStart: text.length - tail.length,
+    prefixLength: marker.length,
+  };
 }

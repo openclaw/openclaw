@@ -1,4 +1,3 @@
-// Memory Core plugin module owns ranked search-window filtering and diagnostics.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveMemoryIndexIdentityDiagnostic,
@@ -14,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { captureMemoryRebuildNotice } from "./memory-rebuild-notice.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { buildMemorySearchUnavailableResult } from "./tools.shared.js";
 
@@ -23,7 +23,10 @@ export function buildPausedMemoryIndexUnavailableResult(
   diagnostic: MemoryIndexIdentityDiagnostic,
   params: {
     agentId: string;
-    status: Pick<MemoryProviderStatus, "provider" | "requestedProvider" | "lastSyncError">;
+    status: Pick<
+      MemoryProviderStatus,
+      "provider" | "requestedProvider" | "lastSyncError" | "custom"
+    >;
   },
 ) {
   const { error, warning, action } = resolveMemoryIndexSearchDiagnostic(
@@ -72,6 +75,7 @@ export async function executeMemorySearchToolQuery(params: {
   visibility: MemorySearchToolVisibility;
   signal: AbortSignal;
   deadlineControl?: MemorySearchDeadlineControl;
+  onRebuildNotice?: (readWarning: () => string | undefined) => void;
   onPartialResults?: (
     result: Awaited<ReturnType<typeof finalizeMemorySearchToolQuery>> | null,
   ) => void;
@@ -92,9 +96,15 @@ export async function executeMemorySearchToolQuery(params: {
           ? query.indexedSources
           : query.defaultSources
         : undefined);
-  const queryContext = { query, visibility, searchSources, startedAt };
+  const queryContext = {
+    query,
+    visibility,
+    searchSources,
+    startedAt,
+  };
 
   const searchOnce = async () => {
+    params.onRebuildNotice?.(captureMemoryRebuildNotice(active.manager.status()));
     const allowedSources = searchSources ? new Set(searchSources) : undefined;
     const searchesSessions = searchSources?.includes("sessions") === true;
     const indexedCandidateCount = searchesSessions
@@ -194,7 +204,19 @@ async function finalizeMemorySearchToolQuery(params: {
   const { active, searched, query, visibility, searchSources, runtimeDebug, startedAt } = params;
   const status = params.status ?? active.manager.status();
   const pausedIndexIdentity = resolveMemoryIndexIdentityDiagnostic(status);
-  if (pausedIndexIdentity) {
+  // A pending format upgrade on an otherwise matching corpus degrades to
+  // keyword-only results instead of pausing memory search; every other
+  // mismatch still withholds all candidates. Keyword results still need a
+  // usable FTS index — the manager's fallback requires the same, so without
+  // it there is no retrieval path and the tool must keep the paused
+  // diagnostic instead of reporting a successful empty search.
+  const formatUpgradeKeywordOnly =
+    pausedIndexIdentity?.status === "mismatched" &&
+    pausedIndexIdentity.owner === "openclaw" &&
+    (pausedIndexIdentity.chunkingVersionOnly === true ||
+      pausedIndexIdentity.lexicalCompatible === true) &&
+    Boolean(status.fts?.enabled && status.fts?.available);
+  if (pausedIndexIdentity && !formatUpgradeKeywordOnly) {
     return {
       searchStartedAt: startedAt,
       status,
@@ -217,10 +239,8 @@ async function finalizeMemorySearchToolQuery(params: {
     const allowedSources = new Set(searchSources);
     filtered = filtered.filter((hit) => allowedSources.has(hit.source));
   }
-  if (query.requestedCorpus === "sessions") {
-    filtered = filtered.filter((hit) => hit.source === "sessions");
-  } else if (query.requestedCorpus === "memory") {
-    filtered = filtered.filter((hit) => hit.source === "memory");
+  if (query.requestedCorpus === "sessions" || query.requestedCorpus === "memory") {
+    filtered = filtered.filter((hit) => hit.source === query.requestedCorpus);
   }
 
   const rawResults = filtered.slice(0, query.resultLimit);

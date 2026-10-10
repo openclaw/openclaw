@@ -2,13 +2,14 @@ import { writeFileSync } from "node:fs";
 import type { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import type { Worker } from "node:worker_threads";
+import { coerceErrorMessage as errorMessage } from "./error-format.mts";
 import {
   GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   type GatewayProfileCommand,
 } from "./gateway-bench-profile.ts";
 
-type WorkerTarget = { sessionId: string; inspectorWorkerId: string };
+type WorkerTarget = { sessionId: string; inspectorWorkerId: string; threadId?: number };
 type WorkerSample = {
   threadId: number;
   cpu?: NodeJS.CpuUsage;
@@ -40,13 +41,9 @@ type Capture = {
 };
 type WorkerReply = {
   id?: number;
-  result?: { profile?: unknown; result?: { value?: unknown } };
+  result?: { profile?: unknown };
   error?: { message: string };
 };
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Uses the private inspector channel; no worker factory changes or debug listener. */
 export class GatewayBenchWorkerProfiler {
@@ -73,10 +70,19 @@ export class GatewayBenchWorkerProfiler {
     });
     inspector.on(
       "NodeWorker.attachedToWorker",
-      ({ params }: { params: { sessionId: string; workerInfo: { workerId: string } } }) => {
+      ({
+        params,
+      }: {
+        params: { sessionId: string; workerInfo: { workerId: string; title: string } };
+      }) => {
+        // Node's WorkerStartedRequest prefixes the native ID before any user-supplied name.
+        // Its inspector target ID has a separate allocation order.
+        const nativeId = /^\[worker ([1-9]\d*)\](?: |$)/.exec(params.workerInfo.title)?.[1];
+        const threadId = nativeId === undefined ? undefined : Number(nativeId);
         const target = {
           sessionId: params.sessionId,
           inspectorWorkerId: params.workerInfo.workerId,
+          threadId: Number.isSafeInteger(threadId) ? threadId : undefined,
         };
         this.targets.set(target.sessionId, target);
         for (const capture of this.captures.values()) {
@@ -158,6 +164,7 @@ export class GatewayBenchWorkerProfiler {
   private record(target: WorkerTarget, capture: Capture): void {
     const recording: WorkerRecording = {
       target,
+      threadId: target.threadId,
       profilePath: `${capture.profilePath}.worker-target-${target.inspectorWorkerId}.${capture.kind === "cpu" ? "cpuprofile" : "heapprofile"}`,
       startedAt: performance.now(),
       pending: Promise.resolve(),
@@ -165,16 +172,9 @@ export class GatewayBenchWorkerProfiler {
     capture.recordings.push(recording);
     recording.pending = (async () => {
       try {
-        const identity = await this.post(target, "Runtime.evaluate", {
-          expression: "process.getBuiltinModule('node:worker_threads').threadId",
-          returnByValue: true,
-        });
-        const threadId = identity?.result?.value;
-        if (typeof threadId !== "number" || !Number.isSafeInteger(threadId) || threadId <= 0) {
+        if (recording.threadId === undefined) {
           throw new Error("Worker native thread identity is unavailable");
         }
-        // Inspector target IDs have a separate allocation order from native thread IDs.
-        recording.threadId = threadId;
         if (capture.kind === "cpu") {
           await this.post(target, "Profiler.enable");
           await this.post(target, "Profiler.setSamplingInterval", {
@@ -253,6 +253,8 @@ export class GatewayBenchWorkerProfiler {
       JSON.stringify({
         kind,
         sampleIntervalMs: 100,
+        sampleClock: "performance.now",
+        cpuCounters: "cumulative-microseconds",
         workers: capture.recordings.map(({ pending: _pending, target, ...row }) => ({
           inspectorWorkerId: target.inspectorWorkerId,
           ...row,

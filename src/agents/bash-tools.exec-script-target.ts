@@ -22,6 +22,22 @@ function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
 }
 
+export function stripPreflightAssignments(argv: string[]): string[] {
+  let index = 0;
+  while (isShellEnvAssignmentToken(argv[index] ?? "")) {
+    index += 1;
+  }
+  return argv.slice(index);
+}
+
+export function parsePreflightShellSegment(rawSegment: string): string[] {
+  const argv = splitShellArgs(rawSegment.trim()) ?? [];
+  const command = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
+    ? argv.slice(1)
+    : argv;
+  return stripPreflightAssignments(stripPreflightEnvPrefix(command));
+}
+
 function isEnvExecutableToken(token: string | undefined): boolean {
   if (!token) {
     return false;
@@ -107,8 +123,12 @@ function findFirstPythonScriptArg(tokens: string[]): string | null {
 
 function findNodeScriptArgs(tokens: string[]): string[] {
   const optionsWithSeparateValue = new Set(["-r", "--require", "--import"]);
-  const preloadScripts: string[] = [];
-  let entryScript: string | null = null;
+  const scripts: string[] = [];
+  const addScript = (value: string | undefined) => {
+    if (value && normalizeLowercaseStringOrEmpty(value).endsWith(".js")) {
+      scripts.push(value);
+    }
+  };
   let hasInlineEvalOrPrint = false;
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens.at(i);
@@ -116,11 +136,8 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       break;
     }
     if (token === "--") {
-      if (!hasInlineEvalOrPrint && !entryScript) {
-        const next = tokens.at(i + 1);
-        if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
-          entryScript = next;
-        }
+      if (!hasInlineEvalOrPrint) {
+        addScript(tokens.at(i + 1));
       }
       break;
     }
@@ -140,10 +157,7 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       continue;
     }
     if (optionsWithSeparateValue.has(token)) {
-      const next = tokens.at(i + 1);
-      if (next && normalizeLowercaseStringOrEmpty(next).endsWith(".js")) {
-        preloadScripts.push(next);
-      }
+      addScript(tokens.at(i + 1));
       i += 1;
       continue;
     }
@@ -152,31 +166,18 @@ function findNodeScriptArgs(tokens: string[]): string[] {
       token.startsWith("--require=") ||
       token.startsWith("--import=")
     ) {
-      const inlineValue = token.startsWith("-r")
-        ? token.slice(2)
-        : token.slice(token.indexOf("=") + 1);
-      if (normalizeLowercaseStringOrEmpty(inlineValue).endsWith(".js")) {
-        preloadScripts.push(inlineValue);
-      }
+      addScript(token.startsWith("-r") ? token.slice(2) : token.slice(token.indexOf("=") + 1));
       continue;
     }
     if (token.startsWith("-")) {
       continue;
     }
-    if (
-      !hasInlineEvalOrPrint &&
-      !entryScript &&
-      normalizeLowercaseStringOrEmpty(token).endsWith(".js")
-    ) {
-      entryScript = token;
+    if (!hasInlineEvalOrPrint) {
+      addScript(token);
     }
     break;
   }
-  const targets = [...preloadScripts];
-  if (entryScript) {
-    targets.push(entryScript);
-  }
-  return targets;
+  return scripts;
 }
 
 function extractInterpreterScriptTargetFromArgv(
@@ -185,18 +186,11 @@ function extractInterpreterScriptTargetFromArgv(
   if (!argv || argv.length === 0) {
     return null;
   }
-  let commandIdx = 0;
-  while (
-    commandIdx < argv.length &&
-    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv.at(commandIdx) ?? "")
-  ) {
-    commandIdx += 1;
-  }
-  const executable = normalizeOptionalLowercaseString(argv.at(commandIdx));
+  const [command, ...args] = stripPreflightAssignments(argv);
+  const executable = normalizeOptionalLowercaseString(command);
   if (!executable) {
     return null;
   }
-  const args = argv.slice(commandIdx + 1);
   if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
     const script = findFirstPythonScriptArg(args);
     return script ? { kind: "python", relOrAbsPaths: [script] } : null;
@@ -209,16 +203,7 @@ function extractInterpreterScriptTargetFromArgv(
 }
 
 export function extractInterpreterScriptPathsFromSegment(rawSegment: string): string[] {
-  const argv = splitShellArgs(rawSegment.trim());
-  if (!argv || argv.length === 0) {
-    return [];
-  }
-  const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
-    ? argv.slice(1)
-    : argv;
-  const target = extractInterpreterScriptTargetFromArgv(
-    stripPreflightEnvPrefix(withoutLeadingKeyword),
-  );
+  const target = extractInterpreterScriptTargetFromArgv(parsePreflightShellSegment(rawSegment));
   return target?.relOrAbsPaths ?? [];
 }
 

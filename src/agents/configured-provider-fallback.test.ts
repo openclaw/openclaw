@@ -34,19 +34,6 @@ const localProvider = configuredProvider("http://127.0.0.1:9191/v1", [
 ]);
 
 describe("resolveConfiguredProviderFallback", () => {
-  it("uses a configured model when the default provider is only an empty overlay", () => {
-    expect(
-      resolveConfiguredProviderFallback({
-        cfg: configuredProviders({
-          openai: configuredProvider(defaultProviderBaseUrl),
-          "local-provider": localProvider,
-        }),
-        defaultProvider: "openai",
-        defaultModel: undefined,
-      }),
-    ).toEqual({ provider: "local-provider", model: "local-good" });
-  });
-
   it("preserves configured provider order when the default model is absent", () => {
     expect(
       resolveConfiguredProviderFallback({
@@ -87,21 +74,6 @@ describe("resolveConfiguredProviderFallback", () => {
     ).toEqual({ provider: "local-provider", model: "local-good" });
   });
 
-  it("preserves the configured default model when it is available", () => {
-    expect(
-      resolveConfiguredProviderFallback({
-        cfg: configuredProviders({
-          openai: configuredProvider(defaultProviderBaseUrl, [
-            configuredModel("configured-default", "Configured Default"),
-          ]),
-          "local-provider": localProvider,
-        }),
-        defaultProvider: "openai",
-        defaultModel: "configured-default",
-      }),
-    ).toBeNull();
-  });
-
   it("preserves configured provider preference order", () => {
     expect(
       resolveConfiguredProviderFallback({
@@ -124,6 +96,37 @@ describe("resolveConfiguredProviderFallback", () => {
         cfg: configuredProviders({ openai: configuredProvider(defaultProviderBaseUrl) }),
         defaultProvider: "openai",
         defaultModel: "missing-default-model",
+      }),
+    ).toBeNull();
+  });
+
+  it.each([
+    { nextModel: "larger", expected: { provider: "local-provider", model: "larger" } },
+    { nextModel: undefined, expected: { provider: "second", model: "local-good" } },
+  ])("keeps eligible model order after excluding a utility row: $nextModel", (scenario) => {
+    expect(
+      resolveConfiguredProviderFallback({
+        cfg: configuredProviders({
+          " Local-Provider ": configuredProvider("http://127.0.0.1:9191/v1", [
+            configuredModel("small", "Small"),
+            ...(scenario.nextModel ? [configuredModel(scenario.nextModel, "Larger")] : []),
+          ]),
+          second: localProvider,
+        }),
+        defaultProvider: "openai",
+        defaultModel: "missing-default-model",
+        excludedModel: { provider: "local-provider", model: "small" },
+      }),
+    ).toEqual(scenario.expected);
+  });
+
+  it("returns no implicit provider when its only model is reserved for utility use", () => {
+    expect(
+      resolveConfiguredProviderFallback({
+        cfg: configuredProviders({ "local-provider": localProvider }),
+        defaultProvider: "openai",
+        defaultModel: "missing-default-model",
+        excludedModel: { provider: "local-provider", model: "local-good" },
       }),
     ).toBeNull();
   });

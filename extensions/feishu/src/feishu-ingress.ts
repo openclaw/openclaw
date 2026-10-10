@@ -56,16 +56,6 @@ export type FeishuWebhookInvoker = (
   params?: { needCheck?: boolean },
 ) => Promise<{ kind: "durable" | "non-durable"; value: unknown }>;
 
-type FeishuDurableIngress = {
-  invoke: Lark.EventDispatcher["invoke"];
-  invokeWebhook: FeishuWebhookInvoker;
-  resolveLifecycle: (data: unknown) => FeishuIngressLifecycle | undefined;
-  setSocketTerminator: (terminate: (() => void) | undefined) => void;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 type FeishuLifecycleSource = {
   lifecycle?: FeishuIngressLifecycle;
   replayClaim?: ChannelReplayClaimHandle;
@@ -198,7 +188,10 @@ function resolveFeishuIngressNonRetryableFailure(error: unknown) {
 /** Fan one merged Feishu turn's adoption across every transport and logical claim. */
 export function buildFeishuFlushIngressLifecycle(
   sources: readonly FeishuLifecycleSource[],
-  options?: { onReplayCommitError?: (error: unknown) => void },
+  options?: {
+    onReplayCommitError?: (error: unknown) => void;
+    trackTask?: (task: Promise<void>) => void;
+  },
 ): {
   lifecycle: FeishuIngressLifecycle | undefined;
   settle: () => Promise<void>;
@@ -297,6 +290,7 @@ export function buildFeishuFlushIngressLifecycle(
         }
       })();
     adopting = activeAdoption;
+    options?.trackTask?.(activeAdoption);
     try {
       await activeAdoption;
     } finally {
@@ -317,6 +311,7 @@ export function buildFeishuFlushIngressLifecycle(
         transportLifecycle.onDeferred();
       },
       onDeferredHeartbeat: () => transportLifecycle.onDeferredHeartbeat?.(),
+      deferredHeartbeatIntervalMs: transportLifecycle.deferredHeartbeatIntervalMs,
       onAdoptionFinalizing: () => {
         transportLifecycle.onAdoptionFinalizing();
       },
@@ -345,7 +340,7 @@ export function buildFeishuFlushIngressLifecycle(
   };
 }
 
-export function createFeishuDurableIngress(options: FeishuIngressOptions): FeishuDurableIngress {
+export function createFeishuDurableIngress(options: FeishuIngressOptions) {
   let socketTerminator: (() => void) | undefined;
   const activeLifecycles = new Map<string, FeishuIngressLifecycle>();
 
@@ -391,7 +386,6 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
       // Keep their lifecycle registry local while the monitor owns the durable claim.
       const wrappedLifecycle: FeishuIngressLifecycle = {
         ...lifecycle,
-        onAdopted: lifecycle.onAdopted,
         onAbandoned: async () => {
           await Promise.allSettled([...abandonHandlers].map(async (handler) => await handler()));
           await lifecycle.onAbandoned();
@@ -483,11 +477,11 @@ export function createFeishuDurableIngress(options: FeishuIngressOptions): Feish
   return {
     invoke,
     invokeWebhook,
-    resolveLifecycle: (data) => {
+    resolveLifecycle: (data: unknown) => {
       const eventId = isRecord(data) ? normalizeNullableString(data.event_id) : null;
       return eventId ? activeLifecycles.get(eventId) : undefined;
     },
-    setSocketTerminator: (terminate) => {
+    setSocketTerminator: (terminate: (() => void) | undefined) => {
       socketTerminator = terminate;
     },
     start: monitor.start,

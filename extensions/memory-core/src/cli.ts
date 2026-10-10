@@ -1,6 +1,4 @@
-// Memory Core plugin module implements cli behavior.
 import type { Command } from "commander";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   formatDocsLink,
   formatHelpExamples,
@@ -13,59 +11,43 @@ import {
 import type {
   MemoryCommandOptions,
   MemoryForgetCommandOptions,
-  MemoryPromoteCommandOptions,
   MemoryPromoteExplainOptions,
-  MemoryRemBackfillOptions,
-  MemoryRemHarnessOptions,
   MemorySearchCommandOptions,
-  MemoryResetCommandOptions,
 } from "./cli.types.js";
 import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
-import type { MemorySessionBackfillOptions } from "./session-backfill.js";
 import {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-} from "./short-term-promotion.js";
-
-const loadMemoryCliRuntime = createLazyRuntimeModule(() => import("./cli.runtime.js"));
+} from "./short-term-promotion-types.js";
 
 const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 const DEFAULT_SESSION_BACKFILL_LIMIT_DAYS = 92;
 
-function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
-  const error = new Error(message) as Error & { code: string; exitCode: number };
-  error.name = "InvalidArgumentError";
-  // Commander recognizes parser failures by code; keep the import type-only for bundled plugin deps.
-  error.code = "commander.invalidArgument";
-  error.exitCode = 1;
-  return error;
-}
-
-function parseMemoryCliNumberOption(value: string, flag: string): number {
-  const trimmed = value.trim();
-  const parsed = DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isFinite(parsed)) {
-    throw invalidCliArgument(`${flag} must be a finite number.`);
-  }
-  return parsed;
-}
-
-function parseMemoryCliPositiveIntegerOption(value: string, flag: string): number {
-  const parsed = parseStrictPositiveInteger(value);
-  if (parsed === undefined) {
-    throw invalidCliArgument(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
-
-function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): number {
-  const parsed = parseStrictNonNegativeInteger(value);
-  if (parsed === undefined) {
-    throw invalidCliArgument(`${flag} must be a non-negative integer.`);
-  }
-  return parsed;
+function memoryCliNumberOption(
+  flag: string,
+  kind: "finite number" | "positive integer" | "non-negative integer",
+): (value: string) => number {
+  return (value) => {
+    const parsed =
+      kind === "positive integer"
+        ? parseStrictPositiveInteger(value)
+        : kind === "non-negative integer"
+          ? parseStrictNonNegativeInteger(value)
+          : DECIMAL_NUMBER_RE.test(value.trim())
+            ? Number(value.trim())
+            : undefined;
+    if (parsed === undefined || !Number.isFinite(parsed)) {
+      // Commander recognizes parser failures by code; keep its import type-only.
+      throw Object.assign(new Error(`${flag} must be a ${kind}.`), {
+        name: "InvalidArgumentError",
+        code: "commander.invalidArgument",
+        exitCode: 1,
+      });
+    }
+    return parsed;
+  };
 }
 
 function collectMemoryCliValues(value: string, previous: string[]): string[] {
@@ -76,6 +58,21 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
   if (hostOptions?.openKeyedStore) {
     configureMemoryCoreDreamingState(hostOptions.openKeyedStore);
   }
+  const lazyAction =
+    (
+      name:
+        | "runMemoryStatus"
+        | "runMemoryIndex"
+        | "runMemoryReset"
+        | "runMemoryPromote"
+        | "runMemoryRemHarness"
+        | "runMemoryRemBackfill"
+        | "runMemorySessionBackfill",
+    ) =>
+    async (opts: MemoryCommandOptions) => {
+      const runtime = await import("./cli.runtime.js");
+      await runtime[name](opts, hostOptions);
+    };
   const memory = program
     .command("memory")
     .description("Search, inspect, and reindex memory files")
@@ -88,7 +85,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
             "openclaw memory status --fix",
             "Repair stale recall locks and normalize promotion metadata.",
           ],
-          ["openclaw memory status --deep", "Probe embedding provider readiness."],
+          ["openclaw memory status --deep", "Check embedding provider readiness."],
           ["openclaw memory index --force", "Force a full reindex."],
           ['openclaw memory search "meeting notes"', "Quick search using positional query."],
           [
@@ -131,40 +128,37 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/memory", "docs.openclaw.ai/cli/memory")}\n`,
     );
 
-  memory
-    .command("status")
-    .description("Show memory search index status")
-    .option("--agent <id>", "Agent id (default: all configured agents)")
+  const agentCommand = (name: string, description: string, allAgents = false) =>
+    memory
+      .command(name)
+      .description(description)
+      .option(
+        "--agent <id>",
+        allAgents
+          ? "Agent id (default: all configured agents)"
+          : "Agent id (default: default agent)",
+      );
+
+  agentCommand("status", "Show memory search index status", true)
     .option("--json", "Print JSON")
-    .option("--deep", "Probe embedding provider availability")
+    .option("--deep", "Check embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions & { force?: boolean }) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryStatus(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryStatus"));
 
-  memory
-    .command("index")
-    .description("Reindex memory files")
-    .option("--agent <id>", "Agent id (default: all configured agents)")
+  agentCommand("index", "Reindex memory files", true)
     .option("--force", "Force full reindex", false)
     .option("--verbose", "Verbose logging", false)
-    .action(async (opts: MemoryCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryIndex(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryIndex"));
 
-  memory
-    .command("reset")
-    .description("Clear the derived memory index and embedding cache without deleting sessions")
-    .option("--agent <id>", "Agent id (default: all configured agents)")
+  agentCommand(
+    "reset",
+    "Clear the derived memory index and embedding cache without deleting sessions",
+    true,
+  )
     .option("--yes", "Skip confirmation", false)
-    .action(async (opts: MemoryResetCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryReset(opts);
-    });
+    .action(lazyAction("runMemoryReset"));
 
   memory
     .command("search")
@@ -172,22 +166,27 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .argument("[query]", "Search query")
     .option("--query <text>", "Search query (alternative to positional argument)")
     .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--max-results <n>", "Max results", (value: string) =>
-      parseMemoryCliPositiveIntegerOption(value, "--max-results"),
+    .option(
+      "--max-results <n>",
+      "Max results",
+      memoryCliNumberOption("--max-results", "positive integer"),
     )
-    .option("--min-score <n>", "Minimum score", (value: string) =>
-      parseMemoryCliNumberOption(value, "--min-score"),
+    .option(
+      "--min-score <n>",
+      "Minimum score",
+      memoryCliNumberOption("--min-score", "finite number"),
     )
     .option("--json", "Print JSON")
     .action(async (queryArg: string | undefined, opts: MemorySearchCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemorySearch(queryArg, opts, hostOptions);
+      const query = opts.query ?? queryArg;
+      if (!query) {
+        throw new Error("Missing search query. Provide a positional query or use --query <text>.");
+      }
+      const runtime = await import("./cli.runtime.js");
+      await runtime.runMemorySearch(query, opts, hostOptions);
     });
 
-  memory
-    .command("forget")
-    .description("Delete memories and derived artifacts from selected sessions")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand("forget", "Delete memories and derived artifacts from selected sessions")
     .option(
       "--session <id-or-key>",
       "Source session ID or key (repeatable)",
@@ -210,39 +209,36 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--dry-run", "Report everything that would be deleted without writing", false)
     .option("--json", "Print the complete machine-readable deletion report")
     .action(async (opts: MemoryForgetCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
+      if (!opts.session?.length && !opts.hookSource?.length && !opts.participant?.length) {
+        throw new Error(
+          "Memory forget requires --session <id-or-key>, --hook-source <source>, or --participant <actor-id>.",
+        );
+      }
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMemoryForget(opts);
     });
 
-  memory
-    .command("promote")
-    .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
-    .option("--agent <id>", "Agent id (default: default agent)")
-    .option("--limit <n>", "Max candidates", (value: string) =>
-      parseMemoryCliPositiveIntegerOption(value, "--limit"),
-    )
+  agentCommand("promote", "Rank short-term recalls and optionally append top entries to MEMORY.md")
+    .option("--limit <n>", "Max candidates", memoryCliNumberOption("--limit", "positive integer"))
     .option(
       "--min-score <n>",
       `Minimum weighted score (default: ${DEFAULT_PROMOTION_MIN_SCORE})`,
-      (value: string) => parseMemoryCliNumberOption(value, "--min-score"),
+      memoryCliNumberOption("--min-score", "finite number"),
     )
     .option(
       "--min-recall-count <n>",
       `Minimum recall count (default: ${DEFAULT_PROMOTION_MIN_RECALL_COUNT})`,
-      (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-recall-count"),
+      memoryCliNumberOption("--min-recall-count", "non-negative integer"),
     )
     .option(
       "--min-unique-queries <n>",
       `Minimum distinct query count (default: ${DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES})`,
-      (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-unique-queries"),
+      memoryCliNumberOption("--min-unique-queries", "non-negative integer"),
     )
     .option("--apply", "Append selected candidates to MEMORY.md", false)
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
-    .action(async (opts: MemoryPromoteCommandOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryPromote(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryPromote"));
 
   memory
     .command("promote-explain")
@@ -252,27 +248,28 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .option("--include-promoted", "Include already promoted candidates", false)
     .option("--json", "Print JSON")
     .action(async (selectorArg: string | undefined, opts: MemoryPromoteExplainOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryPromoteExplain(selectorArg, opts, hostOptions);
+      const selector = selectorArg?.trim();
+      if (!selector) {
+        throw new Error("Memory promote-explain requires a non-empty selector.");
+      }
+      const runtime = await import("./cli.runtime.js");
+      await runtime.runMemoryPromoteExplain(selector, opts, hostOptions);
     });
 
-  memory
-    .command("rem-harness")
-    .description("Preview REM reflections, candidate truths, and deep promotions without writing")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand(
+    "rem-harness",
+    "Preview REM reflections, candidate truths, and deep promotions without writing",
+  )
     .option("--path <file-or-dir>", "Seed the harness from historical daily memory file(s)")
     .option("--grounded", "Also render a grounded day-level REM preview")
     .option("--include-promoted", "Include already promoted deep candidates", false)
     .option("--json", "Print JSON")
-    .action(async (opts: MemoryRemHarnessOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryRemHarness(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryRemHarness"));
 
-  memory
-    .command("rem-backfill")
-    .description("Write grounded historical REM summaries into DREAMS.md for UI review")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand(
+    "rem-backfill",
+    "Write grounded historical REM summaries into DREAMS.md for UI review",
+  )
     .option("--path <file-or-dir>", "Historical daily memory file(s) or directory")
     .option("--rollback", "Remove previously written grounded REM backfill entries", false)
     .option(
@@ -286,21 +283,15 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       false,
     )
     .option("--json", "Print JSON")
-    .action(async (opts: MemoryRemBackfillOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemoryRemBackfill(opts, hostOptions);
-    });
+    .action(lazyAction("runMemoryRemBackfill"));
 
-  memory
-    .command("session-backfill")
-    .description("Distill retained session history into staged memory candidates")
-    .option("--agent <id>", "Agent id (default: default agent)")
+  agentCommand("session-backfill", "Distill retained session history into staged memory candidates")
     .option("--from <YYYY-MM-DD>", "Oldest transcript day to include")
     .option("--to <YYYY-MM-DD>", "Newest transcript day to include")
     .option(
       "--limit-days <n>",
       `Maximum unprocessed days (default: ${DEFAULT_SESSION_BACKFILL_LIMIT_DAYS})`,
-      (value: string) => parseMemoryCliPositiveIntegerOption(value, "--limit-days"),
+      memoryCliNumberOption("--limit-days", "positive integer"),
       DEFAULT_SESSION_BACKFILL_LIMIT_DAYS,
     )
     .option("--rem", "Write grounded per-day REM previews to DREAMS.md", false)
@@ -315,10 +306,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       "Also inspect foreign transcript archive files conservatively",
     )
     .option("--json", "Print JSON")
-    .action(async (opts: MemorySessionBackfillOptions) => {
-      const runtime = await loadMemoryCliRuntime();
-      await runtime.runMemorySessionBackfill(opts, hostOptions);
-    });
+    .action(lazyAction("runMemorySessionBackfill"));
 
   memory.action(() => {
     memory.outputHelp();

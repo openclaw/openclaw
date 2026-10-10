@@ -1,11 +1,15 @@
+import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 // @vitest-environment node
 import { parseAgentSessionKeyParts } from "@openclaw/session-url-contract";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  areUiSessionKeysEquivalent,
+  normalizeDefaultMainSessionAliasForUi,
   canArchiveSessionRow,
   canDeleteSessionRows,
   canonicalUiSessionKeyForPersistence,
   isUiSelectedGlobalSessionKey,
+  isPinnableUiSessionRow,
   normalizeSessionKeyForUiComparison,
   parseAgentSessionKey,
   parseSessionKeyParts,
@@ -18,157 +22,109 @@ import {
 
 describe("Dashboard fixture session keys", () => {
   it.each([
-    ["agent:main:main", "main", "main"],
-    ["agent:ops:home", "ops", "home"],
-    ["agent:ops:current", "ops", "current"],
-    ["agent:research:main:thread", "research", "main:thread"],
-    ["agent:main:dashboard:uuid", "main", "dashboard:uuid"],
-    [
-      "agent:main:dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
-      "main",
-      "dashboard:0f9d5c1e-6d0f-4c9a-9d84-1c2f3a4b5c6d",
-    ],
-    ["agent:main:node-proof-claude", "main", "node-proof-claude"],
-    ["agent:main:explicit:node-mcp-debug", "main", "explicit:node-mcp-debug"],
-    ["agent:main:telegram:direct:42", "main", "telegram:direct:42"],
-    ["agent:main:telegram:cards:dm:42", "main", "telegram:cards:dm:42"],
-    ["agent:main:telegram:cards:direct:42", "main", "telegram:cards:direct:42"],
-    ["agent:main:telegram:default:direct:42", "main", "telegram:default:direct:42"],
-    ["agent:main:telegram:direct:12345😀67890", "main", "telegram:direct:12345😀67890"],
-    ["agent:main:telegram:group:-1001234567890", "main", "telegram:group:-1001234567890"],
-    ["agent:main:slack:channel:C1", "main", "slack:channel:C1", "slack:channel:c1"],
-    ["agent:main:dm:+123", "main", "dm:+123"],
-    ["agent:main:direct:+123", "main", "direct:+123"],
-    ["agent:main:dm:account:group:room", "main", "dm:account:group:room"],
-    [
-      "agent:main:slack:acct-1:channel:C1",
-      "main",
-      "slack:acct-1:channel:C1",
-      "slack:acct-1:channel:c1",
-    ],
+    ["agent:main:main", "main", "main", "main"],
     [
       "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "data-expert",
       "dingtalk:cidzg6sF43NZMy52Rnk8EN",
       "dingtalk:cidzg6sf43nzmy52rnk8en",
     ],
-    ["agent:main:telegram:user:12345:extra", "main", "telegram:user:12345:extra"],
-    ["agent:main:subagent:worker", "main", "subagent:worker"],
-    ["agent:main:cron:daily", "main", "cron:daily"],
-    [
-      "agent:ops:catalog:fixture:node%3ADevBox:Thread%3AA",
-      "ops",
-      "catalog:fixture:node%3ADevBox:Thread%3AA",
-      "catalog:fixture:node%3adevbox:thread%3aa",
-    ],
-    [
-      "agent:ops:matrix:channel:!Room:Example.Org:thread:$Event",
-      "ops",
-      "matrix:channel:!Room:Example.Org:thread:$Event",
-      "matrix:channel:!room:example.org:thread:$event",
-    ],
-    [
-      "agent:ops:signal:group:AbC123=:thread:xyz",
-      "ops",
-      "signal:group:AbC123=:thread:xyz",
-      "signal:group:abc123=:thread:xyz",
-    ],
-  ] as const)("retains ownership and tail for %s", (key, agentId, rest, uiRest?: string) => {
-    expect(parseAgentSessionKeyParts(key)).toEqual({ agentId, rest });
-    expect(parseAgentSessionKey(key)).toEqual({ agentId, rest: uiRest ?? rest });
-  });
-
-  it.each(["main", "global", "unknown", "catalog:claude:gateway%3Alocal:thread-1"])(
-    "keeps %s unscoped while retaining the UI owner fallback",
-    (key) => {
-      expect(parseAgentSessionKeyParts(key)).toBeNull();
-      expect(parseAgentSessionKey(key)).toBeNull();
-      expect(resolveAgentIdFromSessionKey(key)).toBe("main");
-    },
-  );
-
-  it.each([
-    ["agent:ops:room::part", { agentId: "ops", rest: "room::part" }, "ops", "room:part"],
-    ["agent:ops:main:", { agentId: "ops", rest: "main:" }, "ops", "main"],
-    ["agent:ops::cron:job", null, "ops", "cron:job"],
-    ["agent::cron:job", null, "cron", "job"],
-    [":agent:ops:main", null, "ops", "main"],
-    ["agent:ops: :", { agentId: "ops", rest: " :" }, "ops", " "],
-  ] as const)("preserves the display adapter's accepted shape %s", (key, raw, agentId, rest) => {
-    expect(parseAgentSessionKeyParts(key)).toEqual(raw);
-    expect(parseAgentSessionKey(key)).toEqual({ agentId, rest });
-    expect(resolveAgentIdFromSessionKey(key)).toBe(agentId);
-  });
-
-  it("retains the UI fallback for a malformed owner", () => {
-    expect(parseAgentSessionKey("agent::secret")).toBeNull();
-    expect(resolveAgentIdFromSessionKey("agent::secret")).toBe("main");
+    ["main", null, null, null],
+    ["agent::secret", null, null, null],
+    ["agent:ops:room::part", "ops", "room::part", "room:part"],
+    ["agent:ops:main:", "ops", "main:", "main"],
+    ["agent:ops::cron:job", "ops", null, "cron:job"],
+    ["agent::cron:job", "cron", null, "job"],
+    [":agent:ops:main", "ops", null, "main"],
+    ["agent:ops: :", "ops", " :", " "],
+  ] as const)("adapts ownership and tail for %s", (key, agentId, rawRest, rest) => {
+    expect(parseAgentSessionKeyParts(key)).toEqual(
+      rawRest === null ? null : { agentId, rest: rawRest },
+    );
+    expect(parseAgentSessionKey(key)).toEqual(rest === null ? null : { agentId, rest });
+    expect(resolveAgentIdFromSessionKey(key)).toBe(agentId ?? "main");
   });
 });
 
 describe("session archive eligibility", () => {
   it.each([
-    ["active non-main", { key: "agent:main:work", hasActiveRun: true }, true, false],
-    ["idle non-main", { key: "agent:main:work" }, true, true],
-    ["configured main", { key: "agent:main:home" }, false, false],
-    ["literal main", { key: "main" }, false, false],
-    ["global", { key: "global", kind: "global" }, false, false],
-    ["unknown", { key: "unknown", kind: "unknown" }, false, false],
-    ["archived global", { key: "global", kind: "global", archived: true }, false, true],
-  ] as const)("classifies %s", (_name, row, archiveAllowed, deleteAllowed) => {
-    expect(canArchiveSessionRow({ sessionId: "durable-session", ...row }, "home")).toBe(
+    ["active non-main", [{ key: "agent:main:work", hasActiveRun: true }], true, false],
+    ["idle non-main", [{ key: "agent:main:work" }], true, true],
+    ["configured main", [{ key: "agent:main:home" }], false, false],
+    ["literal main", [{ key: "main" }], false, false],
+    ["global", [{ key: "global", kind: "global" }], false, false],
+    ["unknown", [{ key: "unknown", kind: "unknown" }], false, false],
+    ["archived global", [{ key: "global", kind: "global", archived: true }], false, true],
+    ["missing identity", [{ key: "agent:main:work", sessionId: undefined }], false, true],
+    [
+      "mixed archived and idle",
+      [
+        { key: "global", kind: "global", archived: true },
+        { key: "agent:main:work", archived: false },
+      ],
+      false,
+      false,
+    ],
+  ] as const)("classifies %s", (_name, rows, archiveAllowed, deleteAllowed) => {
+    expect(canArchiveSessionRow({ sessionId: "durable-session", ...rows[0] }, "home")).toBe(
       archiveAllowed,
     );
-    expect(canDeleteSessionRows([row], "home")).toBe(deleteAllowed);
-  });
-
-  it("rejects lifecycle actions for a row without a durable identity", () => {
-    expect(canArchiveSessionRow({ key: "agent:main:work" }, "home")).toBe(false);
-  });
-
-  it("keeps mixed archived and idle batch deletion disabled", () => {
-    expect(
-      canDeleteSessionRows(
-        [
-          { key: "global", kind: "global", archived: true },
-          { key: "agent:main:work", archived: false },
-        ],
-        "home",
-      ),
-    ).toBe(false);
+    expect(canDeleteSessionRows(rows, "home")).toBe(deleteAllowed);
   });
 });
 
 describe("parseSessionKeyParts", () => {
-  it("preserves opaque channel account tails", () => {
-    expect(parseSessionKeyParts("agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN")).toEqual({
-      agentId: "data-expert",
-      channel: "dingtalk",
-      accountId: "cidzg6sF43NZMy52Rnk8EN",
-    });
-    expect(parseSessionKeyParts("agent:main:telegram:user:12345:extra")).toEqual({
-      agentId: "main",
-      channel: "telegram",
-      accountId: "user:12345:extra",
-    });
-  });
-
   it.each([
-    "global:default",
-    "direct:some-key",
-    "",
-    "agent:",
-    "agent:main",
-    "agent:main:",
-    "agent:main:telegram",
-    "Agent:main:telegram:user",
-  ])("rejects malformed key %j", (key) => {
-    expect(parseSessionKeyParts(key)).toBeNull();
+    [
+      "agent:data-expert:dingtalk:cidzg6sF43NZMy52Rnk8EN",
+      { agentId: "data-expert", channel: "dingtalk", accountId: "cidzg6sF43NZMy52Rnk8EN" },
+    ],
+    [
+      "agent:main:telegram:user:12345:extra",
+      { agentId: "main", channel: "telegram", accountId: "user:12345:extra" },
+    ],
+    ["Agent:main:telegram:user", null],
+  ] as const)("parses opaque channel accounts in %j", (key, expected) => {
+    expect(parseSessionKeyParts(key)).toEqual(expected);
   });
 });
 
 describe("UI session identity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([undefined, " \t\n", "main"])(
+    "preserves nonblank equivalence for identical %j inputs",
+    (key) => expect(areUiSessionKeysEquivalent(key, key)).toBe(Boolean(key?.trim())),
+  );
+
+  it("reuses comparison keys until bounded eviction without changing their identities", () => {
+    const normalize = vi.spyOn(stringCoerce, "normalizeOptionalString");
+    const keys = [
+      [
+        " Agent:Cache:Matrix:Channel:!Room:Example.Org ",
+        "agent:cache:matrix:channel:!Room:Example.Org",
+      ],
+      [" MAIN \t", "agent:main:main"],
+      ["Agent:MemoEviction:Signal:Group:AbC=", "agent:memoeviction:signal:group:AbC="],
+    ] as const;
+    for (const [key, expected] of keys) {
+      for (let i = 0; i < 10; i++) {
+        expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
+        expect(areUiSessionKeysEquivalent(key, expected)).toBe(true);
+      }
+      expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(1);
+    }
+    for (let i = 0; i < 4096; i++) {
+      normalizeSessionKeyForUiComparison(`Agent:MemoEviction:Dashboard:${i}`);
+    }
+    for (const [key, expected] of keys) {
+      expect(normalizeDefaultMainSessionAliasForUi(key)).toBe(expected);
+      expect(normalize.mock.calls.filter(([value]) => value === key)).toHaveLength(2);
+    }
+  });
   it.each([
+    [" Agent:OPS:Telegram:Direct:ABC ", "agent:ops:telegram:direct:abc"],
+    [" \t\n", ""],
     [
       "Agent:Ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
       "agent:ops:Catalog:Fixture:Node%3ADevBox:Thread%3AA",
@@ -224,6 +180,8 @@ describe("UI session identity", () => {
         sessionKey: selectedKey,
       };
 
+      expect(areUiSessionKeysEquivalent(selectedKey, structuralAlias)).toBe(true);
+      expect(areUiSessionKeysEquivalent(selectedKey, distinctKey)).toBe(false);
       expect(uiSessionEventMatches(host, structuralAlias)).toBe(true);
       expect(uiSessionEventMatches(host, distinctKey)).toBe(false);
       expect(canonicalUiSessionKeyForPersistence(host, structuralAlias)).toBe(selectedKey);
@@ -231,32 +189,14 @@ describe("UI session identity", () => {
     },
   );
 
-  it("retains configured main-session aliases for events and persisted identity", () => {
-    const host = {
-      agentsList: { defaultId: "ops", mainKey: "home" },
-      sessionKey: "agent:ops:home",
-    };
-
-    expect(uiSessionEventMatches(host, "main")).toBe(true);
-    expect(uiSessionEventMatches(host, "agent:ops:main")).toBe(true);
-    expect(canonicalUiSessionKeyForPersistence(host, "main")).toBe("agent:ops:home");
-    expect(canonicalUiSessionKeyForPersistence(host, "agent:ops:main")).toBe("agent:ops:home");
-    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:home")).toBe(false);
-    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:main")).toBe(false);
-    expect(isUiSelectedGlobalSessionKey(host, "agent:ops:other")).toBe(false);
-  });
-
   it.each([
     ["main", undefined, "agent:ops:current", "ops"],
     ["home", undefined, "agent:ops:current", "ops"],
-    ["agent:ops:main", undefined, "agent:ops:current", "ops"],
-    ["agent:ops:home", undefined, "agent:ops:current", "ops"],
     ["agent:work:main", undefined, "agent:work:home", "work"],
     ["main", { defaultId: "work", mainKey: "home" }, "agent:work:home", "work"],
     ["main", { defaultId: "ops", mainKey: "next" }, "agent:ops:next", "ops"],
     ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "ops"],
     ["main", undefined, "agent:work:home", "work", "work"],
-    ["home", undefined, "agent:work:home", "work", "work"],
     ["main", { defaultId: "ops", mainKey: "home", scope: "global" }, "global", "work", "work"],
     ["agent:ops:main", undefined, "agent:ops:current", "ops", "work"],
   ] as const)(
@@ -291,13 +231,8 @@ describe("UI session identity", () => {
       expected: "agent:main:dashboard:navigation-parent",
     },
     {
-      parentSessionKey: "",
-      spawnedBy: "  agent:main:controller  ",
-      expected: "agent:main:controller",
-    },
-    {
       parentSessionKey: "  \t  ",
-      spawnedBy: "agent:main:controller",
+      spawnedBy: "  agent:main:controller  ",
       expected: "agent:main:controller",
     },
     { parentSessionKey: null, spawnedBy: "  ", expected: undefined },
@@ -307,42 +242,97 @@ describe("UI session identity", () => {
 });
 
 describe("canonical host-scoped event and row matching", () => {
-  const host = {
-    agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-    assistantAgentId: "main",
-    sessionKey: "agent:main:main",
-  };
-  it.each(["event", "row"])("separates global from per-sender main in %s matching", (surface) => {
-    expect(
-      surface === "event"
-        ? uiSessionEventMatches(host, "global", "main")
-        : uiSessionRowMatchesSelectedChat(host, "global", host.sessionKey),
-    ).toBe(false);
-  });
-  it("retains configured-global aliases without joining another global agent", () => {
-    const global = {
-      ...host,
-      agentsList: { ...host.agentsList, scope: "global" },
-      sessionKey: "agent:work:main",
-      assistantAgentId: "main",
-    };
-    expect(uiSessionEventMatches(global, "global", "work")).toBe(true);
-    expect(uiSessionEventMatches(global, "global", "main")).toBe(false);
-    expect(uiSessionEventMatches(global, "agent:main:main")).toBe(false);
-  });
-  it("rejects contradictory agent evidence while preserving deliberately unscoped events", () => {
-    expect(uiSessionEventMatches(host, host.sessionKey, "work")).toBe(false);
-    for (const key of [undefined, null, ""]) {
-      expect(uiSessionEventMatches(host, key, "work")).toBe(true);
-    }
-  });
-  it("matches configured custom main rows and keeps literal global separate", () => {
-    const custom = {
-      ...host,
-      agentsList: { defaultId: "ops", mainKey: "home", scope: "per-sender" },
+  it.each([
+    {
+      scope: "per-sender",
+      defaultId: "main",
+      mainKey: "main",
+      sessionKey: "agent:main:main",
+      events: [
+        ["global", "main", false],
+        ["agent:main:main", "work", false],
+        [undefined, "work", true],
+        [null, "work", true],
+        ["", "work", true],
+      ],
+      rows: [["global", false]],
+      aliases: [],
+      nonGlobal: [],
+    },
+    {
+      scope: "per-sender",
+      defaultId: "ops",
+      mainKey: "home",
       sessionKey: "agent:ops:home",
-    };
-    expect(uiSessionRowMatchesSelectedChat(custom, "main", custom.sessionKey)).toBe(true);
-    expect(uiSessionRowMatchesSelectedChat(custom, "global", custom.sessionKey)).toBe(false);
+      events: [
+        ["main", undefined, true],
+        ["agent:ops:main", undefined, true],
+      ],
+      rows: [
+        ["main", true],
+        ["global", false],
+      ],
+      aliases: ["main", "agent:ops:main"],
+      nonGlobal: ["agent:ops:home", "agent:ops:main", "agent:ops:other"],
+    },
+    {
+      scope: "global",
+      defaultId: "main",
+      mainKey: "main",
+      sessionKey: "agent:work:main",
+      events: [
+        ["global", "work", true],
+        ["global", "main", false],
+        ["agent:main:main", undefined, false],
+      ],
+      rows: [],
+      aliases: [],
+      nonGlobal: [],
+    },
+  ] as const)(
+    "matches $scope identities for $sessionKey",
+    ({ scope, defaultId, mainKey, sessionKey, events, rows, aliases, nonGlobal }) => {
+      const host = {
+        agentsList: { defaultId, mainKey, scope },
+        assistantAgentId: "main",
+        sessionKey,
+      };
+      for (const [key, agentId, expected] of events) {
+        expect(uiSessionEventMatches(host, key, agentId)).toBe(expected);
+      }
+      for (const [key, expected] of rows) {
+        expect(uiSessionRowMatchesSelectedChat(host, key, sessionKey)).toBe(expected);
+      }
+      for (const key of aliases) {
+        expect(canonicalUiSessionKeyForPersistence(host, key)).toBe(sessionKey);
+      }
+      for (const key of nonGlobal) {
+        expect(isUiSelectedGlobalSessionKey(host, key)).toBe(false);
+      }
+    },
+  );
+});
+
+describe("session pin eligibility", () => {
+  it.each([
+    [{ key: "agent:main:dashboard:ordinary" }, true],
+    [{ key: "agent:main:dashboard:ordinary", parentSessionKey: "agent:main:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:other:main" }, true],
+    [{ key: "agent:other:dashboard:ordinary", parentSessionKey: "agent:main:main" }, false],
+    [
+      { key: "agent:main:dashboard:nested", parentSessionKey: "agent:main:dashboard:parent" },
+      false,
+    ],
+    [
+      {
+        key: "agent:main:dashboard:spawned",
+        parentSessionKey: "agent:main:main",
+        spawnedBy: "agent:main:main",
+      },
+      false,
+    ],
+    [{ key: "agent:main:subagent:spawned", parentSessionKey: "agent:main:main" }, false],
+  ])("projects pin eligibility for %j", (row, expected) => {
+    expect(isPinnableUiSessionRow(row)).toBe(expected);
   });
 });

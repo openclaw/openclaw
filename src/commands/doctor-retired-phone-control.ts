@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 
 const PHONE_CONTROL_PLUGIN_ID = "phone-control";
 const ARM_STATE_NAMESPACE = "armed";
@@ -35,20 +36,8 @@ type RetiredArmState = {
   removedFromDeny?: unknown;
 };
 
-type RetiredPhoneControlCleanupPlan = {
-  config: OpenClawConfig;
-  configChanges: string[];
-  cleanupPending: boolean;
-  cleanupSafe: boolean;
-  warnings: string[];
-};
-
 function resolveLegacyArmStatePath(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "plugins", PHONE_CONTROL_PLUGIN_ID, "armed.json");
-}
-
-function resolveStateDatabasePath(env: NodeJS.ProcessEnv): string {
-  return path.join(resolveStateDir(env), "state", "openclaw.sqlite");
 }
 
 type StatePathInspection =
@@ -116,10 +105,10 @@ function isRetiredArmState(value: unknown): value is RetiredArmState {
 }
 
 function readStringArrayField(value: unknown, field: keyof RetiredArmState): string[] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isRecord(value)) {
     return [];
   }
-  const entries = (value as RetiredArmState)[field];
+  const entries = value[field];
   return Array.isArray(entries)
     ? entries.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "")
     : [];
@@ -134,27 +123,17 @@ function openRetiredArmStateStore(env: NodeJS.ProcessEnv) {
   });
 }
 
-async function readRetiredArmStates(env: NodeJS.ProcessEnv): Promise<{
-  states: unknown[];
-  cleanupPending: boolean;
-  cleanupSafe: boolean;
-  warnings: string[];
-}> {
+async function readRetiredArmStates(env: NodeJS.ProcessEnv) {
   const legacyPath = resolveLegacyArmStatePath(env);
-  const databasePath = resolveStateDatabasePath(env);
+  const databasePath = resolveOpenClawStateSqlitePath(env);
   const [legacyInspection, databaseInspection] = await Promise.all([
     inspectStatePath(legacyPath, "retired Phone Control lease state"),
     inspectStatePath(databasePath, "OpenClaw state database"),
   ]);
-  const warnings: string[] = [];
-  const inspectionUnsafe =
-    legacyInspection.status === "unsafe" || databaseInspection.status === "unsafe";
-  if (legacyInspection.status === "unsafe") {
-    warnings.push(legacyInspection.warning);
-  }
-  if (databaseInspection.status === "unsafe") {
-    warnings.push(databaseInspection.warning);
-  }
+  const warnings = [legacyInspection, databaseInspection].flatMap((inspection) =>
+    inspection.status === "unsafe" ? [inspection.warning] : [],
+  );
+  const inspectionUnsafe = warnings.length > 0;
 
   let legacyState: unknown;
   let legacyStateValid = false;
@@ -229,15 +208,12 @@ function withCommandLists(
   params: { allow?: string[]; deny?: string[] },
 ): OpenClawConfig {
   const commands = { ...cfg.gateway?.nodes?.commands };
-  if (params.allow === undefined || params.allow.length === 0) {
-    delete commands.allow;
-  } else {
-    commands.allow = params.allow;
-  }
-  if (params.deny === undefined || params.deny.length === 0) {
-    delete commands.deny;
-  } else {
-    commands.deny = params.deny;
+  for (const key of ["allow", "deny"] as const) {
+    if (params[key]?.length) {
+      commands[key] = params[key];
+    } else {
+      delete commands[key];
+    }
   }
   const nodes = { ...cfg.gateway?.nodes };
   delete nodes.commands;
@@ -257,17 +233,19 @@ function withCommandLists(
 export async function prepareRetiredPhoneControlCleanup(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): Promise<RetiredPhoneControlCleanupPlan> {
+}) {
   const env = params.env ?? process.env;
   const residue = await readRetiredArmStates(env);
+  const configChanges: string[] = [];
+  const unchanged = {
+    config: params.cfg,
+    configChanges,
+    cleanupPending: residue.cleanupPending,
+    cleanupSafe: residue.cleanupSafe,
+    warnings: residue.warnings,
+  };
   if (!residue.cleanupSafe) {
-    return {
-      config: params.cfg,
-      configChanges: [],
-      cleanupPending: residue.cleanupPending,
-      cleanupSafe: false,
-      warnings: residue.warnings,
-    };
+    return unchanged;
   }
   const leaseAddedAllows = new Set(
     residue.states.flatMap((state) => readStringArrayField(state, "addedToAllow")),
@@ -277,14 +255,11 @@ export async function prepareRetiredPhoneControlCleanup(params: {
   );
   const currentAllow = params.cfg.gateway?.nodes?.commands?.allow;
   const currentDeny = params.cfg.gateway?.nodes?.commands?.deny;
-  const reconstructedDeny = [...(currentDeny ?? [])];
-  const reconstructedDenySet = new Set(reconstructedDeny);
-  for (const command of leaseRemovedDenies) {
-    if (!reconstructedDenySet.has(command)) {
-      reconstructedDeny.push(command);
-      reconstructedDenySet.add(command);
-    }
-  }
+  const currentDenySet = new Set(currentDeny);
+  const reconstructedDeny = [
+    ...(currentDeny ?? []),
+    ...[...new Set(leaseRemovedDenies)].filter((command) => !currentDenySet.has(command)),
+  ];
   const removeSeededDeny = currentDeny !== undefined && isExactSeededDenyList(reconstructedDeny);
   // The lease journal snapshots persistentAllows through deny-wins policy before
   // activation, so commands in removedFromDeny are lease-only even if also allowed.
@@ -298,16 +273,9 @@ export async function prepareRetiredPhoneControlCleanup(params: {
   const allowChanged = Boolean(currentAllow && nextAllow?.length !== currentAllow.length);
   const denyChanged = reconstructedDeny.length !== (currentDeny?.length ?? 0);
   if (!allowChanged && !denyChanged && !removeSeededDeny) {
-    return {
-      config: params.cfg,
-      configChanges: [],
-      cleanupPending: residue.cleanupPending,
-      cleanupSafe: residue.cleanupSafe,
-      warnings: residue.warnings,
-    };
+    return unchanged;
   }
 
-  const configChanges: string[] = [];
   if (allowChanged) {
     configChanges.push("Removed stale Phone Control lease-only command allow entries.");
   }
@@ -318,14 +286,11 @@ export async function prepareRetiredPhoneControlCleanup(params: {
     configChanges.push("Removed the retired Phone Control setup deny seed.");
   }
   return {
+    ...unchanged,
     config: withCommandLists(params.cfg, {
       allow: nextAllow,
       deny: nextDeny,
     }),
-    configChanges,
-    cleanupPending: residue.cleanupPending,
-    cleanupSafe: residue.cleanupSafe,
-    warnings: residue.warnings,
   };
 }
 
@@ -364,7 +329,7 @@ export async function finalizeRetiredPhoneControlCleanup(params: {
   }
 
   const databaseInspection = await inspectStatePath(
-    resolveStateDatabasePath(env),
+    resolveOpenClawStateSqlitePath(env),
     "OpenClaw state database",
   );
   if (databaseInspection.status === "unsafe") {

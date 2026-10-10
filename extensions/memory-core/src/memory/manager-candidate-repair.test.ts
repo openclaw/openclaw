@@ -15,9 +15,9 @@ describe("automatic candidates during provenance repair", () => {
     closeAllMemorySearchManagers,
   });
 
-  it.each([false, true])(
-    "returns promptly while a large rebuild is pending (startup catch-up: %s)",
-    async (startupCatchup) => {
+  it.for([false, true])(
+    "returns before a pending rebuild finishes (startup catch-up: %s)",
+    async (startupCatchup, { signal }) => {
       const projectKey = "github.com/example/project";
       await fs.writeFile(
         path.join(fixture.paths.workspace, "MEMORY.md"),
@@ -61,18 +61,27 @@ describe("automatic candidates during provenance repair", () => {
       await initial.close();
 
       const gate = createDeferred<void>();
+      const batchEntered = createDeferred<void>();
       fixture.provider.providerRuntimeBatchGate = gate.promise;
-      const upgraded = await fixture.getFreshManager(cfg);
+      fixture.provider.providerRuntimeBatchEntered = () => batchEntered.resolve();
+      // Native test cancellation must release both rendezvous before manager teardown.
+      const abort = () => {
+        batchEntered.resolve();
+        gate.resolve();
+      };
+      signal.addEventListener("abort", abort, { once: true });
       const candidates: Promise<unknown>[] = [];
       try {
+        signal.throwIfAborted();
+        const upgraded = await fixture.getFreshManager(cfg);
         expect(upgraded.status().custom?.indexIdentity).toMatchObject({
           status: "mismatched",
           reason: "index provenance classifier changed",
         });
         if (startupCatchup) {
-          await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1), {
-            timeout: 10_000,
-          });
+          await batchEntered.promise;
+          signal.throwIfAborted();
+          expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         }
         let completed = 0;
         for (const lookup of [
@@ -86,31 +95,35 @@ describe("automatic candidates during provenance repair", () => {
             }),
           );
         }
-        await vi.waitFor(() => expect(completed).toBe(2));
+        // Both public lookups must complete while the repair is still gated.
         expect(await Promise.all(candidates)).toEqual([[], []]);
-        await vi.waitFor(() => expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1), {
-          timeout: 10_000,
-        });
+        expect(completed).toBe(2);
+        await batchEntered.promise;
+        signal.throwIfAborted();
+        expect(fixture.provider.providerRuntimeActiveBatchCalls).toBe(1);
         expect(upgraded.status().dirty).toBe(true);
+        gate.resolve();
+        await upgraded.sync({ reason: "test-repair-complete" });
+        expect(upgraded.status().dirty).toBe(false);
+        const expected = [
+          expect.objectContaining({
+            projectKey,
+            triggers: "release local",
+            provenance: expect.objectContaining({ originClass: "agent" }),
+          }),
+        ];
+        expect(
+          await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
+        ).toEqual(expected);
+        expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
+          expected,
+        );
       } finally {
+        signal.removeEventListener("abort", abort);
+        fixture.provider.providerRuntimeBatchEntered = null;
         gate.resolve();
         await Promise.allSettled(candidates);
       }
-      await upgraded.sync({ reason: "test-repair-complete" });
-      expect(upgraded.status().dirty).toBe(false);
-      const expected = [
-        expect.objectContaining({
-          projectKey,
-          triggers: "release local",
-          provenance: expect.objectContaining({ originClass: "agent" }),
-        }),
-      ];
-      expect(
-        await upgraded.listCuratedProjectCandidates({ activeProjectKeys: [projectKey] }),
-      ).toEqual(expected);
-      expect(await upgraded.listTriggerCandidates({ activeProjectKeys: [projectKey] })).toEqual(
-        expected,
-      );
     },
   );
 

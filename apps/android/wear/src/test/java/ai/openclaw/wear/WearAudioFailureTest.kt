@@ -81,7 +81,7 @@ class WearAudioFailureTest {
       client.callTalkTestMethod("pauseCaptureLocked")
       FailingRestartAudioRecord.failStart = throws
       FailingRestartAudioRecord.stayStopped = !throws
-      client.callTalkTestMethod("clearOutput", fixture.attempt, true)
+      client.callTalkTestMethod("clearOutput", fixture.attempt)
       // Check before running queued audio: a failed start must never publish capture.
       assertFalse("failed restart must not report Listening", client.isCapturing.value)
       audioScheduler.runCurrent()
@@ -111,6 +111,9 @@ class WearAudioFailureTest {
       assertFalse(fixture.client.isCapturing.value)
       assertFalse(state.value.realtimeTalk.active)
       assertFalse(state.value.talkBusy)
+      assertTrue("failed initial start must signal the production error owner", fixture.client.channelFailed.value)
+      // Voice renders realtimePlaybackFailed, not the general failure field.
+      assertTrue("failed initial start must reach the Voice audio error", state.value.realtimePlaybackFailed)
       assertEquals(WearConversationFailure.INTERNAL_ERROR, state.value.failure)
       assertEquals(1, FailingRestartAudioRecord.releases)
       assertEquals(0, FailingRestartAudioRecord.reads)
@@ -155,11 +158,11 @@ class WearAudioFailureTest {
       client.setTalkTestField("scope", CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler)))
       fixture.activate()
       client.disconnectLocal()
-      val replacement = fixture.attempt.copy(generation = 2L, attemptId = "replacement")
+      val replacement = fixture.attempt.copy(attemptId = "replacement")
       client.callTalkTestMethod("activate", replacement)
       FailingRestartAudioRecord.stayStopped = true
       try {
-        client.callTalkTestMethod("clearOutput", fixture.attempt, true)
+        client.callTalkTestMethod("clearOutput", fixture.attempt)
         assertFalse(client.channelFailed.value)
         assertFalse(client.isCapturing.value)
         assertEquals(0, FailingRestartAudioRecord.starts)

@@ -1,9 +1,13 @@
 // Reply dispatcher lifecycle helpers used by auto-reply dispatch paths.
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyDispatchReceipt, ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 
 type ReplyDispatcherSettledTask = () => Promise<void> | void;
 
-const settledTasksByDispatcher = new WeakMap<ReplyDispatcher, Set<ReplyDispatcherSettledTask>>();
+const settledTasksByDispatcher = resolveGlobalSingleton(
+  Symbol.for("openclaw.replyDispatcherSettledTasks"),
+  () => new WeakMap<ReplyDispatcher, Set<ReplyDispatcherSettledTask>>(),
+);
 
 /** Register post-delivery work owned by the dispatcher's settle lifecycle. */
 export function registerReplyDispatcherSettledTask(

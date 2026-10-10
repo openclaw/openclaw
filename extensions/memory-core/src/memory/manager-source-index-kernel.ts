@@ -1,22 +1,18 @@
-import type { DatabaseSync, StatementSync } from "node:sqlite";
-import {
-  hashText,
-  MEMORY_INDEX_FTS_TABLE,
-  MEMORY_INDEX_VECTOR_TABLE,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { DatabaseSync } from "node:sqlite";
+import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import { MEMORY_INDEX_VECTOR_TABLE } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-} from "openclaw/plugin-sdk/sqlite-runtime";
-import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
+  runSqliteImmediateTransactionSync,
+  tableExists,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { createMemoryChunkWriter, type IndexedMemoryChunk } from "./manager-chunk-writer.js";
-import {
-  markMemoryVectorRebuildRequired,
-  memoryTableExists,
-} from "./manager-vector-rebuild-state.js";
-import { replaceMemoryVectorRow } from "./manager-vector-write.js";
+import { markMemoryVectorRebuildRequired } from "./manager-vector-rebuild-state.js";
+import { createMemoryVectorWriter } from "./manager-vector-write.js";
+
+const MAX_VECTOR_POINT_DELETES = 32;
 
 export type MemorySourceIndexReplacement = {
   entry: { path: string; hash: string; mtimeMs: number; size: number };
@@ -27,6 +23,10 @@ export type MemorySourceIndexReplacement = {
   vectorReady: boolean;
 } & ({ source: "memory" } | { source: "sessions"; agentId: string; sessionId: string });
 
+export type MemorySourceIndexHeader = Omit<MemorySourceIndexReplacement, "chunks" | "embeddings"> &
+  ({ source: "memory" } | { source: "sessions"; agentId: string; sessionId: string });
+export type MemorySourceIndexRow = { chunk: IndexedMemoryChunk; embedding: number[] };
+
 type SourceIndexDatabase = {
   memory_index_sources: {
     path: string;
@@ -35,7 +35,7 @@ type SourceIndexDatabase = {
     mtime: number;
     size: number;
   };
-  memory_index_chunks: { path: string; source: MemorySource };
+  memory_index_chunks: { id: string; path: string; source: MemorySource };
 };
 
 type SourceIndexState = {
@@ -66,23 +66,14 @@ export class MemorySourceIndexKernel {
     private readonly state: SourceIndexState,
   ) {}
 
-  replace(
-    params: MemorySourceIndexReplacement,
-    sessionAuthority: MemorySourceIndexKernel,
-  ): "replaced" | "forgotten" {
-    const { entry, source, chunks, embeddings, model, now, vectorReady } = params;
-    // A shadow index must consult the live generation's tombstones at publication.
-    if (
-      params.source === "sessions" &&
-      hasMemorySessionTombstone(sessionAuthority.database, params.agentId, params.sessionId)
-    ) {
-      return "forgotten";
-    }
+  replaceRows(params: MemorySourceIndexHeader, rows: Iterable<MemorySourceIndexRow>): void {
+    const { entry, source, model, now, vectorReady } = params;
     this.clear(entry.path, source);
     let writeChunk: ReturnType<typeof createMemoryChunkWriter> | undefined;
-    let ftsStatement: StatementSync | undefined;
-    for (const [index, chunk] of chunks.entries()) {
-      const embedding = embeddings[index] ?? [];
+    let writeVector: ReturnType<typeof createMemoryVectorWriter> | undefined;
+    let hasEmbeddings = false;
+    for (const { chunk, embedding } of rows) {
+      hasEmbeddings ||= embedding.length > 0;
       const id = hashText(
         `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
@@ -94,19 +85,8 @@ export class MemorySourceIndexKernel {
       });
       writeChunk(id, chunk, embedding);
       if (vectorReady && embedding.length > 0) {
-        replaceMemoryVectorRow({
-          db: this.database,
-          tableName: MEMORY_INDEX_VECTOR_TABLE,
-          id,
-          embedding,
-        });
-      }
-      if (this.state.fts.enabled && this.state.fts.available) {
-        ftsStatement ??= this.database.prepare(
-          `INSERT INTO ${MEMORY_INDEX_FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-            ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        ftsStatement.run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+        writeVector ??= createMemoryVectorWriter(this.database);
+        writeVector(id, embedding);
       }
     }
     const db = getNodeSqliteKysely<SourceIndexDatabase>(this.database);
@@ -129,10 +109,9 @@ export class MemorySourceIndexKernel {
           })),
         ),
     );
-    if (!vectorReady && embeddings.some((embedding) => embedding.length > 0)) {
+    if (!vectorReady && hasEmbeddings) {
       markMemoryVectorRebuildRequired(this.database);
     }
-    return "replaced";
   }
 
   deleteIfCurrent(params: {
@@ -155,30 +134,44 @@ export class MemorySourceIndexKernel {
   }
 
   private clear(pathname: string, source: MemorySource): void {
-    if (memoryTableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
+    if (tableExists(this.database, MEMORY_INDEX_VECTOR_TABLE)) {
       if (!this.state.vector.enabled || this.state.vector.available !== true) {
         markMemoryVectorRebuildRequired(this.database);
       } else {
         try {
-          this.database
-            .prepare(
-              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (
-               SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?
-             )`,
-            )
-            .run(pathname, source);
+          // Point lookups avoid scanning unrelated vectors for small sources;
+          // larger batches use one scan to bound native calls. Keep either path
+          // atomic before recording rebuild debt on a caught failure.
+          runSqliteImmediateTransactionSync(this.database, () => {
+            const rows = executeSqliteQuerySync(
+              this.database,
+              getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+                .selectFrom("memory_index_chunks")
+                .select("id")
+                .where("path", "=", pathname)
+                .where("source", "=", source)
+                .limit(MAX_VECTOR_POINT_DELETES + 1),
+            ).rows;
+            if (rows.length > MAX_VECTOR_POINT_DELETES) {
+              this.database
+                .prepare(
+                  `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id IN (` +
+                    "SELECT id FROM memory_index_chunks WHERE path = ? AND source = ?)",
+                )
+                .run(pathname, source);
+              return;
+            }
+            const removeVector = this.database.prepare(
+              `DELETE FROM ${MEMORY_INDEX_VECTOR_TABLE} WHERE id = ?`,
+            );
+            for (const { id } of rows) {
+              removeVector.run(id);
+            }
+          });
         } catch {
           markMemoryVectorRebuildRequired(this.database);
         }
       }
-    }
-    if (this.state.fts.enabled && this.state.fts.available) {
-      try {
-        // Lexical search is model-agnostic; remove every model for this source.
-        this.database
-          .prepare(`DELETE FROM ${MEMORY_INDEX_FTS_TABLE} WHERE path = ? AND source = ?`)
-          .run(pathname, source);
-      } catch {}
     }
     executeSqliteQuerySync(
       this.database,

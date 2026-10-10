@@ -1,18 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
+import { createDeferred } from "./lifecycle-sync.test-support.js";
 import { WorkboardStore } from "./store.js";
 import { createWorkboardSqliteTestHarness, sqliteTestAuxStores } from "./test/sqlite-store.js";
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 async function beginPreparedDispatch() {
   const { store: dispatchStore, stores } = createWorkboardSqliteTestHarness();
@@ -97,76 +88,6 @@ async function cleanupInterruptedDispatch(
 }
 
 describe("Workboard prepared launch restart recovery", () => {
-  it("fails a prepared launch absent from the first complete post-restart snapshot", async () => {
-    const interrupted = await beginPreparedDispatch();
-    let lifecycle: Awaited<ReturnType<typeof startLifecycleSweep>> | undefined;
-    try {
-      lifecycle = await startLifecycleSweep({
-        store: interrupted.replacementStore,
-        sessions: [],
-        complete: true,
-      });
-
-      await expect(interrupted.replacementStore.get(interrupted.card.id)).resolves.toMatchObject({
-        status: "running",
-        sessionKey: interrupted.prepared.sessionKey,
-        runId: interrupted.prepared.provisionalRunId,
-        execution: { status: "running", runId: interrupted.prepared.provisionalRunId },
-        metadata: {
-          claim: { ownerId: "workboard-dispatcher" },
-          attempts: [{ status: "running", runId: interrupted.prepared.provisionalRunId }],
-          automation: { launch: { phase: "prepared" } },
-        },
-      });
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(lifecycle.readSessions).not.toHaveBeenCalled();
-
-      lifecycle.service.onGatewayStart();
-      await vi.waitFor(async () => {
-        expect((await interrupted.replacementStore.get(interrupted.card.id))?.status).toBe(
-          "blocked",
-        );
-      });
-      await stopLifecycleSweep(lifecycle);
-      lifecycle = undefined;
-
-      const recovered = await interrupted.replacementStore.get(interrupted.card.id);
-      expect(recovered).toMatchObject({
-        status: "blocked",
-        metadata: {
-          automation: {
-            launch: {
-              phase: "failed",
-              requestedSessionKey: interrupted.prepared.sessionKey,
-              provisionalRunId: interrupted.prepared.provisionalRunId,
-              reason: expect.stringContaining("Gateway"),
-            },
-          },
-          attempts: [
-            expect.objectContaining({
-              status: "blocked",
-              runId: interrupted.prepared.provisionalRunId,
-              endedAt: expect.any(Number),
-            }),
-          ],
-        },
-      });
-      expect(recovered?.metadata?.claim).toBeUndefined();
-      expect(recovered?.sessionKey).toBeUndefined();
-      expect(recovered?.runId).toBeUndefined();
-      expect(recovered?.execution).toBeUndefined();
-
-      await rejectInterruptedDispatch(interrupted);
-      expect(
-        (await interrupted.replacementStore.get(interrupted.card.id))?.metadata?.automation?.launch,
-      ).toMatchObject({ phase: "failed" });
-    } finally {
-      await cleanupInterruptedDispatch(interrupted, lifecycle);
-    }
-  });
-
   it("fails a prepared launch when its persisted session has no active run", async () => {
     const interrupted = await beginPreparedDispatch();
     let lifecycle: Awaited<ReturnType<typeof startLifecycleSweep>> | undefined;

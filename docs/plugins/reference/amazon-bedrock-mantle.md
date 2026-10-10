@@ -15,7 +15,7 @@ OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routi
 ## Distribution
 
 - Package: `@openclaw/amazon-bedrock-mantle-provider`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/amazon-bedrock-mantle-provider`
 
 ## Surface
 

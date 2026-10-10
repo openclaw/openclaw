@@ -17,11 +17,6 @@ function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecisi
   return undefined;
 }
 
-/** Normalizes channel/direct chat type aliases used by media-understanding scope rules. */
-export function normalizeMediaUnderstandingChatType(raw?: string | null): string | undefined {
-  return normalizeChatType(raw ?? undefined);
-}
-
 /** Evaluates ordered media-understanding scope rules against channel, chat type, and session key. */
 export function resolveMediaUnderstandingScope(params: {
   scope?: MediaUnderstandingScopeConfig;
@@ -35,7 +30,7 @@ export function resolveMediaUnderstandingScope(params: {
   }
 
   const channel = normalizeOptionalLowercaseString(params.channel);
-  const chatType = normalizeMediaUnderstandingChatType(params.chatType);
+  const chatType = normalizeChatType(params.chatType);
   const sessionKey = normalizeOptionalLowercaseString(params.sessionKey) ?? "";
 
   for (const rule of scope.rules ?? []) {
@@ -47,7 +42,7 @@ export function resolveMediaUnderstandingScope(params: {
     const action = normalizeDecision(rule.action) ?? "allow";
     const match = rule.match ?? {};
     const matchChannel = normalizeOptionalLowercaseString(match.channel);
-    const matchChatType = normalizeMediaUnderstandingChatType(match.chatType);
+    const matchChatType = normalizeChatType(match.chatType);
     const matchPrefix = normalizeOptionalLowercaseString(match.keyPrefix);
 
     if (matchChannel && matchChannel !== channel) {

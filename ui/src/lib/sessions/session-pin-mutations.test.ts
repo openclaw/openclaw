@@ -11,7 +11,7 @@ import {
 } from "./session-capability.test-support.ts";
 import type { SessionListSnapshot } from "./session-capability.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 function rowPinned(result: SessionsListResult | null, key: string): boolean {
   return result?.sessions.find((row) => row.key === key)?.pinned === true;
@@ -392,13 +392,10 @@ describe("session pin mutations", () => {
       const operation = sessions.patch(key, { pinned: true });
       expect(rowPinned(sessions.state.result, key)).toBe(true);
 
-      // A routine turn event for the same row, still carrying the pre-patch pin
-      // value, reaches both the direct merge and the canonical list refresh.
       const stalePayload = sessionChangedPayload(key, false);
-      sessions.reconcileChanged(stalePayload);
+      emitEvent({ type: "event", event: "sessions.changed", payload: stalePayload });
       expect(rowPinned(sessions.state.result, key)).toBe(true);
 
-      emitEvent({ type: "event", event: "sessions.changed", payload: stalePayload });
       await vi.advanceTimersByTimeAsync(SESSION_EVENT_REFRESH_DEBOUNCE_MS);
       expect(rowPinned(sessions.state.result, key)).toBe(true);
 
@@ -414,6 +411,81 @@ describe("session pin mutations", () => {
       sessions.dispose();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("preserves a pending restore-and-pin through archived observations and rolls back rejection", async () => {
+    const key = "agent:main:restore-pin";
+    const sessionId = "restore-pin-session";
+    let current: GatewaySessionRow = {
+      key,
+      agentId: "main",
+      sessionId,
+      kind: "direct",
+      updatedAt: 10,
+      archived: true,
+      archivedAt: 10,
+      pinned: false,
+    };
+    const response = createDeferred<unknown>();
+    const dispatched = createDeferred();
+    const client = createTestGatewayClient(async (method) => {
+      if (method === "sessions.list") {
+        return sessionsResult([current], current.updatedAt ?? 0);
+      }
+      if (method === "sessions.patch") {
+        dispatched.resolve();
+        return response.promise;
+      }
+      throw new Error(`Unexpected Gateway method: ${method}`);
+    });
+    const { gateway, emitEvent } = createGatewayHarness(client);
+    const sessions = createTestSessionCapability(gateway);
+    let observer: ReturnType<typeof sessions.observeRow> | undefined;
+    let operation: ReturnType<typeof sessions.patch> | undefined;
+    const observeArchived = () =>
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...current, sessionKey: key, reason: "patch", pinnedAt: null },
+      });
+    const expectObservedPin = (pinned: boolean) => {
+      for (const row of [sessions.state.result?.sessions[0], observer?.row]) {
+        expect(row).toMatchObject({ key, sessionId, archived: true, pinned });
+        if (!pinned) {
+          expect(row?.pinnedAt).toBeUndefined();
+        }
+      }
+    };
+    try {
+      await sessions.refresh({ agentId: "main", archivedFilter: "all", force: true });
+      observer = sessions.observeRow({ key, agentId: "main" }, () => {});
+      observeArchived();
+      expect(sessions.archiveVisibility(key)).toBe("archived");
+      expectObservedPin(false);
+
+      operation = sessions.patch(
+        key,
+        { archived: false, pinned: true },
+        { agentId: "main", expectedSessionId: sessionId, deferListRefresh: true },
+      );
+      await dispatched.promise;
+      expectObservedPin(true);
+      current = { ...current, updatedAt: 20 };
+      observeArchived();
+      expectObservedPin(true);
+      await sessions.refresh({ agentId: "main", archivedFilter: "all", force: true });
+      expectObservedPin(true);
+
+      response.reject(new Error("Restore and pin rejected"));
+      await expect(operation).rejects.toThrow("Restore and pin rejected");
+      expectObservedPin(false);
+      expect(sessions.state.error).toContain("Restore and pin rejected");
+    } finally {
+      observer?.dispose();
+      sessions.dispose();
+      response.resolve({ ok: true, path: "(multiple)", key, entry: { sessionId } });
+      await Promise.allSettled(operation ? [operation] : []);
     }
   });
 

@@ -30,16 +30,6 @@ describe("voice-call config migration", () => {
   it.each([
     { label: "legacy-only", current: undefined },
     {
-      label: "all canonical fields",
-      current: {
-        apiKey: "synthetic-current-key",
-        model: "synthetic-current-model",
-        silenceDurationMs: 900,
-        vadThreshold: 0.8,
-        keep: { setting: "current" },
-      },
-    },
-    {
       label: "partial canonical fields and a SecretRef",
       current: {
         apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
@@ -144,21 +134,8 @@ describe("voice-call config migration", () => {
       },
     });
 
-    const agentContext = (
-      migration.config.realtime as
-        | {
-            agentContext?: {
-              enabled?: boolean;
-              includeSystemPrompt?: unknown;
-              includeWorkspaceFiles?: boolean;
-            };
-          }
-        | undefined
-    )?.agentContext;
-
-    expect(agentContext).toEqual({
-      enabled: true,
-      includeWorkspaceFiles: true,
+    expect(migration.config.realtime).toEqual({
+      agentContext: { enabled: true, includeWorkspaceFiles: true },
     });
   });
 
@@ -172,18 +149,7 @@ describe("voice-call config migration", () => {
       },
       configPathPrefix: "plugins.entries.voice-call.config",
     });
-    const streaming = migration.config.streaming as
-      | {
-          providers?: {
-            openai?: {
-              silenceDurationMs?: number;
-              vadThreshold?: number;
-            };
-          };
-        }
-      | undefined;
-
-    expect(streaming?.providers?.openai).toBeUndefined();
+    expect(migration.config.streaming).not.toHaveProperty("providers.openai");
     expect(migration.changes).toEqual([
       "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
       "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",

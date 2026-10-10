@@ -1,21 +1,19 @@
 import { spawn } from "node:child_process";
+import * as crypto from "node:crypto";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import * as gatewayService from "../../daemon/service.js";
-import * as systemdExec from "../../daemon/systemd-exec.js";
-import {
-  readSystemdServiceExecStart,
-  resolveSystemdUnitPath,
-} from "../../daemon/systemd-service-files.js";
+import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import * as updateRunLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
@@ -23,21 +21,43 @@ import {
 } from "../../infra/update-run-recovery.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { createUpdateProgress } from "./progress.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
+import { failUpdateCommandRun } from "./update-command-result.js";
+import {
+  registerUpdateRunReceiptTests,
+  registerUpdateRunReceiptFailureTests,
+} from "./update-command-run-progress.test-support.js";
 import {
   admitUpdateCommandRun,
   completeUpdateCommandRun,
-  createUpdateRunProgress,
-  failUpdateCommandRun,
   withUpdatePreviewSignals,
 } from "./update-command-run.js";
 import * as servicePlan from "./update-command-service-plan.js";
-import { publishUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import {
+  publishUpdateCommandTerminalResult,
+  withUpdateCommandTerminalResult,
+} from "./update-command-terminal.js";
+import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
+
+vi.mock("node:crypto", async () => {
+  const actual = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
+afterEach(() => vi.mocked(crypto.randomUUID).mockReset());
+
+const sourceImportArgs = resolveRuntimeWorkerUrl(
+  updateExecutorNativeEntrypoints.commandRun,
+).pathname.endsWith(".ts")
+  ? ["--import", path.resolve("scripts/tsx.mjs")]
+  : [];
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+
 it.each([
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 0 },
   { kind: "package-post-install-doctor", name: "openclaw doctor", exitCode: 86 },
@@ -92,13 +112,13 @@ it.each([
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(message);
   expect(recorded && renderUpdateRunReport(recorded).markdown).toContain(otherWarning);
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  await closeStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
 
-it("persists fingerprint warnings before closing a rolled-back run", () => {
+it("persists fingerprint warnings before closing a rolled-back run", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("rollback-fingerprint-warning-") };
   const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
   const warnings = [
@@ -106,7 +126,7 @@ it("persists fingerprint warnings before closing a rolled-back run", () => {
     "Package fingerprint verification unavailable; rollback verified by the retained package copy's directory identity and version.",
   ];
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  const result = publishUpdateCommandTerminalResult(
+  const result = await publishUpdateCommandTerminalResult(
     { opts: { json: true, run }, ownedManagedUpdateEnv: env },
     {
       status: "error",
@@ -152,90 +172,10 @@ it("persists fingerprint warnings before closing a rolled-back run", () => {
   }
 });
 
-it("presents committed steps without reopening the ledger for display", () => {
-  const env = { OPENCLAW_STATE_DIR: dirs.make("update-progress-committed-") };
-  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  let presentation: ReturnType<typeof createUpdateProgress> | undefined;
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
-  try {
-    presentation = createUpdateProgress(true, run);
-    const progress = createUpdateRunProgress(run, presentation.progress);
-    updateRunLedger.recordUpdateRunPhase(run.runId, "validating", {}, { env });
-    const reread = vi.spyOn(updateRunLedger, "getUpdateRun").mockImplementation(() => {
-      throw new Error("step presentation must use its committed row");
-    });
-    try {
-      for (const [index, name] of ["fetch", "build", "doctor"].entries()) {
-        const step = { name, command: `run ${name}`, index, total: 3 };
-        progress.onStepStart?.(step);
-        progress.onStepComplete?.({
-          ...step,
-          durationMs: 1,
-          exitCode: name === "fetch" ? 0 : 1,
-          ...(name === "build" ? { stdoutTail: "Build type error" } : {}),
-          ...(name === "doctor"
-            ? {
-                advisory: {
-                  kind: "package-post-install-doctor" as const,
-                  message: "Skipped optional cache cleanup",
-                },
-                warnings: ["Skipped optional cache cleanup", "Skipped legacy cache cleanup"],
-              }
-            : {}),
-        });
-      }
-      expect(log).toHaveBeenCalledWith("validating — fetch...");
-      expect(log).toHaveBeenCalledWith("validating — build...");
-      expect(log.mock.calls.flat().join("\n")).toContain("Build type error");
-      expect(log.mock.calls.flat().join("\n")).toContain("Skipped optional cache cleanup");
-      expect(
-        log.mock.calls
-          .flat()
-          .filter((line) => typeof line === "string" && line.startsWith("Phase:")),
-      ).toEqual(["Phase: requested", "Phase: validating"]);
-    } finally {
-      reread.mockRestore();
-    }
-    const recorded = getUpdateRun(run.runId, { env });
-    expect(
-      recorded?.steps
-        .filter((step) => step.step === "fetch" || step.step === "build")
-        .map(({ step, status, detail }) => ({ step, status, detail })),
-    ).toEqual([
-      { step: "fetch", status: "completed", detail: undefined },
-      { step: "build", status: "failed", detail: "Exit code: 1; Build type error" },
-    ]);
-    expect(recorded?.steps).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ step: "doctor", status: "completed" }),
-        expect.objectContaining({
-          step: "warning:doctor",
-          status: "completed",
-          detail: "Skipped optional cache cleanup",
-        }),
-        expect.objectContaining({
-          step: "warning:doctor:2",
-          status: "completed",
-          detail: "Skipped legacy cache cleanup",
-        }),
-      ]),
-    );
-  } finally {
-    try {
-      presentation?.dispose();
-    } finally {
-      if (tty) {
-        Object.defineProperty(process.stdout, "isTTY", tty);
-      } else {
-        Reflect.deleteProperty(process.stdout, "isTTY");
-      }
-    }
-  }
-});
+registerUpdateRunReceiptTests(dirs);
+
 it.each(["state", "config", "include", "environment"])(
-  "refuses changed %s ownership after target initialization before writing update history",
+  "revalidates changed %s input after target initialization without changing its owner",
   async (changed) => {
     const root = dirs.make("update-initialization-admission-");
     const stateDir = path.join(root, "profile");
@@ -276,12 +216,27 @@ it.each(["state", "config", "include", "environment"])(
     const configBefore = fs.readFileSync(configPath);
     const includeBefore = fs.readFileSync(includePath);
 
-    await expect(
-      admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
-    ).rejects.toThrow(/changed/);
-
-    expect(fs.existsSync(databasePath)).toBe(false);
-    expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
+    if (changed === "state" || changed === "config") {
+      await expect(
+        admitUpdateCommandRun({ opts: {}, root, initialization }).then(() => "admitted"),
+      ).rejects.toThrow(/changed/);
+      expect(fs.existsSync(databasePath)).toBe(false);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(false);
+    } else {
+      const warning = vi.spyOn(defaultRuntime, "error");
+      const run = await admitUpdateCommandRun({ opts: {}, root, initialization });
+      expect(getUpdateRun(run.runId, { env })?.status).toBe("running");
+      expect(fs.existsSync(databasePath)).toBe(true);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath(process.env))).toBe(true);
+      expect(warning).toHaveBeenCalledWith(
+        expect.stringContaining("Warning: Configuration changed during database admission"),
+      );
+      expect(initialization.target.configSnapshot.config).toMatchObject(
+        changed === "include"
+          ? { gateway: { mode: "local", port: 19222 } }
+          : { agents: { defaults: { workspace: path.join(root, "replacement-workspace") } } },
+      );
+    }
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
     expect(fs.readFileSync(includePath)).toEqual(includeBefore);
   },
@@ -424,6 +379,173 @@ it.each(["ok", "error"] as const)(
   },
 );
 
+it.each([
+  { json: false, diagnosticsWriteFails: false },
+  { json: true, diagnosticsWriteFails: false },
+  { json: true, diagnosticsWriteFails: true },
+])(
+  "prints an unexpected update failure after settlement with an existing report (json=$json, diagnosticsWriteFails=$diagnosticsWriteFails)",
+  async ({ json, diagnosticsWriteFails }) => {
+    const env = { OPENCLAW_STATE_DIR: dirs.make("update-unexpected-failure-") };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const primaryFailure = new Error("Candidate validation unexpectedly stopped.");
+    const warn = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+    if (diagnosticsWriteFails) {
+      vi.spyOn(
+        existingStateWrite,
+        "runExistingOpenClawStateWriteTransaction",
+      ).mockImplementationOnce(() => {
+        throw new Error("fixture diagnostics write refused");
+      });
+    }
+    const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
+    let savedAtPublication: string | undefined;
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
+      if (String(value).includes("OpenClaw update failed")) {
+        savedAtPublication = fs.readFileSync(reportPath, "utf8");
+      }
+    });
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {
+      savedAtPublication = fs.readFileSync(reportPath, "utf8");
+    });
+    let beforeSettlement: { status?: string; output: number } | undefined;
+    const outcome = await withUpdateCommandTerminalResult(
+      (registerRun) => {
+        registerRun(run);
+        return withUpdateCommandRecoveryUnwind(
+          { json, run },
+          { triageTarget: { env } },
+          async () => {
+            throw primaryFailure;
+          },
+        ).finally(() => {
+          beforeSettlement = {
+            status: getUpdateRun(run.runId, { env })?.status,
+            output: log.mock.calls.length + output.mock.calls.length,
+          };
+        });
+      },
+      { json },
+    ).catch((error: unknown) => error);
+    expect(outcome).toMatchObject({
+      name: "UpdateCommandFailure",
+      exitCode: 1,
+      result: { status: "error", reason: "update-failed" },
+    });
+    expect(collectNestedErrorCandidates(outcome)).toContain(primaryFailure);
+    expect(beforeSettlement).toEqual({ status: "running", output: 0 });
+    expect(getUpdateRun(run.runId, { env })).toMatchObject({
+      status: "failed",
+      reason: "update-failed",
+      verification: { rollbackOutcome: { status: "not-needed" } },
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "requested",
+          status: "failed",
+          failureFacts: [expect.objectContaining({ message: primaryFailure.message })],
+        }),
+      ]),
+    });
+    if (diagnosticsWriteFails) {
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("fixture diagnostics write refused"),
+      );
+    }
+    expect(savedAtPublication).toContain("Candidate validation unexpectedly stopped.");
+    expect(savedAtPublication).toContain("OpenClaw update failed");
+    if (json) {
+      expect(output).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ status: "error", runId: run.runId, reportPath }),
+      );
+      expect(JSON.stringify(output.mock.calls[0]?.[0])).toContain(
+        "Candidate validation unexpectedly stopped.",
+      );
+    } else {
+      const text = log.mock.calls.flat().join("\n");
+      expect(text).toContain("OpenClaw update failed");
+      expect(text).toContain("Candidate validation unexpectedly stopped.");
+      expect(text).toContain(`Report: ${reportPath}`);
+    }
+  },
+);
+
+it.each(["ok", "error"] as const)(
+  "saves the complete %s diagnostics before printing the Markdown path",
+  async (status) => {
+    const secret = "sk-synthetic-terminal-" + "x".repeat(48);
+    const env = {
+      OPENCLAW_STATE_DIR: dirs.make("update-terminal-report-"),
+      OPENAI_API_KEY: secret,
+    };
+    const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+    const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
+    let savedAtPublication: { markdown: string; failure?: string; inventory?: string } | undefined;
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation((value) => {
+      if (String(value) === `Report: ${reportPath}`) {
+        const markdown = fs.readFileSync(reportPath, "utf8");
+        let failure: string | undefined;
+        let inventory: string | undefined;
+        if (status === "error") {
+          const diagnosticLink = /^Bounded diagnostic JSON: ([^\r\n]+)$/mu.exec(markdown)?.[1];
+          if (!diagnosticLink) {
+            throw new Error("Published failure report is missing its diagnostic JSON link.");
+          }
+          failure = fs.readFileSync(path.resolve(path.dirname(reportPath), diagnosticLink), "utf8");
+          expect(Buffer.byteLength(failure)).toBeLessThanOrEqual(8 * 1024);
+          const inventoryPath = JSON.parse(failure)
+            .error.split("Complete Doctor lint inventory: ")[1]
+            .split(" Doctor lint receipt: ")[0]
+            .replace("$OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+          inventory = fs.readFileSync(inventoryPath, "utf8");
+        }
+        savedAtPublication = { markdown, ...(failure ? { failure, inventory } : {}) };
+      }
+    });
+    const doctorLintFindings: UpdateDoctorLintFinding[] = Array.from(
+      { length: 40 },
+      (_, index) => ({
+        checkId: `fixture/check-${index}`,
+        severity: index === 0 && status === "error" ? "error" : "warning",
+        message: `Finding ${index}: ${secret}`,
+      }),
+    );
+    // A valid UUID with a numeric tail must remain a readable diagnostic link.
+    vi.mocked(crypto.randomUUID).mockReturnValue("00000000-0000-4000-8000-123456789012");
+    await publishUpdateCommandTerminalResult(
+      { opts: { run } },
+      {
+        status,
+        mode: "npm",
+        reason: status === "error" ? "doctor-failed" : undefined,
+        durationMs: 1,
+        steps: [
+          {
+            name: "candidate doctor lint",
+            command: "doctor --lint --json",
+            cwd: "/fixture",
+            durationMs: 1,
+            exitCode: status === "error" ? 1 : 0,
+            doctorLintFindings,
+          },
+        ],
+      },
+      { rolledBack: false },
+    );
+    expect(log.mock.calls.flat().join("\n")).toContain(`Report: ${reportPath}`);
+    expect(savedAtPublication).toBeDefined();
+    for (const finding of doctorLintFindings) {
+      expect(savedAtPublication?.markdown).toContain(finding.checkId);
+      if (status === "error") {
+        expect(savedAtPublication?.inventory).toContain(finding.checkId);
+      }
+    }
+    expect(JSON.stringify(savedAtPublication)).not.toContain(secret);
+    expect(savedAtPublication?.markdown).toContain(
+      status === "error" ? "doctor-failed" : "OpenClaw updated",
+    );
+  },
+);
+
 it("continues normal history admission when no operational update is pending", async () => {
   const root = dirs.make("update-admission-empty-");
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -436,6 +558,10 @@ it("continues normal history admission when no operational update is pending", a
 it.skipIf(process.platform === "win32").each([
   { signal: "SIGINT", mode: "fresh" },
   { signal: "SIGTERM", mode: "fresh" },
+  { signal: "SIGINT", mode: "resolved" },
+  { signal: "SIGTERM", mode: "resolved" },
+  { signal: "SIGINT", mode: "resolved-foreign-before" },
+  { signal: "SIGINT", mode: "resolved-foreign-after" },
   { signal: "SIGINT", mode: "repeat" },
   { signal: "SIGINT", mode: "inherited" },
   { signal: "SIGINT", mode: "handoff" },
@@ -452,17 +578,30 @@ it.skipIf(process.platform === "win32").each([
       caller,
       `
       import fs from 'node:fs';
-      import { registerSignalExitGate } from ${JSON.stringify(new URL("../signal-exit-barrier.ts", import.meta.url).href)};
-      import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(new URL("../../infra/update-run-ledger.ts", import.meta.url).href)};
-      import { createRetainedUpdateRecovery } from ${JSON.stringify(new URL("../../infra/update-retained-recovery.test-support.ts", import.meta.url).href)};
-      import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(new URL("../../state/openclaw-state-db.ts", import.meta.url).href)};
-      import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(new URL("./update-command-run.ts", import.meta.url).href)};
+      import { registerSignalExitGate } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.signalExitBarrier).href)};
+      import { createUpdateRun, finishUpdateRun, getUpdateRun, recordUpdateRunPhase } from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateRunLedger).href)};
+      import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
+      import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
+      import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
+      import { resolveUpdateCommandTarget } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandTarget).href)};
       const opts = { dryRun: true };
       const mode = ${JSON.stringify(mode)};
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)} });
+      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
       await withUpdatePreviewSignals({ ...opts, run }, async () => {
         const sibling = createUpdateRun({ trigger: 'cli' });
+        if (mode.startsWith('resolved')) {
+          const foreign = () => recordUpdateRunPhase(run.runId, 'requested', { target: { tag: 'foreign' } });
+          if (mode === 'resolved-foreign-before') foreign();
+          const root = ${JSON.stringify(root)};
+          await resolveUpdateCommandTarget({ ...opts, run }, { triageTarget: { root, env: run.env } }, undefined, {
+            startedAt: Date.now(), postCoreUpdateResume: false, postCoreUpdateChannel: undefined,
+            timeoutMs: 1000, shouldRestart: false, requestedChannel: null, devTarget: undefined,
+            controlPlaneUpdateSentinelMeta: null, discoveredRoot: root, installKind: 'git',
+            servicePlan: undefined,
+          }, { enter: () => { throw new Error('preview must not acquire a mutable executor'); } }, 1000);
+          if (mode === 'resolved-foreign-after') foreign();
+        }
         if (mode === 'repeat') {
           registerSignalExitGate(new Promise((resolve) => process.once('message', resolve)));
           process.once('SIGINT', () => process.send('interrupted'));
@@ -487,7 +626,7 @@ it.skipIf(process.platform === "win32").each([
       });
     `,
     );
-    const child = spawn(process.execPath, ["--import", "./scripts/tsx.mjs", caller], {
+    const child = spawn(process.execPath, [...sourceImportArgs, caller], {
       cwd: process.cwd(),
       env: {
         ...process.env,
@@ -545,7 +684,15 @@ it.skipIf(process.platform === "win32").each([
             }
           : { env: { OPENCLAW_STATE_DIR: root } };
       const record = getUpdateRun(message.runId, options);
-      if (mode === "fresh" || mode === "repeat") {
+      if (mode.startsWith("resolved")) {
+        expect(message.expected).toMatchObject({
+          target: { kind: "git", installationMethod: "git-checkout" },
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "installation-inspection", status: "completed" }),
+          ]),
+        });
+      }
+      if (mode === "fresh" || mode === "repeat" || mode === "resolved") {
         expect(record).toMatchObject({
           status: "skipped",
           phase: "finished",
@@ -597,217 +744,4 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  "owned",
-  "owned-pending",
-  "foreign",
-  "absent",
-  "unloaded-local",
-  "unloaded-global",
-  "denied",
-  "timeout",
-  "malformed",
-  "unresolved-root",
-  "native-rejection",
-  "native-value-rejection",
-  "root-probe-error",
-] as const)("admits only resolved loaded service ownership (%s)", async (scenario) => {
-  const home = dirs.make("update-loaded-admission-");
-  const callerState = path.join(home, ".openclaw-caller");
-  const serviceState = path.join(home, ".openclaw-service");
-  const root = path.join(home, "package");
-  const foreignRoot = path.join(home, "foreign");
-  for (const packageRoot of [root, foreignRoot]) {
-    fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
-    fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
-    fs.writeFileSync(path.join(packageRoot, "dist", "entry.js"), "// fixture");
-  }
-  vi.spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: home });
-  for (const key of [
-    "OPENCLAW_HOME",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-    "OPENCLAW_SUPERVISOR_MODE",
-    UPDATE_RUN_ID_ENV,
-  ]) {
-    vi.stubEnv(key, undefined);
-  }
-  vi.stubEnv("HOME", home);
-  vi.stubEnv("OPENCLAW_PROFILE", "caller");
-  vi.stubEnv("OPENCLAW_STATE_DIR", callerState);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(callerState, "openclaw.json"));
-  const serviceEnv = {
-    ...process.env,
-    OPENCLAW_PROFILE: "service",
-    OPENCLAW_STATE_DIR: serviceState,
-    OPENCLAW_CONFIG_PATH: path.join(serviceState, "openclaw.json"),
-  };
-  let pending: ReturnType<typeof createRetainedUpdateRecovery> | undefined;
-  if (scenario === "owned-pending") {
-    const runId = createUpdateRun({ trigger: "cli" }, { env: serviceEnv }).runId;
-    const from = { root, nodePath: process.execPath, version: "1.0.0", buildId: null };
-    pending = createRetainedUpdateRecovery(
-      { runId, from, to: { ...from, version: "2.0.0" } },
-      { env: serviceEnv },
-    );
-    closeOpenClawStateDatabaseForTest();
-  }
-  const sourcePath = resolveSystemdUnitPath(process.env);
-  if (scenario === "unloaded-local") {
-    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-    fs.writeFileSync(
-      sourcePath,
-      `[Service]\nExecStart=${process.execPath} ${root}/dist/entry.js gateway\n`,
-    );
-  }
-  const snapshot = () =>
-    fs
-      .readdirSync(home, { recursive: true })
-      .map(String)
-      .toSorted()
-      .map((name) => {
-        const filename = path.join(home, name);
-        const stat = fs.statSync(filename);
-        return [
-          name,
-          stat.ino,
-          stat.mtimeMs,
-          stat.mode,
-          stat.isFile()
-            ? createHash("sha256").update(fs.readFileSync(filename)).digest("hex")
-            : null,
-        ];
-      });
-  const before = snapshot();
-  const nativeFailure =
-    scenario === "native-value-rejection"
-      ? { detail: "inspection-secret-canary" }
-      : new Error("inspection-secret-canary");
-  const rootFailure = new Error("later ownership resolution failed");
-  if (scenario === "root-probe-error") {
-    vi.spyOn(servicePlan, "gatewayServiceCommandUsesRoot").mockRejectedValue(rootFailure);
-  }
-  const command =
-    scenario === "unresolved-root"
-      ? ["opaque-launcher"]
-      : [
-          process.execPath,
-          path.join(scenario === "foreign" ? foreignRoot : root, "dist", "entry.js"),
-          "gateway",
-        ];
-  const response = (values: { type: string; data: unknown }[]) => ({
-    code: 0,
-    termination: "exit" as const,
-    stderr: "",
-    stdout: values.map((value) => JSON.stringify(value)).join("\n"),
-  });
-  const bus = vi.spyOn(systemdExec, "execBusctlUser").mockImplementation(async (_env, args) => {
-    if (scenario === "denied" || scenario === "timeout") {
-      return {
-        code: 1,
-        termination: scenario === "timeout" ? "timeout" : "exit",
-        stdout: "",
-        stderr: scenario === "timeout" ? "inspection timed out" : "Call failed: Permission denied",
-      };
-    }
-    if (scenario === "malformed") {
-      return { code: 0, termination: "exit", stdout: "not json", stderr: "" };
-    }
-    if (["absent", "unloaded-local", "unloaded-global"].includes(scenario)) {
-      if (args.includes("GetUnitFileState") && scenario === "unloaded-global") {
-        return response([{ type: "s", data: ["disabled"] }]);
-      }
-      const unit = "openclaw-gateway-caller.service";
-      return {
-        code: 1,
-        termination: "exit",
-        stdout: "",
-        stderr: args.includes("GetUnitFileState")
-          ? `Call failed: Unit file ${unit} does not exist.`
-          : `Call failed: Unit ${unit} ${args.includes("GetUnit") ? "not loaded" : "not found"}.`,
-      };
-    }
-    if (args.includes("GetUnit") || args.includes("LoadUnit")) {
-      return response([{ type: "o", data: ["/org/freedesktop/systemd1/unit/gateway"] }]);
-    }
-    if (args.includes("FragmentPath")) {
-      return response([
-        { type: "s", data: sourcePath },
-        { type: "as", data: [] },
-        { type: "b", data: false },
-        { type: "s", data: "loaded" },
-      ]);
-    }
-    return response([
-      { type: "a(sasbttttuii)", data: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]] },
-      { type: "s", data: "" },
-      {
-        type: "as",
-        data: Object.entries(serviceEnv)
-          .filter(([key]) =>
-            ["OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"].includes(key),
-          )
-          .map(([key, value]) => `${key}=${value}`),
-      },
-      { type: "a(sb)", data: [] },
-      { type: "as", data: [] },
-    ]);
-  });
-  if (scenario === "native-rejection" || scenario === "native-value-rejection") {
-    bus.mockRejectedValue(nativeFailure);
-  }
-  // Use the real manager reader on every platform; only the native bus is simulated.
-  const service = gatewayService.resolveGatewayService();
-  let inspectionFailure: unknown;
-  vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue({
-    ...service,
-    readCommand: async (...args) => {
-      try {
-        return await readSystemdServiceExecStart(...args);
-      } catch (error) {
-        inspectionFailure = error;
-        throw error;
-      }
-    },
-  });
-  if (scenario === "owned" || scenario === "foreign" || scenario === "absent") {
-    const run = await admitUpdateCommandRun({ opts: {}, root });
-    const expectedState = scenario === "owned" ? serviceState : callerState;
-    expect(run.env.OPENCLAW_STATE_DIR).toBe(expectedState);
-    expect(run.env.OPENCLAW_PROFILE).toBe(scenario === "owned" ? "service" : "caller");
-    expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
-    expect(
-      fs.existsSync(path.join(scenario === "owned" ? callerState : serviceState, "state")),
-    ).toBe(false);
-  } else {
-    const failure: unknown = await admitUpdateCommandRun({ opts: {}, root }).then(
-      () => "admitted",
-      (error: unknown) => error,
-    );
-    if (scenario === "owned-pending") {
-      expect(failure).toBeInstanceOf(UpdateRecoveryRequiredError);
-    } else if (scenario === "root-probe-error") {
-      expect(failure).toBe(rootFailure);
-    } else {
-      expect(failure).toBeInstanceOf(servicePlan.GatewayServiceUpdateOwnershipError);
-      if (!(failure instanceof servicePlan.GatewayServiceUpdateOwnershipError)) {
-        throw new Error("Expected safe service ownership error");
-      }
-      if (scenario !== "unresolved-root") {
-        expect(failure.message).toContain("openclaw gateway status --deep");
-        expect(failure.cause).toBe(inspectionFailure);
-        expect(Object.getOwnPropertyDescriptor(failure, "cause")?.enumerable).toBe(false);
-      }
-      expect(String(failure)).not.toContain("inspection-secret-canary");
-      expect(JSON.stringify(failure)).not.toContain("inspection-secret-canary");
-      expect(failure.stack).not.toContain("inspection-secret-canary");
-    }
-    expect(snapshot()).toEqual(before);
-    if (pending) {
-      expect(loadUpdateRecovery(pending.runId, { env: serviceEnv })).toEqual(pending);
-    }
-  }
-  expect(bus).toHaveBeenCalled();
-  expect(bus.mock.calls.every(([, args]) => !args.includes("LoadUnit"))).toBe(true);
-});
+registerUpdateRunReceiptFailureTests(dirs);

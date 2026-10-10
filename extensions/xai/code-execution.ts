@@ -1,4 +1,3 @@
-// Xai plugin module implements code execution behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/provider-web-search";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
@@ -11,7 +10,6 @@ import {
   resolveCodeExecutionEnabled,
 } from "./src/code-execution-config.js";
 import {
-  buildXaiCodeExecutionPayload,
   requestXaiCodeExecution,
   resolveXaiCodeExecutionMaxTurns,
   resolveXaiCodeExecutionModel,
@@ -66,17 +64,13 @@ export function createCodeExecutionTool(options?: {
         maxTurns,
         task,
       });
-      return jsonResult(
-        buildXaiCodeExecutionPayload({
-          task,
-          model,
-          tookMs: Date.now() - startedAt,
-          content: result.content,
-          citations: result.citations,
-          usedCodeExecution: result.usedCodeExecution,
-          outputTypes: result.outputTypes,
-        }),
-      );
+      return jsonResult({
+        task,
+        provider: "xai",
+        model,
+        tookMs: Date.now() - startedAt,
+        ...result,
+      });
     },
   );
 }

@@ -13,7 +13,7 @@ export function createTabDocumentProvenance({ access }) {
   function lifecycle(tabId) {
     let value = lifetimes.get(tabId);
     if (!value) {
-      value = { root: 0, attachment: 0 };
+      value = { root: 0, attachment: 0, rootUrl: undefined };
       lifetimes.set(tabId, value);
     }
     return value;
@@ -118,6 +118,7 @@ export function createTabDocumentProvenance({ access }) {
     const frameUrl = root ? frameDocumentUrl(event.params.frame) : undefined;
     if (root) {
       lifecycle(event.tabId).root += 1;
+      lifecycle(event.tabId).rootUrl = frameUrl;
       access.recordRootCommit(event.tabId, frameUrl);
     }
     if (document) {
@@ -140,13 +141,30 @@ export function createTabDocumentProvenance({ access }) {
     send(event);
   }
 
+  function resolveTabSnapshot(tabId, tab) {
+    const rootUrl = lifetimes.get(tabId)?.rootUrl;
+    // Chrome's tab metadata can lag the native root commit, including in fresh reads.
+    return tab?.id === tabId &&
+      tab.url === "about:blank" &&
+      typeof rootUrl === "string" &&
+      tab.pendingUrl === rootUrl
+      ? { ...tab, url: rootUrl }
+      : tab;
+  }
+
   return {
     get: (tabId) => documents.get(tabId),
     rootRevision: (tabId) => lifecycle(tabId).root,
+    resolveTabSnapshot,
+    resolveTabUpdate: (tabId, tab, change) =>
+      change.status === "loading" && change.url === undefined
+        ? resolveTabSnapshot(tabId, tab)
+        : tab,
     observeTab,
     revokeDocument,
     retireAttachment: (tabId) => {
       lifecycle(tabId).attachment += 1;
+      lifecycle(tabId).rootUrl = undefined;
       if (documents.has(tabId)) {
         access.invalidateTab(tabId);
       }

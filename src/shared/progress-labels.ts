@@ -1,4 +1,4 @@
-export const DEFAULT_PROGRESS_DRAFT_LABELS = ["Working"] as const;
+const DEFAULT_PROGRESS_DRAFT_LABELS = ["Working"] as const;
 
 function hashProgressSeed(seed: string): number {
   let hash = 2166136261;

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -11,14 +11,42 @@ import { prepareMemoryRuntimeReload } from "./memory-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "./runtime/types.js";
 
-const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
-  "../../extensions/memory-core/runtime-api.js",
-);
+const cleanupClock = vi.hoisted(() => ({ setTimeout: globalThis.setTimeout }));
+
+beforeEach(() => {
+  const nativeSetTimeout = globalThis.setTimeout;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldClearNativeTimers: true });
+  cleanupClock.setTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = nativeSetTimeout;
+});
+afterEach(() => vi.useRealTimers());
+
+vi.mock("./host-hook-cleanup-timeout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./host-hook-cleanup-timeout.js")>();
+  return {
+    ...actual,
+    withPluginHostCleanupTimeout: <T>(hookId: string, cleanup: () => T | Promise<T>) => {
+      const nativeSetTimeout = globalThis.setTimeout;
+      // Only the cleanup deadline is virtual; asynchronous workers and watchers keep real timers.
+      globalThis.setTimeout = cleanupClock.setTimeout;
+      try {
+        return actual.withPluginHostCleanupTimeout(hookId, cleanup, 500);
+      } finally {
+        globalThis.setTimeout = nativeSetTimeout;
+      }
+    },
+  };
+});
+
+const { createMemoryRuntime } = await vi.importActual<{
+  createMemoryRuntime: (host: {
+    runInBackgroundContext: <T>(run: () => T) => T;
+  }) => MemoryPluginRuntime;
+}>("../../extensions/memory-core/runtime-api.js");
 
 it("keeps persistent managers isolated between memory runtime instances with the same agent", async () => {
   const state = await createOpenClawTestState({
@@ -54,15 +82,8 @@ it("keeps persistent managers isolated between memory runtime instances with the
   }
 });
 
-function registerMemoryOwner(
-  config: OpenClawConfig,
-  runtimeImplementation: MemoryPluginRuntime = memoryRuntime,
-) {
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean } = {}) {
+  const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "memory-fixture",
     source: "fixture",
@@ -74,6 +95,13 @@ function registerMemoryOwner(
   record.memorySlotSelected = true;
   owner.registry.plugins.push(record);
   const api = owner.createApi(record, { config });
+  assert(api.lifecycle.runInBackgroundContext);
+  const runtimeImplementation = createMemoryRuntime({
+    runInBackgroundContext: api.lifecycle.runInBackgroundContext,
+  });
+  if (options.legacy) {
+    delete runtimeImplementation.prepareReload;
+  }
   api.registerMemoryCapability({ runtime: runtimeImplementation });
   const runtime = owner.registry.memoryCapabilities[0]?.capability.runtime;
   assert(runtime);
@@ -129,26 +157,22 @@ it.each([
       },
     },
   };
-  const legacyRuntime = { ...memoryRuntime };
-  delete legacyRuntime.prepareReload;
-  const owner = registerMemoryOwner(
-    config,
-    mode === "legacy-retained" ? legacyRuntime : memoryRuntime,
-  );
+  const owner = registerMemoryOwner(config, { legacy: mode === "legacy-retained" });
   const sibling = registerMemoryOwner(config);
   const successor = registerMemoryOwner(config);
   const entered = createDeferredCore();
   const releaseCreate = createDeferredCore();
   const releaseClose = createDeferredCore();
+  const closeEntered = createDeferredCore();
   const probeEntered = createDeferredCore();
   const releaseProbe = createDeferredCore();
   let rejectClose = mode === "failed-close";
-  const embedBatch = vi.fn(async () => {
+  const embed = vi.fn(async () => {
     probeEntered.resolve();
     if (mode === "late-probe") {
       await releaseProbe.promise;
     }
-    return [[1, 0, 0]];
+    return [1, 0, 0];
   });
   const create = vi.fn(async () => {
     entered.resolve();
@@ -162,13 +186,14 @@ it.each([
       provider: {
         id: targetId,
         model: "synthetic-embedding",
-        embed: async () => [1, 0, 0],
-        embedBatch,
+        embed,
+        embedBatch: async () => [[1, 0, 0]],
         close,
       },
     };
   });
   const close = vi.fn(async () => {
+    closeEntered.resolve();
     expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(targetId);
     if (rejectClose) {
       throw new Error("synthetic provider cleanup refused");
@@ -300,7 +325,7 @@ it.each([
       assert(unaffected.manager, unaffected.error ?? "Expected an unaffected manager");
       await unaffected.manager.probeEmbeddingAvailability();
       const prepared = prepareMemoryRuntimeReload(owner.registry, next);
-      const probesBeforeAcquisition = embedBatch.mock.calls.length;
+      const probesBeforeAcquisition = embed.mock.calls.length;
       try {
         const retained = await owner.runtime.getMemorySearchManager({
           cfg: unaffectedConfig,
@@ -318,7 +343,7 @@ it.each([
           hasManager: false,
           error: expect.stringContaining("reloading"),
         });
-        expect(embedBatch).toHaveBeenCalledTimes(probesBeforeAcquisition);
+        expect(embed).toHaveBeenCalledTimes(probesBeforeAcquisition);
         expect(close).not.toHaveBeenCalled();
         expect(unaffectedClose).not.toHaveBeenCalled();
       } finally {
@@ -362,7 +387,10 @@ it.each([
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
     } else if (mode === "timeout") {
-      await expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      await closeEntered.promise;
+      await vi.advanceTimersByTimeAsync(500);
+      await expired;
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
       const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
@@ -379,7 +407,9 @@ it.each([
       await finalClose;
       expect(close).toHaveBeenCalledOnce();
     } else if (mode === "late-probe") {
-      await expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      await vi.advanceTimersByTimeAsync(500);
+      await expired;
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
       const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
@@ -393,7 +423,7 @@ it.each([
       await expect(reload.close()).resolves.toMatchObject({
         errors: [
           expect.objectContaining({
-            message: expect.stringContaining(`Plugin ${targetId} was reloaded or disabled`),
+            message: `Plugin ${targetId} is retiring`,
           }),
         ],
       });
@@ -511,7 +541,7 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
   const drain = vi.fn(async () => {});
   const failure = new Error("second memory runtime preparation failed");
   const firstRuntime = first.instance.wrap({
-    ...memoryRuntime,
+    ...first.runtime,
     prepareReload: () => ({ drain, resume }),
   });
   first.registry.memoryCapabilities[0]!.capability = first.instance.wrap({ runtime: firstRuntime });
@@ -519,7 +549,7 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
     pluginId: "another-runtime",
     capability: {
       runtime: {
-        ...memoryRuntime,
+        ...first.runtime,
         prepareReload() {
           throw failure;
         },

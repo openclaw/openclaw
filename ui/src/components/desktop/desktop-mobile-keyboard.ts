@@ -55,6 +55,8 @@ export class DesktopMobileKeyboard {
   reset(input?: HTMLTextAreaElement): void {
     if (!input) {
       this.clearModifiers();
+      // A retired viewer must be releasable even if no keyboard input follows the handoff.
+      this.modifierConnection = null;
     }
     this.value = MOBILE_KEYBOARD_SENTINEL;
     const target = input ?? this.options.input();

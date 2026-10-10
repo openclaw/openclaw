@@ -14,7 +14,6 @@ type EmbeddingQueryRetryHarness = {
     text: string,
     signal?: AbortSignal,
     provider?: EmbeddingProvider,
-    markDegraded?: boolean,
     providerRuntime?: EmbeddingProviderRuntime,
     deadlineControl?: MemorySearchDeadlineControl,
   ) => Promise<number[]>;
@@ -60,6 +59,69 @@ function createEmbeddingBatchRetryHarness(embedBatch: EmbeddingProvider["embedBa
   return manager;
 }
 
+describe("memory model input formatting", () => {
+  it.each([
+    [
+      "local",
+      "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf",
+      true,
+    ],
+    ["ollama", "embeddinggemma:latest", true],
+    ["ollama", "embeddinggemma-2:270m", true],
+    ["lmstudio", "text-embedding-embeddinggemma-300m", true],
+    ["openai-compatible", "google/embeddinggemma-300m", true],
+    ["local", "/models/EmbeddingGemma-300m.Q8_0.gguf", true],
+    ["openai-compatible", "nomic-embed-text", false],
+    ["openai-compatible", "other/embeddinggemmax", false],
+    ["gemini", "gemini-embedding-2", false],
+  ])("formats query and document inputs for %s/%s", async (id, model, prefixed) => {
+    const embed = vi.fn<EmbeddingProvider["embed"]>(async () => [1, 0]);
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async (inputs) =>
+      inputs.map(() => [0, 1]),
+    );
+    const manager = createEmbeddingBatchRetryHarness(embedBatch);
+    Object.assign(manager.provider, { id, model, embed });
+    const document = {
+      text: "first second",
+      parts: [
+        { type: "text" as const, text: "first" },
+        { type: "text" as const, text: " second" },
+      ],
+    };
+
+    await expect(manager.embedQueryWithRetry("find this")).resolves.toEqual([1, 0]);
+    await expect(manager.embedBatchWithRetry(["remember this", document])).resolves.toEqual([
+      [0, 1],
+      [0, 1],
+    ]);
+
+    expect(embed.mock.calls[0]?.[0]).toBe(
+      prefixed ? "task: search result | query: find this" : "find this",
+    );
+    expect(embedBatch.mock.calls[0]?.[0]).toEqual(
+      prefixed
+        ? [
+            "title: none | text: remember this",
+            {
+              text: "title: none | text: first second",
+              parts: [
+                { type: "text", text: "title: none | text: first" },
+                { type: "text", text: " second" },
+              ],
+            },
+          ]
+        : ["remember this", document],
+    );
+    expect(document).toEqual({
+      text: "first second",
+      parts: [
+        { type: "text", text: "first" },
+        { type: "text", text: " second" },
+      ],
+    });
+  });
+});
+
 describe("memory embedding query retry cancellation", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -80,7 +142,6 @@ describe("memory embedding query retry cancellation", () => {
       "search terms",
       undefined,
       undefined,
-      true,
       undefined,
       control,
     );
@@ -231,6 +292,10 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       () =>
         '{"error":{"message":"<400> InternalError.Algo.InvalidParameter: Value error, batch size is invalid, it should not be larger than 10.: input.contents","type":"InvalidParameter","code":"InvalidParameter"}}',
     ],
+    [
+      "an explicit input array item cap",
+      () => '{"error":{"code":"1214","message":"input array max 10"}}',
+    ],
   ])(
     "splits provider errors with %s without retrying oversized requests",
     async (_label, error) => {
@@ -247,9 +312,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       await expect(manager.embedBatchWithRetry(batchInputs(items))).resolves.toEqual(
         items.map((_, index) => [index]),
       );
-      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([
-        33, 17, 9, 8, 16, 8, 8,
-      ]);
+      expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([33, 10, 10, 10, 3]);
       expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
       expect(manager.markLocalEmbeddingProviderDegraded).not.toHaveBeenCalled();
     },
@@ -293,8 +356,33 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       message: "batch size is invalid, it should not be larger than 10",
       items: ["one"],
     },
+    {
+      label: "an input array item length limit",
+      message: "input array item max length 64",
+      items: ["one", "two"],
+    },
+    {
+      label: "a numbered input array element token limit",
+      message: "input array element 0 exceeds 256 tokens",
+      items: ["one", "two"],
+    },
+    {
+      label: "an input array token limit",
+      message: "input array max 64 tokens",
+      items: ["one", "two"],
+    },
+    {
+      label: "a numeric prefix with a token suffix",
+      message: "input array max 64tokens",
+      items: ["one", "two"],
+    },
+    {
+      label: "a fractional input array limit",
+      message: "input array max 64.5",
+      items: ["one", "two"],
+    },
   ])("does not retry or split $label", async ({ message, items }) => {
-    const embedBatch = vi.fn(async () => {
+    const embedBatch = vi.fn<EmbeddingProvider["embedBatch"]>(async () => {
       throw new Error(`openai-compatible embeddings failed: HTTP 400: ${message}`);
     });
     const manager = createEmbeddingBatchRetryHarness(embedBatch);
@@ -304,6 +392,7 @@ describe.each(["text", "structured"])("memory embedding batch retry boundary (%s
       operation: kind === "text" ? "batch" : "structured-batch",
     });
     expect(embedBatch).toHaveBeenCalledOnce();
+    expect(embedBatch.mock.calls[0]?.[0]).toEqual(batchInputs(items));
     expect(manager.waitForEmbeddingRetry).not.toHaveBeenCalled();
     expect(manager.markLocalEmbeddingProviderDegraded).toHaveBeenCalledOnce();
   });

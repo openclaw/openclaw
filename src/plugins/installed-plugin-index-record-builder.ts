@@ -74,79 +74,53 @@ function buildContributionInfo(record: PluginManifestRecord): InstalledPluginCon
   };
 }
 
+const ACTIVATION_COMPAT_CODES = [
+  ["onProviders", "activation-provider-hint"],
+  ["onAgentHarnesses", "activation-agent-harness-hint"],
+  ["onChannels", "activation-channel-hint"],
+  ["onCommands", "activation-command-hint"],
+  ["onRoutes", "activation-route-hint"],
+  ["onConfigPaths", "activation-config-path-hint"],
+  ["onCapabilities", "activation-capability-hint"],
+] as const;
+
 /** Collects compatibility codes implied by a manifest's legacy or activation surfaces. */
 export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
-  const codes: PluginCompatCode[] = [];
-  if (record.activation?.onProviders?.length) {
-    codes.push("activation-provider-hint");
-  }
-  if (record.activation?.onAgentHarnesses?.length) {
-    codes.push("activation-agent-harness-hint");
-  }
-  if (record.activation?.onChannels?.length) {
-    codes.push("activation-channel-hint");
-  }
-  if (record.activation?.onCommands?.length) {
-    codes.push("activation-command-hint");
-  }
-  if (record.activation?.onRoutes?.length) {
-    codes.push("activation-route-hint");
-  }
-  if (record.activation?.onConfigPaths?.length) {
-    codes.push("activation-config-path-hint");
-  }
-  if (record.activation?.onCapabilities?.length) {
-    codes.push("activation-capability-hint");
-  }
-  return normalizeSortedUniqueStringEntries(codes) as readonly PluginCompatCode[];
-}
-
-function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string | undefined {
-  if (!candidate?.packageDir) {
-    return undefined;
-  }
-  const packageDir =
-    pluginCacheRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
-  const packageJsonPath = path.join(packageDir, "package.json");
-  const rootDir =
-    candidate.rootDir === candidate.packageDir
-      ? packageDir
-      : (pluginCacheRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir));
-  const packageJsonRealPath = pluginCacheRealpathSync(packageJsonPath);
-  return packageJsonRealPath && isPathInside(rootDir, packageJsonRealPath)
-    ? packageJsonPath
-    : undefined;
-}
-
-function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {
-  const resolvedRootDir =
-    rootDir === path.dirname(packageJsonPath)
-      ? path.dirname(packageJsonPath)
-      : (pluginCacheRealpathSync(rootDir) ?? path.resolve(rootDir));
-  const relativePath = path.relative(resolvedRootDir, packageJsonPath) || "package.json";
-  return relativePath.split(path.sep).join("/");
+  return ACTIVATION_COMPAT_CODES.filter(([key]) => record.activation?.[key]?.length)
+    .map(([, code]) => code)
+    .toSorted();
 }
 
 function resolvePackageJsonRecord(params: {
   candidate: PluginCandidate | undefined;
-  packageJsonPath: string | undefined;
   rejectHardlinks: boolean;
 }): InstalledPluginIndexRecord["packageJson"] | undefined {
-  if (!params.candidate?.packageDir || !params.packageJsonPath) {
+  const { candidate } = params;
+  if (!candidate?.packageDir) {
     return undefined;
   }
   const file = readPluginCacheFile({
-    rootDir: params.candidate.packageDir,
+    rootDir: candidate.packageDir,
     relativePath: "package.json",
     rejectHardlinks: params.rejectHardlinks,
   });
   if (!file.ok) {
     return undefined;
   }
+  const rootDir =
+    candidate.rootDir === candidate.packageDir
+      ? file.rootRealPath
+      : (pluginCacheRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir));
+  if (!isPathInside(rootDir, file.path)) {
+    return undefined;
+  }
+  // Persist the package entry path, even when its checked target uses another filename.
+  const packageJsonPath = path.join(file.rootRealPath, "package.json");
+  const relativePath = path.relative(rootDir, packageJsonPath) || "package.json";
   return {
-    path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
+    path: relativePath.split(path.sep).join("/"),
     hash: file.hash,
     fileSignature: file.signature,
   };
@@ -223,16 +197,6 @@ function readRecordFile(params: {
   return undefined;
 }
 
-function buildCandidateLookup(
-  candidates: readonly PluginCandidate[],
-): Map<string, PluginCandidate> {
-  const bySource = new Map<string, PluginCandidate>();
-  for (const candidate of candidates) {
-    bySource.set(candidate.source, candidate);
-  }
-  return bySource;
-}
-
 export function buildInstalledPluginIndexRecords(params: {
   candidates: readonly PluginCandidate[];
   registry: PluginManifestRegistry;
@@ -242,11 +206,12 @@ export function buildInstalledPluginIndexRecords(params: {
   /** Index builds scoped to an explicit env stamp that env's compat decisions. */
   env?: NodeJS.ProcessEnv;
 }): InstalledPluginIndexRecord[] {
-  const candidateBySource = buildCandidateLookup(params.candidates);
+  const candidateBySource = new Map(
+    params.candidates.map((candidate) => [candidate.source, candidate]),
+  );
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   return params.registry.plugins.map((record): InstalledPluginIndexRecord => {
     const candidate = candidateBySource.get(record.source);
-    const packageJsonPath = resolvePackageJsonPath(candidate);
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
       origin: record.origin,
       rootDir: record.rootDir,
@@ -290,7 +255,6 @@ export function buildInstalledPluginIndexRecords(params: {
       : undefined;
     const packageJson = resolvePackageJsonRecord({
       candidate,
-      packageJsonPath,
       rejectHardlinks,
     });
     const enabled = resolveEffectiveEnableState({

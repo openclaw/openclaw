@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -15,7 +15,7 @@ import {
   persistCompactionBoundaryWithSessionEntrySync,
   loadTranscriptEventsSync,
   replaceTranscriptSuffixEventsSync,
-  replaceSessionEntry,
+  replaceSessionEntrySync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
@@ -49,7 +49,8 @@ it("refuses synchronous writes to cold current history without mutating or resto
     sessionKey: "agent:main:cold-sync-writes",
     sessionId: "inactive-current-window",
   };
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  // This test owns cold maintenance explicitly; seeding must not schedule age retention.
+  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
     { type: "session", id: scope.sessionId },
     {
@@ -61,7 +62,7 @@ it("refuses synchronous writes to cold current history without mutating or resto
     },
   ]);
   await waitForSessionTranscriptIndexReconcile(options);
-  await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+  replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     executeSqliteQuerySync(
       database,
@@ -75,7 +76,7 @@ it("refuses synchronous writes to cold current history without mutating or resto
   expect(
     await runSessionColdStorageMaintenance({
       config: {
-        agents: { list: [{ id: scope.agentId }] },
+        agents: { entries: { [scope.agentId]: {} } },
         session: {
           store: scope.storePath,
           maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -112,17 +113,6 @@ it("refuses synchronous writes to cold current history without mutating or resto
   );
   const event = { type: "custom", id: "sync-custom", customType: "sync-write", data: {} };
   const message = { role: "user", content: "A new synchronous message", timestamp: 20 };
-  const appendBoundary = vi.fn(() => {
-    appendTranscriptEventSync(scope, {
-      type: "compaction",
-      id: "sync-boundary",
-      parentId: "original-user",
-      summary: "Compacted",
-      firstKeptEntryId: "original-user",
-      tokensBefore: 100,
-    });
-    return "sync-boundary";
-  });
   const mutations = [
     { name: "append event", run: () => appendTranscriptEventSync(scope, event) },
     { name: "append event snapshot", run: () => appendTranscriptEventSnapshotSync(scope, event) },
@@ -162,14 +152,23 @@ it("refuses synchronous writes to cold current history without mutating or resto
       name: "compaction boundary",
       run: () =>
         persistCompactionBoundaryWithSessionEntrySync(scope, {
-          append: appendBoundary,
+          prepared: {
+            scope,
+            event: {
+              type: "compaction",
+              id: "sync-boundary",
+              parentId: "original-user",
+              timestamp: new Date(20).toISOString(),
+              summary: "Compacted",
+              firstKeptEntryId: "original-user",
+              tokensBefore: 100,
+            },
+          },
           transcriptByteCompactionLatch: {
             sessionId: scope.sessionId,
             activeBytes: 2048,
             maxBytes: 1024,
           },
-          validateAppend: (entryId, text) =>
-            entryId === "sync-boundary" && text.includes('"type":"compaction"'),
         }),
     },
   ];
@@ -180,5 +179,4 @@ it("refuses synchronous writes to cold current history without mutating or resto
     expect(snapshot(), mutation.name).toEqual(before);
     expect(await fs.readFile(archivePath), mutation.name).toEqual(archiveBytes);
   }
-  expect(appendBoundary).not.toHaveBeenCalled();
 });

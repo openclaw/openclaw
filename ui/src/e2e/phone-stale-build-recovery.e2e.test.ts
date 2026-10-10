@@ -103,7 +103,8 @@ suite.define(() => {
       );
       const retainedImageRequestUrls: string[] = [];
       let blockedUnticketedRequestCount = 0;
-      await page.route("**/api/chat/media/outgoing/**", async (route) => {
+      // The service worker owns the network request when it controls the page.
+      await context.route("**/api/chat/media/outgoing/**", async (route) => {
         const requestUrl = new URL(route.request().url());
         if (requestUrl.searchParams.get("mediaTicket") !== "phone-proof") {
           blockedUnticketedRequestCount += 1;
@@ -521,6 +522,7 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [actions]),
         );
         await actions.tap();
+        await page.getByRole("menuitem", { name: "Session settings", exact: true }).tap();
         const assignment = page.getByRole("menuitem", { name: "Assign to…", exact: true });
         await assignment.waitFor();
         await assignment.tap();

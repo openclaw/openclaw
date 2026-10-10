@@ -1,13 +1,12 @@
-// Mattermost plugin module owns draft-preview final delivery.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  defineFinalizableLivePreviewAdapter,
-  deliverWithFinalizableLivePreviewAdapter,
-  listMessageReceiptPlatformIds,
+  createPreviewMessageReceipt,
+  type LivePreviewDeliveryResult,
+  type LivePreviewLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
@@ -15,19 +14,13 @@ import {
   isReasoningReplyPayload,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import { updateMattermostPost, type MattermostClient, type MattermostPost } from "./client.js";
-import { createMattermostDraftStream } from "./draft-stream.js";
+import { updateMattermostPost, type MattermostClient } from "./client.js";
 import { canFinalizeMattermostPreviewInPlace } from "./monitor-context.js";
 import {
   joinMattermostVisibleContent,
   type MattermostReplyDeliveryResult,
 } from "./reply-delivery.js";
 import type { ChatType, ReplyPayload } from "./runtime-api.js";
-
-export type MattermostDraftPreviewState = {
-  /** True once the preview is the durable final post and must not be reused as a draft. */
-  finalizedViaPreviewPost: boolean;
-};
 
 export type MattermostPreviewFinalResolution = {
   editText?: string;
@@ -41,32 +34,29 @@ type MattermostDraftPreviewDeliverParams = {
   info: { kind: "tool" | "block" | "final" };
   kind: ChatType;
   client: MattermostClient;
-  draftStream: Pick<
-    ReturnType<typeof createMattermostDraftStream>,
-    "flush" | "postId" | "clear" | "discardPending" | "seal"
-  >;
+  previewLifecycle: LivePreviewLifecycle<ReplyPayload, string>;
   effectiveReplyToId?: string;
   resolvePreviewFinalText: (text?: string) => MattermostPreviewFinalResolution | undefined;
-  previewState: MattermostDraftPreviewState;
   logVerboseMessage: (message: string) => void;
   deliverPayload: (payload: ReplyPayload) => Promise<MattermostReplyDeliveryResult>;
   // Visible same-thread finals can be delivered by editing the draft preview in
   // place (onPreviewFinalized) without ever calling deliverPayload; this lets the
   // caller record thread participation on that path too.
-  recordThreadParticipation?: () => void;
+  recordThreadParticipation?: () => Promise<void> | void;
 };
 
 function combineMattermostVisibleDeliveryResults(
-  results: readonly (MattermostReplyDeliveryResult | undefined)[],
+  results: readonly (LivePreviewDeliveryResult | undefined)[],
+  outcome: "text" | "media",
 ): MattermostReplyDeliveryResult | undefined {
   const visibleResults = results.filter(
-    (result): result is MattermostReplyDeliveryResult => result?.visibleReplySent === true,
+    (result): result is LivePreviewDeliveryResult => result?.visibleReplySent === true,
   );
   if (visibleResults.length === 0) {
     return undefined;
   }
   return {
-    outcome: visibleResults.some((result) => result.outcome === "media") ? "media" : "text",
+    outcome,
     ...createAcceptedChannelDeliveryResult({
       deliveryResults: visibleResults,
       content: joinMattermostVisibleContent(visibleResults.map((result) => result.content)),
@@ -85,48 +75,41 @@ export async function deliverMattermostReplyWithDraftPreview(
     };
   }
 
-  let normalDeliveryResult: MattermostReplyDeliveryResult | undefined;
-  let supplementalDeliveryResult: MattermostReplyDeliveryResult | undefined;
-  let previewDeliveryResult: MattermostReplyDeliveryResult | undefined;
-  let confirmedPreviewDelivery: MattermostReplyDeliveryResult | undefined;
-  let previewFinalDeliveryText: string | undefined;
-  let previewFinalTextAlreadyDelivered = false;
-  let useConfirmedPreviewAsWholeFinal = false;
-  let pendingPreviewFinalContent: string | undefined;
-  let finalizedPreviewPost: MattermostPost | undefined;
+  let outcome: "text" | "media" = "text";
+  const ttsSupplement = getReplyPayloadTtsSupplement(params.payload);
+  const previewFinalResolution =
+    params.info.kind === "final" && !params.previewLifecycle.previewFinalized
+      ? params.resolvePreviewFinalText(params.payload.text ?? ttsSupplement?.spokenText)
+      : undefined;
+  const confirmedPreviewDelivery = previewFinalResolution?.confirmedDelivery;
+  const previewFinalDeliveryText = previewFinalResolution?.deliveryText;
+  let previewFinalTextAlreadyDelivered =
+    previewFinalResolution?.alreadyDelivered === true && params.payload.isError !== true;
+  if (
+    previewFinalTextAlreadyDelivered &&
+    !resolveSendableOutboundReplyParts(params.payload).hasMedia &&
+    !params.payload.presentation &&
+    confirmedPreviewDelivery?.visibleReplySent
+  ) {
+    try {
+      await params.previewLifecycle.observeDelivery(confirmedPreviewDelivery);
+      await params.recordThreadParticipation?.();
+      return confirmedPreviewDelivery;
+    } catch (error) {
+      throw createChannelPartialDeliveryError(error, {
+        ...confirmedPreviewDelivery,
+        visibleReplySent: true,
+      });
+    }
+  }
   try {
-    const finalization = await deliverWithFinalizableLivePreviewAdapter({
+    const finalization = await params.previewLifecycle.deliver<{ message: string }>({
       kind: params.info.kind,
       payload: params.payload,
-      adapter: defineFinalizableLivePreviewAdapter<ReplyPayload, string, { message: string }>({
-        // Once the preview is finalized, later payloads must use durable sends.
-        // Reusing the sealed draft would clear and delete the successful final post.
-        ...(params.previewState.finalizedViaPreviewPost
-          ? {}
-          : {
-              draft: {
-                flush: params.draftStream.flush,
-                clear: params.draftStream.clear,
-                discardPending: params.draftStream.discardPending,
-                seal: params.draftStream.seal,
-                id: params.draftStream.postId,
-              },
-            }),
+      isError: params.payload.isError,
+      adapter: {
         buildFinalEdit: (payload) => {
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-          const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-          const previewFinalResolution = params.resolvePreviewFinalText(
-            payload.text ?? ttsSupplement?.spokenText,
-          );
-          confirmedPreviewDelivery = previewFinalResolution?.confirmedDelivery;
-          previewFinalDeliveryText = previewFinalResolution?.deliveryText;
-          previewFinalTextAlreadyDelivered =
-            previewFinalResolution?.alreadyDelivered === true && payload.isError !== true;
-          // A text-only preview cannot finalize unsent presentation content or controls.
-          useConfirmedPreviewAsWholeFinal =
-            previewFinalTextAlreadyDelivered &&
-            !resolveSendableOutboundReplyParts(payload).hasMedia &&
-            !payload.presentation;
           const previewFinalText = previewFinalResolution?.editText;
 
           if (
@@ -143,51 +126,41 @@ export async function deliverMattermostReplyWithDraftPreview(
           ) {
             return undefined;
           }
-          pendingPreviewFinalContent = previewFinalText;
           return { message: previewFinalText };
         },
         editFinal: async (previewPostId, edit) => {
-          finalizedPreviewPost = await updateMattermostPost(params.client, previewPostId, edit);
-        },
-        resolveFinalizedId: (previewPostId) => finalizedPreviewPost?.id ?? previewPostId,
-        onPreviewFinalized: (_previewPostId, receipt) => {
-          params.previewState.finalizedViaPreviewPost = true;
-          // Supplemental retries must not repost text already committed by the preview edit.
-          previewFinalTextAlreadyDelivered = true;
-          previewDeliveryResult = {
-            outcome: "text",
-            messageIds: listMessageReceiptPlatformIds(receipt),
+          const post = await updateMattermostPost(params.client, previewPostId, edit);
+          const receipt = createPreviewMessageReceipt({ id: post.id ?? previewPostId });
+          return {
+            messageIds: receipt.platformMessageIds,
             receipt,
             visibleReplySent: true,
-            content: finalizedPreviewPost?.message ?? pendingPreviewFinalContent ?? "",
+            content: post.message ?? edit.message,
           };
-          // The visible final reply landed by editing the preview post, so the normal
-          // deliverPayload record path is skipped; record participation explicitly here.
-          params.recordThreadParticipation?.();
+        },
+        onPreviewFinalized: async () => {
+          // Supplemental retries must not repost text already committed by the preview edit.
+          previewFinalTextAlreadyDelivered = true;
+          await params.recordThreadParticipation?.();
         },
         buildSupplementalPayload: (payload) =>
           getReplyPayloadTtsSupplement(payload)
             ? buildTtsSupplementMediaPayload(payload)
             : undefined,
         deliverSupplemental: async (payload) => {
-          supplementalDeliveryResult = await params.deliverPayload(payload);
-          return supplementalDeliveryResult.visibleReplySent;
+          const delivered = await params.deliverPayload(payload);
+          if (delivered.outcome === "media") {
+            outcome = "media";
+          }
+          return delivered.visibleReplySent ? delivered : false;
         },
         logPreviewEditFailure: (err) => {
           params.logVerboseMessage(
             `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
           );
         },
-      }),
+      },
       deliverNormally: async (payload) => {
-        if (
-          useConfirmedPreviewAsWholeFinal &&
-          confirmedPreviewDelivery?.visibleReplySent === true
-        ) {
-          // The logical final is already durable in sealed preview generations. Report
-          // those provider posts as the normal success so cleanup cannot erase the fact.
-          return true;
-        }
         const supplement = getReplyPayloadTtsSupplement(payload);
         const resolvedDeliveryText =
           previewFinalDeliveryText ?? (previewFinalTextAlreadyDelivered ? "" : undefined);
@@ -208,56 +181,38 @@ export async function deliverMattermostReplyWithDraftPreview(
               : payload.isError !== true && typeof resolvedDeliveryText === "string"
                 ? { ...payload, text: resolvedDeliveryText }
                 : payload;
-        normalDeliveryResult = await params.deliverPayload(deliveryPayload);
-        return normalDeliveryResult.visibleReplySent;
+        const delivered = await params.deliverPayload(deliveryPayload);
+        if (delivered.outcome === "media") {
+          outcome = "media";
+        }
+        return delivered;
       },
+      onNormalDelivered: params.recordThreadParticipation,
     });
 
-    if (finalization.kind !== "preview-finalized" || !previewDeliveryResult?.receipt) {
-      return (
-        combineMattermostVisibleDeliveryResults([
-          confirmedPreviewDelivery,
-          normalDeliveryResult,
-        ]) ?? {
-          outcome: "empty",
-          visibleReplySent: false,
-          suppression: { reason: "no_visible_result" },
-        }
-      );
-    }
     return (
-      combineMattermostVisibleDeliveryResults([
-        confirmedPreviewDelivery,
-        previewDeliveryResult,
-        supplementalDeliveryResult,
-        // Supplemental retries use the normal sender; retain its durable receipt too.
-        normalDeliveryResult,
-      ]) ?? previewDeliveryResult
+      combineMattermostVisibleDeliveryResults(
+        [confirmedPreviewDelivery, finalization.deliveryResult],
+        outcome,
+      ) ?? {
+        outcome: "empty",
+        visibleReplySent: false,
+        suppression: { reason: "no_visible_result" },
+      }
     );
   } catch (error: unknown) {
-    // Preserve confirmed preview and supplemental receipts so core cannot
-    // mistake a later visible-delivery failure for a safe retry.
-    const completedVisibleResults = [
-      confirmedPreviewDelivery,
-      previewDeliveryResult,
-      normalDeliveryResult,
-      supplementalDeliveryResult,
-    ].filter(
-      (result): result is MattermostReplyDeliveryResult => result?.visibleReplySent === true,
-    );
-    if (completedVisibleResults.length === 0) {
+    // Core owns receipts from this delivery. Only prepend earlier sealed
+    // assistant generations that were not part of its send/edit operation.
+    if (!confirmedPreviewDelivery?.visibleReplySent) {
       throw error;
     }
     const failedPartial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
     throw createChannelPartialDeliveryError(
       error,
       createAcceptedChannelDeliveryResult({
-        deliveryResults: [...completedVisibleResults, ...(failedPartial ? [failedPartial] : [])],
+        deliveryResults: [confirmedPreviewDelivery, ...(failedPartial ? [failedPartial] : [])],
         content: joinMattermostVisibleContent([
-          confirmedPreviewDelivery?.content,
-          previewDeliveryResult?.content,
-          normalDeliveryResult?.content,
-          supplementalDeliveryResult?.content,
+          confirmedPreviewDelivery.content,
           failedPartial?.content,
         ]),
       }),

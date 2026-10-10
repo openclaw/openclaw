@@ -1,8 +1,16 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import "../test-helpers/load-styles.ts";
+import { installTitleTooltips } from "./tooltip-title.ts";
 
-afterEach(() => document.body.replaceChildren());
+let disposeTitleTooltips: () => void;
+beforeEach(() => {
+  disposeTitleTooltips = installTitleTooltips(document);
+});
+afterEach(() => {
+  disposeTitleTooltips();
+  document.body.replaceChildren();
+});
 
 describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navigation", () => {
   it("traverses the actual item order and both footer controls in each direction", async () => {
@@ -20,9 +28,15 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
 
     const identity = sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card");
     expect(identity).not.toBeNull();
-    // A pointer left by another test can open Help as the keyboard menu appears.
+    const name = sidebar.querySelector<HTMLElement>(".sidebar-identity-card__name")!;
+    await page.elementLocator(name).hover();
+    expect(document.querySelector("body > openclaw-tooltip")).toBeNull();
+    expect(page.getByRole("button", { name: /Owner/ }).elements()).toContain(identity);
+    expect(identity?.getAttribute("aria-expanded")).toBe("false");
+    // A pointer left over the footer can open Help as the keyboard menu appears.
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
     identity?.focus();
+    expect(document.querySelector("body > openclaw-tooltip")).toBeNull();
     await userEvent.keyboard("{Enter}");
 
     const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
@@ -33,6 +47,7 @@ describe.runIf("__vitest_browser__" in globalThis)("identity menu keyboard navig
         !item.hasAttribute("disabled"),
     );
     const theme = menu?.querySelector<HTMLButtonElement>(".theme-mode-toggle");
+    expect(theme?.getAttribute("role")).toBe("menuitem");
     const build = document.createElement("a");
     build.href = "#build";
     build.textContent = "Build details";

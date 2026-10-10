@@ -15,7 +15,6 @@ import {
   getPluginInstance,
   type PluginInstanceHandle,
 } from "../../plugins/plugin-instance-scope.js";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { projectPluginContributions } from "../../plugins/registry-contributions.js";
 import {
   createEmptyPluginRegistry,
@@ -26,6 +25,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import {
   createGatewayPluginRequestHandler,
@@ -267,11 +267,9 @@ describe("plugin HTTP route instance ownership", () => {
 
   it("keeps the bundled Prometheus singleton scrape live after another registration retires", async () => {
     const pluginId = "diagnostics-prometheus";
+    // Share the suite's SDK graph instead of rebuilding core through the source loader.
     const plugin = resolvePluginModuleExport(
-      loadBundledPluginPublicArtifactModuleSync({
-        dirName: pluginId,
-        artifactBasename: "index.js",
-      }),
+      await loadBundledPluginFacade({ pluginId, artifactBasename: "index.js" }),
     );
     expect(plugin.definition?.id).toBe(pluginId);
     const register = expectDefined(plugin.register, "Prometheus registration");

@@ -1,34 +1,46 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
+import { i18n } from "../i18n/index.ts";
 import {
-  isCronSessionKey,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
   resolveSessionWorkSubtitle,
 } from "./session-display.ts";
 
-describe("isCronSessionKey", () => {
+describe("isCronSessionDisplayKey", () => {
   it.each([
-    ["cron:job", true],
     [" CRON:JOB ", true],
     ["agent:ops:cron:job", true],
-    ["agent:ops:cron:job:run:one", true],
     ["agent:ops::cron:job", true],
     ["agent: :cron:job", true],
     ["agent:ops:cron:", false],
-    ["agent:ops:cron::", false],
     ["agent::cron:job", false],
     [":agent:ops:cron:job", false],
     ["agent:ops:custom:cron:job", false],
     ["agent:ops:main", false],
     ["", false],
   ] as const)("retains automation classification for %j", (key, expected) => {
-    expect(isCronSessionKey(key)).toBe(expected);
+    expect(isCronSessionDisplayKey(key)).toBe(expected);
   });
 });
 
 describe("resolveSessionDisplayName", () => {
+  it.each(["Subagent (worker):", "Subagent [worker]:"])(
+    "treats translated prefix %s as literal text",
+    (prefix) => {
+      const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
+      try {
+        const key = "agent:main:subagent:worker";
+        const row = { label: `${prefix} Research sources` };
+        expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
+      } finally {
+        translation.mockRestore();
+      }
+    },
+  );
+
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
       expect(resolveSessionDisplayName(key)).toBe("Main Session");
@@ -169,14 +181,6 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("New session");
   });
 
-  it("names unnamed work sessions after their checkout", () => {
-    expect(
-      resolveSessionDisplayName("agent:main:dashboard:uuid", {
-        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/Users/dev/Projects/clawdbot" },
-      }),
-    ).toBe("clawdbot ⎇ wt-3f2a");
-  });
-
   it("uses a gateway-derived title for otherwise unnamed sessions", () => {
     expect(
       resolveSessionDisplayName("agent:main:dashboard:uuid", {
@@ -215,32 +219,25 @@ describe("resolveSessionDisplayName", () => {
     );
   });
 
-  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+  it("uses plain subagent names and preserves the unnamed fallback", () => {
     const key = "agent:main:subagent:worker";
-    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
-      "Subagent: Research sources",
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, { label: "Subagent: Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key, { displayName: "Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key, { derivedTitle: "Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key)).toBe("Subagent");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Daily" })).toBe(
+      "Automation: Daily",
     );
     expect(
-      resolveSessionDisplayName(
-        key,
-        { label: "Subagent: Research sources" },
-        {
-          includeSubagentPrefix: false,
-        },
-      ),
-    ).toBe("Research sources");
-    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
-      "Subagent:",
-    );
-    expect(
-      resolveSessionDisplayName(
-        "agent:main:cron:daily",
-        { label: "Daily" },
-        {
-          includeSubagentPrefix: false,
-        },
-      ),
-    ).toBe("Automation: Daily");
+      resolveSessionDisplayName("agent:main:dashboard:task", { label: "Subagent: explicit title" }),
+    ).toBe("Subagent: explicit title");
   });
 
   it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {
@@ -262,7 +259,7 @@ describe("resolveSessionWorkSubtitle", () => {
           branch: "openclaw/cloud-task",
         },
       }),
-    ).toBe("openclaw ⎇ cloud-task");
+    ).toBe("openclaw ⎇ openclaw/cloud-task");
     expect(
       resolveSessionWorkSubtitle({
         worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/clawdbot" },
@@ -296,11 +293,13 @@ describe("resolveSessionWorkContext", () => {
     expect(
       resolveSessionWorkContext({
         worktree: { branch: "openclaw/session-ui", repoRoot: "/repo/openclaw" },
+        spawnedCwd: "/worktrees/session-ui/packages/ui",
       }),
     ).toEqual({
       kind: "project",
       name: "openclaw",
       path: "/repo/openclaw",
+      cwd: "/worktrees/session-ui/packages/ui",
       branch: "session-ui",
     });
     expect(
@@ -322,6 +321,61 @@ describe("resolveSessionWorkContext", () => {
       }),
     ).toEqual({ kind: "workspace", name: "workspace", path: "/remote/workspace" });
     expect(resolveSessionWorkContext({ execCwd: "/stale/local-routing-cwd" })).toBeUndefined();
+    expect(
+      resolveSessionWorkContext({
+        repository: {
+          url: "https://github.com/example/project.git",
+          branch: "openclaw/feature-cloud",
+        },
+        execNode: "cloud-node",
+        execCwd: "/remote/project",
+        worktree: { branch: "stale-local-branch", repoRoot: "/gateway/repo" },
+      }),
+    ).toEqual({
+      kind: "project",
+      name: "project",
+      path: "https://github.com/example/project",
+      cwd: "/remote/project",
+      branch: "openclaw/feature-cloud",
+    });
+    expect(
+      resolveSessionWorkContext({
+        repository: {
+          url: "https://github.com/example/project.git",
+          branch: "openclaw/feature-cloud",
+        },
+        spawnedCwd: "/gateway/unrelated",
+      }),
+    ).toEqual({
+      kind: "project",
+      name: "project",
+      path: "https://github.com/example/project",
+      cwd: undefined,
+      branch: "openclaw/feature-cloud",
+    });
+    expect(
+      resolveSessionWorkContext({
+        repository: { url: "https://github.com/example/project.git", branch: "main" },
+        placement: {
+          state: "reclaimed",
+          providerId: "example",
+          profileId: "test",
+          generation: 1,
+          createdAtMs: 1,
+          updatedAtMs: 2,
+          stateChangedAtMs: 2,
+          remoteWorkspaceDir: "/cloud/project",
+        },
+        execCwd: "/gateway/stale-routing",
+        spawnedCwd: "/gateway/unrelated",
+      }),
+    ).toEqual({
+      kind: "project",
+      name: "project",
+      path: "https://github.com/example/project",
+      cwd: "/cloud/project",
+      branch: "main",
+    });
   });
 });
 

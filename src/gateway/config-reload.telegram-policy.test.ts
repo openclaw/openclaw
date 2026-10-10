@@ -1,9 +1,9 @@
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { loadPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { diffGatewayReloadPaths } from "./config-diff.js";
 import {
@@ -12,14 +12,88 @@ import {
   listConfigReloadRefinementPrefixes,
 } from "./config-reload-plan.js";
 
-const { telegramSetupPlugin } = loadPluginPublicArtifactModuleSync<{
-  telegramSetupPlugin: ChannelPlugin;
-}>({
-  pluginRoot: fileURLToPath(new URL("../../extensions/telegram", import.meta.url)),
-  artifactBasename: "setup-plugin-api",
-  origin: "bundled",
-  pluginId: "telegram",
+beforeEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
+afterEach(() => resetPluginRuntimeStateForTest());
+
+describe("decision model reload planning", () => {
+  it.each<{
+    name: string;
+    previous: OpenClawConfig;
+    next: OpenClawConfig;
+    reloadPlugins: boolean;
+  }>([
+    {
+      name: "adds the decision agent roster",
+      previous: {},
+      next: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
+      reloadPlugins: true,
+    },
+    {
+      name: "removes the decision agent roster",
+      previous: { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } },
+      next: {},
+      reloadPlugins: true,
+    },
+    {
+      name: "changes a utility model",
+      previous: { agents: { entries: { worker: { utilityModel: "fixture/small" } } } },
+      next: { agents: { entries: { worker: { utilityModel: "fixture/large" } } } },
+      reloadPlugins: false,
+    },
+    {
+      name: "adds an agent without a decision override",
+      previous: { agents: { entries: {} } },
+      next: { agents: { entries: { worker: {} } } },
+      reloadPlugins: false,
+    },
+  ])(
+    "preserves roster actions and scopes provider reloads when it $name",
+    ({ previous, next, reloadPlugins }) => {
+      const paths = diffGatewayReloadPaths(previous, next, listConfigReloadRefinementPrefixes());
+      expect(buildGatewayReloadPlan(paths)).toMatchObject({
+        restartGateway: false,
+        reloadPlugins,
+        refreshHooksPolicy: true,
+        reloadInternalHooks: true,
+        restartHeartbeat: true,
+      });
+    },
+  );
+
+  it("hot-applies the default decision model", () => {
+    expect(buildGatewayReloadPlan(["agents.defaults.decisionModel"])).toMatchObject({
+      restartGateway: false,
+      reloadPlugins: true,
+    });
+  });
 });
+
+it("restarts Slack when plugin approvers are edited", async () => {
+  const { slackSetupPlugin } = await loadBundledPluginFacade<{
+    slackSetupPlugin: ChannelPlugin;
+  }>({ pluginId: "slack", artifactBasename: "setup-plugin-api.ts" });
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "slack", plugin: slackSetupPlugin, source: "test" }]),
+  );
+  const configWithApprover = (approver: string): OpenClawConfig => ({
+    approvals: { plugin: { slack: { approvers: [approver] } } },
+  });
+  const plan = buildGatewayReloadPlan(
+    diffGatewayReloadPaths(
+      configWithApprover("team:T123:user:U111"),
+      configWithApprover("team:T123:user:U222"),
+      listConfigReloadRefinementPrefixes(),
+    ),
+  );
+  expect(plan.restartGateway).toBe(false);
+  expect(plan.restartChannels).toEqual(new Set(["slack"]));
+  expect(plan.restartChannelAccounts).toEqual(new Map());
+  expect(plan.reloadPlugins).toBe(false);
+});
+
+const { telegramSetupPlugin } = await loadBundledPluginFacade<{
+  telegramSetupPlugin: ChannelPlugin;
+}>({ artifactBasename: "setup-plugin-api", pluginId: "telegram" });
 
 function planTelegramChange(prev: OpenClawConfig, next: OpenClawConfig) {
   setActivePluginRegistry(
@@ -29,8 +103,6 @@ function planTelegramChange(prev: OpenClawConfig, next: OpenClawConfig) {
     diffGatewayReloadPaths(prev, next, listConfigReloadRefinementPrefixes()),
   );
 }
-
-afterEach(() => resetPluginRuntimeStateForTest());
 
 describe("Telegram live policy reload", () => {
   it.each([undefined, "support"])("retains the monitor for policy changes in %s", (accountId) => {
@@ -61,20 +133,15 @@ describe("Telegram live policy reload", () => {
     expect(plan.restartChannels.size).toBe(0);
   });
 
-  it.each([
-    ["botToken", "123456:synthetic-token"],
-    ["apiRoot", "https://api.telegram.org"],
-    ["proxy", "http://127.0.0.1:8080"],
-    ["commands", { native: false }],
-    ["customCommands", [{ command: "hello", description: "Say hello" }]],
-    ["futurePolicy", true],
-  ])("keeps startup ownership for %s even alongside live policy", (key, value) => {
+  it("keeps startup ownership for botToken even alongside live policy", () => {
     const plan = planTelegramChange(
       { channels: { telegram: { accounts: { support: { dmPolicy: "disabled" } } } } },
       {
         channels: {
           telegram: {
-            accounts: { support: { dmPolicy: "pairing", [key]: value } },
+            accounts: {
+              support: { dmPolicy: "pairing", botToken: "123456:synthetic-token" },
+            },
           },
         },
       },
@@ -83,12 +150,27 @@ describe("Telegram live policy reload", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
-  it.each([true, false])("refreshes account creation/removal (add: %s)", (add) => {
-    const empty = { channels: { telegram: { accounts: {} } } };
-    const configured = {
-      channels: { telegram: { accounts: { support: { dmPolicy: "disabled" as const } } } },
-    };
-    const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
-    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
-  });
+  it.each([
+    { add: true, decisionAgent: false },
+    { add: false, decisionAgent: false },
+    { add: true, decisionAgent: true },
+    { add: false, decisionAgent: true },
+  ])(
+    "refreshes account creation/removal (add: $add, decision agent: $decisionAgent)",
+    ({ add, decisionAgent }) => {
+      const empty: OpenClawConfig = {
+        channels: { telegram: { accounts: {} } },
+        ...(decisionAgent ? { agents: { entries: {} } } : {}),
+      };
+      const configured: OpenClawConfig = {
+        channels: { telegram: { accounts: { support: { dmPolicy: "disabled" } } } },
+        ...(decisionAgent
+          ? { agents: { entries: { worker: { decisionModel: "fixture/fast" } } } }
+          : {}),
+      };
+      const plan = planTelegramChange(add ? empty : configured, add ? configured : empty);
+      expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+      expect(plan.reloadPlugins).toBe(decisionAgent);
+    },
+  );
 });

@@ -25,6 +25,16 @@ import {
   type SessionEntry as AgentSessionEntry,
 } from "./sessions/session-manager.js";
 
+export function normalizeBtwContentBlocks(content: unknown): unknown[] | undefined {
+  if (Array.isArray(content)) {
+    return content;
+  }
+  if (content && typeof content === "object") {
+    return [content];
+  }
+  return undefined;
+}
+
 /** Resolves the persisted transcript file for a BTW session handoff. */
 export function resolveBtwSessionTranscriptPath(params: {
   sessionId: string;

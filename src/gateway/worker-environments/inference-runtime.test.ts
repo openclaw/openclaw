@@ -1,355 +1,54 @@
+import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  validateWorkerInferenceTerminalOutcome,
-  type WorkerInferenceStartParams,
-} from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
-import type { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-override.js";
-import type { applyExtraParamsToAgent } from "../../agents/embedded-agent-runner/extra-params.js";
-import type { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
-import type { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/stream-resolution.js";
-import type {
-  acquireAgentRunPreparedModelRuntime,
-  PreparedModelRuntimeSnapshot,
-} from "../../agents/prepared-model-runtime.js";
-import type { registerProviderStreamForModel } from "../../agents/provider-stream.js";
-import type { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
-import { createEmptyPluginMetadataSnapshot } from "../../agents/test-helpers/embedded-agent-runner-e2e-mocks.js";
+import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
+import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
+import * as modelAuth from "../../agents/model-auth.js";
+import * as providerStreamRuntime from "../../agents/provider-stream.js";
+import { AuthStorage } from "../../agents/sessions/auth-storage.js";
+import { ModelRegistry } from "../../agents/sessions/model-registry.js";
+import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
-import { bindModelLlmRuntime } from "../../llm/model-runtime-binding.js";
-import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm/types.js";
+import type { AssistantMessage, StreamFn } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
+import type { ProviderWrapStreamFnContext } from "../../plugins/provider-transport.types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
-import {
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { parseApiErrorInfo } from "../../shared/assistant-error-format.js";
 import {
   isWorkerTranscriptMessageFrameSafe,
   WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE,
 } from "../../worker/transcript-message.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import {
-  createWorkerInferenceExecutor,
-  type WorkerInferenceExecutionParams,
-} from "./inference-runtime.js";
+  ALIAS,
+  AUTH_MARKER,
+  BASE_URL,
+  ENDPOINT,
+  MODEL,
+  PROFILE,
+  PROVIDER,
+  SESSION_ID,
+  TOOL_CALL,
+  WORKSPACE,
+  config,
+  finalMessage,
+  logicalModel,
+  params,
+  providerStream,
+  request,
+  sessionEntry,
+  setup,
+  usage,
+  type Execution,
+} from "./inference-runtime.test-support.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
-
-type Deps = {
-  applyStreamPolicy: typeof applyExtraParamsToAgent;
-  acquireRuntimeLease: typeof acquireAgentRunPreparedModelRuntime;
-  prepareModel: typeof prepareSimpleCompletionModel;
-  resolveSessionAuthSelection: typeof resolveSessionAuthSelection;
-  resolveModel: typeof resolveModelAsync;
-  resolveProviderStream: typeof registerProviderStreamForModel;
-  resolveStream: typeof resolveEmbeddedAgentStream;
-};
-type Execution = WorkerInferenceExecutionParams;
-
-const PROVIDER = "openai";
-const MODEL = "gpt-5.6-sol";
-const ALIAS = "fast";
-const BASE_URL = "https://chatgpt.com/backend-api";
-const ENDPOINT = `${BASE_URL}/codex`;
-const PROFILE = ["gateway", "profile"].join("-");
-const AUTH_MARKER = ["gateway", "profile", "value"].join("-");
-const SESSION_ID = "session-runtime-test";
-const SESSION_KEY = "agent:runtime-agent:main";
-const TOOL_CALL = { type: "toolCall" as const, id: "call-1", name: "lookup", arguments: {} };
-const WORKSPACE_BASE = "/gateway-workspace";
-const WORKSPACE = `${WORKSPACE_BASE}/runtime-agent`;
-
-const config = {
-  agents: {
-    defaults: {
-      model: { primary: `${PROVIDER}/${MODEL}` },
-      models: { [`${PROVIDER}/${MODEL}`]: {} },
-      workspace: WORKSPACE_BASE,
-    },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "runtime-agent",
-        models: {
-          [`${PROVIDER}/${MODEL}`]: { alias: ALIAS, agentRuntime: { id: "openclaw" } },
-        },
-        params: { temperature: 0.1 },
-      },
-    ],
-  },
-} satisfies OpenClawConfig;
-const sessionEntry: SessionEntry = {
-  sessionId: SESSION_ID,
-  updatedAt: 1,
-  authProfileOverride: PROFILE,
-  authProfileOverrideSource: "user",
-};
-const identity: WorkerConnectionIdentity = {
-  environmentId: "environment-runtime-test",
-  credentialHash: ["credential", "hash", "runtime", "test"].join("-"),
-  bundleHash: "bundle-hash-runtime-test",
-  sessionId: SESSION_ID,
-  runId: "run-runtime-test",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-runtime-test",
-    runId: "run-runtime-test",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-runtime-test", ownerEpoch: 3 },
-  },
-  ownerEpoch: 3,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-inference-v1"],
-  credentialExpiresAtMs: 100_000,
-};
-const usage: Usage = {
-  input: 11,
-  output: 7,
-  cacheRead: 3,
-  cacheWrite: 2,
-  totalTokens: 23,
-  cost: {
-    input: 0.001,
-    output: 0.002,
-    cacheRead: 0.0001,
-    cacheWrite: 0.0002,
-    total: 0.0033,
-  },
-};
-const logicalModel: Model = {
-  id: MODEL,
-  name: "Approved model",
-  api: "openai-chatgpt-responses",
-  provider: PROVIDER,
-  baseUrl: BASE_URL,
-  headers: { "x-gateway-route": "selected" },
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 },
-  contextWindow: 16_000,
-  maxTokens: 1_024,
-};
-function request(model = ALIAS): WorkerInferenceStartParams {
-  return {
-    runEpoch: 3,
-    sessionId: SESSION_ID,
-    runId: "run-runtime-test",
-    turnId: `turn-${model}`,
-    modelRef: { provider: PROVIDER, model },
-    context: {
-      systemPrompt: "Gateway system prompt",
-      messages: [{ role: "user", content: "Prepared worker context", timestamp: 10 }],
-      tools: [{ name: "lookup", description: "Look up a value", parameters: { type: "object" } }],
-    },
-    options: {
-      temperature: 0.25,
-      maxTokens: 256,
-      reasoning: "low",
-      thinkingBudgets: { low: 96 },
-    },
-  };
-}
-
-function finalMessage(): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [
-      { type: "text", text: "Gateway response", textSignature: "text-signature" },
-      TOOL_CALL,
-    ],
-    api: logicalModel.api,
-    provider: PROVIDER,
-    model: MODEL,
-    usage,
-    stopReason: "stop",
-    timestamp: 20,
-  };
-}
-
-function providerStream(message = finalMessage(), options: { omitToolEnd?: boolean } = {}) {
-  const stream = createAssistantMessageEventStream();
-  const fragmented = {
-    ...message,
-    content: [...message.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }],
-  } satisfies AssistantMessage;
-  stream.push({ type: "text_delta", contentIndex: 0, delta: "Gateway response" });
-  stream.push({ type: "toolcall_start", contentIndex: 1, partial: fragmented });
-  stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
-  if (!options.omitToolEnd) {
-    stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial: message });
-  }
-  stream.push({ type: "done", reason: "stop", message });
-  return stream;
-}
-
-function setup(
-  entry: SessionEntry = sessionEntry,
-  options: {
-    catalogOnlyModel?: boolean;
-    pluginRegistry?: PluginRegistry;
-    afterModelPreparation?: () => void;
-    observeStage?: (
-      stage: "factory" | "policy" | "wrapper" | "execution",
-      registry: PluginRegistry | null | undefined,
-    ) => void;
-  } = {},
-) {
-  const scope: {
-    agentDir?: string;
-    agentRuntime?: string;
-    authProfile?: string;
-    preparedModelRuntime?: boolean;
-    prepareWorkspace?: string;
-  } = {};
-  const preparedModelRuntime = {
-    catalogOwner: undefined,
-    agentDir: "/gateway-agent",
-    activeProjectKeys: [],
-    allowGatewaySubagentBinding: true,
-    workspaceDir: WORKSPACE,
-    config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: {},
-    metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),
-    pluginRegistry: options.pluginRegistry ?? createEmptyPluginRegistry(),
-    modelCatalog: {
-      entries: [
-        { provider: PROVIDER, id: MODEL, name: "Approved model" },
-        { provider: PROVIDER, id: "known-but-unapproved", name: "Unapproved model" },
-      ],
-      routeVariants: [],
-    },
-    configuredRuntimeModels: [],
-    inlineProviderModels: [],
-    createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
-  } satisfies PreparedModelRuntimeSnapshot;
-  let leasedPreparedModelRuntime: PreparedModelRuntimeSnapshot | undefined;
-  const resolveModel = vi.fn<Deps["resolveModel"]>(async () => {
-    return {} as Awaited<ReturnType<Deps["resolveModel"]>>;
-  });
-  const prepareModel = vi.fn<Deps["prepareModel"]>(async (modelParams) => {
-    if (options.catalogOnlyModel && !modelParams.allowBundledStaticCatalogFallback) {
-      return { error: `Unknown model: ${modelParams.provider}/${modelParams.modelId}` };
-    }
-    scope.agentRuntime = modelParams.agentRuntimeId;
-    scope.preparedModelRuntime = modelParams.preparedModelRuntime === leasedPreparedModelRuntime;
-    scope.prepareWorkspace = modelParams.workspaceDir;
-    options.afterModelPreparation?.();
-    return {
-      model: bindModelLlmRuntime(logicalModel, {
-        registry: {},
-        streamSimple: fallbackStream,
-      } as never),
-      auth: {
-        apiKey: AUTH_MARKER,
-        profileId: PROFILE,
-        source: "gateway agent profile",
-        mode: "api-key",
-      },
-    };
-  });
-  const resolveAuthSelection = vi.fn<Deps["resolveSessionAuthSelection"]>(async () =>
-    entry.authProfileOverride
-      ? {
-          profileId: entry.authProfileOverride,
-          source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
-          routeRequirement: undefined,
-        }
-      : undefined,
-  );
-  const observedRegistry = () => getPluginRuntimeGenerationRegistry() ?? getActivePluginRegistry();
-  const stream = vi.fn<StreamFn>(() => {
-    options.observeStage?.("execution", observedRegistry());
-    return providerStream();
-  });
-  const fallbackStream = vi.fn<StreamFn>(() => providerStream());
-  const resolveProviderStream = vi.fn<Deps["resolveProviderStream"]>(() => {
-    options.observeStage?.("factory", observedRegistry());
-    return stream;
-  });
-  const resolveStream = vi.fn<Deps["resolveStream"]>((streamParams) => {
-    scope.authProfile = streamParams.authProfileId;
-    return {
-      streamFn: streamParams.providerStreamFn ?? streamParams.currentStreamFn ?? fallbackStream,
-      strategy: "provider",
-    };
-  });
-  const applyStreamPolicy = vi.fn<Deps["applyStreamPolicy"]>(() => {
-    options.observeStage?.("policy", observedRegistry());
-    return { effectiveExtraParams: {}, nativeWebSearchAllowedByToolPolicy: undefined };
-  });
-  const releaseRuntime = vi.fn(async () => {});
-  const acquireRuntimeLease = vi.fn<Deps["acquireRuntimeLease"]>(async (runtimeParams) => {
-    scope.agentDir = runtimeParams.agentDir;
-    const leased = { ...preparedModelRuntime, agentDir: runtimeParams.agentDir };
-    leasedPreparedModelRuntime = leased;
-    return {
-      snapshot: leased,
-      pluginGeneration: {
-        configuredCatalogEntries: [],
-        inlineProviderModels: [],
-        pluginMetadataSnapshot: leased.metadataSnapshot,
-        pluginRegistry: leased.pluginRegistry,
-      },
-      [Symbol.asyncDispose]: releaseRuntime,
-    };
-  });
-  const dependencies = {
-    now: vi.fn<() => number>().mockReturnValueOnce(100).mockReturnValue(125),
-    resolveSessionTarget: vi.fn(() => ({
-      agentId: "runtime-agent",
-      sessionEntry: entry,
-      sessionKey: SESSION_KEY,
-      sessionStore: { [SESSION_KEY]: entry },
-      storePath: "runtime-sessions.json",
-    })),
-    acquireRuntimeLease,
-    resolveDefaultModel: vi.fn(() => ({ provider: PROVIDER, model: MODEL })),
-    resolveSessionAuthSelection: resolveAuthSelection,
-    resolveModel,
-    prepareModel,
-    resolveProviderStream,
-    resolveStream,
-    applyStreamPolicy,
-    wrapStream: vi.fn((streamFn: StreamFn) => {
-      options.observeStage?.("wrapper", observedRegistry());
-      return streamFn;
-    }),
-    createTrace: vi.fn(() => ({ traceId: "1".repeat(32), spanId: "2".repeat(16) })),
-  };
-  return {
-    applyStreamPolicy,
-    executor: createWorkerInferenceExecutor(dependencies),
-    acquireRuntimeLease,
-    prepareModel,
-    releaseRuntime,
-    resolveAuthSelection,
-    scope,
-    stream,
-  };
-}
-
-function params(
-  inferenceRequest: WorkerInferenceStartParams,
-  emit: Execution["emit"],
-  runtimeConfig: OpenClawConfig = config,
-): Execution {
-  return {
-    identity,
-    request: inferenceRequest,
-    signal: new AbortController().signal,
-    emit,
-    isCurrent: () => true,
-    config: runtimeConfig,
-  };
-}
+import * as workerTurnOwners from "./placement-turn-claim-events.js";
+import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
 const MODEL_ERROR = {
   type: "error",
@@ -358,6 +57,149 @@ const MODEL_ERROR = {
 };
 
 describe("worker inference provider runtime", () => {
+  it("constructs only the embedded provider stream when preparing a worker turn", async () => {
+    const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
+    const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
+    const stream = vi.fn<StreamFn>(() => providerStream());
+    const createStreamFn = vi.fn(() => stream);
+    const wrapSimpleCompletionStreamFn = vi.fn(
+      ({ streamFn }: ProviderWrapStreamFnContext) => streamFn,
+    );
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "worker-provider",
+      source: "test",
+      provider: {
+        id: PROVIDER,
+        label: "Worker provider",
+        auth: [],
+        createStreamFn,
+        wrapSimpleCompletionStreamFn,
+      },
+    });
+    const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1 }, { pluginRegistry });
+    const authStorage = AuthStorage.inMemory({});
+    const modelRegistry = ModelRegistry.inMemory(authStorage);
+    vi.spyOn(authProfileStore, "ensureAuthProfileStore").mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER },
+      },
+    });
+    vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
+    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
+      apiKey: AUTH_MARKER,
+      mode: "api-key",
+      source: "worker provider fixture",
+    });
+    runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
+      prepareModel(
+        {
+          ...modelParams,
+          modelResolver: async (_provider, _modelId, _agentDir, cfg) => ({
+            model: {
+              ...logicalModel,
+              api: cfg?.models?.providers?.openai?.api ?? logicalModel.api,
+              baseUrl: cfg?.models?.providers?.openai?.baseUrl ?? logicalModel.baseUrl,
+            },
+            authStorage,
+            modelRegistry,
+          }),
+        },
+        assertCurrent,
+      ),
+    );
+    vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
+      registerProviderStream,
+    );
+
+    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+      type: "done",
+      message: { provider: PROVIDER, model: MODEL },
+    });
+    expect(createStreamFn).toHaveBeenCalledOnce();
+    expect(wrapSimpleCompletionStreamFn).not.toHaveBeenCalled();
+    expect(stream).toHaveBeenCalledOnce();
+    expect(stream.mock.calls[0]?.[2]).toMatchObject({ apiKey: AUTH_MARKER });
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    {
+      name: "boundary rotation",
+      boundaries: [0, 0, 2],
+      explicitKey: undefined,
+      keys: [`${SESSION_ID}:0`, `${SESSION_ID}:0`, `${SESSION_ID}:2`],
+    },
+    {
+      name: "explicit key",
+      boundaries: [3],
+      explicitKey: " gateway-explicit-cache ",
+      keys: ["gateway-explicit-cache"],
+    },
+  ])("uses the Gateway cache owner for $name", async ({ boundaries, explicitKey, keys }) => {
+    const runtime = setup();
+    for (const boundaryCount of boundaries) {
+      runtime.readPromptCacheContext.mockReturnValue({
+        boundaryCount,
+        ...(explicitKey ? { promptCacheKey: explicitKey } : {}),
+      });
+      const inferenceRequest = request();
+      if (!explicitKey) {
+        Object.assign(inferenceRequest.options, { promptCacheKey: "worker-chosen-key" });
+      }
+      await expect(runtime.executor(params(inferenceRequest, vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+    }
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.promptCacheKey)).toEqual(keys);
+    expect(runtime.stream.mock.calls.map((call) => call[2]?.sessionId)).toEqual(
+      boundaries.map(() => SESSION_ID),
+    );
+    if (explicitKey) {
+      runtime.readPromptCacheContext.mockReturnValue(undefined);
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "error",
+        reason: "session-not-attached",
+      });
+      expect(runtime.stream).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("retains runtime context under the approved replay policy", async () => {
+    const retain = true;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "worker-replay-policy",
+      source: "test",
+      provider: {
+        id: PROVIDER,
+        label: "Worker replay policy",
+        auth: [],
+        buildReplayPolicy: ({ modelId, modelApi }) => ({
+          appendOnlyRuntimeContext: retain && modelId === MODEL && modelApi === logicalModel.api,
+        }),
+      },
+    });
+    const runtime = setup(sessionEntry, { pluginRegistry, config: structuredClone(config) });
+    const inferenceRequest = request(ALIAS);
+    inferenceRequest.context.messages = [
+      { role: "user", content: "Earlier facts", timestamp: 1, runtimeContext: {} },
+      { role: "user", content: "Current question", timestamp: 2 },
+      { role: "user", content: "Current facts", timestamp: 3, runtimeContext: {} },
+    ];
+    const original = structuredClone(inferenceRequest);
+    expect((await runtime.executor(params(inferenceRequest, vi.fn()))).type).toBe("done");
+    const messages = runtime.stream.mock.calls[0]?.[1].messages;
+    expect(messages).toMatchObject([
+      { content: "Earlier facts", runtimeContext: { retained: retain } },
+      { content: "Current question" },
+      { content: "Current facts", runtimeContext: { retained: retain } },
+    ]);
+    expect(messages?.[1]).not.toHaveProperty("runtimeContext");
+    expect(inferenceRequest).toEqual(original);
+  });
+
   it("prepares an approved model available only from the bundled static catalog", async () => {
     const runtime = setup(sessionEntry, { catalogOnlyModel: true });
 
@@ -390,6 +232,81 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    { errorCode: "insufficient_quota", detailed: false },
+    { errorCode: "rate_limit_exceeded", detailed: true },
+  ])(
+    "preserves bounded, redacted streamed provider failure $errorCode",
+    async ({ errorCode, detailed }) => {
+      const runtime = setup();
+      const secret = `stream-secret-${"a".repeat(48)}`;
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        stream.push({
+          type: "error",
+          reason: "error",
+          error: {
+            ...finalMessage(),
+            stopReason: "error",
+            errorCode,
+            ...(detailed
+              ? {
+                  errorMessage: `429: Authorization: Bearer ${secret} ${'diagnostic " \\ '.repeat(80)}`,
+                  errorType: "rate_limit_error",
+                }
+              : {}),
+          },
+        });
+        return stream;
+      });
+
+      const outcome = await runtime.executor(params(request(), vi.fn()));
+
+      expect(outcome).toMatchObject({ type: "error", reason: "provider-error", usage });
+      if (outcome.type !== "error") {
+        throw new Error("expected provider failure");
+      }
+      expect(parseApiErrorInfo(outcome.message)?.code).toBe(errorCode);
+      if (detailed) {
+        expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+          httpCode: "429",
+          code: errorCode,
+          type: "rate_limit_error",
+        });
+        expect(outcome.message).not.toContain(secret);
+        expect(outcome.message.length).toBeLessThanOrEqual(256);
+      }
+      expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+    },
+  );
+
+  it.each([
+    { name: "short body", status: 503, code: "upstream_unavailable", detail: "Unavailable" },
+    { name: "long body", status: 429, code: "insufficient_quota", detail: "x".repeat(520) },
+    { name: "bigint diagnostic", status: 429, code: "insufficient_quota", detail: 1n },
+  ])("preserves a thrown provider HTTP failure ($name)", async ({ status, code, detail }) => {
+    const runtime = setup();
+    runtime.stream.mockImplementation(() => {
+      throw Object.assign(new Error("Request rejected"), {
+        status,
+        body: { error: { detail, code, message: "Provider request rejected" } },
+      });
+    });
+
+    const outcome = await runtime.executor(params(request(), vi.fn()));
+
+    if (outcome.type !== "error") {
+      throw new Error("expected provider failure");
+    }
+    expect(outcome).toMatchObject({ type: "error", reason: "provider-error" });
+    expect(parseApiErrorInfo(outcome.message)).toMatchObject({
+      httpCode: String(status),
+      code,
+    });
+    expect(outcome.message).toContain("Provider request rejected");
+    expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
+  });
+
   it("keeps provider construction and execution on the leased generation", async () => {
     const generationA = createEmptyPluginRegistry();
     const generationB = createEmptyPluginRegistry();
@@ -416,80 +333,56 @@ describe("worker inference provider runtime", () => {
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
   });
 
-  it("projects the gateway-owned auth profile onto the provider route", async () => {
-    const oauthRuntime = setup();
-    oauthRuntime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
-      routeRequirement: "subscription",
-    });
-    await oauthRuntime.executor(params(request(), vi.fn()));
-    const oauth = oauthRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
-
-    const apiKeyRuntime = setup();
-    apiKeyRuntime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
+  it.each([
+    {
       source: "user",
       routeRequirement: "api-key",
-    });
-    await apiKeyRuntime.executor(params(request(), vi.fn()));
-    const apiKey = apiKeyRuntime.prepareModel.mock.calls[0]?.[0].cfg ?? {};
-
-    expect(oauth.models?.providers?.openai).toMatchObject({
-      auth: "oauth",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-    expect(apiKey.models?.providers?.openai).toMatchObject({
       auth: "api-key",
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
-    });
-  });
-
-  it("prepares the selected model against its gateway-owned OAuth route", async () => {
-    const runtime = setup();
-    runtime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "user",
+    },
+    {
+      source: "auto",
       routeRequirement: "subscription",
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-
-    expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
       auth: "oauth",
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
-  });
-
-  it("pins an automatic profile to the route projected from that profile", async () => {
-    const runtime = setup({
-      ...sessionEntry,
-      authProfileOverrideSource: "auto",
-      authProfileOverrideCompactionCount: 1,
-    });
-    runtime.resolveAuthSelection.mockResolvedValue({
-      profileId: PROFILE,
-      source: "auto",
-      routeRequirement: "subscription",
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
-
-    expect(runtime.prepareModel).toHaveBeenCalledWith(
-      expect.objectContaining({
+    },
+  ] as const)(
+    "pins the $source profile to its $routeRequirement route",
+    async ({ source, routeRequirement, auth, api, baseUrl }) => {
+      const runtime = setup(
+        source === "auto"
+          ? {
+              ...sessionEntry,
+              authProfileOverrideSource: "auto",
+              authProfileOverrideCompactionCount: 1,
+            }
+          : sessionEntry,
+      );
+      runtime.resolveAuthSelection.mockResolvedValue({
         profileId: PROFILE,
-        preferredProfile: PROFILE,
-        bindAuthOwner: true,
-      }),
-    );
-  });
+        source,
+        routeRequirement,
+      });
+
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "done",
+      });
+      expect(runtime.prepareModel.mock.calls[0]?.[0].cfg?.models?.providers?.openai).toMatchObject({
+        auth,
+        api,
+        baseUrl,
+      });
+      expect(runtime.prepareModel).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profileId: PROFILE,
+          preferredProfile: PROFILE,
+          bindAuthOwner: true,
+        }),
+      );
+    },
+  );
 
   it("keeps approved alias routing, endpoint, headers, and auth gateway-owned", async () => {
     const runtime = setup();
@@ -515,6 +408,7 @@ describe("worker inference provider runtime", () => {
       }),
     );
     const prepared = runtime.prepareModel.mock.calls[0]?.[0];
+    expect(prepared?.signal).toBe(execution.signal);
     expect(runtime.scope).toEqual({
       agentDir: prepared?.agentDir,
       agentRuntime: "openclaw",
@@ -534,6 +428,7 @@ describe("worker inference provider runtime", () => {
       ...inferenceRequest.options,
       signal: expect.any(AbortSignal),
       sessionId: SESSION_ID,
+      promptCacheKey: `${SESSION_ID}:0`,
       apiKey: AUTH_MARKER,
     });
     expect(emitted.map((event) => event.type)).toEqual([
@@ -571,64 +466,130 @@ describe("worker inference provider runtime", () => {
     ]);
   });
 
-  it("closes provider tool calls from the authoritative terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => providerStream(finalMessage(), { omitToolEnd: true }));
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
+  it.each(["text", "unsupported"])(
+    "projects %s terminal content onto the closed worker schema",
+    async (type) => {
+      const runtime = setup();
+      const message = finalMessage();
+      const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
+      message.providerReplay = {
+        v: 1,
+        type: "openai-responses-compaction",
+        id: "cmp_worker_terminal",
+        data: ciphertext,
+        replayIndex: 1,
+        provider: "openai",
+        api: "openai-responses",
+        model: MODEL,
+        baseUrlHash: "ozhevd1smnk8s",
+        sessionHash: "171dzdv17gum5g",
+        authProfileHash: "oe8bkr3r8947",
+      };
+      Object.assign(message.content[0]!, { type, providerScratch: "text-state" });
+      Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
+      Object.assign(message.usage, { providerScratch: { requestId: "private" } });
+      Object.assign(message.providerReplay, { providerScratch: "private" });
+      runtime.stream.mockImplementation(() => providerStream(message));
 
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({
-      type: "done",
-    });
-    expect(emitted.map((event) => event.type)).toEqual([
-      "text_delta",
-      "toolcall_start",
-      "toolcall_delta",
-      "toolcall_end",
-    ]);
-  });
+      const outcome = await runtime.executor(params(request(), vi.fn()));
 
-  it("projects provider terminal messages onto the closed worker schema", async () => {
+      expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
+      expect(JSON.stringify(outcome)).not.toContain("providerScratch");
+      expect(JSON.stringify(outcome)).not.toContain("partialArgs");
+      expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+      if (type === "unsupported") {
+        expect(outcome).toMatchObject({
+          type: "error",
+          reason: "provider-error",
+          message: '{"message":"Unsupported assistant terminal content"}',
+        });
+        return;
+      }
+      expect(outcome).toMatchObject({
+        type: "done",
+        message: {
+          providerReplay: {
+            type: "openai-responses-compaction",
+            data: ciphertext,
+            replayIndex: 1,
+            sessionHash: "171dzdv17gum5g",
+            authProfileHash: "oe8bkr3r8947",
+          },
+        },
+      });
+      if (outcome.type !== "done") {
+        throw new Error("expected successful worker inference");
+      }
+      expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
+    },
+  );
+
+  it("canonicalizes fresh reasoning before continuation without rewriting approved history", async () => {
     const runtime = setup();
+    const signature =
+      '{"type":"reasoning","id":"rs_fresh","encrypted_content":"gAAAA-synthetic==","summary":[{"type":"summary_text","text":"fresh summary"}]}';
+    const canonical =
+      '{"id":"rs_fresh","type":"reasoning","summary":[],"encrypted_content":"gAAAA-synthetic=="}';
     const message = finalMessage();
-    message.providerReplay = {
-      v: 1,
-      type: "openai-responses-compaction",
-      id: "cmp_worker_terminal",
-      data: "opaque-worker-terminal",
-      replayIndex: 1,
-      provider: "openai",
-      api: "openai-responses",
-      model: MODEL,
-      baseUrlHash: "ozhevd1smnk8s",
-      sessionHash: "171dzdv17gum5g",
-      authProfileHash: "oe8bkr3r8947",
+    const toolCall = {
+      type: "toolCall" as const,
+      id: TOOL_CALL.id,
+      name: TOOL_CALL.name,
+      arguments: { token: "synthetic-tool-input" },
     };
-    Object.assign(message.content[0]!, { providerScratch: "text-state" });
-    Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
-    Object.assign(message.usage, { providerScratch: { requestId: "private" } });
-    Object.assign(message.providerReplay, { providerScratch: "private" });
-    runtime.stream.mockImplementation(() => providerStream(message));
+    message.content = [
+      { type: "thinking", thinking: "fresh summary", thinkingSignature: signature },
+      { type: "text", text: "Calling lookup" },
+      toolCall,
+    ];
+    const original = structuredClone(message);
+    runtime.stream.mockImplementation(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({ type: "toolcall_start", contentIndex: 2, partial: message });
+      stream.push({
+        type: "toolcall_delta",
+        contentIndex: 2,
+        delta: JSON.stringify(toolCall.arguments),
+        partial: message,
+      });
+      stream.push({ type: "toolcall_end", contentIndex: 2, toolCall, partial: message });
+      stream.push({ type: "done", reason: "toolUse", message });
+      return stream;
+    });
 
     const outcome = await runtime.executor(params(request(), vi.fn()));
 
-    expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
-    expect(JSON.stringify(outcome)).not.toContain("providerScratch");
-    expect(JSON.stringify(outcome)).not.toContain("partialArgs");
-    expect(JSON.stringify(outcome)).not.toContain("streamIndex");
-    expect(outcome).toMatchObject({
-      type: "done",
-      message: {
-        providerReplay: {
-          type: "openai-responses-compaction",
-          data: "opaque-worker-terminal",
-          replayIndex: 1,
-          sessionHash: "171dzdv17gum5g",
-          authProfileHash: "oe8bkr3r8947",
-        },
+    expect(outcome.type).toBe("done");
+    if (outcome.type !== "done") {
+      throw new Error("expected successful worker inference");
+    }
+    expect(outcome.message.content).toEqual([
+      { type: "thinking", thinking: "fresh summary", thinkingSignature: canonical },
+      { type: "text", text: "Calling lookup" },
+      toolCall,
+    ]);
+    expect(message).toEqual(original);
+
+    const continuation = request();
+    continuation.context.messages.push(
+      {
+        ...outcome.message,
+        content: [{ type: "thinking", thinking: "approved history", thinkingSignature: signature }],
       },
-    });
+      outcome.message,
+      {
+        role: "toolResult",
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        content: [{ type: "text", text: "found" }],
+        isError: false,
+        timestamp: 30,
+      },
+    );
+    const approvedHistory = structuredClone(continuation.context.messages);
+    await runtime.executor(params(continuation, vi.fn()));
+    expect(runtime.stream.mock.calls[1]?.[1].messages).toEqual(approvedHistory);
+    expect(continuation.context.messages).toEqual(approvedHistory);
   });
 
   it("returns a typed error when authoritative replay cannot be persisted", async () => {
@@ -671,102 +632,99 @@ describe("worker inference provider runtime", () => {
     expect(JSON.stringify(payloadEvents)).not.toContain(message.providerReplay.data);
   });
 
-  it("keeps a maximum fitting replay exact through the terminal projection", async () => {
-    const runtime = setup();
-    const message = finalMessage();
-    const ciphertext = `cipher-${"x".repeat(60 * 1024)}-€`;
-    message.providerReplay = {
-      v: 1,
-      type: "openai-responses-compaction",
-      data: ciphertext,
-      provider: "openai",
-      api: "openai-responses",
-      model: MODEL,
-    };
-    runtime.stream.mockImplementation(() => providerStream(message));
-
-    const outcome = await runtime.executor(params(request(), vi.fn()));
-
-    expect(outcome.type).toBe("done");
-    if (outcome.type !== "done") {
-      throw new Error("expected successful worker inference");
-    }
-    expect(outcome.message.providerReplay?.data).toBe(ciphertext);
-    expect(isWorkerTranscriptMessageFrameSafe(outcome.message)).toBe(true);
-  });
-
-  it("rejects an incomplete final argument stream", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      const completeToolCall = { ...TOOL_CALL, arguments: { query: "alpha" } };
-      message.content = [...message.content.slice(0, -1), completeToolCall];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex: 1,
-        delta: '{"query":',
-        partial: message,
+  it.each([
+    {
+      name: "incomplete JSON",
+      arguments: { query: "alpha" },
+      deltas: ['{"query":'],
+      outcome: "error",
+    },
+    {
+      name: "oversized arguments",
+      arguments: {},
+      deltas: ["x".repeat(1024 * 1024 + 1)],
+      outcome: "error",
+    },
+    {
+      name: "fragmented valid JSON",
+      arguments: {},
+      deltas: [...Array<string>(4096).fill(" "), "{}"],
+      outcome: "done",
+    },
+  ])(
+    "validates $name in the final argument stream",
+    async ({ name, arguments: toolArguments, deltas, outcome }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        const message = finalMessage();
+        message.content = [
+          ...message.content.slice(0, -1),
+          { ...TOOL_CALL, arguments: toolArguments },
+        ];
+        stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
+        for (const delta of deltas) {
+          stream.push({ type: "toolcall_delta", contentIndex: 1, delta, partial: message });
+        }
+        stream.push({ type: "done", reason: "toolUse", message });
+        return stream;
       });
-      stream.push({ type: "done", reason: "toolUse", message });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(
-      emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
-    ).toEqual(['{"query":']);
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
+      await expect(
+        runtime.executor(params(request(), (event) => emitted.push(event))),
+      ).resolves.toMatchObject(
+        outcome === "done" ? { type: "done" } : { type: "error", reason: "provider-error" },
+      );
+      if (name === "incomplete JSON") {
+        expect(
+          emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
+        ).toEqual(deltas);
+        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+      } else if (name === "oversized arguments") {
+        expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
+      }
+    },
+  );
 
-  it("rejects a terminal tool call whose identity changed", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
-  });
-
-  it("revalidates a normally ended tool call against the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
+  it.each([
+    { ended: false, omitted: false, unidentified: false },
+    { ended: true, omitted: false, unidentified: false },
+    { ended: true, omitted: true, unidentified: false },
+    { ended: false, omitted: true, unidentified: true },
+  ])(
+    "rejects terminal tool identity mismatch (ended=$ended, omitted=$omitted, unidentified=$unidentified)",
+    async ({ ended, omitted, unidentified }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(() => {
+        const stream = createAssistantMessageEventStream();
+        const partial = finalMessage();
+        const terminal = finalMessage();
+        terminal.content = omitted
+          ? terminal.content.slice(0, 1)
+          : [...terminal.content.slice(0, -1), { ...TOOL_CALL, id: "call-2" }];
+        if (unidentified) {
+          partial.content = [...partial.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }];
+        } else {
+          stream.push({ type: "toolcall_start", contentIndex: 1, partial });
+        }
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
+        if (ended) {
+          stream.push({ type: "toolcall_end", contentIndex: 1, toolCall: TOOL_CALL, partial });
+        }
+        stream.push({ type: "done", reason: omitted ? "stop" : "toolUse", message: terminal });
+        return stream;
       });
-      stream.push({ type: "done", reason: "toolUse", message: terminal });
-      return stream;
-    });
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
 
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
+      await expect(
+        runtime.executor(params(request(), (event) => emitted.push(event))),
+      ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
+      if (!ended) {
+        expect(emitted.some((event) => event.type === "toolcall_end")).toBe(false);
+      }
+    },
+  );
 
   it("rejects tool-call deltas after the end event", async () => {
     const runtime = setup();
@@ -793,94 +751,6 @@ describe("worker inference provider runtime", () => {
     expect(
       emitted.flatMap((event) => (event.type === "toolcall_delta" ? [event.delta] : [])),
     ).toEqual(["{}"]);
-  });
-
-  it("rejects a normally ended tool call omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({
-        type: "toolcall_end",
-        contentIndex: 1,
-        toolCall: TOOL_CALL,
-        partial,
-      });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
-
-  it("rejects unresolved pre-identity tool deltas omitted from the terminal message", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const terminal = finalMessage();
-      terminal.content = terminal.content.slice(0, 1);
-      const partial = {
-        ...terminal,
-        content: [...terminal.content, { ...TOOL_CALL, id: "", name: "" }],
-      } satisfies AssistantMessage;
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial });
-      stream.push({ type: "done", reason: "stop", message: terminal });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "error",
-      reason: "provider-error",
-    });
-  });
-
-  it("rejects retained tool arguments above the stream bound", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const partial = finalMessage();
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial });
-      stream.push({
-        type: "toolcall_delta",
-        contentIndex: 1,
-        delta: "x".repeat(1024 * 1024 + 1),
-        partial,
-      });
-      stream.push({ type: "done", reason: "toolUse", message: partial });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-
-    await expect(
-      runtime.executor(params(request(), (event) => emitted.push(event))),
-    ).resolves.toMatchObject({ type: "error", reason: "provider-error" });
-    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
-  });
-
-  it("accepts valid tool arguments split across many small fragments", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      stream.push({ type: "toolcall_start", contentIndex: 1, partial: message });
-      for (let index = 0; index < 4096; index += 1) {
-        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: " ", partial: message });
-      }
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: message });
-      stream.push({ type: "done", reason: "toolUse", message });
-      return stream;
-    });
-
-    await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
-      type: "done",
-    });
   });
 
   it("bounds nonempty streamed argument work and ignores empty fragments", () => {
@@ -926,62 +796,51 @@ describe("worker inference provider runtime", () => {
     ]);
   });
 
-  it("fences terminal tool-call synthesis after owner rotation", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => providerStream(finalMessage(), { omitToolEnd: true }));
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-    let current = true;
-    const execution = params(request(), (event) => {
-      emitted.push(event);
-      if (event.type === "toolcall_delta") {
-        current = false;
-      }
-    });
-    execution.isCurrent = () => current;
+  it.each([
+    {
+      phase: "toolcall_delta",
+      provider: () => providerStream(finalMessage(), { omitToolEnd: true }),
+      events: ["text_delta", "toolcall_start", "toolcall_delta"],
+    },
+    {
+      phase: "toolcall_start",
+      provider: () => {
+        const stream = createAssistantMessageEventStream();
+        const message = finalMessage();
+        const fragmented = {
+          ...message,
+          content: [...message.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }],
+        } satisfies AssistantMessage;
+        stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: fragmented });
+        stream.push({ type: "done", reason: "stop", message });
+        return stream;
+      },
+      events: ["toolcall_start"],
+    },
+  ])(
+    "fences terminal synthesis when $phase rotates ownership",
+    async ({ phase, provider, events }) => {
+      const runtime = setup();
+      runtime.stream.mockImplementation(provider);
+      const emitted: Parameters<Execution["emit"]>[0][] = [];
+      let current = true;
+      const execution = params(request(), (event) => {
+        emitted.push(event);
+        if (event.type === phase) {
+          current = false;
+        }
+      });
+      execution.isCurrent = () => current;
 
-    await expect(runtime.executor(execution)).resolves.toMatchObject({
-      type: "error",
-      reason: "cancelled",
-    });
-    expect(emitted.map((event) => event.type)).toEqual([
-      "text_delta",
-      "toolcall_start",
-      "toolcall_delta",
-    ]);
-  });
-
-  it("stops terminal synthesis when its start event rotates ownership", async () => {
-    const runtime = setup();
-    runtime.stream.mockImplementation(() => {
-      const stream = createAssistantMessageEventStream();
-      const message = finalMessage();
-      const fragmented = {
-        ...message,
-        content: [...message.content.slice(0, -1), { ...TOOL_CALL, id: "", name: "" }],
-      } satisfies AssistantMessage;
-      stream.push({ type: "toolcall_delta", contentIndex: 1, delta: "{}", partial: fragmented });
-      stream.push({ type: "done", reason: "stop", message });
-      return stream;
-    });
-    const emitted: Parameters<Execution["emit"]>[0][] = [];
-    let current = true;
-    const execution = params(request(), (event) => {
-      emitted.push(event);
-      if (event.type === "toolcall_start") {
-        current = false;
-      }
-    });
-    execution.isCurrent = () => current;
-
-    await expect(runtime.executor(execution)).resolves.toMatchObject({
-      type: "error",
-      reason: "cancelled",
-    });
-    expect(emitted.map((event) => event.type)).toEqual(["toolcall_start"]);
-  });
+      await expect(runtime.executor(execution)).resolves.toMatchObject({
+        type: "error",
+        reason: "cancelled",
+      });
+      expect(emitted.map((event) => event.type)).toEqual(events);
+    },
+  );
 
   it.each([
-    { name: "token usage", tokens: true, cost: 0.0033, billed: false },
     { name: "positive cost-only", tokens: false, cost: 0.25, billed: false },
     { name: "billed zero", tokens: false, cost: 0, billed: true },
     { name: "empty snapshot", tokens: false, cost: undefined, billed: false },
@@ -1033,35 +892,92 @@ describe("worker inference provider runtime", () => {
     }
   });
 
-  it("projects worker options before applying provider stream policy", async () => {
+  it("passes the admitted search capability to the provider and revokes it after prompt policy", async () => {
     const runtime = setup();
-    const inferenceRequest = request();
-    Object.assign(inferenceRequest.options, {
-      extra_body: { mode: "worker" },
-      transport: "sse",
-      response_format: { type: "json_object" },
+    const searchTool = {
+      name: "web_search",
+      label: "Search",
+      description: "Search",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    bindAgentToolExecutionLocation(searchTool, { kind: "gateway" });
+    const toolRuntime = createWorkerGatewayToolRuntime({
+      assertCurrent() {},
+      signal: new AbortController().signal,
+      prepare: async () => ({
+        tools: [searchTool],
+        presentation: createToolSurfacePresentationForTest(),
+        policy: {
+          workspaceOnly: true,
+          readOnly: false,
+          applyPatchEnabled: false,
+          applyPatchWorkspaceOnly: true,
+          imageSanitization: {},
+        },
+      }),
     });
+    vi.spyOn(workerTurnOwners, "getWorkerTurnToolSurface").mockReturnValue(toolRuntime);
+    try {
+      for (const enabled of [true, false]) {
+        if (!enabled) {
+          toolRuntime.applyPromptToolsAllow([]);
+        }
+        expect(await runtime.executor(params(request(), vi.fn()))).toMatchObject({ type: "done" });
+        expect(
+          runtime.applyStreamPolicy.mock.lastCall?.[11]?.nativeWebSearchPolicyContext
+            ?.webSearchEnabled,
+        ).toBe(enabled);
+      }
+    } finally {
+      await toolRuntime.close();
+    }
+  });
+});
 
-    expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
-      type: "done",
-    });
-    expect(runtime.applyStreamPolicy.mock.calls[0]?.[4]).toEqual({
-      temperature: 0.25,
-      maxTokens: 256,
-      reasoning: "low",
-      thinkingBudgets: { low: 96 },
-    });
+describe("worker inference session admission", () => {
+  it("uses the admitted source when current config routes the session to another store", async () => {
+    const runtime = setup();
+    const changedConfig = { ...config, session: { store: "replacement-sessions.json" } };
+
+    await expect(
+      runtime.executor(params(request(), vi.fn(), changedConfig)),
+    ).resolves.toMatchObject({ type: "done" });
+    expect(runtime.scope.authProfile).toBe(PROFILE);
+    expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
+    expect(runtime.stream).toHaveBeenCalledOnce();
   });
 
-  it("preserves adaptive provider policy while lowering the core stream effort", async () => {
-    const runtime = setup();
-    const inferenceRequest = request();
-    Object.assign(inferenceRequest.options, { reasoning: "adaptive" });
+  it.each([undefined, { ...sessionEntry, sessionId: "replaced-session" }])(
+    "rejects a missing or replaced session before model preparation",
+    async (entry) => {
+      const runtime = setup();
+      runtime.readSessionEntry.mockResolvedValue(entry);
 
-    expect(await runtime.executor(params(inferenceRequest, vi.fn()))).toMatchObject({
-      type: "done",
-    });
-    expect(runtime.applyStreamPolicy.mock.calls[0]?.[5]).toBe("adaptive");
-    expect(runtime.stream.mock.calls[0]?.[2]).toMatchObject({ reasoning: "high" });
+      await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
+        type: "error",
+        reason: "session-not-attached",
+      });
+      expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
+      expect(runtime.acquireRuntimeLease).not.toHaveBeenCalled();
+      expect(runtime.stream).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects revoked authority after an asynchronous session read", async () => {
+    const runtime = setup();
+    const read = createDeferred<typeof sessionEntry>();
+    runtime.readSessionEntry.mockReturnValue(read.promise);
+    let current = true;
+    const execution = params(request(), vi.fn());
+    execution.isCurrent = () => current;
+    const pending = runtime.executor(execution);
+    current = false;
+    read.resolve(sessionEntry);
+
+    await expect(pending).rejects.toThrow("Worker inference source is no longer current");
+    expect(runtime.readSessionEntry).toHaveBeenCalledOnce();
+    expect(runtime.acquireRuntimeLease).not.toHaveBeenCalled();
+    expect(runtime.stream).not.toHaveBeenCalled();
   });
 });

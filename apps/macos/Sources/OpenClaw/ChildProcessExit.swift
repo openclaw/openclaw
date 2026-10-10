@@ -103,6 +103,13 @@ final class ChildProcessExit: @unchecked Sendable {
         Self.hasExited(self.processIdentifier)
     }
 
+    /// Retained callbacks lose authority before the observer releases its unreaped child.
+    var isRunning: Bool {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        return !self.finished && !Self.hasExited(self.processIdentifier)
+    }
+
     private func finish() {
         self.lock.lock()
         guard !self.finished else {

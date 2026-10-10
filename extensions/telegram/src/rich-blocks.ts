@@ -14,8 +14,11 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import {
   inputRichBlocksToPlainText,
-  maxInputRichBlockNesting,
+  MAX_RICH_BLOCK_NESTING,
+  measureInputRichBlocks,
+  normalizeInputRichBlocks,
   normalizeRichText,
+  richTextLink,
   type InputRichBlock,
   type InputRichBlockParagraph,
   type RichBlockTableCell,
@@ -23,7 +26,12 @@ import {
   type TelegramRichBlocksDegradationReason,
 } from "./rich-block-model.js";
 import { findTelegramHtmlIslands, renderTelegramHtmlIsland } from "./rich-blocks-html-map.js";
-import { htmlNodesToRichText, parseHtmlFragment, type HtmlNode } from "./rich-blocks-html.js";
+import {
+  htmlNodesToRichText,
+  nodeText,
+  parseHtmlFragment,
+  type HtmlNode,
+} from "./rich-blocks-html.js";
 import {
   collectMarkdownRichListSources,
   renderMarkdownRichListSource,
@@ -58,37 +66,17 @@ type StructuralSegment =
   | { kind: "list"; start: number; end: number; source: MarkdownRichListSource }
   | { kind: "table"; start: number; end: number; table: MarkdownTableMeta };
 
-function isTelegramRichLinkHref(href: string): boolean {
-  return TELEGRAM_RICH_LINK_HREF_RE.test(href);
-}
-
-function resolveHeadingSize(style: MarkdownStyle): 1 | 2 | 3 | 4 | 5 | 6 | undefined {
-  switch (style) {
-    case "heading_1":
-      return 1;
-    case "heading_2":
-      return 2;
-    case "heading_3":
-      return 3;
-    case "heading_4":
-      return 4;
-    case "heading_5":
-      return 5;
-    case "heading_6":
-      return 6;
-    default:
-      return undefined;
-  }
-}
+const HEADING_SIZES: Partial<Record<MarkdownStyle, 1 | 2 | 3 | 4 | 5 | 6>> = {
+  heading_1: 1,
+  heading_2: 2,
+  heading_3: 3,
+  heading_4: 4,
+  heading_5: 5,
+  heading_6: 6,
+};
 
 function isInlineStyle(style: MarkdownStyle): style is InlineStyleKind {
-  return (
-    style === "bold" ||
-    style === "italic" ||
-    style === "strikethrough" ||
-    style === "code" ||
-    style === "spoiler"
-  );
+  return Object.hasOwn(INLINE_STYLE_RANK, style);
 }
 
 type TelegramLinkAction =
@@ -115,32 +103,10 @@ function resolveTelegramLinkAction(
     // In-message fragments are RichTextAnchorLink, not RichTextUrl.
     return { kind: "anchor", name: href.slice(1) };
   }
-  if (!isTelegramRichLinkHref(href)) {
+  if (!TELEGRAM_RICH_LINK_HREF_RE.test(href)) {
     return null;
   }
   return { kind: "url", href };
-}
-
-function collectTelegramLinkActions(
-  ir: MarkdownIR,
-): Array<{ start: number; end: number; action: TelegramLinkAction }> {
-  const links: Array<{ start: number; end: number; action: TelegramLinkAction }> = [];
-  renderMarkdownWithMarkers(
-    ir,
-    {
-      styleMarkers: {},
-      escapeText: (text) => text,
-      buildLink: (link, source, context) => {
-        const action = resolveTelegramLinkAction(link, source, context);
-        if (action) {
-          links.push({ start: link.start, end: link.end, action });
-        }
-        return null;
-      },
-    },
-    TELEGRAM_RICH_FORMAT_PROFILE,
-  );
-  return links;
 }
 
 /**
@@ -169,11 +135,25 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   for (const span of slice.annotations ?? []) {
     spans.push({ start: span.start, end: span.end, kind: "annotation" });
   }
-  for (const link of collectTelegramLinkActions(slice)) {
-    spans.push(
-      link.action.kind === "code"
-        ? { start: link.start, end: link.end, kind: "style", style: "code" }
-        : { start: link.start, end: link.end, kind: "link", target: link.action },
+  if (slice.links.length > 0) {
+    renderMarkdownWithMarkers(
+      slice,
+      {
+        styleMarkers: {},
+        escapeText: (value) => value,
+        buildLink: (link, source, context) => {
+          const action = resolveTelegramLinkAction(link, source, context);
+          if (action) {
+            spans.push(
+              action.kind === "code"
+                ? { start: link.start, end: link.end, kind: "style", style: "code" }
+                : { start: link.start, end: link.end, kind: "link", target: action },
+            );
+          }
+          return null;
+        },
+      },
+      TELEGRAM_RICH_FORMAT_PROFILE,
     );
   }
   type Leaf = { start: number; end: number } & (
@@ -216,31 +196,41 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
   const points = [
     ...new Set([...spans, ...leaves].flatMap((span) => [span.start, span.end])),
   ].toSorted((left, right) => left - right);
-  const stack: Active[] = [];
+  const stack: Array<{ span: Active; text: RichText[] }> = [];
   const root: RichText[] = [];
-  const frameStack: RichText[][] = [root];
+  const currentText = () => stack.at(-1)?.text ?? root;
+  let leafIndex = 0;
+  let nextSpanIndex = 0;
+  let pendingSpans: Active[] = [];
 
   for (let i = 0; i < points.length - 1; i += 1) {
     const start = points[i] ?? 0;
-    const leaf = leaves.find((entry) => entry.start <= start && entry.end > start);
-    if (!leaf || (leaf.kind === "atom" && leaf.start !== start)) {
+    // HTML traversal emits source-ordered leaves.
+    while (leafIndex < leaves.length && leaves[leafIndex]!.end <= start) {
+      leafIndex += 1;
+    }
+    const leaf = leaves[leafIndex];
+    if (!leaf || leaf.start > start || (leaf.kind === "atom" && leaf.start !== start)) {
       continue;
     }
     const end = leaf.kind === "atom" ? leaf.end : (points[i + 1] ?? start);
-    const covering = spans.filter((span) => span.start <= start && span.end >= end);
+    while (nextSpanIndex < spans.length && spans[nextSpanIndex]!.start <= start) {
+      pendingSpans.push(spans[nextSpanIndex++]!);
+    }
+    pendingSpans = pendingSpans.filter((span) => span.end > start);
+    const covering = pendingSpans.filter((span) => span.end >= end);
     const annotation = covering.find((span) => span.kind === "annotation");
     // Dominance applies only to the covered range. Surrounding formatting resumes
     // after a transcript header. Code is already literal in IR; its merged range
     // may contain independently authored styles and clickable links.
     const active = annotation ? [annotation] : covering;
     let shared = 0;
-    while (shared < stack.length && stack[shared] === active[shared]) {
+    while (shared < stack.length && stack[shared]?.span === active[shared]) {
       shared += 1;
     }
     // Retain unchanged containers; rebuild the suffix when an ancestor expires,
     // even if its child continues, so crossed ranges cannot leak formatting.
     stack.length = shared;
-    frameStack.length = shared + 1;
     for (const item of active.slice(shared)) {
       const container: RichText[] = [];
       const node: RichText =
@@ -248,117 +238,86 @@ function irRangeToRichText(ir: MarkdownIR, rangeStart: number, rangeEnd: number)
           ? item.wrap(container)
           : item.kind === "link"
             ? item.target.kind === "url"
-              ? { type: "url", text: container, url: item.target.href }
+              ? richTextLink(container, item.target.href)
               : { type: "anchor_link", text: container, anchor_name: item.target.name }
             : { type: item.kind === "annotation" ? "code" : item.style, text: container };
-      frameStack.at(-1)?.push(node);
-      stack.push(item);
-      frameStack.push(container);
+      currentText().push(node);
+      stack.push({ span: item, text: container });
     }
-    if (end > start) {
-      // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
-      frameStack.at(-1)?.push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
-    }
+    // Unlike Bot API HTML mode, rich paragraphs preserve bare newlines verbatim.
+    currentText().push(leaf.kind === "atom" ? leaf.value : text.slice(start, end));
   }
 
   return normalizeRichText(root);
-}
-
-function pushParagraph(
-  paragraphs: InputRichBlockParagraph[],
-  ir: MarkdownIR,
-  rangeStart: number,
-  rangeEnd: number,
-): void {
-  // Trim the range (not the rendered text) so style/link offsets stay aligned;
-  // gaps after structural blocks otherwise leak leading newlines into paragraphs.
-  const raw = ir.text.slice(rangeStart, rangeEnd);
-  const leading = raw.length - raw.trimStart().length;
-  const trailing = raw.length - raw.trimEnd().length;
-  const absStart = rangeStart + leading;
-  const absEnd = rangeEnd - trailing;
-  if (absEnd <= absStart) {
-    return;
-  }
-  const text = irRangeToRichText(ir, absStart, absEnd);
-  // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
-  // with empty label); an empty paragraph is invalid wire content.
-  if (text !== "") {
-    paragraphs.push({ type: "paragraph", text });
-  }
 }
 
 function splitParagraphs(ir: MarkdownIR, start: number, end: number): InputRichBlockParagraph[] {
   if (end <= start) {
     return [];
   }
-  const text = ir.text.slice(start, end);
+  const sourceText = ir.text.slice(start, end);
   const paragraphs: InputRichBlockParagraph[] = [];
+  const pushParagraph = (rangeStart: number, rangeEnd: number) => {
+    // Trim the range so style/link offsets stay aligned with the source.
+    const raw = ir.text.slice(rangeStart, rangeEnd);
+    const absStart = rangeStart + raw.length - raw.trimStart().length;
+    const absEnd = rangeEnd - (raw.length - raw.trimEnd().length);
+    if (absEnd <= absStart) {
+      return;
+    }
+    const text = irRangeToRichText(ir, absStart, absEnd);
+    // Inline island conversion can normalize a leaf to nothing (e.g. an anchor
+    // with empty label); an empty paragraph is invalid wire content.
+    if (text !== "") {
+      paragraphs.push({ type: "paragraph", text });
+    }
+  };
   const blankLine = /\n[ \t]*\n+/g;
   let last = 0;
   let match: RegExpExecArray | null;
-  while ((match = blankLine.exec(text)) !== null) {
-    pushParagraph(paragraphs, ir, start + last, start + match.index);
+  while ((match = blankLine.exec(sourceText)) !== null) {
+    pushParagraph(start + last, start + match.index);
     last = match.index + match[0].length;
   }
-  pushParagraph(paragraphs, ir, start + last, end);
+  pushParagraph(start + last, end);
   return paragraphs;
 }
 
-function renderAsciiTableGrid(table: MarkdownTableMeta): string {
-  return renderTelegramMonospaceGrid([table.headers, ...table.rows], {
-    headerSeparator: true,
-  });
-}
-
-function cellToRichText(cell: MarkdownTableCell | undefined): RichText | undefined {
-  if (!cell?.text) {
-    return undefined;
-  }
-  const rich = irRangeToRichText(cell, 0, cell.text.length);
-  return rich === "" ? undefined : rich;
-}
-
-function renderTableBlock(table: MarkdownTableMeta): {
-  block: InputRichBlock;
-  degradation?: TelegramRichBlocksDegradationReason;
-} {
+function renderTableBlock(
+  table: MarkdownTableMeta,
+  degradationReasons: Set<TelegramRichBlocksDegradationReason>,
+): InputRichBlock {
   const columnCount = Math.max(table.headers.length, ...table.rows.map((row) => row.length), 0);
   if (columnCount > TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT) {
-    return {
-      block: { type: "pre", text: renderAsciiTableGrid(table) },
-      degradation: "table-ascii",
-    };
+    const text = renderTelegramMonospaceGrid([table.headers, ...table.rows], {
+      headerSeparator: true,
+    });
+    degradationReasons.add("table-ascii");
+    return { type: "pre", text };
   }
-  const headerRow: RichBlockTableCell[] = table.headerCells.map((cell, index) => {
-    const align = table.aligns?.[index];
-    const text = cellToRichText(cell);
+  const renderCell = (
+    cell: MarkdownTableCell | undefined,
+    index: number,
+    header = false,
+  ): RichBlockTableCell => {
+    const text = cell?.text ? irRangeToRichText(cell, 0, cell.text.length) : "";
     return {
-      is_header: true,
-      align: align ?? "left",
+      ...(header ? { is_header: true as const } : {}),
+      align: table.aligns?.[index] ?? "left",
       valign: "middle",
-      ...(text !== undefined ? { text } : {}),
+      ...(text !== "" ? { text } : {}),
     };
-  });
+  };
+  const headerRow = table.headerCells.map((cell, index) => renderCell(cell, index, true));
   const bodyRows: RichBlockTableCell[][] = table.rowCells.map((row) =>
-    Array.from({ length: columnCount }, (_value, index) => {
-      const align = table.aligns?.[index];
-      const text = cellToRichText(row[index]);
-      return {
-        align: align ?? "left",
-        valign: "middle",
-        ...(text !== undefined ? { text } : {}),
-      };
-    }),
+    Array.from({ length: columnCount }, (_value, index) => renderCell(row[index], index)),
   );
   const cells = headerRow.length > 0 ? [headerRow, ...bodyRows] : bodyRows;
   return {
-    block: {
-      type: "table",
-      cells,
-      is_bordered: true,
-      is_striped: true,
-    },
+    type: "table",
+    cells,
+    is_bordered: true,
+    is_striped: true,
   };
 }
 
@@ -373,7 +332,7 @@ function collectStructuralSegments(
     if (span.end <= span.start) {
       continue;
     }
-    const headingSize = resolveHeadingSize(span.style);
+    const headingSize = HEADING_SIZES[span.style];
     if (headingSize) {
       segments.push({ kind: "heading", start: span.start, end: span.end, size: headingSize });
       continue;
@@ -455,8 +414,26 @@ function emitSegments(
   rangeEnd: number,
   degradationReasons: Set<TelegramRichBlocksDegradationReason>,
   htmlNodes: readonly HtmlNode[] = [],
+  depth = 0,
 ): InputRichBlock[] {
+  // Leave room for the existing list-limit fallback before applying the wire
+  // depth budget, but never recurse through an unbounded authored document.
+  if (depth >= MAX_RICH_BLOCK_NESTING * 2) {
+    degradationReasons.add("nesting-limit");
+    return [
+      {
+        type: "paragraph",
+        text: htmlNodes.length ? nodeText(htmlNodes, true) : ir.text.slice(rangeStart, rangeEnd),
+      },
+    ];
+  }
   preserveLiteralHtmlOwners(ir, segments, htmlNodes);
+  const renderChildren = (
+    children: readonly StructuralSegment[],
+    start: number,
+    end: number,
+    nodes: readonly HtmlNode[] = [],
+  ) => emitSegments(ir, children, start, end, degradationReasons, nodes, depth + 1);
   const containerRank = (segment: StructuralSegment) =>
     segment.kind === "blockquote" ? 0 : segment.kind === "list" ? 1 : 2;
   const orderedSegments = [
@@ -504,6 +481,13 @@ function emitSegments(
       next += 1;
     }
     const children = orderedSegments.slice(index + 1, next);
+    const renderChildRange = (start: number, end: number, nodes: readonly HtmlNode[] = []) =>
+      renderChildren(
+        children.filter((child) => child.start >= start && child.end <= end),
+        start,
+        end,
+        nodes,
+      );
     switch (segment.kind) {
       case "html": {
         blocks.push(
@@ -518,16 +502,7 @@ function emitSegments(
               const end = nodes[last]!.end;
               // Removed summaries, credits, and checkboxes split body ranges.
               // Render the remaining tree with the same Markdown owner as the root.
-              content.push(
-                ...emitSegments(
-                  ir,
-                  children.filter((child) => child.start >= start && child.end <= end),
-                  start,
-                  end,
-                  degradationReasons,
-                  nodes.slice(first, last + 1),
-                ),
-              );
+              content.push(...renderChildRange(start, end, nodes.slice(first, last + 1)));
               first = last + 1;
             }
             return content;
@@ -552,44 +527,18 @@ function emitSegments(
         break;
       }
       case "blockquote": {
-        const inner = emitSegments(ir, children, segment.start, segment.end, degradationReasons);
+        const inner = renderChildren(children, segment.start, segment.end);
         if (inner.length > 0) {
           blocks.push({ type: "blockquote", blocks: inner });
         }
         break;
       }
       case "list": {
-        const rendered = renderMarkdownRichListSource(segment.source, (start, end) =>
-          emitSegments(
-            ir,
-            children.filter((child) => child.start >= start && child.end <= end),
-            start,
-            end,
-            degradationReasons,
-          ),
-        );
-        if (rendered) {
-          blocks.push(...rendered);
-        } else {
-          degradationReasons.add("list-limit");
-          blocks.push(
-            ...emitSegments(
-              ir,
-              children.filter((child) => child.kind !== "list"),
-              segment.start,
-              segment.end,
-              degradationReasons,
-            ),
-          );
-        }
+        blocks.push(renderMarkdownRichListSource(segment.source, renderChildRange));
         break;
       }
       case "table": {
-        const rendered = renderTableBlock(segment.table);
-        if (rendered.degradation) {
-          degradationReasons.add(rendered.degradation);
-        }
-        blocks.push(rendered.block);
+        blocks.push(renderTableBlock(segment.table, degradationReasons));
         break;
       }
     }
@@ -621,6 +570,11 @@ export function markdownToTelegramRichBlocks(
     headingStyle: "rich",
     blockquotePrefix: "",
     tableMode,
+    // resolveTelegramLinkAction already collapses unsupported hrefs (file:,
+    // data:, ...) to their label; let the parser tokenize them instead of
+    // leaking raw `[label](href)` source when markdown-it's own scheme
+    // denylist rejects it.
+    allowAllLinkSchemes: true,
   });
 
   let degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
@@ -629,10 +583,14 @@ export function markdownToTelegramRichBlocks(
   const hasMarkdownLists = segments.some((segment) => segment.kind === "list");
   const flattenedSegments = segments.filter((segment) => segment.kind !== "list");
   let blocks = emitSegments(ir, segments, 0, ir.text.length, degradationReasons, htmlNodes);
-  if (hasMarkdownLists && maxInputRichBlockNesting(blocks) > 16) {
+  if (hasMarkdownLists && measureInputRichBlocks(blocks).nesting > 16) {
     degradationReasons = new Set<TelegramRichBlocksDegradationReason>();
     degradationReasons.add("list-limit");
     blocks = emitSegments(ir, flattenedSegments, 0, ir.text.length, degradationReasons, htmlNodes);
+  }
+  if (measureInputRichBlocks(blocks).nesting > MAX_RICH_BLOCK_NESTING) {
+    degradationReasons.add("nesting-limit");
+    blocks = normalizeInputRichBlocks(blocks);
   }
 
   if (blocks.length === 0 && ir.text.trim()) {

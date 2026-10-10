@@ -259,6 +259,36 @@ describe("normalizeMessageActionInput", () => {
       input: {
         action: "read",
         args: {
+          channel: "pinboard",
+          messageId: "msg_123",
+        },
+        toolContext: { currentChannelId: "channel:C1" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { target: "channel:C1", to: "channel:C1", messageId: "msg_123" },
+    },
+    {
+      input: {
+        action: "poll",
+        args: { channel: "imessage", chatGuid: "bundled-target" },
+        toolContext: { currentChannelId: "selected-target" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { target: "selected-target", to: "selected-target" },
+    },
+    {
+      input: {
+        action: "edit",
+        args: { channel: "imessage", messageId: "msg_123" },
+        targetAliasSpec: null,
+      },
+      expectedFields: { messageId: "msg_123" },
+      absentFields: ["target", "to"],
+    },
+    {
+      input: {
+        action: "read",
+        args: {
           channel: "workspace",
           messageId: "123.456",
         },
@@ -468,14 +498,14 @@ describe("normalizeMessageActionInput", () => {
     expect(
       normalizeMessageActionInput({
         action: "unpin",
-        args: { channel: "pinboard", messageId: "om_123" },
+        args: { channel: "pinboard", postId: "post_123" },
         targetAliasSpec: {
-          aliases: ["messageId", "chatId"],
-          deliveryTargetAliases: ["chatId"],
+          aliases: ["postId", "roomId"],
+          deliveryTargetAliases: ["roomId"],
         },
         allowResourceOnly: true,
       }),
-    ).toEqual({ channel: "pinboard", messageId: "om_123" });
+    ).toEqual({ channel: "pinboard", postId: "post_123" });
   });
 
   it.each([

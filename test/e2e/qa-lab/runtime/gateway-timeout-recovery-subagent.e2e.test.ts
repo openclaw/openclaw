@@ -1,6 +1,6 @@
+import { once } from "node:events";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -9,6 +9,9 @@ import {
   createQaGatewayChild,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
+import { writeOpenAiResponsesSse as writeSse } from "../../../helpers/openai-responses-sse.js";
+import { createDeferred, withTestTimeout } from "../../../helpers/promise.js";
+import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const MODEL = "mock-openai/gpt-5.6-luna";
@@ -19,6 +22,18 @@ const PROMPT =
 const CHILD_MARKER = "QA-TIMEOUT-RECOVERY-CHILD-OK";
 const PARENT_READY = "QA-TIMEOUT-RECOVERY-PARENT-READY";
 const RECOVERY_PROMPT = "Continue while the existing worker finishes. Do not spawn another worker.";
+const COMPACTION_SUMMARY = [
+  "## Decisions\nOne native worker has already been spawned.",
+  "## Open TODOs\nDeliver the existing worker's terminal reply once.",
+  "## Constraints/Rules\nDo not spawn another worker or use ACP.",
+  `## Pending user asks\n${RECOVERY_PROMPT}`,
+  "## Exact identifiers\nqa-timeout-recovery-child",
+].join("\n\n");
+const TURN_PREFIX_SUMMARY = [
+  `## Original Request\n${RECOVERY_PROMPT}`,
+  "## Early Progress\nThe existing worker is still running.",
+  "## Context for Suffix\nDeliver qa-timeout-recovery-child once; do not spawn another worker.",
+].join("\n\n");
 type SseEvent = {
   type: string;
   response?: Record<string, unknown>;
@@ -134,28 +149,33 @@ function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>
   ];
 }
 
-function writeSse(response: ServerResponse, events: SseEvent[]) {
-  response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
-  response.end(
-    `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
-  );
-}
-
-async function streamAssistantReply(response: ServerResponse, text: string, durationMs: number) {
+async function streamAssistantReply(
+  response: ServerResponse,
+  text: string,
+  release: Promise<void>,
+) {
+  const closed = once(response, "close");
   response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
   for (const event of withUsage(buildAssistantEvents(text), 20)) {
-    if (event.type === "response.output_text.delta") {
-      // Successful child/compaction requests stay live while the parent's
-      // silent continuation alone crosses the provider's idle deadline.
-      for (const delta of text) {
-        await sleep(durationMs / text.length);
-        response.write(`data: ${JSON.stringify({ ...event, delta })}\n\n`);
+    response.write(`data: ${JSON.stringify(event)}\n\n`);
+    if (event.type === "response.created") {
+      // Successful requests wait on lifecycle facts. Provider progress keeps
+      // only the deliberately silent parent on the real idle deadline.
+      const heartbeat = setInterval(() => {
+        response.write(`data: ${JSON.stringify({ ...event, type: "response.in_progress" })}\n\n`);
+      }, 500);
+      try {
+        await Promise.race([release, closed]);
+      } finally {
+        clearInterval(heartbeat);
       }
-    } else {
-      response.write(`data: ${JSON.stringify(event)}\n\n`);
+      if (response.destroyed) {
+        return false;
+      }
     }
   }
   response.end("data: [DONE]\n\n");
+  return true;
 }
 
 function withUsage(events: SseEvent[], inputTokens: number): SseEvent[] {
@@ -174,12 +194,17 @@ function withUsage(events: SseEvent[], inputTokens: number): SseEvent[] {
 }
 
 async function startProofProvider() {
-  let parentContinuationStartedAt: number | undefined;
-  let childReleasedAt: number | undefined;
-  let compactionStartedAt: number | undefined;
-  let compactionReleasedAt: number | undefined;
+  const proof: {
+    parentContinuationStartedAt?: number;
+    childReleasedAt?: number;
+    compactionStartedAt?: number;
+    compactionReleasedAt?: number;
+    recoveredParentReplies: string[];
+  } = { recoveredParentReplies: [] };
   let parentContinuationSeen = false;
   let childRequestSeen = false;
+  const compactionStarted = createDeferred();
+  const compactionRelease = createDeferred();
   const server = createServer((request, response) => {
     void (async () => {
       if (request.method === "GET" && request.url === "/v1/models") {
@@ -202,8 +227,9 @@ async function startProofProvider() {
       if (body.model === CHILD_MODEL.split("/")[1]) {
         if (!childRequestSeen) {
           childRequestSeen = true;
-          await streamAssistantReply(response, CHILD_MARKER, 6_000);
-          childReleasedAt = Date.now();
+          if (await streamAssistantReply(response, CHILD_MARKER, compactionStarted.promise)) {
+            proof.childReleasedAt = performance.now();
+          }
         } else {
           // Follow-up model calls must not overwrite the original worker's
           // completion time used to prove the recovery window.
@@ -211,12 +237,24 @@ async function startProofProvider() {
         }
         return;
       }
-      // Compaction serializes history into one tool-free summary request; its
+      // Compaction serializes history into tool-free summary requests; their
       // quoted tool calls are not a fresh request to spawn another worker.
       if (!Array.isArray(body.tools) || body.tools.length === 0) {
-        compactionStartedAt = Date.now();
-        await streamAssistantReply(response, "QA-TIMEOUT-RECOVERY-SUMMARY", 10_000);
-        compactionReleasedAt = Date.now();
+        // Split-turn context has its own format; the retained suffix owns the pending ask.
+        const summary = inputText.includes("This is the PREFIX of a turn")
+          ? TURN_PREFIX_SUMMARY
+          : COMPACTION_SUMMARY;
+        // Multi-stage compaction can request more summaries. Keep the first
+        // request's overlap evidence paired, just like the original child run.
+        if (proof.compactionStartedAt !== undefined) {
+          writeSse(response, withUsage(buildAssistantEvents(summary), 20));
+          return;
+        }
+        proof.compactionStartedAt = performance.now();
+        compactionStarted.resolve();
+        if (await streamAssistantReply(response, summary, compactionRelease.promise)) {
+          proof.compactionReleasedAt = performance.now();
+        }
         return;
       }
       if (parentContinuationSeen) {
@@ -226,15 +264,9 @@ async function startProofProvider() {
           inputText.includes("Agent steering queue items arrived since your last turn.") &&
           inputText.includes("qa-timeout-recovery-child") &&
           inputText.includes(CHILD_MARKER);
-        writeSse(
-          response,
-          withUsage(
-            buildAssistantEvents(
-              hasChildCompletion ? CHILD_MARKER : "QA-TIMEOUT-RECOVERY-PARENT-OK",
-            ),
-            20,
-          ),
-        );
+        const reply = hasChildCompletion ? CHILD_MARKER : "QA-TIMEOUT-RECOVERY-PARENT-OK";
+        proof.recoveredParentReplies.push(reply);
+        writeSse(response, withUsage(buildAssistantEvents(reply), 20));
         return;
       }
       if (!inputText.includes(PROMPT)) {
@@ -242,6 +274,11 @@ async function startProofProvider() {
         return;
       }
       if (!inputText.includes("function_call_output")) {
+        expect(body.tools).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "function", name: "sessions_spawn" }),
+          ]),
+        );
         writeSse(
           response,
           withUsage(
@@ -262,9 +299,8 @@ async function startProofProvider() {
         return;
       }
       parentContinuationSeen = true;
-      parentContinuationStartedAt = Date.now();
-      await sleep(12_000);
-      writeSse(response, withUsage(buildAssistantEvents("NO_REPLY"), 90_000));
+      proof.parentContinuationStartedAt = performance.now();
+      await once(response, "close");
     })().catch(() => {
       if (!response.headersSent) {
         response.writeHead(500);
@@ -282,21 +318,12 @@ async function startProofProvider() {
   }
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    proof: {
-      get parentContinuationStartedAt() {
-        return parentContinuationStartedAt;
-      },
-      get childReleasedAt() {
-        return childReleasedAt;
-      },
-      get compactionReleasedAt() {
-        return compactionReleasedAt;
-      },
-      get compactionStartedAt() {
-        return compactionStartedAt;
-      },
-    },
+    compactionStarted: compactionStarted.promise,
+    releaseCompaction: () => compactionRelease.resolve(),
+    proof,
     stop: async () => {
+      compactionStarted.resolve();
+      compactionRelease.resolve();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
@@ -318,6 +345,8 @@ function withTimeoutConfig(config: OpenClawConfig): OpenClawConfig {
   }
   return {
     ...config,
+    // The synthetic provider tests timeout recovery, not deferred tool discovery.
+    tools: { ...config.tools, codeMode: false, toolSearch: false },
     agents: {
       ...config.agents,
       // The alternate model identifies the child, not a parent fallback.
@@ -362,7 +391,12 @@ describe("Gateway timeout recovery subagent delivery", () => {
     cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
-      useRepoCli: true,
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],
+        cwd: REPO_ROOT,
+        usePackagedPlugins: true,
+      },
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL,
@@ -373,15 +407,45 @@ describe("Gateway timeout recovery subagent delivery", () => {
       mutateConfig: withTimeoutConfig,
     });
     await transport.waitReady({ gateway });
+    const readChildRuns = () =>
+      readQaSubagentRuns(gateway.runtimeEnv).filter(
+        (entry) => entry.label === "qa-timeout-recovery-child",
+      );
+    // Mirrors the requester steering lease: a pending payload without an
+    // in-flight announce reservation is what the recovered retry injects.
+    const readChildHandoff = () =>
+      readChildRuns().map((run) => ({
+        execution: run.execution.status,
+        outcome: run.execution.outcome?.status,
+        delivery: run.delivery?.status,
+        leasable:
+          run.delivery?.status === "pending" &&
+          run.delivery.payload !== undefined &&
+          run.cleanupHandled !== true,
+      }));
+    const sendInbound = (text: string) =>
+      transport.sendInbound({
+        accountId: "default",
+        conversation: CONVERSATION,
+        senderId: CONVERSATION.id,
+        text,
+      });
+    // Compaction preserves the latest three turns locally. An older real
+    // conversation prefix is required to exercise model-backed summarization.
+    for (let turn = 1; turn <= 4; turn += 1) {
+      const before = state.getSnapshot().messages.filter((m) => m.direction === "outbound").length;
+      await sendInbound(`Record timeout-recovery setup turn ${turn}. Acknowledge this setup.`);
+      await transport.waitForOutbound({
+        conversation: CONVERSATION,
+        sinceIndex: before,
+        textIncludes: "QA-TIMEOUT-RECOVERY-ANNOUNCE-OK",
+        timeoutMs: 90_000,
+      });
+    }
     const sinceIndex = state
       .getSnapshot()
       .messages.filter((message) => message.direction === "outbound").length;
-    await transport.sendInbound({
-      accountId: "default",
-      conversation: CONVERSATION,
-      senderId: CONVERSATION.id,
-      text: PROMPT,
-    });
+    await sendInbound(PROMPT);
     await transport.waitForOutbound({
       conversation: CONVERSATION,
       sinceIndex,
@@ -390,17 +454,40 @@ describe("Gateway timeout recovery subagent delivery", () => {
     });
     // Spawning is a committed side effect and cannot be replayed after timeout.
     // Recover the next turn while the already-started child is still running.
-    await transport.sendInbound({
-      accountId: "default",
-      conversation: CONVERSATION,
-      senderId: CONVERSATION.id,
-      text: RECOVERY_PROMPT,
-    });
-    const completion = await transport.waitForOutbound({
-      conversation: CONVERSATION,
-      sinceIndex,
-      textIncludes: CHILD_MARKER,
-      timeoutMs: 90_000,
+    await sendInbound(RECOVERY_PROMPT);
+    const completionDeadline = performance.now() + 90_000;
+    const remainingMs = () => Math.max(1, completionDeadline - performance.now());
+    let phase = "compaction start";
+    const completion = await withTestTimeout(
+      (async () => {
+        await provider.compactionStarted;
+        phase = "child completion handoff";
+        // Hold compaction until the delivery owner defers the child's result for
+        // the recovering parent. A terminal row alone races that handoff: once
+        // the retry is active, the completion steers into it instead.
+        await expect
+          .poll(readChildHandoff, { timeout: remainingMs() })
+          .toEqual([{ execution: "terminal", outcome: "ok", delivery: "pending", leasable: true }]);
+        provider.releaseCompaction();
+        phase = "child completion outbound";
+        return await transport.waitForOutbound({
+          conversation: CONVERSATION,
+          sinceIndex,
+          textIncludes: CHILD_MARKER,
+          timeoutMs: remainingMs(),
+        });
+      })(),
+      remainingMs(),
+      "Timed out waiting for child completion during parent timeout recovery",
+    ).catch((error: unknown) => {
+      // All barriers share one budget; name the stalled one with its evidence.
+      const evidence = JSON.stringify({
+        phase,
+        provider: provider.proof,
+        child: readChildHandoff(),
+      });
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`${message} ${evidence}`, { cause: error });
     });
     expect(completion.accountId).toBe("default");
     expect(provider.proof.parentContinuationStartedAt).toBeTypeOf("number");
@@ -409,29 +496,24 @@ describe("Gateway timeout recovery subagent delivery", () => {
     expect(provider.proof.compactionReleasedAt).toBeTypeOf("number");
     expect(provider.proof.compactionStartedAt!).toBeLessThan(provider.proof.childReleasedAt!);
     expect(provider.proof.childReleasedAt!).toBeLessThan(provider.proof.compactionReleasedAt!);
+    // The deferred result reaches the recovered retry itself, not a later wake.
+    expect(provider.proof.recoveredParentReplies[0]).toBe(CHILD_MARKER);
     expect(gateway.logs()).toContain("attempting compaction before retry");
     expect(gateway.logs()).toContain("compaction succeeded");
-    const listing = (await gateway.call("tasks.list", { agentId: "qa", limit: 100 })) as {
-      tasks?: Array<Record<string, unknown>>;
-    };
-    const tasks = listing.tasks?.filter((entry) => entry.title === "qa-timeout-recovery-child");
-    expect(tasks).toHaveLength(1);
-    const task = tasks?.[0];
-    expect(task?.runId).toBeTypeOf("string");
-    expect(task?.taskId).toBeTypeOf("string");
-    // Read completion through the serving Gateway's durable task projection.
-    // The terminal reply can precede its delivery-state commit.
-    await expect
-      .poll(
-        async () => {
-          const result = (await gateway.call("tasks.get", { taskId: task?.taskId })) as {
-            task: Record<string, unknown>;
-          };
-          return result.task;
-        },
-        { timeout: 10_000 },
-      )
-      .toMatchObject({ status: "completed", deliveryStatus: "delivered" });
+    const runs = readChildRuns();
+    expect(runs).toHaveLength(1);
+    const run = runs[0]!;
+    expect(run.runId).toBeTypeOf("string");
+    // The terminal reply may precede the native outbox delivery commit.
+    await expect.poll(readChildRuns, { timeout: 10_000 }).toEqual([
+      expect.objectContaining({
+        execution: expect.objectContaining({
+          status: "terminal",
+          outcome: expect.objectContaining({ status: "ok" }),
+        }),
+        delivery: expect.objectContaining({ status: "delivered" }),
+      }),
+    ]);
     const matching = state
       .getSnapshot()
       .messages.filter(
@@ -445,7 +527,7 @@ describe("Gateway timeout recovery subagent delivery", () => {
       JSON.stringify({
         phase: "gateway-timeout-recovery-subagent",
         stateDir: gateway.runtimeEnv.OPENCLAW_STATE_DIR,
-        childRunId: task?.runId,
+        childRunId: run.runId,
         outboundCompletionCount: matching.length,
         childReleasedAt: provider.proof.childReleasedAt,
         compactionReleasedAt: provider.proof.compactionReleasedAt,

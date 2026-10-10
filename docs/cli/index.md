@@ -27,14 +27,14 @@ Setup commands by intent:
 | Reset, backup, and migration | [`backup`](/cli/backup) · [`database`](/reference/database-schemas) · [`migrate`](/cli/migrate) · [`reset`](/cli/reset) · [`uninstall`](/cli/uninstall) · [`update`](/cli/update)                                                     |
 | Messaging and agents         | [`message`](/cli/message) · [`agent`](/cli/agent) · [`agents`](/cli/agents) · [`claws`](/cli/claws) · [`attach`](/cli/attach) · [`acp`](/cli/acp) · [`mcp`](/cli/mcp)                                                                 |
 | Health and sessions          | [`status`](/cli/status) · [`health`](/cli/health) · [`triage`](/cli/triage) · [`sessions`](/cli/sessions) · [`resume`](/cli/resume) · [`audit`](/cli/audit)                                                                           |
-| Gateway and logs             | [`fleet`](/cli/fleet) · [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                     |
+| Gateway and logs             | [`gateway`](/cli/gateway) · [`logs`](/cli/logs) · [`system`](/cli/system)                                                                                                                                                             |
 | Models and inference         | [`models`](/cli/models) · [`promos`](/cli/promos) · [`infer`](/cli/infer) · `capability` (alias for [`infer`](/cli/infer)) · [`memory`](/cli/memory) · [`wiki`](/cli/wiki)                                                            |
 | Network and nodes            | [`connect`](/cli/connect) · [`directory`](/cli/directory) · [`nodes`](/cli/nodes) · [`node`](/cli/node) · [`worker`](/cli/worker)                                                                                                     |
 | Runtime and sandbox          | [`approvals`](/cli/approvals) · `exec-policy` (see [`approvals`](/cli/approvals)) · [`sandbox`](/cli/sandbox) · [`tui`](/cli/tui) · `chat`/`terminal` (aliases for [`tui --local`](/cli/tui)) · [`browser`](/cli/browser)             |
 | Worktrees                    | [`worktrees`](/concepts/managed-worktrees)                                                                                                                                                                                            |
-| Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`tasks`](/cli/tasks) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                           |
+| Automation                   | [`cron`](/cli/cron) (alias `automations`) · [`hooks`](/cli/hooks) · [`webhooks`](/cli/webhooks) · [`transcripts`](/cli/transcripts)                                                                                                   |
 | Discovery and docs           | [`dns`](/cli/dns) · [`docs`](/cli/docs)                                                                                                                                                                                               |
-| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels)                                                                                                                                 |
+| Pairing and channels         | [`pairing`](/cli/pairing) · [`qr`](/cli/qr) · [`devices`](/cli/devices) · [`channels`](/cli/channels) · [`users`](/cli/users)                                                                                                         |
 | Security and plugins         | [`security`](/cli/security) · [`secrets`](/cli/secrets) · [`skills`](/cli/skills) · [`plugins`](/cli/plugins) · [`proxy`](/cli/proxy)                                                                                                 |
 | Legacy aliases               | [`daemon`](/cli/daemon) (gateway service) · [`clawbot`](/cli/clawbot) (namespace)                                                                                                                                                     |
 | Plugins (optional)           | [`file-transfer`](/cli/file-transfer) · [`path`](/cli/path) · [`policy`](/cli/policy) · [`voicecall`](/cli/voicecall) · [`workboard`](/cli/workboard) (if installed)                                                                  |
@@ -52,6 +52,8 @@ Setup commands by intent:
 | `-V`, `--version`, `-v` | Print version and exit                                                                                  |
 
 Place command-specific options after their command name, for example `openclaw status --json`. Global options such as `--profile` can precede the command.
+
+Unknown root options fail with an option error and a help hint instead of starting onboarding or the TUI.
 
 A named `--profile` replaces canonical state and config paths inherited from
 another profile, including a running Gateway service. Explicitly customized
@@ -73,6 +75,8 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
   and pure side-effect commands may omit `--json` when they have no meaningful
   report to return.
 - Long-running commands show a progress indicator (`OSC 9;4` when supported).
+- Connection failures give a short explanation and a status-check command. If a request may have completed, check its result before retrying. Unexpected failures point to a recovery command; use `OPENCLAW_DEBUG=1` when rerunning to include diagnostics. JSON failures keep their diagnostic fields.
+- Update failures keep their reason on stderr, including in JSON mode.
 
 ### JSON failures
 
@@ -200,7 +204,7 @@ openclaw [--dev] [--profile <name>] <command>
     install
     update
     verify
-    workshop list|inspect|propose-create|propose-update|revise|apply|reject|quarantine
+    workshop list|changes|show|archive|restore
     list
     info
     check
@@ -324,19 +328,6 @@ openclaw [--dev] [--profile <name>] <command>
     stop
     restart
     run
-  fleet
-    create
-    backup
-    restore
-    doctor
-    list
-    status
-    logs
-    start
-    stop
-    restart
-    upgrade
-    rm
   worktrees
     list
     create
@@ -387,6 +378,7 @@ openclaw [--dev] [--profile <name>] <command>
     status
     list
     get
+    show
     add
     edit
     rm
@@ -394,6 +386,7 @@ openclaw [--dev] [--profile <name>] <command>
     disable
     runs
     run
+    scratch
   nodes
     status
     describe
@@ -417,6 +410,10 @@ openclaw [--dev] [--profile <name>] <command>
     reject
     rotate
     revoke
+  users
+    list
+    link-email <email> --to <profileId>
+    merge <sourceProfileId> --into <targetProfileId>
   node
     run
     status

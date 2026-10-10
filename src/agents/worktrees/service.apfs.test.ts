@@ -5,10 +5,11 @@ import { promisify } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { getApfsCloneId } from "../../../test/helpers/apfs.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-import { listTemplates } from "./template-registry.js";
+import { listTemplatesAsync } from "./template-registry-async.js";
 
 const execFileAsync = promisify(execFile);
 async function git(cwd: string, ...args: string[]): Promise<string> {
@@ -26,10 +27,10 @@ async function readAcl(file: string): Promise<string[]> {
 describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
       vi.unstubAllEnvs();
       vi.restoreAllMocks();
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       cleanup();
     }),
   );
@@ -72,7 +73,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
         ),
       ).toEqual(expected);
       expect(await git(created.path, "status", "--porcelain")).toBe("");
-      expect(listTemplates(env)).toEqual([]);
+      expect(await listTemplatesAsync(env)).toEqual([]);
     },
   );
 
@@ -83,7 +84,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
     const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
-    const template = listTemplates(env)[0];
+    const template = (await listTemplatesAsync(env))[0];
     assert(template);
     const parent = path.dirname(first.path);
     await execFileAsync("/bin/chmod", [
@@ -95,7 +96,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     expect(await readAcl(path.join(second.path, "README.md"))).toEqual([
       "0: group:everyone inherited allow read",
     ]);
-    expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
     await execFileAsync("/bin/chmod", ["-N", parent]);
     await execFileAsync("/bin/chmod", ["+a", "everyone allow read", parent]);
     const third = await service.create({ repoRoot: repo, name: "third", baseRef: "HEAD" });
@@ -112,7 +113,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
     await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
-    const template = listTemplates(env)[0];
+    const template = (await listTemplatesAsync(env))[0];
     assert(template);
     await execFileAsync("/bin/chmod", ["+a", "everyone allow read", template.path]);
     const created = await service.create({ repoRoot: repo, name: "clean-root", baseRef: "HEAD" });
@@ -128,10 +129,9 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
       const root = tempDirs.make("openclaw-service-apfs-acl-race-");
       const repo = await initializeRepository(root);
       const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-      const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-      const clone = apfsFilesystem.cloneDirectory;
-      vi.spyOn(apfsFilesystem, "cloneDirectory").mockImplementationOnce(
-        async (source, destination) => {
+      const copy = nativeWorktreeFilesystem.copy;
+      vi.spyOn(nativeWorktreeFilesystem, "copy").mockImplementationOnce(
+        async (source, destination, options) => {
           await execFileAsync("/bin/chmod", [
             "+a",
             changed === "parent"
@@ -139,7 +139,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
               : "everyone allow read",
             changed === "parent" ? path.dirname(destination) : source,
           ]);
-          await clone(source, destination);
+          await copy(source, destination, options);
         },
       );
       const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
@@ -169,7 +169,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const created = await service.create({ repoRoot: repo, name: "unavailable", baseRef: "HEAD" });
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
     expect(await git(created.path, "status", "--porcelain")).toBe("");
-    expect(listTemplates(env)).toEqual([]);
+    expect(await listTemplatesAsync(env)).toEqual([]);
   });
 
   it("clones through creation, independent provisioning, restore, invalidation and cleanup", async () => {
@@ -195,12 +195,12 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     let now = Date.now();
     const service = new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) });
     const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
-    const template = listTemplates(env)[0];
+    const template = (await listTemplatesAsync(env))[0];
     assert(template);
     expect(template.backend).toBe("apfs");
     await fs.writeFile(path.join(repo, ".env.local"), "second");
     const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
-    expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
+    expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
     for (const record of [first, second]) {
       expect(getApfsCloneId(path.join(record.path, "payload"))).toBe(
         getApfsCloneId(path.join(template.path, "payload")),
@@ -231,10 +231,12 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     await git(repo, "commit", "-m", "invalidate template");
     const third = await service.create({ repoRoot: repo, name: "third", baseRef: "HEAD" });
     expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new source\n");
-    expect(listTemplates(env)[0]?.sourceCommit).toBe(await git(repo, "rev-parse", "HEAD"));
+    expect((await listTemplatesAsync(env))[0]?.sourceCommit).toBe(
+      await git(repo, "rev-parse", "HEAD"),
+    );
     now += IDLE_GC_MS + 1;
     expect((await service.gc()).removed).toEqual([]);
-    expect(listTemplates(env)).toEqual([]);
+    expect(await listTemplatesAsync(env)).toEqual([]);
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");
     expect(await git(second.path, "status", "--porcelain")).toBe("");
   });

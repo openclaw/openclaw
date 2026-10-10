@@ -81,12 +81,11 @@ async function startRfbHarness(
   const peers = new Set<net.Socket>();
   let connectionCount = 0;
   let completedStreams = 0;
-  let resolveCompletion!: () => void;
-  let rejectCompletion!: (error: Error) => void;
-  const completion = new Promise<void>((resolve, reject) => {
-    resolveCompletion = resolve;
-    rejectCompletion = reject;
-  });
+  const {
+    promise: completion,
+    resolve: resolveCompletion,
+    reject: rejectCompletion,
+  } = createDeferred();
   const server = net.createServer((socket) => {
     peers.add(socket);
     socket.once("close", () => peers.delete(socket));
@@ -290,9 +289,7 @@ describe("paired node desktop observe integration", () => {
       gatewayUrl = await startDesktopGateway({ desktopRegistry, nodeRegistry, streamBroker });
 
       const service = createNodeDesktopService({
-        getConfig: () => ({
-          gateway: { nodes: { commands: { allow: [NODE_DESKTOP_STREAM_COMMAND] } } },
-        }),
+        getConfig: () => ({}),
         nodeRegistry,
         desktopRegistry,
         streamBroker,
@@ -369,7 +366,7 @@ describe("worker environment node desktop observe integration", () => {
       const completedInvocations: boolean[] = [];
       const passwordFilePath = path.join(workerSupport.testState.root, "vnc.password");
       await fs.writeFile(passwordFilePath, "memory-only-password\n", { mode: 0o600 });
-      const record = workerSupport.seedReadyNodeDesktop("worker-node-desktop-byte-flow", {
+      const record = await workerSupport.seedReadyNodeDesktop("worker-node-desktop-byte-flow", {
         ...workerSupport.DESKTOP,
         port: rfb.port,
         passwordFilePath,

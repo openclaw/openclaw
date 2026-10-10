@@ -43,7 +43,7 @@ export async function handleA2uiHttpRequestWithRootResolver(
   }
 
   const rel = url.pathname.slice(basePath.length);
-  const result = await resolveFileWithinRoot(a2uiRootReal, rel || "/");
+  await using result = await resolveFileWithinRoot(a2uiRootReal, rel || "/");
   if (!result) {
     res.statusCode = 404;
     res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -51,35 +51,31 @@ export async function handleA2uiHttpRequestWithRootResolver(
     return true;
   }
 
-  try {
-    const lower = lowercasePreservingWhitespace(result.realPath);
-    const mime =
-      lower.endsWith(".html") || lower.endsWith(".htm")
-        ? "text/html"
-        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
-    res.setHeader("Cache-Control", "no-store");
+  const lower = lowercasePreservingWhitespace(result.realPath);
+  const mime =
+    lower.endsWith(".html") || lower.endsWith(".htm")
+      ? "text/html"
+      : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+  res.setHeader("Cache-Control", "no-store");
 
-    if (mime === "text/html") {
-      const buf = await result.handle.readFile({ encoding: "utf8" });
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      if (req.method === "HEAD") {
-        res.setHeader("Content-Length", String(Buffer.byteLength(buf)));
-        res.end();
-        return true;
-      }
-      res.end(buf);
-      return true;
-    }
-
-    res.setHeader("Content-Type", mime);
+  if (mime === "text/html") {
+    const buf = await result.handle.readFile({ encoding: "utf8" });
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
     if (req.method === "HEAD") {
-      res.setHeader("Content-Length", String(result.stat.size));
+      res.setHeader("Content-Length", String(Buffer.byteLength(buf)));
       res.end();
       return true;
     }
-    res.end(await result.handle.readFile());
+    res.end(buf);
     return true;
-  } finally {
-    await result.handle.close().catch(() => {});
   }
+
+  res.setHeader("Content-Type", mime);
+  if (req.method === "HEAD") {
+    res.setHeader("Content-Length", String(result.stat.size));
+    res.end();
+    return true;
+  }
+  res.end(await result.handle.readFile());
+  return true;
 }

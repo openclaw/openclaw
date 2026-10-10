@@ -1,4 +1,3 @@
-// Matrix plugin module implements cli behavior.
 import type { Command } from "commander";
 import { registerMatrixAccountCommands } from "./cli-account.js";
 import { registerMatrixDeviceCommands } from "./cli-devices.js";

@@ -1,5 +1,6 @@
-// Verifies provider attribution headers and endpoint classification policies.
 import { afterEach, describe, expect, it, vi } from "vitest";
+// Verifies provider attribution headers and endpoint classification policies.
+import { makeEmptyPluginMetadataOwners } from "../plugins/current-plugin-metadata.test-support.js";
 
 function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
   // Policy helpers return broad records; assertions pin only the relevant fields.
@@ -44,6 +45,7 @@ const providerEndpointPlugins = vi.hoisted(() => [
         baseUrls: ["https://opencode.ai/zen/go", "https://opencode.ai/zen/go/v1"],
       },
       { endpointClass: "openrouter", hostSuffixes: ["openrouter.ai"] },
+      { endpointClass: "vercel-ai-gateway", hosts: ["ai-gateway.vercel.sh"] },
       { endpointClass: "zai-native", hosts: ["api.z.ai"] },
       { endpointClass: "google-generative-ai", hosts: ["generativelanguage.googleapis.com"] },
       {
@@ -179,35 +181,6 @@ import {
   describeProviderRequestRoutingSummary,
 } from "./provider-attribution.js";
 
-type ProviderAttributionTestEnv = Parameters<typeof resolveProviderRequestPolicy>[1];
-
-function resolveProviderAttributionPolicy(provider: string, env: ProviderAttributionTestEnv) {
-  return resolveProviderRequestPolicy({ provider }, env).policy;
-}
-
-function resolveProviderAttributionIdentity(env: ProviderAttributionTestEnv) {
-  const policy = resolveProviderAttributionPolicy("openrouter", env);
-  return policy ? { product: policy.product, version: policy.version } : undefined;
-}
-
-function listProviderAttributionPolicies(env: ProviderAttributionTestEnv) {
-  return [
-    "openrouter",
-    "nvidia",
-    "google",
-    "openai",
-    "opencode-go",
-    "xai",
-    "anthropic",
-    "groq",
-    "mistral",
-    "together",
-  ].flatMap((provider) => {
-    const policy = resolveProviderAttributionPolicy(provider, env);
-    return policy ? [policy] : [];
-  });
-}
-
 describe("provider attribution", () => {
   afterEach(() => {
     providerMetadataState.defaultDiscoveryCompatible = true;
@@ -260,42 +233,6 @@ describe("provider attribution", () => {
     );
   });
 
-  it("rejects provider facts from a plugin-id-scoped current snapshot", () => {
-    providerMetadataState.pluginIdScoped = true;
-    providerMetadataState.snapshot = {
-      owners: {
-        providerEndpoints: [
-          {
-            endpointClass: "openai-public",
-            hosts: ["scoped-only.example"],
-            hostSuffixes: [],
-            baseUrls: [],
-          },
-        ],
-        providerRequests: new Map(),
-      },
-    };
-
-    expect(resolveProviderEndpoint("https://scoped-only.example").endpointClass).toBe("custom");
-  });
-
-  it("reuses lifecycle provider facts without a default-discovery fallback", () => {
-    providerMetadataState.defaultDiscoveryCompatible = false;
-    providerMetadataState.snapshot = {
-      owners: {
-        providerEndpoints: [],
-        providerRequests: new Map([["custom-provider", { family: "custom" }]]),
-      },
-    };
-
-    for (let index = 0; index < 10; index += 1) {
-      expect(
-        resolveProviderRequestPolicy({ provider: "custom-provider" }).knownProviderFamily,
-      ).toBe("custom");
-    }
-    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
   it("resolves fallback provider facts in each operation's metadata generation", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
@@ -326,15 +263,7 @@ describe("provider attribution", () => {
     providerMetadataState.pluginIdScoped = true;
     providerMetadataState.snapshot = undefined;
     const providerMetadataOwners = {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      modelIdNormalizationPolicies: new Map(),
+      ...makeEmptyPluginMetadataOwners(),
       providerEndpoints: [
         {
           endpointClass: "anthropic-public" as const,
@@ -357,186 +286,6 @@ describe("provider attribution", () => {
       knownProviderFamily: "prepared-family",
     });
     expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("resolves the canonical OpenClaw product and runtime version", () => {
-    const identity = resolveProviderAttributionIdentity({
-      OPENCLAW_VERSION: "2026.3.99",
-    });
-
-    expect(identity).toEqual({
-      product: "OpenClaw",
-      version: "2026.3.99",
-    });
-  });
-
-  it("returns a documented OpenRouter attribution policy", () => {
-    const policy = resolveProviderAttributionPolicy("openrouter", {
-      OPENCLAW_VERSION: "2026.3.22",
-    });
-
-    expect(policy).toEqual({
-      provider: "openrouter",
-      enabledByDefault: true,
-      verification: "vendor-documented",
-      hook: "request-headers",
-      docsUrl: "https://openrouter.ai/docs/app-attribution",
-      reviewNote: "Documented app attribution headers. Verified in OpenClaw runtime wrapper.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        "HTTP-Referer": "https://openclaw.ai",
-        "X-OpenRouter-Title": "OpenClaw",
-        "X-OpenRouter-Categories":
-          "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
-      },
-    });
-  });
-
-  it("returns a documented NVIDIA attribution policy", () => {
-    const policy = resolveProviderAttributionPolicy("nvidia", {
-      OPENCLAW_VERSION: "2026.3.22",
-    });
-
-    expect(policy).toEqual({
-      provider: "nvidia",
-      enabledByDefault: true,
-      verification: "vendor-documented",
-      hook: "request-headers",
-      reviewNote:
-        "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
-      },
-    });
-  });
-
-  it("returns a documented Google Gemini attribution policy", () => {
-    const policy = resolveProviderAttributionPolicy("google", {
-      OPENCLAW_VERSION: "2026.3.22",
-    });
-
-    expect(policy).toEqual({
-      provider: "google",
-      enabledByDefault: true,
-      verification: "vendor-documented",
-      hook: "request-headers",
-      docsUrl: "https://ai.google.dev/gemini-api/docs/partner-integration",
-      reviewNote:
-        "Gemini API partner integration guidance requires x-goog-api-client on partner and library traffic.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        "x-goog-api-client": "openclaw/2026.3.22",
-      },
-    });
-  });
-
-  it("normalizes aliases when resolving provider policy headers", () => {
-    expect(
-      resolveProviderAttributionPolicy("OpenRouter", {
-        OPENCLAW_VERSION: "2026.3.22",
-      })?.headers,
-    ).toEqual({
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-OpenRouter-Title": "OpenClaw",
-      "X-OpenRouter-Categories":
-        "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
-    });
-  });
-
-  it("returns a hidden-spec OpenAI attribution policy", () => {
-    expect(resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
-      provider: "openai",
-      enabledByDefault: true,
-      verification: "vendor-hidden-api-spec",
-      hook: "request-headers",
-      reviewNote:
-        "OpenAI native traffic supports hidden originator/User-Agent attribution. Verified against the Codex wire contract.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        originator: "openclaw",
-        version: "2026.3.22",
-        "User-Agent": "openclaw/2026.3.22",
-      },
-    });
-    expect(
-      resolveProviderAttributionPolicy("openai", { OPENCLAW_VERSION: "2026.3.22" })?.headers,
-    ).toEqual({
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-    });
-  });
-
-  it("returns a hidden-spec xAI attribution policy", () => {
-    expect(resolveProviderAttributionPolicy("xai", { OPENCLAW_VERSION: "2026.3.22" })).toEqual({
-      provider: "xai",
-      enabledByDefault: true,
-      verification: "vendor-hidden-api-spec",
-      hook: "request-headers",
-      reviewNote:
-        "xAI api.x.ai accepts a standard openclaw User-Agent. Companion originator/version headers mirror the OpenAI attribution shape for consistency; they are not validated against an xAI-specific spec and are expected to be ignored by xAI's OpenAI-compatible surface.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        originator: "openclaw",
-        version: "2026.3.22",
-        "User-Agent": "openclaw/2026.3.22",
-      },
-    });
-    expect(
-      resolveProviderAttributionPolicy("xai", { OPENCLAW_VERSION: "2026.3.22" })?.headers,
-    ).toEqual({
-      originator: "openclaw",
-      version: "2026.3.22",
-      "User-Agent": "openclaw/2026.3.22",
-    });
-  });
-
-  it("returns a documented OpenCode Go attribution policy", () => {
-    expect(
-      resolveProviderAttributionPolicy("opencode-go", { OPENCLAW_VERSION: "2026.3.22" }),
-    ).toEqual({
-      provider: "opencode-go",
-      enabledByDefault: true,
-      verification: "vendor-documented",
-      hook: "request-headers",
-      docsUrl: "https://opencode.ai/docs/go/",
-      reviewNote:
-        "OpenCode Go requires coding agents to identify themselves with a specific User-Agent.",
-      product: "OpenClaw",
-      version: "2026.3.22",
-      headers: {
-        "User-Agent": "openclaw/2026.3.22",
-      },
-    });
-  });
-
-  it("lists the current attribution support matrix", () => {
-    // Resolve every supported provider through the production request-policy path.
-    expect(
-      listProviderAttributionPolicies({ OPENCLAW_VERSION: "2026.3.22" }).map((policy) => [
-        policy.provider,
-        policy.enabledByDefault,
-        policy.verification,
-        policy.hook,
-      ]),
-    ).toEqual([
-      ["openrouter", true, "vendor-documented", "request-headers"],
-      ["nvidia", true, "vendor-documented", "request-headers"],
-      ["google", true, "vendor-documented", "request-headers"],
-      ["openai", true, "vendor-hidden-api-spec", "request-headers"],
-      ["opencode-go", true, "vendor-documented", "request-headers"],
-      ["xai", true, "vendor-hidden-api-spec", "request-headers"],
-      ["anthropic", false, "vendor-sdk-hook-only", "default-headers"],
-      ["groq", false, "vendor-sdk-hook-only", "default-headers"],
-      ["mistral", false, "vendor-sdk-hook-only", "custom-user-agent"],
-      ["together", false, "vendor-sdk-hook-only", "default-headers"],
-    ]);
   });
 
   it("identifies OpenClaw only on native OpenCode Go routes", () => {
@@ -665,98 +414,6 @@ describe("provider attribution", () => {
     );
   });
 
-  it("authorizes hidden OpenAI attribution only on verified native hosts", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy(
-        {
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          transport: "stream",
-          capability: "llm",
-        },
-        { OPENCLAW_VERSION: "2026.3.22" },
-      ),
-      {
-        endpointClass: "openai-public",
-        attributionProvider: "openai",
-        allowsHiddenAttribution: true,
-        usesKnownNativeOpenAIEndpoint: true,
-        usesVerifiedOpenAIAttributionHost: true,
-        usesExplicitProxyLikeEndpoint: false,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy(
-        {
-          provider: "openai",
-          api: "openai-responses",
-          baseUrl: "https://proxy.example.com/v1",
-          transport: "stream",
-          capability: "llm",
-        },
-        { OPENCLAW_VERSION: "2026.3.22" },
-      ),
-      {
-        endpointClass: "custom",
-        attributionProvider: undefined,
-        allowsHiddenAttribution: false,
-        usesKnownNativeOpenAIEndpoint: false,
-        usesVerifiedOpenAIAttributionHost: false,
-        usesExplicitProxyLikeEndpoint: true,
-      },
-    );
-  });
-
-  it("classifies OpenAI-family default, codex, and Azure routes distinctly", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openai",
-        api: "openai-responses",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "default",
-        attributionProvider: undefined,
-        usesKnownNativeOpenAIRoute: true,
-        usesExplicitProxyLikeEndpoint: false,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "openai",
-        attributionProvider: "openai",
-        allowsHiddenAttribution: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "azure-openai",
-        api: "azure-openai-responses",
-        baseUrl: "https://tenant.openai.azure.com/openai/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "azure-openai",
-        attributionProvider: undefined,
-        allowsHiddenAttribution: false,
-        usesKnownNativeOpenAIEndpoint: true,
-      },
-    );
-  });
-
   it("classifies native Mistral hosts centrally", () => {
     expectRecordFields(resolveProviderEndpoint("https://api.mistral.ai/v1"), {
       endpointClass: "mistral-public",
@@ -779,91 +436,7 @@ describe("provider attribution", () => {
     );
   });
 
-  it("classifies native MiniMax hosts centrally", () => {
-    for (const hostname of ["api.minimax.io", "api.minimaxi.com"]) {
-      expectRecordFields(resolveProviderEndpoint(`https://${hostname}/v1`), {
-        endpointClass: "minimax-native",
-        hostname,
-      });
-      expectRecordFields(
-        resolveProviderRequestCapabilities({
-          provider: "minimax",
-          baseUrl: `https://${hostname}`,
-          capability: "image",
-          transport: "media-understanding",
-        }),
-        {
-          endpointClass: "minimax-native",
-          isKnownNativeEndpoint: true,
-        },
-      );
-    }
-  });
-
-  it("classifies native OpenAI-compatible vendor hosts centrally", () => {
-    expectRecordFields(resolveProviderEndpoint("https://api.x.ai/v1"), {
-      endpointClass: "xai-native",
-      hostname: "api.x.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://api.grok.x.ai/v1"), {
-      endpointClass: "custom",
-      hostname: "api.grok.x.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://api.z.ai/api/coding/paas/v4"), {
-      endpointClass: "zai-native",
-      hostname: "api.z.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://api.deepseek.com"), {
-      endpointClass: "deepseek-native",
-      hostname: "api.deepseek.com",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://llm.chutes.ai/v1"), {
-      endpointClass: "chutes-native",
-      hostname: "llm.chutes.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://api.groq.com/openai/v1"), {
-      endpointClass: "groq-native",
-      hostname: "api.groq.com",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://api.cerebras.ai/v1"), {
-      endpointClass: "cerebras-native",
-      hostname: "api.cerebras.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://integrate.api.nvidia.com/v1"), {
-      endpointClass: "nvidia-native",
-      hostname: "integrate.api.nvidia.com",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/zen/v1"), {
-      endpointClass: "opencode-native",
-      hostname: "opencode.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/zen/go/v1"), {
-      endpointClass: "opencode-go-native",
-      hostname: "opencode.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://opencode.ai/api"), {
-      endpointClass: "custom",
-      hostname: "opencode.ai",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://api.xiaomimimo.com/v1"), {
-      endpointClass: "xiaomi-native",
-      hostname: "api.xiaomimimo.com",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://token-plan-ams.xiaomimimo.com/v1"), {
-      endpointClass: "xiaomi-native",
-      hostname: "token-plan-ams.xiaomimimo.com",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://token-plan-cn.xiaomimimo.com/v1"), {
-      endpointClass: "xiaomi-native",
-      hostname: "token-plan-cn.xiaomimimo.com",
-    });
-    expectRecordFields(resolveProviderEndpoint("https://token-plan-sgp.xiaomimimo.com/v1"), {
-      endpointClass: "xiaomi-native",
-      hostname: "token-plan-sgp.xiaomimimo.com",
-    });
-  });
-
-  it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {
+  it("gates documented OpenRouter attribution to OpenRouter endpoints for any provider id", () => {
     expectRecordFields(
       resolveProviderRequestPolicy({
         provider: "openrouter",
@@ -876,25 +449,23 @@ describe("provider attribution", () => {
         endpointClass: "openrouter",
         usesExplicitProxyLikeEndpoint: true,
         attributionProvider: "openrouter",
+        allowsHiddenAttribution: false,
       },
     );
-  });
 
-  it("gates documented OpenRouter attribution to known OpenRouter endpoints", () => {
-    expectRecordFields(
+    expect(
       resolveProviderRequestPolicy({
-        provider: "openrouter",
-        api: "openai-responses",
+        provider: "or",
+        api: "openai-completions",
         baseUrl: "https://openrouter.ai/api/v1",
         transport: "stream",
         capability: "llm",
-      }),
-      {
-        endpointClass: "openrouter",
-        attributionProvider: "openrouter",
-        allowsHiddenAttribution: false,
-      },
-    );
+      }).attributionHeaders,
+    ).toEqual({
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-OpenRouter-Title": "OpenClaw",
+      "X-OpenRouter-Categories": "personal-agent,cli-agent",
+    });
 
     expect(
       resolveProviderRequestPolicy({
@@ -906,88 +477,45 @@ describe("provider attribution", () => {
     ).toBeUndefined();
   });
 
-  it("gates documented NVIDIA attribution to official NVIDIA NIM endpoints", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "nvidia",
-        api: "openai-completions",
-        baseUrl: "https://integrate.api.nvidia.com/v1",
-        transport: "stream",
-        capability: "llm",
-      }),
-      {
-        endpointClass: "nvidia-native",
-        knownProviderFamily: "nvidia",
-        attributionProvider: "nvidia",
-        allowsHiddenAttribution: false,
-      },
-    );
-
+  it("gates documented Vercel AI Gateway attribution to its endpoint for any provider id", () => {
     expect(
       resolveProviderRequestPolicy({
-        provider: "custom-nim",
-        api: "openai-completions",
-        baseUrl: "https://integrate.api.nvidia.com/v1",
+        provider: "my-gateway",
+        api: "anthropic-messages",
+        baseUrl: "https://ai-gateway.vercel.sh",
         transport: "stream",
         capability: "llm",
       }).attributionHeaders,
     ).toEqual({
-      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+      "HTTP-Referer": "https://openclaw.ai",
+      "X-Title": "OpenClaw",
     });
 
     expect(
       resolveProviderRequestPolicy({
-        provider: "nvidia",
-        api: "openai-completions",
-        baseUrl: "https://proxy.example.com/v1",
+        provider: "vercel-ai-gateway",
+        api: "anthropic-messages",
+        baseUrl: "https://proxy.example.com",
         transport: "stream",
         capability: "llm",
       }).attributionHeaders,
     ).toBeUndefined();
   });
 
-  it("gates documented Google Gemini attribution to official Generative Language endpoints", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy(
-        {
-          provider: "google",
-          api: "google-generative-ai",
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-          transport: "stream",
-          capability: "llm",
-        },
-        { OPENCLAW_VERSION: "2026.3.22" },
-      ),
-      {
-        endpointClass: "google-generative-ai",
-        knownProviderFamily: "google",
-        attributionProvider: "google",
-        allowsHiddenAttribution: false,
-      },
-    );
-
+  it("gates documented Perplexity attribution to the direct Perplexity API", () => {
     expect(
       resolveProviderRequestPolicy(
-        {
-          provider: "google",
-          api: "openai-completions",
-          baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
-          transport: "stream",
-          capability: "llm",
-        },
+        { provider: "perplexity", transport: "http", capability: "other" },
         { OPENCLAW_VERSION: "2026.3.22" },
       ).attributionHeaders,
-    ).toEqual({
-      "x-goog-api-client": "openclaw/2026.3.22",
-    });
+    ).toEqual({ "X-Pplx-Integration": "openclaw/2026.3.22" });
 
     expect(
       resolveProviderRequestPolicy({
-        provider: "google",
-        api: "google-generative-ai",
-        baseUrl: "https://proxy.example.com/v1beta",
-        transport: "stream",
-        capability: "llm",
+        provider: "perplexity",
+        baseUrl: "https://proxy.example.com/v1",
+        transport: "http",
+        capability: "other",
       }).attributionHeaders,
     ).toBeUndefined();
   });
@@ -1075,54 +603,6 @@ describe("provider attribution", () => {
     );
   });
 
-  it("models other provider families without enabling hidden attribution", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "google",
-        baseUrl: "https://generativelanguage.googleapis.com",
-        transport: "http",
-        capability: "image",
-      }),
-      {
-        knownProviderFamily: "google",
-        attributionProvider: "google",
-        allowsHiddenAttribution: false,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "github-copilot",
-        transport: "http",
-        capability: "llm",
-      }),
-      {
-        knownProviderFamily: "github-copilot",
-        attributionProvider: undefined,
-        allowsHiddenAttribution: false,
-      },
-    );
-  });
-
-  it("classifies native Anthropic endpoints separately from custom hosts", () => {
-    expectRecordFields(resolveProviderEndpoint("https://api.anthropic.com/v1"), {
-      endpointClass: "anthropic-public",
-      hostname: "api.anthropic.com",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/anthropic"), {
-      endpointClass: "custom",
-      hostname: "proxy.example.com",
-    });
-  });
-
-  it("classifies WebSocket provider URLs by hostname", () => {
-    expectRecordFields(resolveProviderEndpoint("wss://api.openai.com/v1/realtime"), {
-      endpointClass: "openai-public",
-      hostname: "api.openai.com",
-    });
-  });
-
   it("classifies Google Gemini and Vertex endpoints separately from custom hosts", () => {
     expectRecordFields(resolveProviderEndpoint("https://generativelanguage.googleapis.com"), {
       endpointClass: "google-generative-ai",
@@ -1167,70 +647,6 @@ describe("provider attribution", () => {
     });
   });
 
-  it("classifies native Moonshot and ModelStudio endpoints separately from custom hosts", () => {
-    expectRecordFields(resolveProviderEndpoint("https://api.moonshot.ai/v1"), {
-      endpointClass: "moonshot-native",
-      hostname: "api.moonshot.ai",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://api.moonshot.cn/v1"), {
-      endpointClass: "moonshot-native",
-      hostname: "api.moonshot.cn",
-    });
-
-    expectRecordFields(
-      resolveProviderEndpoint("https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
-      {
-        endpointClass: "modelstudio-native",
-        hostname: "dashscope-intl.aliyuncs.com",
-      },
-    );
-
-    expectRecordFields(resolveProviderEndpoint("https://proxy.example.com/v1"), {
-      endpointClass: "custom",
-      hostname: "proxy.example.com",
-    });
-  });
-
-  it("classifies native GitHub Copilot endpoints separately from custom hosts", () => {
-    expectRecordFields(resolveProviderEndpoint("https://api.individual.githubcopilot.com"), {
-      endpointClass: "github-copilot-native",
-      hostname: "api.individual.githubcopilot.com",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://api.enterprise.githubcopilot.com"), {
-      endpointClass: "github-copilot-native",
-      hostname: "api.enterprise.githubcopilot.com",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://api.githubcopilot.example.com"), {
-      endpointClass: "custom",
-      hostname: "api.githubcopilot.example.com",
-    });
-  });
-
-  it("does not classify malformed or embedded Google host strings as native endpoints", () => {
-    expectRecordFields(resolveProviderEndpoint("proxy/generativelanguage.googleapis.com"), {
-      endpointClass: "custom",
-      hostname: "proxy",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://xgenerativelanguage.googleapis.com"), {
-      endpointClass: "custom",
-      hostname: "xgenerativelanguage.googleapis.com",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("proxy/aiplatform.googleapis.com"), {
-      endpointClass: "custom",
-      hostname: "proxy",
-    });
-
-    expectRecordFields(resolveProviderEndpoint("https://xaiplatform.googleapis.com"), {
-      endpointClass: "custom",
-      hostname: "xaiplatform.googleapis.com",
-    });
-  });
-
   it("does not trust schemeless or embedded trusted-provider substrings", () => {
     expectRecordFields(resolveProviderEndpoint("api.anthropic.com.attacker.example"), {
       endpointClass: "custom",
@@ -1258,114 +674,7 @@ describe("provider attribution", () => {
     });
   });
 
-  it.each(["https://us.api.openai.com/v1", "https://eu.api.openai.com/v1"])(
-    "classifies regional OpenAI endpoint %s as public",
-    (baseUrl) => {
-      expectRecordFields(resolveProviderEndpoint(baseUrl), {
-        endpointClass: "openai-public",
-      });
-    },
-  );
-
-  it("ignores non-http schemes when normalizing native comparable base URLs", () => {
-    expectRecordFields(resolveProviderEndpoint("javascript:alert(1)"), {
-      endpointClass: "invalid",
-    });
-  });
-
-  it("applies OpenAI attribution to every verified native capability", () => {
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openai",
-        api: "openai-audio-transcriptions",
-        baseUrl: "https://api.openai.com/v1",
-        transport: "media-understanding",
-        capability: "audio",
-      }),
-      {
-        attributionProvider: "openai",
-        allowsHiddenAttribution: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        transport: "media-understanding",
-        capability: "audio",
-      }),
-      {
-        attributionProvider: "openai",
-        allowsHiddenAttribution: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        transport: "http",
-        capability: "image",
-      }),
-      {
-        attributionProvider: "openai",
-        allowsHiddenAttribution: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestPolicy({
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        transport: "websocket",
-        capability: "audio",
-      }),
-      {
-        attributionProvider: "openai",
-        allowsHiddenAttribution: true,
-      },
-    );
-  });
-
-  it("resolves centralized request capabilities for native and proxied routes", () => {
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "openai-public",
-        allowsOpenAIServiceTier: true,
-        supportsOpenAIReasoningCompatPayload: true,
-        allowsResponsesStore: true,
-        supportsResponsesStoreField: true,
-        shouldStripResponsesPromptCache: false,
-      },
-    );
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "openai",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "openai",
-        attributionProvider: "openai",
-        allowsOpenAIServiceTier: true,
-        supportsOpenAIReasoningCompatPayload: true,
-        allowsResponsesStore: true,
-        supportsResponsesStoreField: true,
-        shouldStripResponsesPromptCache: false,
-      },
-    );
-
+  it("allows Anthropic service tiers on the default route", () => {
     expectRecordFields(
       resolveProviderRequestCapabilities({
         provider: "anthropic",
@@ -1373,28 +682,7 @@ describe("provider attribution", () => {
         capability: "llm",
         transport: "stream",
       }),
-      {
-        endpointClass: "default",
-        allowsAnthropicServiceTier: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "custom-proxy",
-        api: "openai-responses",
-        baseUrl: "https://proxy.example.com/v1",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "custom",
-        allowsOpenAIServiceTier: false,
-        supportsOpenAIReasoningCompatPayload: false,
-        allowsResponsesStore: false,
-        supportsResponsesStoreField: true,
-        shouldStripResponsesPromptCache: true,
-      },
+      { endpointClass: "default", allowsAnthropicServiceTier: true },
     );
   });
 
@@ -1450,83 +738,14 @@ describe("provider attribution", () => {
     );
   });
 
-  it("resolves shared compat families and native streaming-usage gates", () => {
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "moonshot",
-        api: "openai-completions",
-        baseUrl: "https://api.moonshot.ai/v1",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "moonshot-native",
-        supportsNativeStreamingUsageCompat: true,
-        compatibilityFamily: "moonshot",
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "qwen",
-        api: "openai-completions",
-        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "modelstudio-native",
-        supportsNativeStreamingUsageCompat: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "generic",
-        api: "openai-completions",
-        baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "modelstudio-native",
-        supportsNativeStreamingUsageCompat: true,
-      },
-    );
-
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "custom-local",
-        api: "openai-completions",
-        baseUrl: "http://127.0.0.1:11434/v1",
-        capability: "llm",
-        transport: "stream",
-      }),
-      {
-        endpointClass: "local",
-        supportsNativeStreamingUsageCompat: false,
-      },
-    );
-  });
-
-  it("treats native GitHub Copilot base URLs as known native endpoints", () => {
-    expectRecordFields(
-      resolveProviderRequestCapabilities({
-        provider: "github-copilot",
-        api: "openai-responses",
-        baseUrl: "https://api.individual.githubcopilot.com",
-        capability: "llm",
-        transport: "http",
-      }),
-      {
-        endpointClass: "github-copilot-native",
-        knownProviderFamily: "github-copilot",
-        isKnownNativeEndpoint: true,
-      },
-    );
-  });
-
   it("resolves a provider capability matrix for representative native and proxied routes", () => {
+    const disabledCapabilities = {
+      allowsOpenAIServiceTier: false,
+      supportsOpenAIReasoningCompatPayload: false,
+      allowsResponsesStore: false,
+      allowsAnthropicServiceTier: false,
+      supportsNativeStreamingUsageCompat: false,
+    };
     const cases = [
       {
         name: "native OpenAI responses",
@@ -1534,10 +753,9 @@ describe("provider attribution", () => {
           provider: "openai",
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "openai-family",
           endpointClass: "openai-public",
           isKnownNativeEndpoint: true,
@@ -1546,8 +764,6 @@ describe("provider attribution", () => {
           allowsResponsesStore: true,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: false,
-          allowsAnthropicServiceTier: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1556,20 +772,14 @@ describe("provider attribution", () => {
           provider: "openai",
           api: "openai-responses",
           baseUrl: "https://proxy.example.com/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "openai-family",
           endpointClass: "custom",
           isKnownNativeEndpoint: false,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: true,
-          allowsAnthropicServiceTier: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1578,20 +788,15 @@ describe("provider attribution", () => {
           provider: "anthropic",
           api: "anthropic-messages",
           baseUrl: "https://api.anthropic.com/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "anthropic",
           endpointClass: "anthropic-public",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: false,
           shouldStripResponsesPromptCache: false,
           allowsAnthropicServiceTier: true,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1600,16 +805,12 @@ describe("provider attribution", () => {
           provider: "custom-anthropic",
           api: "anthropic-messages",
           baseUrl: "https://proxy.example.com/anthropic",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           endpointClass: "custom",
           isKnownNativeEndpoint: false,
-          allowsAnthropicServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
           supportsResponsesStoreField: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1618,20 +819,14 @@ describe("provider attribution", () => {
           provider: "openrouter",
           api: "openai-responses",
           baseUrl: "https://openrouter.ai/api/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "openrouter",
           endpointClass: "openrouter",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: true,
-          allowsAnthropicServiceTier: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1640,19 +835,14 @@ describe("provider attribution", () => {
           provider: "moonshot",
           api: "openai-completions",
           baseUrl: "https://api.moonshot.ai/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "moonshot",
           endpointClass: "moonshot-native",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: false,
           shouldStripResponsesPromptCache: false,
-          allowsAnthropicServiceTier: false,
           supportsNativeStreamingUsageCompat: true,
           compatibilityFamily: "moonshot",
         },
@@ -1663,19 +853,14 @@ describe("provider attribution", () => {
           provider: "qwen",
           api: "openai-completions",
           baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "modelstudio",
           endpointClass: "modelstudio-native",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: false,
           shouldStripResponsesPromptCache: false,
-          allowsAnthropicServiceTier: false,
           supportsNativeStreamingUsageCompat: true,
         },
       },
@@ -1685,19 +870,14 @@ describe("provider attribution", () => {
           provider: "generic",
           api: "openai-completions",
           baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "generic",
           endpointClass: "modelstudio-native",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: false,
           shouldStripResponsesPromptCache: false,
-          allowsAnthropicServiceTier: false,
           supportsNativeStreamingUsageCompat: true,
         },
       },
@@ -1707,20 +887,14 @@ describe("provider attribution", () => {
           provider: "google",
           api: "google-generative-ai",
           baseUrl: "https://generativelanguage.googleapis.com",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "google",
           endpointClass: "google-generative-ai",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: false,
           shouldStripResponsesPromptCache: false,
-          allowsAnthropicServiceTier: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1729,20 +903,14 @@ describe("provider attribution", () => {
           provider: "github-copilot",
           api: "openai-responses",
           baseUrl: "https://api.individual.githubcopilot.com",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "github-copilot",
           endpointClass: "github-copilot-native",
           isKnownNativeEndpoint: true,
-          allowsOpenAIServiceTier: false,
-          supportsOpenAIReasoningCompatPayload: false,
-          allowsResponsesStore: false,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: true,
-          allowsAnthropicServiceTier: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
       {
@@ -1751,10 +919,9 @@ describe("provider attribution", () => {
           provider: "openai",
           api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api/codex",
-          capability: "llm" as const,
-          transport: "stream" as const,
         },
         expected: {
+          ...disabledCapabilities,
           knownProviderFamily: "openai-family",
           endpointClass: "openai",
           isKnownNativeEndpoint: true,
@@ -1763,15 +930,19 @@ describe("provider attribution", () => {
           allowsResponsesStore: true,
           supportsResponsesStoreField: true,
           shouldStripResponsesPromptCache: false,
-          allowsAnthropicServiceTier: false,
-          supportsNativeStreamingUsageCompat: false,
         },
       },
     ];
 
     for (const testCase of cases) {
-      expectRecordFields(resolveProviderRequestCapabilities(testCase.input), testCase.expected);
+      expectRecordFields(
+        resolveProviderRequestCapabilities({
+          capability: "llm",
+          transport: "stream",
+          ...testCase.input,
+        }),
+        testCase.expected,
+      );
     }
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

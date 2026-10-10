@@ -447,7 +447,8 @@ const adapter: ChannelOutboundAdapter = {
   renderPresentation({ payload, presentation, ctx }) {
     return renderNativePayload(payload, presentation, ctx);
   },
-  async pinDeliveredMessage({ target, messageId, pin }) {
+  async pinDeliveredMessage({ target, messageId, pin, assertDirectAdapterHandoff }) {
+    assertDirectAdapterHandoff?.();
     await pinNativeMessage(target, messageId, { notify: pin.notify === true });
   },
 };
@@ -742,11 +743,27 @@ Semantics:
 - `pin.notify` defaults to `false`.
 - `pin.required` defaults to `false`.
 - Optional pin failures degrade and leave the sent message intact.
-- Required pin failures fail delivery.
+- Required pin failures report a partial delivery failure while preserving the
+  accepted message and its receipt.
 - Chunked messages pin the first delivered chunk, not the tail chunk.
 
 Manual `pin`, `unpin`, and `pins` message actions still exist for existing
 messages where the provider supports those operations.
+
+The `pinDeliveredMessage` context includes an optional
+`assertDirectAdapterHandoff` callback. A successful send does not keep its owner
+active indefinitely: the owner can close while the adapter prepares or waits to
+pin that message. Core checks the assertion before entering the pin hook, and
+the adapter must retain it through preparation, rate-limit queues, and retries,
+checking it synchronously immediately before each provider request. If the
+native pin helper performs those waits, forward the assertion into its existing
+request guard too.
+
+Let a submitted pin request settle even if authority closes while awaiting its
+response. Do not discard an accepted pin or repeat the message send. This
+optional context field preserves older callers that do not supply an assertion;
+it adds no configuration or pin permission and must not be serialized into a
+payload.
 
 ## Plugin author checklist
 

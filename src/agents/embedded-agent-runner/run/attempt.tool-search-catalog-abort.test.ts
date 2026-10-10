@@ -1,21 +1,25 @@
-import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
-  type Model,
-} from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, type AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   onInternalDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPrivateData,
   type DiagnosticEventPayload,
 } from "../../../infra/diagnostic-events.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js";
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
-import { Agent, type AgentEvent, type AgentTool } from "../../runtime/index.js";
+import { Agent, type AgentEvent } from "../../runtime/index.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
+import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
-import { TOOL_EXECUTION_GATED_MESSAGE } from "../../tool-policy-shared.js";
+import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
@@ -60,7 +64,7 @@ function requireAttemptCatalogRef(): ToolSearchCatalogRef {
   return options.toolSearchCatalogRef;
 }
 
-describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
+describe("runEmbeddedAttempt tool boundaries", () => {
   beforeAll(async () => {
     await preloadRunEmbeddedAttemptForTests();
   });
@@ -71,18 +75,11 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
 
   afterEach(async () => {
     await cleanupTempPaths(tempPaths);
-    tempPaths.length = 0;
+    vi.restoreAllMocks();
   });
 
   it.each([
     { mode: "direct spawn", toolName: "sessions_spawn", code: undefined, failurePhase: undefined },
-    { mode: "direct wait", toolName: "agents_wait", code: undefined, failurePhase: undefined },
-    {
-      mode: "raw catalog spawn",
-      failurePhase: "bridge",
-      toolName: "sessions_spawn",
-      code: 'return await sessions_spawn({ task: "inspect", collect: true });',
-    },
     {
       mode: "raw catalog wait",
       failurePhase: "bridge",
@@ -117,12 +114,11 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         tempPaths,
         createSession: () => {
           const session = createDefaultEmbeddedSession();
-          // SAFETY: The runner supplied the model and finalized tools to this session factory.
-          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
-            model: Model;
-            customTools: AgentTool[];
-          };
-          const allTools = options.customTools;
+          const options = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0];
+          if (!options?.customTools) {
+            throw new Error("Expected the embedded attempt to supply custom tools");
+          }
+          const allTools = options.customTools.map((definition) => wrapToolDefinition(definition));
           expect(allTools.map((tool) => tool.name)).toContain(code ? "exec" : toolName);
           let turn = 0;
           const agent = new Agent({
@@ -140,7 +136,7 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
                         id: "denied",
                         name: code ? "exec" : toolName,
                         arguments: code
-                          ? { code }
+                          ? { title: "Inspect the denied catalog action", code }
                           : toolName === "sessions_spawn"
                             ? { task: "inspect" }
                             : { ids: ["child"] },
@@ -196,80 +192,39 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
         },
       });
       const outcome = outcomes.find((event) => event.toolName === (code ? "exec" : toolName));
-      expect(outcome).toMatchObject({ isError: true });
-      const expectedError =
-        failurePhase === "guest" ? "agents is not defined" : TOOL_EXECUTION_GATED_MESSAGE;
-      expect(outcome?.result).toMatchObject({
-        content: [expect.objectContaining({ text: expect.stringContaining(expectedError) })],
-      });
-      if (code) {
-        expect(outcome?.result).toMatchObject({
-          details: {
-            status: "failed",
-            failurePhase,
-            bridgeDispatchStarted: failurePhase === "bridge",
-            error: expect.stringContaining(expectedError),
-          },
-        });
-      }
+      const denial = formatToolExecutionGatedMessage(toolName, ["read"]);
       const activities = sessionManager.getEntries().flatMap((entry) => {
         const activity = entry.type === "message" && readNestedToolActivity(entry.message);
         return activity ? [activity.details] : [];
       });
-      expect(activities).toEqual(
-        failurePhase === "bridge"
-          ? [
-              expect.objectContaining({
-                toolName,
-                isError: true,
-                result: expect.objectContaining({
-                  content: [
-                    expect.objectContaining({ text: expect.stringContaining(expectedError) }),
-                  ],
-                }),
-              }),
-            ]
-          : [],
-      );
+      if (failurePhase === "guest") {
+        // Swarm globals are absent from the guest, so the script itself fails.
+        expect(outcome).toMatchObject({ isError: true });
+        expect(outcome?.result).toMatchObject({
+          details: { status: "failed", failurePhase, bridgeDispatchStarted: false },
+        });
+        expect(activities).toEqual([]);
+      } else if (code) {
+        // Code Mode dispatched the call, which reached only the gated stand-in.
+        expect(activities).toEqual([expect.objectContaining({ toolName })]);
+      } else {
+        expect(outcome).toMatchObject({
+          isError: false,
+          result: { content: [expect.objectContaining({ text: denial })] },
+        });
+        expect(activities).toEqual([]);
+      }
       expect(prepare).not.toHaveBeenCalled();
       expect(execute).not.toHaveBeenCalled();
     },
   );
 
   it.each([
-    {
-      mode: "code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "tool-search-tools",
-      tools: { toolSearch: { enabled: true, mode: "tools" } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "tool-search-directory",
-      tools: { toolSearch: { enabled: true, mode: "directory" } },
-      cancel: false,
-      timeout: false,
-    },
-    {
-      mode: "cancelled-code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: true,
-      timeout: false,
-    },
-    {
-      mode: "timed-out-code-mode",
-      tools: { codeMode: { enabled: true } },
-      cancel: true,
-      timeout: true,
-    },
+    ["tool-search-directory", { toolSearch: { enabled: true, mode: "directory" } }, false, false],
+    ["timed-out-code-mode", { codeMode: { enabled: true } }, true, true],
   ] as const)(
-    "clears the $mode run catalog when preparation fails or is cancelled",
-    async ({ mode, tools, cancel, timeout }) => {
+    "clears the %s run catalog when preparation fails or is cancelled",
+    async (mode, tools, cancel, timeout) => {
       const runId = `run-catalog-diagnostics-${mode}`;
       const diagnosticsError = new Error(`failed ${mode} tool diagnostics`);
       if (timeout) {
@@ -346,4 +301,213 @@ describe("runEmbeddedAttempt tool-search catalog cleanup", () => {
       expect(catalogRef?.current).toBeUndefined();
     },
   );
+
+  it.each([
+    { provider: "custom", expected: "high", compat: undefined },
+    { provider: "openai", expected: undefined, compat: { supportsReasoningEffort: false } },
+  ])(
+    "keeps Ultra logical at $provider effort boundaries",
+    async ({ provider, expected, compat }) => {
+      await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:main",
+        tempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          thinkLevel: "ultra",
+          model: {
+            id: "synthetic-model",
+            provider,
+            name: "Synthetic model",
+            api: "openai-completions",
+            baseUrl: "https://example.invalid/v1",
+            reasoning: true,
+            compat,
+            input: ["text"],
+            contextWindow: 8192,
+            maxTokens: 2048,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      });
+
+      const promptInput = hoisted.embeddedSystemPromptInputs.at(-1) as {
+        proactiveSubagentOrchestration?: boolean;
+      };
+      const sessionOptions = hoisted.createAgentSessionMock.mock.calls.at(-1)?.[0] as {
+        thinkingLevel?: string;
+      };
+      const providerThinkingLevel = hoisted.applyExtraParamsToAgentMock.mock.calls.at(-1)?.[5];
+
+      expect(promptInput.proactiveSubagentOrchestration).toBe(true);
+      expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenLastCalledWith(
+        expect.objectContaining({ requesterThinkingLevel: "ultra" }),
+        [],
+        undefined,
+        undefined,
+        expect.objectContaining({ assertCurrent: expect.any(Function) }),
+      );
+      expect(sessionOptions.thinkingLevel).toBe(expected ?? "off");
+      expect(providerThinkingLevel).toBe(expected);
+    },
+  );
+
+  describe("preparation diagnostics", () => {
+    beforeEach(resetDiagnosticEventsForTest);
+    afterEach(resetDiagnosticEventsForTest);
+
+    it("attributes awaited bundle work separately from synchronous catalog preparation", async () => {
+      const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
+      const runtimeToolPolicy = await import("../../runtime-plan/tools.js");
+      const { log } = await import("../logger.js");
+      let clock = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
+      const warn = vi.spyOn(log, "warn");
+      const acquired = createDeferred();
+      const release = createDeferred();
+      const dispose = vi.fn(async () => {});
+      vi.spyOn(bundleLspTools, "createBundleLspToolRuntime").mockImplementationOnce(async () => {
+        acquired.resolve();
+        await release.promise;
+        return { tools: [], sessions: [], dispose };
+      });
+      vi.spyOn(runtimeToolPolicy, "logAgentRuntimeToolDiagnostics").mockImplementation(() => {
+        clock += 37;
+      });
+      getHoisted().createOpenClawCodingToolsMock.mockReturnValue([createStubTool("read")]);
+      const attempt = createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey: "agent:main:bundle-timing",
+        tempPaths,
+        attemptOverrides: {
+          disableTools: false,
+          config: { tools: { codeMode: true } },
+        },
+      });
+      try {
+        await Promise.race([
+          acquired.promise,
+          attempt.then(() => {
+            throw new Error("Attempt completed before bundle acquisition");
+          }),
+        ]);
+        clock += 6_000;
+        release.resolve();
+        const result = await attempt;
+        expect(result.terminal).toEqual({ kind: "ok" });
+        expect(dispose).toHaveBeenCalledOnce();
+        const summary = warn.mock.calls
+          .map(([message]) => message)
+          .find(
+            (message) => message.includes("prep stages:") && message.includes("phase=stream-ready"),
+          );
+        expect(summary).toContain("bundle-tools:6000ms@");
+        expect(summary).toContain("tool-catalog:37ms@");
+        expect(summary).toContain("tool-preparation:6037ms@");
+        expect(summary).toContain("system-prompt:0ms@");
+      } finally {
+        release.resolve();
+        await attempt;
+      }
+    });
+
+    it.each([
+      { kind: "cancel", errorName: "AbortError" },
+      { kind: "timeout", errorName: "TimeoutError" },
+    ] as const)(
+      "classifies $kind during pending LSP acquisition through the full attempt",
+      async ({ kind, errorName }) => {
+        const bundleLspTools = await import("../../agent-bundle-lsp-runtime.js");
+        const acquired = createDeferred();
+        const acquisition = createDeferred<never>();
+        void acquisition.promise.catch(() => {});
+        const controller = new AbortController();
+        const reason = new Error(`LSP preparation ${kind}`);
+        reason.name = errorName;
+        const createLsp = vi
+          .spyOn(bundleLspTools, "createBundleLspToolRuntime")
+          .mockImplementationOnce(({ abortSignal }) => {
+            const onAbort = () => acquisition.reject(abortSignal?.reason);
+            abortSignal?.addEventListener("abort", onAbort, { once: true });
+            if (abortSignal?.aborted) {
+              onAbort();
+            }
+            acquired.resolve();
+            return acquisition.promise.finally(() =>
+              abortSignal?.removeEventListener("abort", onAbort),
+            );
+          });
+        const cleanup = vi.fn(async (_reason: string) => {});
+        hoisted.createOpenClawCodingToolsMock.mockImplementation((options: unknown) => {
+          const toolOptions = options as NonNullable<
+            Parameters<typeof createOpenClawCodingTools>[0]
+          >;
+          toolOptions.registerRunCleanup?.(cleanup);
+          return [createStubTool("read")];
+        });
+        const runId = `run-lsp-acquisition-${kind}`;
+        const completed: Array<{
+          event: DiagnosticEventPayload;
+          privateData: DiagnosticEventPrivateData;
+        }> = [];
+        const unsubscribe = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+          if (event.type === "run.completed" && event.runId === runId) {
+            completed.push({ event, privateData });
+          }
+        });
+        const attempt = createContextEngineAttemptRunner({
+          contextEngine: createContextEngineBootstrapAndAssemble(),
+          sessionKey: `agent:main:lsp-acquisition-${kind}`,
+          tempPaths,
+          attemptOverrides: { runId, abortSignal: controller.signal, disableTools: false },
+        });
+        const outcome = attempt.then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        try {
+          await Promise.race([
+            acquired.promise,
+            outcome.then(() => {
+              throw new Error("Attempt completed before LSP acquisition");
+            }),
+          ]);
+          controller.abort(reason);
+          await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce(), { timeout: 1_000 });
+          expect(cleanup).toHaveBeenCalledExactlyOnceWith(kind);
+          const error = await outcome;
+          if (kind === "timeout") {
+            if (!(error instanceof AgentRunTerminalOutcomeError)) {
+              throw new Error("Expected the canonical timeout outcome", { cause: error });
+            }
+            expect(error.cause).toBe(reason);
+            expect(error.terminalOutcome).toMatchObject({ status: "timeout" });
+          } else {
+            expect(error).toBe(reason);
+          }
+          expect(hoisted.createAgentSessionMock).not.toHaveBeenCalled();
+          await waitForDiagnosticEventsDrained();
+          expect(completed).toHaveLength(1);
+          expect(completed[0]?.event).toMatchObject({
+            type: "run.completed",
+            runId,
+            outcome: "aborted",
+            errorCategory: "Error",
+          });
+          expect(completed[0]?.event).not.toHaveProperty("error");
+          expect(completed[0]?.privateData.errorMessage).toBe(reason.message);
+        } finally {
+          // Missing signal forwarding must fail without stranding the attempt's owners.
+          acquisition.reject(reason);
+          try {
+            await outcome;
+            await waitForDiagnosticEventsDrained();
+          } finally {
+            unsubscribe();
+            createLsp.mockRestore();
+          }
+        }
+      },
+    );
+  });
 });

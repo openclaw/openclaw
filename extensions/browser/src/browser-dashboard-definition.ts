@@ -55,6 +55,7 @@ const boardSnapshotSchema = z.object({
 /** Resolve the current board instance; a saved browser target is never authority. */
 export async function readBrowserDashboardDefinition(
   request: BrowserDashboardRequest,
+  defaultProfile = "openclaw",
 ): Promise<BrowserDashboardDefinition | undefined> {
   const runtime = getBrowserStateRuntime();
   if (!runtime.gateway) {
@@ -98,7 +99,7 @@ export async function readBrowserDashboardDefinition(
     revision: widget.revision,
     ...(widget.title ? { title: widget.title } : {}),
     url: props.url,
-    profile: props.profile ?? "openclaw",
+    profile: props.profile ?? defaultProfile,
   };
 }
 

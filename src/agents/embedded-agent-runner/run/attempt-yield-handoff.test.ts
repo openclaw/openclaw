@@ -29,21 +29,13 @@ registerAgentSessionLoopTestLifecycle();
 
 describe("sessions_yield transcript handoff", () => {
   it.each([
-    { yieldMessage: null, retainedBytes: 0, bounded: false },
-    { yieldMessage: "Continue after the child completes", retainedBytes: 0, bounded: false },
-    {
-      yieldMessage: "Continue after the child completes",
-      retainedBytes: 3 * 1024 * 1024,
-      bounded: true,
-    },
-    {
-      yieldMessage: "Continue after the child completes",
-      retainedBytes: 3 * 1024 * 1024,
-      bounded: false,
-    },
+    [null, 0, false],
+    ["Continue after the child completes", 0, false],
+    ["Continue after the child completes", 3 * 1024 * 1024, true],
+    ["Continue after the child completes", 3 * 1024 * 1024, false],
   ])(
-    "leaves yielded history ready (context=$yieldMessage, retainedBytes=$retainedBytes, bounded=$bounded)",
-    async ({ yieldMessage, retainedBytes, bounded }) => {
+    "leaves yielded history ready (context=%s, retainedBytes=%s, bounded=%s)",
+    async (yieldMessage, retainedBytes, bounded) => {
       await withOpenClawTestState({ label: "yield-projection-handoff" }, async (state) => {
         const target = {
           agentId: "main",

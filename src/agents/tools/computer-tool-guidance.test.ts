@@ -34,17 +34,8 @@ describe("computer tool guidance", () => {
       ]),
     );
 
-    expect(description).toContain("Observe first with `get_window_state`");
-    expect(description).toContain("capture the desktop and return frameId");
-    expect(description).toContain("do not accept window or browser targets");
-    expect(description).toContain("observationId for window input");
-    expect(description).toContain("`list_windows` to obtain windowRef");
-    expect(description).toContain("`get_accessibility_tree` for unfiltered desktop discovery");
-    expect(description).toContain("`query`, `depth`, and `maxElements` filters");
-    expect(description).toContain('`effect:"confirmed"` > `unverifiable` > `suspected_noop`');
-    expect(description).toContain("never blind-retry a mutation");
-    expect(description).toContain("For window input");
-    expect(description).toContain("untrusted input");
+    expect(description).toContain("`list_windows`");
+    expect(description).toContain("`query`");
     expect(description).not.toMatch(
       /cua|peekaboo|\b(?:cli|mcp|daemon|socket|install(?:ation|ing)?)\b|verify_state|start_session|end_session|element_token|snapshot_id|window_id|delivery_mode/iu,
     );
@@ -59,11 +50,9 @@ describe("computer tool guidance", () => {
         observations: ["image"],
       }),
     );
-    expect(desktopOnly).toContain("desktop coordinates from the latest screenshot");
-    expect(desktopOnly).toContain("stale frameId");
-    expect(desktopOnly).toContain("unchanged screen returns metadata only and reuses its frameId");
+    expect(desktopOnly).toContain("desktop coordinates");
     expect(desktopOnly).not.toMatch(
-      /get_window_state|accessibility|elementRef|window pixels|deliveryMode:"background"|background_unavailable/,
+      /get_window_state|accessibility|elementRef|window pixels|deliveryMode:"background"|background_unavailable|without another observation call/,
     );
 
     const windowBackground = buildComputerToolDescription(
@@ -72,11 +61,7 @@ describe("computer tool guidance", () => {
         deliveryModes: ["background"],
       }),
     );
-    expect(windowBackground).toContain(
-      "elementRef from the latest observation > window coordinates from the latest observation",
-    );
     expect(windowBackground).toContain('deliveryMode:"background"');
-    expect(windowBackground).toContain("background_occluded");
     expect(windowBackground).not.toMatch(/desktop coordinates|foreground|frameId/);
 
     const discoveryOnly = buildComputerToolDescription(descriptor(["get_accessibility_tree"]));

@@ -21,13 +21,24 @@ export const desktopEnvironment = {
 } as const;
 
 export function createPanel() {
-  return document.createElement("openclaw-desktop-panel");
+  const panel = document.createElement("openclaw-desktop-panel");
+  panel.sessions = {
+    describe: (params, options) => {
+      const client = options?.client ?? panel.client;
+      if (!client) {
+        throw new Error("Desktop fixture has no Gateway client");
+      }
+      return client.request("sessions.describe", params);
+    },
+  };
+  return panel;
 }
 
 export function createConnectionHandle(overrides: Partial<DesktopConnectionHandle> = {}) {
   return {
     disconnect: vi.fn(),
     disableInput: vi.fn(),
+    setPresented: vi.fn(() => true),
     sendBackspace: vi.fn(),
     sendKeyboardEvent: vi.fn(),
     sendText: vi.fn(),

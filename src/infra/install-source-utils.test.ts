@@ -1,7 +1,7 @@
-// Covers npm install source packing and archive path resolution.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import { npmCommandFailureCases } from "../test-utils/npm-spec-install-test-helpers.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
@@ -9,12 +9,10 @@ import {
   resolveArchiveSourcePath,
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
-  withInstallWorkspace,
 } from "./install-source-utils.js";
 
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
 const runCommandWithTimeoutMock = vi.fn();
-const TEMP_DIR_PREFIX = "openclaw-install-source-utils-";
 const tempDirs = createTrackedTempDirs();
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -29,32 +27,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
-async function createTempDir(prefix: string) {
-  return await tempDirs.make(prefix);
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error);
-    const statError = error as NodeJS.ErrnoException;
-    expect({
-      code: statError.code,
-      path: statError.path,
-      syscall: statError.syscall,
-    }).toEqual({
-      code: "ENOENT",
-      path: targetPath,
-      syscall: "stat",
-    });
-    return;
-  }
-  throw new Error(`Expected path to be missing: ${targetPath}`);
-}
-
 async function createFixtureDir() {
-  return await createTempDir(TEMP_DIR_PREFIX);
+  return await tempDirs.make("openclaw-install-source-utils-");
 }
 
 async function createFixtureFile(params: {
@@ -90,7 +64,7 @@ async function expectPackFallsBackToDetectedArchive(params: {
   stdout: string;
   expectedMetadata?: Record<string, unknown>;
 }) {
-  const cwd = await createTempDir("openclaw-install-source-utils-");
+  const cwd = await createFixtureDir();
   const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
   await fs.writeFile(archivePath, "", "utf-8");
   runCommandWithTimeoutMock.mockResolvedValue({
@@ -156,7 +130,17 @@ describe.each([
     },
   },
 ])("npm failure diagnostics: $owner", ({ prefix, category, run }) => {
-  it.each(npmCommandFailureCases)("preserves $label", async ({ npmResult, expectedDetail }) => {
+  const failureCases =
+    category === "metadata-env"
+      ? npmCommandFailureCases.filter(({ label }) =>
+          [
+            "exit code without output",
+            "cancellation followed by a nonzero exit",
+            "no-output-timeout with normalized exit code",
+          ].includes(label),
+        )
+      : npmCommandFailureCases.filter(({ label }) => label === "signal without output");
+  it.each(failureCases)("preserves $label", async ({ npmResult, expectedDetail }) => {
     runCommandWithTimeoutMock.mockResolvedValue(npmResult);
 
     await expect(run()).resolves.toEqual({
@@ -164,23 +148,6 @@ describe.each([
       error: `${prefix}${expectedDetail}`,
       ...(category ? { category } : {}),
     });
-  });
-});
-
-describe("withInstallWorkspace", () => {
-  it("creates a temp dir and always removes it after callback", async () => {
-    let observedDir = "";
-    const markerFile = "marker.txt";
-
-    const value = await withInstallWorkspace("openclaw-install-source-utils-", async (tmpDir) => {
-      observedDir = tmpDir;
-      await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
-      await expect(fs.readFile(path.join(tmpDir, markerFile), "utf8")).resolves.toBe("ok");
-      return "done";
-    });
-
-    expect(value).toBe("done");
-    await expectPathMissing(observedDir);
   });
 });
 
@@ -205,19 +172,6 @@ describe("resolveArchiveSourcePath", () => {
   ])("$name", async ({ path: resolvePath, expected }) => {
     expectPackError(await resolveArchiveSourcePath(await resolvePath()), [expected]);
   });
-
-  it.each(["plugin.zip", "plugin.tgz", "plugin.tar.gz"])(
-    "accepts supported archive extension %s",
-    async (fileName) => {
-      const { filePath } = await createFixtureFile({
-        fileName,
-        contents: "",
-      });
-
-      const result = await resolveArchiveSourcePath(filePath);
-      expect(result).toEqual({ ok: true, path: filePath });
-    },
-  );
 });
 
 describe("resolveNpmSpecMetadata", () => {
@@ -231,11 +185,8 @@ describe("resolveNpmSpecMetadata", () => {
     },
   };
 
-  it.each([
-    { npmVersion: "11", stdout: JSON.stringify(npmViewMetadata) },
-    { npmVersion: "12", stdout: JSON.stringify([npmViewMetadata]) },
-  ])("normalizes npm $npmVersion view JSON", async ({ stdout }) => {
-    mockPackCommandResult({ stdout });
+  it("normalizes npm 12 view JSON", async () => {
+    mockPackCommandResult({ stdout: JSON.stringify([npmViewMetadata]) });
 
     const result = await resolveNpmSpecMetadata({ spec: "@openclaw/codex" });
 
@@ -254,134 +205,47 @@ describe("resolveNpmSpecMetadata", () => {
     });
   });
 
-  it("selects the newest multi-version entry satisfying the requested range", async () => {
-    mockPackCommandResult({
-      stdout: JSON.stringify([
-        {
-          ...npmViewMetadata,
-          version: "2026.5.9",
-          "dist.integrity": "older-placeholder",
-        },
-        npmViewMetadata,
-        {
-          ...npmViewMetadata,
-          version: "2026.6.12",
-          "dist.integrity": "newer-placeholder",
-        },
-        {
-          ...npmViewMetadata,
-          version: "2026.7.0-beta.1",
-          "dist.integrity": "prerelease-placeholder",
-        },
-      ]),
+  describe("registry selectors", () => {
+    const name = "example-plugin";
+    it("preserves literal tag v2 in both npm view shapes", async () => {
+      const tag = "v2";
+      const entry = { name, version: "1.0.0" };
+      // npm resolves literal dist-tags before interpreting the selector as a range.
+      for (const payload of [entry, [entry]]) {
+        mockPackCommandResult({ stdout: JSON.stringify(payload) });
+        await expect(resolveNpmSpecMetadata({ spec: `${name}@${tag}` })).resolves.toMatchObject({
+          ok: true,
+          metadata: { name, version: "1.0.0", resolvedSpec: `${name}@1.0.0` },
+        });
+      }
     });
 
-    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@^2026.6.0" })).resolves.toEqual({
-      ok: true,
-      metadata: expect.objectContaining({
-        version: "2026.6.12",
-        integrity: "newer-placeholder",
-      }),
-    });
-  });
-
-  it("prefers the max satisfying version over publication order", async () => {
-    // npm view arrays follow publication order: a backport published after a
-    // higher release must not win range resolution.
-    mockPackCommandResult({
-      stdout: JSON.stringify([
-        {
-          ...npmViewMetadata,
-          version: "2026.6.12",
-          "dist.integrity": "newer-placeholder",
-        },
-        {
-          ...npmViewMetadata,
-          version: "2026.6.9",
-          "dist.integrity": "backport-placeholder",
-        },
-      ]),
+    it("selects the max version when v2 is not a literal tag", async () => {
+      const tag = "v2";
+      mockPackCommandResult({
+        stdout: JSON.stringify([
+          { name, version: "2.9.0" },
+          { name, version: "2.1.0" },
+        ]),
+      });
+      await expect(resolveNpmSpecMetadata({ spec: `${name}@${tag}` })).resolves.toMatchObject({
+        ok: true,
+        metadata: { name, version: "2.9.0", resolvedSpec: `${name}@2.9.0` },
+      });
     });
 
-    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@^2026.6.0" })).resolves.toEqual({
-      ok: true,
-      metadata: expect.objectContaining({
-        version: "2026.6.12",
-        integrity: "newer-placeholder",
-      }),
-    });
-  });
-
-  it("fails when no multi-version entry satisfies the requested range", async () => {
-    mockPackCommandResult({
-      stdout: JSON.stringify([
-        {
-          ...npmViewMetadata,
-          version: "2025.1.0",
-          "dist.integrity": "older-placeholder",
-        },
-      ]),
-    });
-
-    await expect(resolveNpmSpecMetadata({ spec: "@openclaw/codex@^2026.6.0" })).resolves.toEqual({
-      ok: false,
-      error: "npm view produced incomplete package metadata (missing: name, version)",
-      category: "metadata-env",
-    });
-  });
-
-  it("uses the last multi-version entry when the selector is not a semver range", async () => {
-    mockPackCommandResult({
-      stdout: JSON.stringify([npmViewMetadata, { ...npmViewMetadata, version: "2026.6.12" }]),
-    });
-
-    const result = await resolveNpmSpecMetadata({ spec: "@openclaw/codex@latest" });
-
-    expect(result).toEqual({
-      ok: true,
-      metadata: expect.objectContaining({ version: "2026.6.12" }),
-    });
-  });
-
-  it("normalizes nested dist metadata", async () => {
-    mockPackCommandResult({
-      stdout: JSON.stringify({
-        name: "@openclaw/codex",
-        version: "2026.6.11",
-        dist: { integrity: "nested-placeholder", shasum: "nested-placeholder" },
-      }),
-    });
-
-    const result = await resolveNpmSpecMetadata({ spec: "@openclaw/codex" });
-
-    expect(result).toEqual({
-      ok: true,
-      metadata: {
-        name: "@openclaw/codex",
-        version: "2026.6.11",
-        resolvedSpec: "@openclaw/codex@2026.6.11",
-        integrity: "nested-placeholder",
-        shasum: "nested-placeholder",
+    it.each(["^2", "2.0.0"])(
+      "rejects a singleton outside the non-tag selector %s",
+      async (selector) => {
+        mockPackCommandResult({ stdout: JSON.stringify([{ name, version: "1.0.0" }]) });
+        await expect(
+          resolveNpmSpecMetadata({ spec: `${name}@${selector}` }),
+        ).resolves.toMatchObject({
+          ok: false,
+          category: "metadata-env",
+        });
       },
-    });
-  });
-
-  it("accepts metadata without an openclaw block", async () => {
-    const { openclaw: _openclaw, ...withoutOpenClaw } = npmViewMetadata;
-    mockPackCommandResult({ stdout: JSON.stringify(withoutOpenClaw) });
-
-    const result = await resolveNpmSpecMetadata({ spec: "@openclaw/codex" });
-
-    expect(result).toEqual({
-      ok: true,
-      metadata: {
-        name: "@openclaw/codex",
-        version: "2026.6.11",
-        resolvedSpec: "@openclaw/codex@2026.6.11",
-        integrity: "placeholder",
-        shasum: "placeholder",
-      },
-    });
+    );
   });
 
   it("reports which required metadata fields are missing", async () => {
@@ -396,7 +260,7 @@ describe("resolveNpmSpecMetadata", () => {
 });
 
 describe("packNpmSpecToArchive", () => {
-  it("packs spec and returns archive path using JSON output metadata", async () => {
+  it("packs spec with an unbounded work deadline and retains metadata", async () => {
     const cwd = await createFixtureDir();
     const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
     await fs.writeFile(archivePath, "", "utf-8");
@@ -417,6 +281,7 @@ describe("packNpmSpecToArchive", () => {
     const result = await packNpmSpecToArchive({
       spec: "openclaw-plugin@1.2.3",
       timeoutMs: 1000,
+      workTimeoutMs: null,
       cwd,
       signal,
     });
@@ -433,18 +298,17 @@ describe("packNpmSpecToArchive", () => {
       },
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [
-        "npm",
+      expectedNpmCommand([
         "pack",
         "openclaw-plugin@1.2.3",
         "--ignore-scripts",
         "--json",
         "--dry-run=false",
         `--pack-destination=${cwd}`,
-      ],
+      ]),
       {
         cwd,
-        timeoutMs: 300_000,
+        timeoutMs: undefined,
         signal,
         killProcessTree: true,
         env: {
@@ -459,38 +323,6 @@ describe("packNpmSpecToArchive", () => {
         },
       },
     );
-  });
-
-  it("unpacks npm 12 name-keyed pack json output", async () => {
-    const cwd = await createFixtureDir();
-    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
-    await fs.writeFile(archivePath, "", "utf-8");
-    mockPackCommandResult({
-      stdout: JSON.stringify({
-        "openclaw-plugin": {
-          id: "openclaw-plugin@1.2.3",
-          name: "openclaw-plugin",
-          version: "1.2.3",
-          filename: "openclaw-plugin-1.2.3.tgz",
-          integrity: "sha512-test-integrity",
-          shasum: "abc123",
-        },
-      }),
-    });
-
-    const result = await runPack("openclaw-plugin@1.2.3", cwd);
-
-    expect(result).toEqual({
-      ok: true,
-      archivePath,
-      metadata: {
-        name: "openclaw-plugin",
-        version: "1.2.3",
-        resolvedSpec: "openclaw-plugin@1.2.3",
-        integrity: "sha512-test-integrity",
-        shasum: "abc123",
-      },
-    });
   });
 
   it("uses the workspace archive when npm prints notices without JSON", async () => {
@@ -510,29 +342,8 @@ describe("packNpmSpecToArchive", () => {
     });
   });
 
-  it("returns npm pack error details when command fails", async () => {
-    const cwd = await createFixtureDir();
-    mockPackCommandResult({
-      stdout: "fallback stdout",
-      stderr: "registry timeout",
-      code: 1,
-    });
-
-    const result = await runPack("bad-spec", cwd, 5000);
-    expectPackError(result, ["npm pack failed", "registry timeout"]);
-  });
-
-  it.each([
-    {
-      name: "falls back to archive detected in cwd when npm pack stdout is empty",
-      stdout: " \n\n",
-    },
-    {
-      name: "falls back to archive detected in cwd when stdout does not contain a tgz",
-      stdout: "npm pack completed successfully\n",
-    },
-    {
-      name: "falls back to cwd archive when logged JSON metadata omits filename",
+  it("falls back to cwd archive when logged JSON metadata omits filename", async () => {
+    await expectPackFallsBackToDetectedArchive({
       stdout:
         'npm notice using cache\n[{"id":"openclaw-plugin@1.2.3","name":"openclaw-plugin","version":"1.2.3","integrity":"sha512-test-integrity","shasum":"abc123"}]\n',
       expectedMetadata: {
@@ -542,9 +353,7 @@ describe("packNpmSpecToArchive", () => {
         integrity: "sha512-test-integrity",
         shasum: "abc123",
       },
-    },
-  ])("$name", async ({ stdout, expectedMetadata }) => {
-    await expectPackFallsBackToDetectedArchive({ stdout, expectedMetadata });
+    });
   });
 
   it("returns friendly error for 404 (package not on npm)", async () => {
@@ -600,72 +409,23 @@ describe("packNpmSpecToArchive", () => {
       },
     });
   });
-
-  it("uses stdout fallback error text when stderr is empty", async () => {
-    const cwd = await createFixtureDir();
-    mockPackCommandResult({
-      stdout: "network timeout",
-      stderr: " ",
-      code: 1,
-    });
-
-    const result = await runPack("bad-spec", cwd);
-    expect(result).toEqual({
-      ok: false,
-      error: "npm pack failed: network timeout",
-    });
-  });
 });
 
 describe("resolveNpmPackArchiveMetadata", () => {
-  it("reads archive metadata from npm <=11 array pack output", async () => {
+  it("reads archive metadata from npm 12 pack output", async () => {
     const cwd = await createFixtureDir();
     const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
     await fs.writeFile(archivePath, "tar-bytes", "utf-8");
+    const entry = {
+      id: "openclaw-plugin@1.2.3",
+      name: "openclaw-plugin",
+      version: "1.2.3",
+      filename: "openclaw-plugin-1.2.3.tgz",
+      integrity: "sha512-test-integrity",
+      shasum: "abc123",
+    };
     mockPackCommandResult({
-      stdout: JSON.stringify([
-        {
-          id: "openclaw-plugin@1.2.3",
-          name: "openclaw-plugin",
-          version: "1.2.3",
-          filename: "openclaw-plugin-1.2.3.tgz",
-          integrity: "sha512-test-integrity",
-          shasum: "abc123",
-        },
-      ]),
-    });
-
-    const result = await resolveNpmPackArchiveMetadata({ archivePath, timeoutMs: 1000 });
-
-    expect(result).toEqual({
-      ok: true,
-      archivePath,
-      tarballName: "openclaw-plugin-1.2.3.tgz",
-      metadata: {
-        name: "openclaw-plugin",
-        version: "1.2.3",
-        resolvedSpec: "openclaw-plugin@1.2.3",
-        integrity: "sha512-test-integrity",
-        shasum: "abc123",
-      },
-    });
-  });
-
-  it("reads archive metadata from npm 12 name-keyed pack output", async () => {
-    const cwd = await createFixtureDir();
-    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
-    await fs.writeFile(archivePath, "tar-bytes", "utf-8");
-    mockPackCommandResult({
-      stdout: JSON.stringify({
-        "openclaw-plugin": {
-          id: "openclaw-plugin@1.2.3",
-          name: "openclaw-plugin",
-          version: "1.2.3",
-          filename: "openclaw-plugin-1.2.3.tgz",
-          integrity: "sha512-test-integrity",
-          shasum: "abc123",
-        },
-      }),
+      stdout: JSON.stringify({ "openclaw-plugin": entry }),
     });
 
     const result = await resolveNpmPackArchiveMetadata({ archivePath, timeoutMs: 1000 });

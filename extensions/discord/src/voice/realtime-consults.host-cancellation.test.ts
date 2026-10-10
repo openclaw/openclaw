@@ -75,45 +75,15 @@ defineDiscordVoiceTests(
     }
 
     it.each([
-      { mode: "bidi", path: "native", abort: "signal", suppression: true, rejectDelivery: false },
-      {
-        mode: "agent-proxy",
-        path: "native",
-        abort: "named",
-        suppression: false,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "late",
-        abort: "signal",
-        suppression: true,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "joined",
-        abort: "signal",
-        suppression: true,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "joined",
-        abort: "named",
-        suppression: false,
-        rejectDelivery: false,
-      },
-      {
-        mode: "agent-proxy",
-        path: "joined",
-        abort: "named",
-        suppression: false,
-        rejectDelivery: true,
-      },
+      ["bidi", "native", "signal", true, false],
+      ["agent-proxy", "native", "named", false, false],
+      ["agent-proxy", "late", "signal", true, false],
+      ["agent-proxy", "joined", "signal", true, false],
+      ["agent-proxy", "joined", "named", false, false],
+      ["agent-proxy", "joined", "named", false, true],
     ] as const)(
-      "terminally cancels $mode $path host $abort abort (suppression=$suppression, delivery rejection=$rejectDelivery)",
-      async ({ mode, path, abort, suppression, rejectDelivery }) => {
+      "terminally cancels %s %s host %s abort (suppression=%s, delivery rejection=%s)",
+      async (mode, path, abort, suppression, rejectDelivery) => {
         const fixture = await createPendingConsultFixture(mode);
         const { bridgeParams, entry, hostTurn, consult } = fixture;
         const deliveryError = new Error("native delivery rejected");

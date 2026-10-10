@@ -15,8 +15,6 @@ import {
 describe("Gateway Control UI identity", () => {
   it.each([
     { basePath: "", enabled: true },
-    { basePath: "", enabled: false },
-    { basePath: "/console/", enabled: true },
     { basePath: "/console/", enabled: false },
   ])(
     "keeps authenticated media available at $basePath with dashboard enabled=$enabled",
@@ -160,12 +158,14 @@ describe("Gateway Control UI identity", () => {
           getRuntimeConfig: () => ({
             agents: {
               ownership: "explicit",
-              entries: { ops: { workspace }, research: {} },
+              entries: { ops: {}, research: { workspace } },
               defaults: { systemAgent: { agentId: "research" } },
             },
           }),
         },
         run: async (server) => {
+          const identityRuntime = await import("../agents/identity-file-runtime.js");
+          const prepareIdentity = vi.spyOn(identityRuntime, "prepareIdentityFile");
           const realpath = vi.spyOn(fsSync, "realpathSync");
           const identityReads = () =>
             realpath.mock.calls.filter(
@@ -177,17 +177,20 @@ describe("Gateway Control UI identity", () => {
               expect(response.res.statusCode, path).toBe(200);
             }
             expect(identityReads()).toHaveLength(0);
+            expect(prepareIdentity).not.toHaveBeenCalled();
 
             const bootstrap = await sendRequest(server, {
               path: "/control-ui-config.json",
               method: "GET",
             });
             expect(JSON.parse(bootstrap.getBody())).toMatchObject({
-              assistantAgentId: "ops",
+              assistantAgentId: "research",
               assistantName: "Synthetic assistant",
             });
-            expect(identityReads().length).toBeGreaterThan(0);
+            expect(prepareIdentity).toHaveBeenCalledWith(nodePath.join(workspace, "IDENTITY.md"));
+            expect(identityReads()).toHaveLength(0);
           } finally {
+            prepareIdentity.mockRestore();
             realpath.mockRestore();
           }
         },

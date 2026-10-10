@@ -1,11 +1,18 @@
 import { createHash } from "node:crypto";
 import { escapeRegExp } from "./regexp.mjs";
+import { evaluateStableRollbackDrill } from "./release-publish-gates.mts";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./release-version.mjs";
 
 const STABLE_RELEASE_TAG_RE = /^v(?<version>\d{4}\.\d{1,2}\.\d{1,2})(?:-[1-9]\d*)?$/u;
-const STABLE_PACKAGE_VERSION_RE =
-  /^(?<year>\d{4})\.(?<month>\d{1,2})\.(?<patch>\d{1,2})(?:-(?<correction>[1-9]\d*))?$/u;
 const SHA256_HEX_RE = /^[a-f0-9]{64}$/u;
-const MAX_ROLLBACK_DRILL_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+const GIT_SHA_RE = /^[a-f0-9]{40}$/u;
+const APPCAST_NEWEST_VERSION_RE =
+  /<sparkle:shortVersionString>([^<]+)<\/sparkle:shortVersionString>/u;
+const THIN_MAC_RELEASE_MINIMUM = "2026.9.6";
 
 function parseStableReleaseTagDetails(tag) {
   const match = STABLE_RELEASE_TAG_RE.exec(tag);
@@ -33,31 +40,28 @@ export function parseStableReleaseTag(tag) {
   return parseStableReleaseTagDetails(tag).baseVersion;
 }
 
-function parseStablePackageVersion(version) {
-  const match = STABLE_PACKAGE_VERSION_RE.exec(version);
-  if (!match?.groups) {
-    return null;
-  }
-  return [
-    Number.parseInt(match.groups.year, 10),
-    Number.parseInt(match.groups.month, 10),
-    Number.parseInt(match.groups.patch, 10),
-    Number.parseInt(match.groups.correction ?? "0", 10),
-  ];
+export function requiresThinMacArtifacts(tag) {
+  const { tagVersion } = parseStableReleaseTagDetails(tag);
+  return compareReleaseVersions(tagVersion, THIN_MAC_RELEASE_MINIMUM) >= 0;
 }
 
 function isStableMainVersionAtLeast(mainVersion, shippedVersion) {
-  const main = parseStablePackageVersion(mainVersion);
-  const shipped = parseStablePackageVersion(shippedVersion);
-  if (!main || !shipped) {
-    return false;
-  }
-  for (let index = 0; index < main.length; index += 1) {
-    if (main[index] !== shipped[index]) {
-      return main[index] > shipped[index];
+  return (
+    parseReleaseVersion(mainVersion)?.channel === "stable" &&
+    (compareReleaseVersions(mainVersion, shippedVersion) ?? -1) >= 0
+  );
+}
+
+// GitHub commit list entries; the first `Refs #NNN` line (or the subject) is the reason.
+export function findAppcastWithdrawal(commits, version) {
+  const subject = `chore(release): withdraw the ${version} macOS build from the Sparkle feed`;
+  for (const entry of commits) {
+    const message = entry?.commit?.message ?? "";
+    if (message.split("\n", 1)[0].startsWith(subject) && GIT_SHA_RE.test(entry.sha)) {
+      return { commit: entry.sha, reason: /^Refs #\d+/mu.exec(message)?.[0] ?? subject };
     }
   }
-  return true;
+  return undefined;
 }
 
 export function extractStableChangelogSection(changelog, version) {
@@ -107,6 +111,19 @@ function readVerifiedAssetNames(assets) {
   );
 }
 
+export function requiresLinuxUpdaterObservation({ release, existingManifest }) {
+  return ["latest.json", `OpenClaw-${release.tagName?.slice(1)}-linux.json`].some((name) => {
+    const selectors = readReleaseAssets(release).filter((asset) => asset.name === name);
+    const recorded = existingManifest?.githubReleaseAssets?.find((asset) => asset.name === name);
+    return (
+      selectors.length > 0 &&
+      (selectors.length !== 1 ||
+        !isCanonicalAssetDigest(selectors[0].digest) ||
+        selectors[0].digest !== recorded?.digest)
+    );
+  });
+}
+
 function copyOwnFields(source, ...keys) {
   return Object.fromEntries(
     keys.filter((key) => Object.hasOwn(source, key)).map((key) => [key, source[key]]),
@@ -130,38 +147,6 @@ function isCloseoutEvidenceAsset(assetName, tag) {
     assetName === `openclaw-${releaseVersion}-stable-main-closeout.json` ||
     assetName === `openclaw-${releaseVersion}-stable-main-closeout.json.sha256`
   );
-}
-
-function parseRollbackDrillDate(value) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/u.test(value)) {
-    return null;
-  }
-
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value
-    ? parsed.getTime()
-    : null;
-}
-
-function verifyRollbackDrill(params, errors) {
-  if (!params.rollbackDrillId?.trim()) {
-    errors.push("rollback drill id is required.");
-  }
-
-  const drillDateMs = parseRollbackDrillDate(params.rollbackDrillDate);
-  if (drillDateMs === null) {
-    errors.push(`rollback drill date is invalid: ${params.rollbackDrillDate ?? "<missing>"}.`);
-    return;
-  }
-
-  const ageMs = params.nowMs - drillDateMs;
-  if (ageMs < 0) {
-    errors.push(`rollback drill date is in the future: ${params.rollbackDrillDate}.`);
-  } else if (!params.allowStaleRollbackDrill && ageMs > MAX_ROLLBACK_DRILL_AGE_MS) {
-    errors.push(
-      `rollback drill is older than 90 days: ${params.rollbackDrillDate}. Run the private rollback drill before stable closeout.`,
-    );
-  }
 }
 
 export function verifyStableMainCloseout(params) {
@@ -232,10 +217,19 @@ export function verifyStableMainCloseout(params) {
   }
 
   const macAssetVersion = version;
-  const expectedMacAssets = [
+  const universalMacAssets = [
     `OpenClaw-${macAssetVersion}.zip`,
     `OpenClaw-${macAssetVersion}.dmg`,
     `OpenClaw-${macAssetVersion}.dSYM.zip`,
+  ];
+  const thinMacVariants = requiresThinMacArtifacts(params.tag) ? ["arm64", "x86_64"] : [];
+  const expectedMacAssets = [
+    ...universalMacAssets,
+    ...thinMacVariants.flatMap((arch) => [
+      `OpenClaw-${macAssetVersion}-${arch}.zip`,
+      `OpenClaw-${macAssetVersion}-${arch}.dmg`,
+      `OpenClaw-${macAssetVersion}-${arch}.dSYM.zip`,
+    ]),
   ];
   const platformAssets = {
     macos: expectedMacAssets,
@@ -246,11 +240,79 @@ export function verifyStableMainCloseout(params) {
       "OpenClawCompanion-Setup-x64.exe",
     ],
   };
-  const expectedAppAssets = new Set(Object.values(platformAssets).flat());
+  const allowedLateAssets = new Set([
+    ...Object.values(platformAssets).flat(),
+    `OpenClaw-${tagVersion}-amd64.AppImage`,
+    `OpenClaw-${tagVersion}-amd64.deb`,
+    "SHA256SUMS.linux-app.txt",
+    "latest.json",
+  ]);
   const observedAssets = readReleaseAssets(params.release).filter(
     (asset) => !isCloseoutEvidenceAsset(asset.name, params.tag),
   );
   const existingManifest = params.existingManifest;
+  if (
+    existingManifest &&
+    ["stableSoakWaiver", "laneWaiver"].some((key) => Object.hasOwn(existingManifest, key))
+  ) {
+    return {
+      errors: [
+        "Historical waiver-bearing closeout receipt replay is unsupported. Preserve the recorded manifest and checksum; a fresh validation run cannot replace their published binding.",
+      ],
+      manifest: null,
+    };
+  }
+  let verifiedLinuxSelector = false;
+  if (requiresLinuxUpdaterObservation(params)) {
+    const observation = params.linuxUpdaterObservation;
+    const source =
+      typeof observation?.sourceVersion === "string"
+        ? parseReleaseVersion(observation.sourceVersion)
+        : null;
+    const sourceComparison = source ? compareReleaseVersions(source.version, tagVersion) : null;
+    const selectors = observedAssets.filter((asset) => asset.name === "latest.json");
+    verifiedLinuxSelector =
+      selectors.length === 1 &&
+      observation?.carrierTag === params.tag &&
+      isSha256Hex(observation?.manifestSha256) &&
+      selectors[0].digest === `sha256:${observation.manifestSha256}` &&
+      source !== null &&
+      source.version === observation.sourceVersion &&
+      classifyReleaseTrain(source) === "stable" &&
+      sourceComparison !== null &&
+      sourceComparison <= 0;
+    const recordedSelector = existingManifest?.githubReleaseAssets?.find(
+      (asset) => asset.name === "latest.json",
+    );
+    if (
+      selectors.length > 0 &&
+      (selectors.length !== 1 ||
+        !isCanonicalAssetDigest(selectors[0].digest) ||
+        selectors[0].digest !== recordedSelector?.digest) &&
+      !verifiedLinuxSelector
+    ) {
+      errors.push(
+        "New or changed Linux updater selector requires a validated observation bound to this carrier and asset digest.",
+      );
+    }
+    const immutableName = `OpenClaw-${tagVersion}-linux.json`;
+    const immutable = observedAssets.filter((asset) => asset.name === immutableName);
+    if (immutable.length > 0) {
+      const verified =
+        immutable.length === 1 &&
+        observation?.carrierTag === params.tag &&
+        observation?.immutableManifest?.name === immutableName &&
+        isSha256Hex(observation?.immutableManifest?.sha256) &&
+        immutable[0].digest === `sha256:${observation.immutableManifest.sha256}`;
+      if (verified) {
+        allowedLateAssets.add(immutableName);
+      } else {
+        errors.push(
+          "Late immutable Linux metadata requires a validated exact-name and digest observation.",
+        );
+      }
+    }
+  }
   const releaseAssets =
     existingManifest?.githubReleaseAssets ??
     observedAssets.map((asset) => ({
@@ -258,10 +320,13 @@ export function verifyStableMainCloseout(params) {
       digest: typeof asset.digest === "string" ? asset.digest : null,
     }));
   if (existingManifest) {
-    // Closeout records a publication-time snapshot. Later app attachments may
-    // extend it, but must never rewrite recorded assets or release evidence.
+    // Keep the publication-time snapshot. Only the independently validated
+    // updater selector may change; recorded bundles and evidence are immutable.
     for (const recorded of releaseAssets) {
       const observed = observedAssets.find((asset) => asset.name === recorded.name);
+      if (recorded.name === "latest.json" && verifiedLinuxSelector) {
+        continue;
+      }
       const observedDigest =
         observed && typeof observed.digest === "string" ? observed.digest : null;
       if (!observed || observedDigest !== recorded.digest) {
@@ -271,7 +336,7 @@ export function verifyStableMainCloseout(params) {
     for (const observed of observedAssets) {
       if (
         !releaseAssets.some((asset) => asset.name === observed.name) &&
-        !expectedAppAssets.has(observed.name)
+        !allowedLateAssets.has(observed.name)
       ) {
         errors.push(`Unexpected release asset added after closeout: ${observed.name}.`);
       }
@@ -288,21 +353,53 @@ export function verifyStableMainCloseout(params) {
     : macAttachedAtCloseout;
   // Fresh closeout must validate the same main snapshot it hashes. Only a
   // pending recorded closeout may use the current feed for late publication.
-  const appcast =
+  const feed = (name) =>
     existingManifest && !appcastVerifiedAtCloseout
-      ? (params.publishedAppcast ?? params.mainAppcast)
-      : params.mainAppcast;
-  if (
+      ? (params[`published${name}`] ?? params[`main${name}`])
+      : params[`main${name}`];
+  const appcast = feed("Appcast");
+  const appcastContracts = [
+    { name: "main appcast.xml", content: appcast, asset: universalMacAssets[0] },
+    ...thinMacVariants.map((arch) => ({
+      name: `main appcast-${arch}.xml`,
+      content: feed(`${arch === "arm64" ? "Arm64" : "X86_64"}Appcast`),
+      asset: `OpenClaw-${macAssetVersion}-${arch}.zip`,
+    })),
+  ];
+  // A deliberately withdrawn macOS build keeps an older newest Sparkle entry;
+  // only its explicit withdrawal commit on main replaces the feed contracts.
+  const appcastWithdrawnAtCloseout = existingManifest?.appcast === "withdrawn";
+  const checksAppcast =
     macPublished &&
-    (!existingManifest || !appcastVerifiedAtCloseout) &&
-    !appcast.includes(`/releases/download/${params.tag}/${expectedMacAssets[0]}`)
-  ) {
-    errors.push(`main appcast.xml does not point at ${expectedMacAssets[0]} from ${params.tag}.`);
+    !appcastWithdrawnAtCloseout &&
+    (!existingManifest || !appcastVerifiedAtCloseout);
+  const newestAppcastVersion = APPCAST_NEWEST_VERSION_RE.exec(appcast ?? "")?.[1];
+  const appcastWithdrawal =
+    checksAppcast &&
+    newestAppcastVersion !== undefined &&
+    compareReleaseVersions(newestAppcastVersion, version) === -1
+      ? params.findAppcastWithdrawal?.(version)
+      : undefined;
+  if (checksAppcast && !appcastWithdrawal) {
+    for (const contract of appcastContracts) {
+      if (!contract.content?.includes(`/releases/download/${params.tag}/${contract.asset}`)) {
+        errors.push(`${contract.name} does not point at ${contract.asset} from ${params.tag}.`);
+      }
+    }
   }
+  const appcastState = !macAttachedAtCloseout
+    ? "pending"
+    : (existingManifest ? appcastWithdrawnAtCloseout : appcastWithdrawal)
+      ? "withdrawn"
+      : "verified";
   const appPlatforms = Object.fromEntries(
     Object.entries(platformAssets).map(([platform, assets]) => [
       platform,
-      assets.every((asset) => verifiedAssetNames.has(asset)) ? "attached" : "pending",
+      platform === "macos" && appcastState === "withdrawn"
+        ? "withdrawn"
+        : assets.every((asset) => verifiedAssetNames.has(asset))
+          ? "attached"
+          : "pending",
     ]),
   );
   const apps = Object.values(appPlatforms).every((state) => state === "attached")
@@ -318,20 +415,21 @@ export function verifyStableMainCloseout(params) {
     if (Object.hasOwn(existingManifest, "apps") && existingManifest.apps !== apps) {
       errors.push("Recorded aggregate app state does not match canonical release asset digests.");
     }
-    const expectedAppcastState = macAttachedAtCloseout ? "verified" : "pending";
-    if (
-      Object.hasOwn(existingManifest, "appcast") &&
-      existingManifest.appcast !== expectedAppcastState
-    ) {
+    if (Object.hasOwn(existingManifest, "appcast") && existingManifest.appcast !== appcastState) {
       errors.push("Recorded appcast state does not match canonical macOS release asset digests.");
     }
     const hasAppcastSha256 = Object.hasOwn(existingManifest, "appcastSha256");
+    const hasAppcastWithdrawal = Object.hasOwn(existingManifest, "appcastWithdrawal");
     if (
-      hasAppcastSha256 !== macAttachedAtCloseout ||
-      (hasAppcastSha256 && !isSha256Hex(existingManifest.appcastSha256))
+      hasAppcastSha256 !== (appcastState === "verified") ||
+      (hasAppcastSha256 && !isSha256Hex(existingManifest.appcastSha256)) ||
+      hasAppcastWithdrawal !== (appcastState === "withdrawn") ||
+      (hasAppcastWithdrawal &&
+        (!GIT_SHA_RE.test(String(existingManifest.appcastWithdrawal?.commit)) ||
+          typeof existingManifest.appcastWithdrawal?.reason !== "string"))
     ) {
       errors.push(
-        "Recorded appcast hash presence or format does not match canonical macOS release asset state.",
+        "Recorded appcast evidence presence or format does not match canonical macOS release asset state.",
       );
     }
   }
@@ -357,7 +455,11 @@ export function verifyStableMainCloseout(params) {
       "Recorded split publication recovery must be independently reverified without changes.",
     );
   }
-  verifyRollbackDrill(params, errors);
+  errors.push(
+    ...evaluateStableRollbackDrill(params)
+      .filter((gate) => gate.status === "FAIL")
+      .map((gate) => gate.message),
+  );
 
   if (errors.length > 0) {
     return { errors, manifest: null };
@@ -375,12 +477,20 @@ export function verifyStableMainCloseout(params) {
     // evolve, while the independent frozen contribution record must not.
     changelogSha256: sha256(tagChangelog),
     ...(existingManifest
-      ? copyOwnFields(existingManifest, "apps", "appPlatforms", "appcast", "appcastSha256")
+      ? copyOwnFields(
+          existingManifest,
+          "apps",
+          "appPlatforms",
+          "appcast",
+          "appcastSha256",
+          "appcastWithdrawal",
+        )
       : {
           apps,
           appPlatforms,
-          appcast: macAttachedAtCloseout ? "verified" : "pending",
-          ...(macAttachedAtCloseout ? { appcastSha256: sha256(params.mainAppcast) } : {}),
+          appcast: appcastState,
+          ...(appcastState === "verified" ? { appcastSha256: sha256(params.mainAppcast) } : {}),
+          ...(appcastState === "withdrawn" ? { appcastWithdrawal } : {}),
         }),
     fullReleaseValidationRunId: params.fullReleaseValidationRunId,
     fullReleaseValidationRunAttempt,

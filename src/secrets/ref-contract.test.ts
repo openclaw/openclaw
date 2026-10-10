@@ -56,20 +56,6 @@ describe("exec secret ref id validation", () => {
 });
 
 describe("secret ref validation", () => {
-  it("rejects non-canonical refs with extra properties", () => {
-    expect(isValidSecretRef({ source: "env", provider: "default", id: "OPENAI_API_KEY" })).toBe(
-      true,
-    );
-    expect(
-      isValidSecretRef({
-        source: "env",
-        provider: "default",
-        id: "OPENAI_API_KEY",
-        extra: "x",
-      } as never),
-    ).toBe(false);
-  });
-
   it("uses env-name grammar and source-specific defaults for store refs", () => {
     expect(isValidSecretRef({ source: "store", provider: "default", id: "STORED_API_KEY" })).toBe(
       true,

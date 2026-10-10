@@ -5,14 +5,11 @@ import {
   matchesBoardFilter,
   WORKBOARD_ALL_BOARDS_FILTER,
 } from "../lib/workboard/board-filter.ts";
-import {
-  WORKBOARD_STATUSES,
-  type WorkboardCard,
-  type WorkboardStatus,
-} from "../lib/workboard/types.ts";
+import { groupWorkboardCardsByStatus } from "../lib/workboard/derived.ts";
+import { WORKBOARD_STATUSES } from "../lib/workboard/types.ts";
+import { workboardPageTarget } from "../pages/workboard/page-target.ts";
 import { renderColumn } from "../pages/workboard/view-card.ts";
 import type { WorkboardProps } from "../pages/workboard/view-helpers.ts";
-import { workboardPageTarget } from "../pages/workboard/workboard-page.ts";
 import type { WorkboardWidgetModel } from "./runtime.ts";
 
 function renderAvailability(model: WorkboardWidgetModel): TemplateResult | null {
@@ -170,13 +167,7 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
   const boardId = model.readStringProp("boardId");
   const filter = boardId ?? WORKBOARD_ALL_BOARDS_FILTER;
   const cards = model.cards.filter((card) => matchesBoardFilter(card, filter));
-  const byStatus = new Map<WorkboardStatus, WorkboardCard[]>();
-  for (const status of model.statuses) {
-    byStatus.set(status, []);
-  }
-  for (const card of cards) {
-    byStatus.get(card.status)?.push(card);
-  }
+  const byStatus = groupWorkboardCardsByStatus(cards, model.statuses);
 
   // Hidden widgets retain their controls; mutation admission must follow the current lease.
   const props: WorkboardProps = {
@@ -193,7 +184,7 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
     agentsList: null,
     sessions: [],
     onOpenSession: model.host.sessions.open,
-    onRequestUpdate: () => model.syncFromHost(),
+    onRequestUpdate: () => model.runtime.notify(),
   };
   const workboardPath = model.host.navigation.pageHref(workboardPageTarget(boardId));
 
@@ -206,7 +197,10 @@ export function renderWorkboardBoardWidget(model: WorkboardWidgetModel): Templat
       </header>
       <div class="workboard-board workboard-board--compact workboard-widget-board__columns">
         ${model.statuses.map((status) =>
-          renderColumn(props, status, byStatus.get(status) ?? [], { surface: "widget" }),
+          renderColumn(props, status, byStatus.get(status) ?? [], {
+            surface: "widget",
+            boardFilter: filter,
+          }),
         )}
       </div>
     </section>

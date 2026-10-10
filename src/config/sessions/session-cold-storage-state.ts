@@ -1,9 +1,26 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
-import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+} from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 
 export type SessionColdArchive = Selectable<DB["session_transcript_cold_archives"]>;
+
+export const sessionColdArchiveMetadataColumns = [
+  "session_id",
+  "generation",
+  "archive_name",
+  "archive_sha256",
+  "event_count",
+  "raw_bytes",
+  "archive_bytes",
+  "last_seq",
+  "archived_at",
+  "storage",
+] as const;
 
 function createColdTranscriptQueries(db: DatabaseSync) {
   const kysely = getNodeSqliteKysely<DB>(db);
@@ -13,18 +30,7 @@ function createColdTranscriptQueries(db: DatabaseSync) {
       (parameter) =>
         kysely
           .selectFrom("session_transcript_cold_archives")
-          .select([
-            "session_id",
-            "generation",
-            "archive_name",
-            "archive_sha256",
-            "event_count",
-            "raw_bytes",
-            "archive_bytes",
-            "last_seq",
-            "archived_at",
-            "storage",
-          ])
+          .select(sessionColdArchiveMetadataColumns)
           .where(
             "session_id",
             "=",
@@ -44,19 +50,7 @@ function createColdTranscriptQueries(db: DatabaseSync) {
   };
 }
 
-const coldTranscriptQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createColdTranscriptQueries>
->();
-
-function getColdTranscriptQueries(db: DatabaseSync) {
-  let queries = coldTranscriptQueries.get(db);
-  if (!queries) {
-    queries = createColdTranscriptQueries(db);
-    coldTranscriptQueries.set(db, queries);
-  }
-  return queries;
-}
+const getColdTranscriptQueries = createSqliteQueryCache(createColdTranscriptQueries);
 
 export function readSessionColdTranscript(
   db: DatabaseSync,

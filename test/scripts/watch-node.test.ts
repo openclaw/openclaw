@@ -1,7 +1,7 @@
 // Watch Node tests cover watch node script behavior.
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runWatchMain } from "../../scripts/watch-node.mts";
+import { runWatch, watchReady } from "./watch-node.test-support.js";
 
 class FakeProcess extends EventEmitter {
   execPath = process.execPath;
@@ -41,12 +41,11 @@ describe("watch-node shutdown cleanup", () => {
     vi.useFakeTimers();
     const fakeProcess = new FakeProcess();
     const child = new FakeChild();
-    let resolvedCode: Awaited<ReturnType<typeof runWatchMain>> | undefined;
+    let resolvedCode: Awaited<ReturnType<typeof runWatch>> | undefined;
 
-    const run = runWatchMain({
+    const run = runWatch({
       args: ["gateway"],
-      createWatcher: () => ({ close: async () => {}, on: () => {} }),
-      lockDisabled: true,
+      createWatcher: () => ({ close: async () => {} }),
       process: fakeProcess as unknown as NodeJS.Process,
       spawn: () => child as never,
     }).then((code) => {
@@ -54,6 +53,7 @@ describe("watch-node shutdown cleanup", () => {
       return code;
     });
 
+    await watchReady();
     fakeProcess.emit("SIGTERM");
     await vi.advanceTimersByTimeAsync(4_999);
     expect(resolvedCode).toBeUndefined();
@@ -70,10 +70,9 @@ describe("watch-node shutdown cleanup", () => {
     const child = new FakeChild(4_242);
     const groupSignals: Array<[number, string | number]> = [];
 
-    const run = runWatchMain({
+    const run = runWatch({
       args: ["gateway"],
-      createWatcher: () => ({ close: async () => {}, on: () => {} }),
-      lockDisabled: true,
+      createWatcher: () => ({ close: async () => {} }),
       process: fakeProcess as unknown as NodeJS.Process,
       signalProcess: (pid, signal) => {
         groupSignals.push([pid, signal]);
@@ -81,6 +80,7 @@ describe("watch-node shutdown cleanup", () => {
       spawn: () => child as never,
     });
 
+    await watchReady();
     fakeProcess.emit("SIGTERM");
     expect(groupSignals).toEqual([[-4_242, "SIGTERM"]]);
     child.emit("exit", 0, null);
@@ -98,13 +98,12 @@ describe("watch-node shutdown cleanup", () => {
     const runner = new FakeChild();
     const doctor = new FakeChild();
     const children = [runner, doctor];
-    let resolvedCode: Awaited<ReturnType<typeof runWatchMain>> | undefined;
+    let resolvedCode: Awaited<ReturnType<typeof runWatch>> | undefined;
 
-    const run = runWatchMain({
+    const run = runWatch({
       args: ["gateway"],
-      createWatcher: () => ({ close: async () => {}, on: () => {} }),
+      createWatcher: () => ({ close: async () => {} }),
       env: {},
-      lockDisabled: true,
       process: fakeProcess as unknown as NodeJS.Process,
       spawn: () => children.shift() as never,
     }).then((code) => {
@@ -112,9 +111,11 @@ describe("watch-node shutdown cleanup", () => {
       return code;
     });
 
+    await watchReady();
     runner.emit("exit", 1, null);
     expect(children).toHaveLength(0);
 
+    await watchReady();
     fakeProcess.emit("SIGTERM");
     await vi.advanceTimersByTimeAsync(4_999);
     expect(resolvedCode).toBeUndefined();

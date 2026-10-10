@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { pauseVirtualClock, type ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -85,6 +86,63 @@ const registeredElementSuite = createControlUiE2eSuite({
 });
 
 registeredElementSuite.define(() => {
+  it.each([false, true])(
+    "preserves a slow module graph (recovery document: %s)",
+    async (recovery) => {
+      syntheticModuleRenders = true;
+      const requested = createDeferred();
+      const release = createDeferred();
+      let moduleRequests = 0;
+      await registeredElementSuite.withPage(
+        { serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
+        async ({ page }) => {
+          await addLifecycleCounters(page);
+          await page.route("**/src/main.ts", async (route) => {
+            const response = await route.fetch();
+            await route.fulfill({ response, body: `import "/slow.js";\n${await response.text()}` });
+          });
+          await page.route("**/slow.js", async (route) => {
+            moduleRequests += 1;
+            requested.resolve();
+            await release.promise;
+            await route.fulfill({
+              contentType: "text/javascript",
+              body: "export const loaded = true;",
+            });
+          });
+          await page.clock.install();
+          await pauseVirtualClock(page);
+          const url = new URL(registeredElementSuite.server.baseUrl);
+          if (recovery) {
+            url.searchParams.set("openclaw_mount_recovery", "1");
+          }
+          url.searchParams.set("session", "synthetic-session");
+          url.hash = "synthetic-fragment";
+          await page.goto(url.href, { waitUntil: "commit" });
+          await requested.promise;
+          await page.clock.runFor(12_001);
+
+          await page.getByRole("heading", { name: "Control UI is still loading" }).waitFor();
+          expect(await page.evaluate((key) => sessionStorage.getItem(key), loadCountKey)).toBe("1");
+          await page.getByRole("button", { name: "Keep waiting" }).click();
+          await page.clock.runFor(12_001);
+          expect(moduleRequests).toBe(1);
+          expect(await page.evaluate((key) => sessionStorage.getItem(key), loadCountKey)).toBe("1");
+
+          release.resolve();
+          await page.getByText("Application rendered", { exact: true }).waitFor();
+          expect(await page.locator("#openclaw-mount-fallback").isHidden()).toBe(true);
+          expect(await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey)).toBe(
+            "1",
+          );
+          expect(new URL(page.url()).searchParams.get("session")).toBe("synthetic-session");
+          expect(new URL(page.url()).hash).toBe("#synthetic-fragment");
+        },
+        async () => release.resolve(),
+      );
+    },
+  );
+
   it("shows the fallback when registration never produces an application render", async () => {
     syntheticModuleRenders = false;
     await registeredElementSuite.withPage(
@@ -111,6 +169,49 @@ registeredElementSuite.define(() => {
         expect(
           await page.evaluate((key) => sessionStorage.getItem(key), renderCountKey),
         ).toBeNull();
+
+        const drag = await page.evaluate(() => {
+          const fallback = document.getElementById("openclaw-mount-fallback")!;
+          const press = (target: Element, button = 0, handled = false) => {
+            const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true, button });
+            if (handled) {
+              event.preventDefault();
+            }
+            target.dispatchEvent(event);
+            return event.defaultPrevented;
+          };
+          const withoutBridge = press(fallback);
+          const messages: unknown[] = [];
+          Object.defineProperty(window, "webkit", {
+            configurable: true,
+            value: {
+              messageHandlers: {
+                openclawWindowDrag: { postMessage: (message: unknown) => messages.push(message) },
+              },
+            },
+          });
+          try {
+            const background = press(fallback);
+            const panel = [
+              ".mount-fallback__panel",
+              ".mount-fallback__panel h1",
+              "#openclaw-mount-retry",
+              "#openclaw-mount-wait",
+            ].map((selector) => press(fallback.querySelector(selector)!));
+            const secondary = press(fallback, 2);
+            press(fallback, 0, true);
+            return { withoutBridge, background, panel, secondary, messages };
+          } finally {
+            Reflect.deleteProperty(window, "webkit");
+          }
+        });
+        expect(drag).toEqual({
+          withoutBridge: false,
+          background: true,
+          panel: [false, false, false, false],
+          secondary: false,
+          messages: [{ type: "window-drag" }],
+        });
 
         syntheticModuleRenders = true;
         await Promise.all([

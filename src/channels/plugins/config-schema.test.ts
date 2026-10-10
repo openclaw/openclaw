@@ -1,6 +1,7 @@
 // Config schema tests cover channel plugin config schema validation and defaults.
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
+import { z as z3 } from "zod/v3";
 import {
   ChannelGroupEntrySchema,
   buildCatchallMultiAccountChannelSchema,
@@ -120,7 +121,7 @@ describe("channel config composition", () => {
 });
 
 describe("buildChannelConfigSchema", () => {
-  it("builds json schema when toJSONSchema is available", () => {
+  it("builds draft-07 json schema in output mode by default", () => {
     const schema = z.object({ enabled: z.boolean().default(true) });
     const result = buildChannelConfigSchema(schema);
     expect(result.schema).toEqual({
@@ -137,29 +138,74 @@ describe("buildChannelConfigSchema", () => {
     });
   });
 
-  it("falls back when toJSONSchema is missing (zod v3 plugin compatibility)", () => {
-    const legacySchema = {} as unknown as Parameters<typeof buildChannelConfigSchema>[0];
-    const result = buildChannelConfigSchema(legacySchema);
+  it("preserves permissive json schema and runtime parsing for zod v3 plugins", () => {
+    const legacySchema = z3.object({ enabled: z3.boolean().default(true) }).strict();
+    const result = buildChannelConfigSchema(
+      legacySchema as unknown as Parameters<typeof buildChannelConfigSchema>[0],
+    );
     expect(result.schema).toEqual({ type: "object", additionalProperties: true });
+    expect(result.runtime?.safeParse({})).toEqual({ success: true, data: { enabled: true } });
+    expect(result.runtime?.safeParse({ enabled: "yes" })).toMatchObject({
+      success: false,
+      issues: [{ path: ["enabled"] }],
+    });
   });
 
-  it("passes draft-07 compatibility options to toJSONSchema", () => {
-    const toJSONSchema = vi.fn(() => ({
-      type: "object",
-      properties: { enabled: { type: "boolean" } },
-    }));
-    const schema = { toJSONSchema } as unknown as Parameters<typeof buildChannelConfigSchema>[0];
-
-    const result = buildChannelConfigSchema(schema);
-
-    expect(toJSONSchema).toHaveBeenCalledWith({
-      target: "draft-07",
-      unrepresentable: "any",
+  it("converts SDK schemas with the host while retaining metadata, references and defaults", () => {
+    const policy = z.string().describe("Policy name").meta({
+      id: "Channel/Policy~v1",
+      title: "Policy",
     });
-    expect(result.schema).toEqual({
-      type: "object",
-      properties: { enabled: { type: "boolean" } },
+    const schema = z.object({
+      group: buildGroupEntrySchema(),
+      first: policy,
+      second: policy,
+      enabled: z.boolean().default(true),
     });
+    vi.spyOn(schema, "toJSONSchema").mockImplementation(() => {
+      throw new Error("schema-owned converter must not run");
+    });
+
+    for (const jsonSchemaMode of ["input", "output"] as const) {
+      const result = buildChannelConfigSchema(schema, { jsonSchemaMode });
+      expect(result.schema).toMatchObject({
+        $schema: "http://json-schema.org/draft-07/schema#",
+        properties: {
+          group: {
+            properties: {
+              toolsBySender: {
+                type: "object",
+                additionalProperties: { properties: { allow: { type: "array" } } },
+              },
+            },
+          },
+          first: { $ref: "#/definitions/Channel~1Policy~0v1" },
+          second: { $ref: "#/definitions/Channel~1Policy~0v1" },
+          enabled: { type: "boolean", default: true },
+        },
+        definitions: {
+          "Channel/Policy~v1": { type: "string", description: "Policy name", title: "Policy" },
+        },
+      });
+      expect(result.schema.required).toEqual(
+        jsonSchemaMode === "output"
+          ? ["group", "first", "second", "enabled"]
+          : ["group", "first", "second"],
+      );
+      const input = {
+        group: { toolsBySender: { sender: { allow: ["read"] } } },
+        first: "read",
+        second: "write",
+      };
+      expect(result.runtime?.safeParse(input)).toEqual({
+        success: true,
+        data: { ...input, enabled: true },
+      });
+      expect(result.runtime?.safeParse({ ...input, enabled: "yes" })).toMatchObject({
+        success: false,
+        issues: [{ path: ["enabled"] }],
+      });
+    }
   });
 
   it("can describe accepted transform inputs instead of unrepresentable outputs", () => {

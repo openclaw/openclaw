@@ -1,8 +1,9 @@
 import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-legacy-oauth.js";
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
-import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { DoctorConfigReferenceSource } from "../commands/doctor/shared/config-flow-steps.js";
+import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type {
   LegacyStateMigrationStepReceipt,
@@ -11,19 +12,20 @@ import type {
 import type { UpdatePostInstallDoctorResult } from "../infra/update-doctor-result.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { AgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import type { DoctorUpdateBudget, DoctorUpdateWork } from "./doctor-update-budget.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheckContext } from "./health-checks.js";
-import type { FlowContribution } from "./types.js";
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
-  /** Source before the first write; later writes use cfgForPersistence. */
-  sourceConfigForWrite?: OpenClawConfig;
-  pluginInstallConfigImport?: ShippedPluginInstallConfigImport;
+  warnings?: string[];
+  /** Original authored/resolved pair; retained across every committed Doctor write. */
+  referenceSource?: DoctorConfigReferenceSource;
   path?: string;
   shouldWriteConfig?: boolean;
-  /** Source of the ordinary confirmed proposal, consumed by its initial write. */
-  confirmedConfigSource?: { path: string; hash: string };
+  /** Active planning revision, advanced on success and cleared after partial publication. */
+  confirmedConfigSource?: { path: string; hash: string | null };
   /** Repair panels held back until the atomic config write commits. */
   pendingChangePanels?: readonly string[];
   /** Billing changes reported once after the model migration is durable. */
@@ -62,8 +64,12 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   /** The finalized config-flow candidate crossed the atomic writer boundary. */
   configResultWriteCommitted?: boolean;
+  /** External config edits are advisory; dependent cleanup still requires persistence. */
+  externalConfigRepairsPending?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
   configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
+  /** A post-commit failure is terminal for this context; retry needs a fresh inspected snapshot. */
+  configWriteError?: ConfigWritePostCommitError;
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
@@ -73,11 +79,15 @@ export type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   /** State migration owns service activation until final readiness passes. */
   gatewayMaintenanceActive?: boolean;
+  agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
+  preparedAgentCount?: number;
+  updateBudget?: DoctorUpdateBudget;
+  authProfileHealthReady?: boolean;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
-  gatewayStatus?: import("../status/types.js").StatusSummary;
+  gatewayStatus?: import("../status/summary.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
   postInstallDoctorResult?: UpdatePostInstallDoctorResult;
   updateWarnings?: string[];
@@ -87,15 +97,20 @@ export type DoctorHealthFlowContext = {
 
 /** Internal facts carried through Doctor detect/repair/validate passes without widening the SDK. */
 export type DoctorHealthCheckContext = HealthCheckContext & {
+  /** Read-only lint validates the source once; mutable Doctor passes must reread it. */
+  readonly lintConfigSnapshot?: Pick<ConfigFileSnapshot, "exists" | "issues" | "warnings">;
   readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
+  readonly agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
+  /** The isolated lint worker retains its private state until these disposers settle. */
+  readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
-export type DoctorHealthContribution = FlowContribution & {
-  kind: "core";
-  surface: "health";
+export type DoctorHealthContribution = {
+  id: string;
+  label: string;
   required?: true;
   /** Diagnostics with no update migration or readiness dependency stay in standalone Doctor. */
-  updatePolicy?: "standalone";
+  updateWork?: DoctorUpdateWork;
   healthChecks: readonly DoctorHealthCheck[];
   healthCheckIds: readonly string[];
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
@@ -103,6 +118,4 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export type DoctorContributionHealthCheck = Omit<DoctorHealthCheck, "id" | "kind" | "source"> & {
   readonly id?: string;
-  readonly kind?: "core";
-  readonly source?: string;
 };

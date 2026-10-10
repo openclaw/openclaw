@@ -1,19 +1,20 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { loadProviderScopedThinkingCatalog } from "../agents/model-catalog.runtime.js";
 import {
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { applySessionModelSelection as applySdkModelSelection } from "../plugin-sdk/model-session-runtime.js";
 import {
   onSessionLifecycleEvent,
   type SessionLifecycleEvent,
 } from "../sessions/session-lifecycle-events.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { createModelSelectionInputs } from "./apply-session-model-selection.test-support.js";
 
 const runtimeChoiceMocks = vi.hoisted(() => ({
   validate: vi.fn<() => string | undefined>(),
@@ -21,8 +22,11 @@ const runtimeChoiceMocks = vi.hoisted(() => ({
 
 // Runtime eligibility belongs to its owner; exercise its commit guard here.
 vi.mock("../agents/model-runtime-choice.js", () => ({
-  preparePublishedModelRuntimeChoice: vi.fn(async () => ({
+  preparePublishedModelRuntimeChoice: vi.fn<
+    typeof import("../agents/model-runtime-choice.js").preparePublishedModelRuntimeChoice
+  >(async ({ runtimeId, preferredRuntimeId }) => ({
     kind: "ready",
+    runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
     validate: runtimeChoiceMocks.validate,
   })),
 }));
@@ -31,111 +35,51 @@ vi.mock("../agents/model-catalog.runtime.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
 }));
 
-const effects = vi.hoisted(() => ({
-  enqueueSystemEvent: vi.fn(),
-  info: vi.fn(),
-  mutateConfigFileWithRetry: vi.fn(),
-  refreshQueuedFollowupSession: vi.fn(),
-  triggerSessionPatchHook: vi.fn(),
-  warn: vi.fn(),
-}));
-const placementMocks = vi.hoisted(() => ({
-  getMany: vi.fn(),
-  resolveWorkerPlacementSessionRuntimeCapabilities: vi.fn(),
-}));
+const { effects, placementMocks, factories, resetMocks } = await vi.hoisted(async () => {
+  const { createModelSelectionMocks } =
+    await import("./apply-session-model-selection.test-support.js");
+  return createModelSelectionMocks();
+});
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-model-picker-runtime-race-");
 let lifecycleEvents: SessionLifecycleEvent[];
 let unsubscribeLifecycle: () => void;
 
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => effects.enqueueSystemEvent(...args),
-}));
-vi.mock("../auto-reply/reply/queue.js", () => ({
-  refreshQueuedFollowupSession: (...args: unknown[]) =>
-    effects.refreshQueuedFollowupSession(...args),
-}));
-vi.mock("../gateway/session-patch-hooks.js", () => ({
-  triggerSessionPatchHook: (...args: unknown[]) => effects.triggerSessionPatchHook(...args),
-}));
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return { ...actual, mutateConfigFileWithRetry: effects.mutateConfigFileWithRetry };
-});
+vi.mock("../infra/system-events.js", factories.systemEvents);
+vi.mock("../auto-reply/reply/queue.js", factories.queue);
+vi.mock("../gateway/session-patch-hooks.js", factories.patchHooks);
+vi.mock("../config/config.js", factories.config);
 
-vi.mock("../logging/subsystem.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../logging/subsystem.js")>("../logging/subsystem.js");
+vi.mock("../logging/subsystem.js", factories.logging);
+
+vi.mock("../gateway/session-worker-placement-context.js", factories.placementContext);
+vi.mock("../gateway/worker-environments/placement-session-runtime.js", factories.placementRuntime);
+
+import { applySessionModelSelectionInternal as applySessionModelSelection } from "./apply-session-model-selection.js";
+
+const { createEntry, createParams } = createModelSelectionInputs();
+
+function createPlacement(sessionId: string, state: "local" | "active" = "active") {
   return {
-    ...actual,
-    createSubsystemLogger: (subsystem: string) =>
-      subsystem === "agents/sticky-model-selection"
-        ? { info: effects.info, warn: effects.warn }
-        : actual.createSubsystemLogger(subsystem),
+    sessionId,
+    state,
+    executionMode: "worker-turn" as const,
+    generation: 1,
+    environmentId: "env-1",
+    runnerId: "runner-1",
+    runnerStatus: "available" as const,
+    recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
+    transitionGeneration: 1,
+    ownerId: "worker",
+    ownerEpoch: 1,
+    turnClaim: null,
+    workspace: null,
+    retirement: null,
+    createdAtMs: 0,
+    updatedAtMs: 0,
   };
-});
-
-vi.mock("../gateway/session-worker-placement-context.js", () => ({
-  resolveSessionWorkerPlacementContext: () => ({
-    workerSessionPlacementService: {
-      getMany: placementMocks.getMany,
-    },
-  }),
-}));
-vi.mock("../gateway/worker-environments/placement-session-runtime.js", () => ({
-  resolveWorkerPlacementSessionRuntimeCapabilities:
-    placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
-}));
-
-import {
-  applySessionModelSelection,
-  type ApplySessionModelSelectionParams,
-} from "./apply-session-model-selection.js";
-
-const catalog = [
-  {
-    provider: "anthropic",
-    id: "claude-opus-4-6",
-    name: "Claude Opus",
-    contextTokens: 32_000,
-  },
-  { provider: "openai", id: "gpt-4o", name: "GPT-4o", contextTokens: 16_000 },
-] satisfies ModelCatalogEntry[];
-
-function createEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 1,
-    delivery: { kind: "none" },
-    ...overrides,
-  };
-}
-
-function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {}) {
-  const sessionEntry = overrides.sessionEntry ?? createEntry();
-  const sessionKey = overrides.sessionKey ?? "agent:main:dm:1";
-  return {
-    cfg: {},
-    agentId: "main",
-    sessionKey,
-    sessionEntry,
-    sessionStore: { [sessionKey]: sessionEntry },
-    defaultProvider: "anthropic",
-    defaultModel: "claude-opus-4-6",
-    currentProvider: "anthropic",
-    currentModel: "claude-opus-4-6",
-    modelCatalog: catalog,
-    thinkingCatalog: catalog,
-    canPersistStickyModelSelection: false,
-    request: {
-      provider: "openai",
-      model: "gpt-4o",
-      isDefault: false,
-      runtime: { kind: "unchanged" },
-    },
-    markLiveSwitchPending: true,
-    ...overrides,
-  } satisfies ApplySessionModelSelectionParams;
 }
 
 beforeEach(() => {
@@ -143,46 +87,43 @@ beforeEach(() => {
   vi.mocked(loadProviderScopedThinkingCatalog).mockReset().mockResolvedValue([]);
   lifecycleEvents = [];
   unsubscribeLifecycle = onSessionLifecycleEvent((event) => lifecycleEvents.push(event));
-  effects.enqueueSystemEvent.mockReset();
-  effects.info.mockReset();
-  effects.warn.mockReset();
-  effects.mutateConfigFileWithRetry.mockReset().mockResolvedValue({
-    nextConfig: {},
-    result: "defaults",
-  });
-  effects.refreshQueuedFollowupSession.mockReset();
-  effects.triggerSessionPatchHook.mockReset();
-  placementMocks.getMany.mockReset().mockReturnValue(new Map());
-  placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReset();
+  resetMocks();
 });
 
 afterEach(() => unsubscribeLifecycle());
 
 describe("applySessionModelSelection — placement guard", () => {
+  it("keeps released SDK validators inside the native session transaction", async () => {
+    const storePath = path.join(sessionDirs.make(), "openclaw-agent.sqlite");
+    const sessionKey = "agent:main:sdk-model-validator";
+    const sessionEntry = createEntry({ sessionId: "sdk-model-validator" });
+    await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    let validatedInTransaction = false;
+    const result = await applySdkModelSelection(
+      createParams({
+        sessionEntry,
+        sessionKey,
+        storePath,
+        validateAuthProfileSelection: () => {
+          validatedInTransaction ||= database.db.isTransaction;
+          expect(loadSessionEntryReadOnly({ sessionKey, storePath })?.sessionId).toBe(
+            sessionEntry.sessionId,
+          );
+          return undefined;
+        },
+      }),
+    );
+    expect(result.status).toBe("applied");
+    expect(validatedInTransaction).toBe(true);
+  });
+
   it("rejects a model selection incompatible with an active cloud placement without persisting", async () => {
     const sessionEntry = createEntry({ sessionId: "placement-active-1" });
     const initial = structuredClone(sessionEntry);
-    const placement = {
-      sessionId: "placement-active-1",
-      state: "active" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
-    placementMocks.getMany.mockReturnValue(new Map([["placement-active-1", placement]]));
+    placementMocks.getMany.mockReturnValue(
+      new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
+    );
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
       executionMode: undefined,
     });
@@ -203,27 +144,9 @@ describe("applySessionModelSelection — placement guard", () => {
 
   it("allows a model selection compatible with an active cloud placement", async () => {
     const sessionEntry = createEntry({ sessionId: "placement-active-2" });
-    const placement = {
-      sessionId: "placement-active-2",
-      state: "active" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
-    placementMocks.getMany.mockReturnValue(new Map([["placement-active-2", placement]]));
+    placementMocks.getMany.mockReturnValue(
+      new Map([[sessionEntry.sessionId, createPlacement(sessionEntry.sessionId)]]),
+    );
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReturnValue({
       executionMode: "worker-turn",
     });
@@ -233,18 +156,8 @@ describe("applySessionModelSelection — placement guard", () => {
     expect(result.status).toBe("applied");
   });
 
-  it("skips placement validation when no active placement exists", async () => {
-    const sessionEntry = createEntry({ sessionId: "placement-none" });
-    placementMocks.getMany.mockReturnValue(new Map());
-
-    const result = await applySessionModelSelection(createParams({ sessionEntry }));
-
-    expect(result.status).toBe("applied");
-    expect(placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities).not.toHaveBeenCalled();
-  });
-
   it("rejects runtime availability revoked while waiting for the session writer", async () => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-runtime-race-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:runtime-race";
     const sessionEntry = createEntry({ sessionId: "runtime-race-1" });
@@ -302,32 +215,13 @@ describe("applySessionModelSelection — placement guard", () => {
   });
 
   it("rejects a model selection when placement activates between the pre-write read and the durable commit", async () => {
-    const tempRoot = tempDirs.make("openclaw-model-picker-placement-race-");
+    const tempRoot = sessionDirs.make();
     const storePath = path.join(tempRoot, "sessions.json");
     const sessionKey = "agent:main:dm:placement-race";
     const sessionEntry = createEntry({ sessionId: "placement-race-1" });
     await replaceSessionEntry({ sessionKey, storePath }, sessionEntry);
     const initial = structuredClone(sessionEntry);
-    const localPlacement = {
-      sessionId: "placement-race-1",
-      state: "local" as const,
-      executionMode: "worker-turn" as const,
-      generation: 1,
-      environmentId: "env-1",
-      runnerId: "runner-1",
-      runnerStatus: "available" as const,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-      transitionGeneration: 1,
-      ownerId: "worker",
-      ownerEpoch: 1,
-      turnClaim: null,
-      workspace: null,
-      retirement: null,
-      createdAtMs: 0,
-      updatedAtMs: 0,
-    };
+    const localPlacement = createPlacement(sessionEntry.sessionId, "local");
     const activePlacement = { ...localPlacement, state: "active" as const, generation: 2 };
     // First read (pre-write guard) sees a local placement; the synchronous commit boundary
     // then sees an activation that overtook the directive's first read.

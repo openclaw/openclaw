@@ -104,6 +104,7 @@ Group chats are supported by the plugin (`chatTypes: ["direct", "group"]`) and g
 
 - Text: full support, chunked to 2000 characters.
 - Media: inbound/outbound, capped by `mediaMaxMb`.
+- Photo captions: truncated to fit the 2000-character limit, including polling replies.
 - Reactions, threads, polls, native commands: not supported by the plugin.
 - Streaming: the plugin declares block-streaming capability. Zalo has no dedicated outbound queue/merge-text tuning knobs, unlike some other regional channels. Verify current behavior in your environment if this matters for your use case.
 

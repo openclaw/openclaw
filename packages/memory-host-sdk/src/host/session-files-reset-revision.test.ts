@@ -1,24 +1,43 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  appendTranscriptEvent,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
+  readActiveTranscriptEntryAnchor,
+  readTranscriptStatsSync,
   replaceTranscriptEventsSync,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { runWithSessionTranscriptReadFence } from "../../../../src/config/sessions/session-transcript-read-fence.js";
+import { WorkerTaskPool } from "../../../../src/infra/worker-task-pool.js";
+import { registerSecretValueForRedaction } from "../../../../src/logging/secret-redaction-registry.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../../../src/state/openclaw-state-db.js";
 import {
   buildSessionEntry,
   matchesSessionEntryPrefixHash,
   type SessionFileEntry,
 } from "./session-files.js";
+import {
+  readSessionResetRecallCutoff,
+  readSessionResetRecallCutoffInProcess,
+} from "./session-reset-recall-read.js";
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
   if (!entry) {
@@ -40,7 +59,9 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   if (previousStateDir === undefined) {
@@ -77,7 +98,7 @@ describe("SQLite session snapshots and reset content revision", () => {
           content: "Internal poll.",
           provenance: { kind: "internal_system", sourceTool: "heartbeat" },
         },
-        { role: "toolResult", content: "Background result." },
+        { role: "toolResult", content: "Background result.", details: "x".repeat(64_000) },
         {
           role: "assistant",
           content: [
@@ -101,6 +122,15 @@ describe("SQLite session snapshots and reset content revision", () => {
           __openclaw: { senderIsOwner: true },
         },
         { role: "assistant", content: [{ type: "text", text: "Photo answer." }] },
+        {
+          role: "assistant",
+          timestamp: 1000,
+          content: [
+            { type: "thinking", thinking: "x".repeat(64_000) },
+            { type: "text", text: "" },
+          ],
+          providerReplay: { payload: "x".repeat(64_000) },
+        },
       ];
       const records = [
         { type: "custom", customType: "metadata", data: {} },
@@ -137,11 +167,19 @@ describe("SQLite session snapshots and reset content revision", () => {
           onTranscriptMessage: archiveObserver,
         }),
       );
+      const worker = requireSessionEntry(
+        await buildSessionEntry(scope.sessionKey, {
+          ...scope,
+          ...options,
+          updatedAtMs: observedAt,
+        }),
+      );
 
       expect(sqlite).toEqual({
         ...archive,
         absPath: scope.sessionKey,
         path: "sessions/main/parity.jsonl",
+        revisionMs: readTranscriptStatsSync(scope).lastMutationAtMs,
       });
       expect(sqlite.content).toBe(
         kind === "interactive"
@@ -157,13 +195,139 @@ describe("SQLite session snapshots and reset content revision", () => {
       );
       const observations = messages
         .filter((message) => message.role !== "toolResult")
-        .map((message) => [message, observedAt]);
+        .map((message) => [message, "timestamp" in message ? 1_000_000 : observedAt]);
       expect(sqliteObserver.mock.calls).toEqual(observations);
       expect(archiveObserver.mock.calls).toEqual(observations);
       const cutoff = Symbol.for("openclaw.memory.sessionResetRecallCutoff");
+      expect(worker).toEqual(sqlite);
+      expect(Object.getOwnPropertyDescriptor(worker, cutoff)).toEqual(
+        Object.getOwnPropertyDescriptor(sqlite, cutoff),
+      );
       expect(Object.getOwnPropertyDescriptor(sqlite, cutoff)).toEqual(
         Object.getOwnPropertyDescriptor(archive, cutoff),
       );
+    },
+  );
+
+  it.each([1, 2])(
+    "handles %i redaction changes while an export is pending",
+    async (invalidations) => {
+      const scope = {
+        agentId: "main",
+        sessionId: `redaction-refresh-${invalidations}`,
+        sessionKey: `agent:main:chat:redaction-refresh-${invalidations}`,
+        storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+      };
+      const secrets = Array.from(
+        { length: invalidations },
+        (_, index) => `session-export-${invalidations}-${index}-registered-fixture`,
+      );
+      const sessionEntry = { sessionId: scope.sessionId, updatedAt: 1 };
+      await patchSessionEntryCore(scope, () => sessionEntry, {
+        fallbackEntry: sessionEntry,
+        skipMaintenance: true,
+      });
+      expect(
+        replaceTranscriptEventsSync(scope, [
+          {
+            type: "message",
+            id: "late-secret",
+            message: { role: "user", content: secrets.join(" ") },
+          },
+        ]),
+      ).toBe(true);
+      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the intercepted pool receiver.
+      const run = WorkerTaskPool.prototype.run;
+      let replies = 0;
+      const spy = vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async function (
+        this: WorkerTaskPool<unknown, unknown>,
+        ...args
+      ) {
+        const result = await Reflect.apply(run, this, args);
+        const input = asOptionalRecord(args[0]);
+        if (
+          input?.kind === "session-entry" &&
+          asOptionalRecord(input.options)?.sessionId === scope.sessionId
+        ) {
+          const secret = secrets[replies++];
+          if (secret) {
+            registerSecretValueForRedaction(secret);
+          }
+        }
+        return result;
+      });
+      const sql = [
+        vi.spyOn(DatabaseSync.prototype, "prepare"),
+        vi.spyOn(DatabaseSync.prototype, "exec"),
+        vi.spyOn(StatementSync.prototype, "get"),
+        vi.spyOn(StatementSync.prototype, "all"),
+        vi.spyOn(StatementSync.prototype, "run"),
+        vi.spyOn(StatementSync.prototype, "iterate"),
+      ];
+      try {
+        const pending = buildSessionEntry(scope.sessionKey, scope);
+        if (invalidations === 2) {
+          await expect(pending).rejects.toThrow(
+            "Session transcript redaction changed during preparation; retry the operation.",
+          );
+        } else {
+          const entry = requireSessionEntry(await pending);
+          expect(entry.content).toBe("User: sessio…ture");
+          expect(entry.lineMap).toEqual([1]);
+        }
+        expect(replies).toBe(2);
+        for (const operation of sql) {
+          expect(operation).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const operation of sql) {
+          operation.mockRestore();
+        }
+        spy.mockRestore();
+      }
+      const stable = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+      expect(stable.content).toBe(`User: ${secrets.map(() => "sessio…ture").join(" ")}`);
+      expect(stable.lineMap).toEqual([1]);
+      const current = requireSessionEntry(
+        await buildSessionEntry(scope.sessionKey, { ...scope, parseYieldEveryLines: 1 }),
+      );
+      expect(stable.hash).toBe(current.hash);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps missing and incognito exports non-persisting (incognito=%s)",
+    async (incognito) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "nonpersisting-export",
+        sessionKey: incognito
+          ? "agent:main:dashboard:incognito-export"
+          : "agent:main:chat:nonpersisting-export",
+        storePath: path.join(tmpDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+      };
+      expect(await buildSessionEntry(scope.sessionKey, scope)).toBeNull();
+      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "invalid" });
+      expect(fsSync.existsSync(scope.storePath)).toBe(false);
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: 1,
+        ...(incognito ? { incognito: true } : {}),
+      });
+      expect(
+        replaceTranscriptEventsSync(scope, [
+          {
+            type: "message",
+            id: "visible",
+            message: { role: "user", content: "Visible transcript" },
+          },
+        ]),
+      ).toBe(true);
+      expect((await buildSessionEntry(scope.sessionKey, scope))?.content).toBe(
+        "User: Visible transcript",
+      );
+      expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "absent" });
+      expect(fsSync.existsSync(scope.storePath)).toBe(!incognito);
     },
   );
 
@@ -189,11 +353,32 @@ describe("SQLite session snapshots and reset content revision", () => {
     };
     const records = [
       first,
+      {
+        type: "message",
+        id: "tool-result",
+        message: { role: "toolResult", content: "payload-only-probe".repeat(4096) },
+      },
       kept,
       { type: "reset", id: "reset", parentId: "kept", firstKeptEntryId: "kept" },
     ];
     expect(replaceTranscriptEventsSync(scope, records)).toBe(true);
     const before = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 3 });
+    const parse = JSON.parse;
+    const payloadGuard = vi.spyOn(JSON, "parse").mockImplementation((...args) => {
+      if (args[0].includes("payload-only-probe")) {
+        throw new Error("Reset metadata must not hydrate message payloads");
+      }
+      return Reflect.apply(parse, JSON, args);
+    });
+    try {
+      expect(readSessionResetRecallCutoffInProcess(scope)).toEqual({
+        state: "valid",
+        cutoffLine: 3,
+      });
+    } finally {
+      payloadGuard.mockRestore();
+    }
     const observed: unknown[] = [];
     const during = requireSessionEntry(
       await buildSessionEntry(scope.sessionKey, {
@@ -215,11 +400,43 @@ describe("SQLite session snapshots and reset content revision", () => {
       configurable: false,
       enumerable: false,
       writable: false,
-      value: { state: "valid", cutoffLine: 2 },
+      value: { state: "valid", cutoffLine: 3 },
     });
     const after = requireSessionEntry(await buildSessionEntry(scope.sessionKey, scope));
     expect(after.content).toBe("User: first");
     expect(Object.getOwnPropertyDescriptor(after, cutoff)?.value).toEqual({ state: "absent" });
+  });
+
+  it("carries the admitted input fence through the reset metadata worker", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "metadata-fence",
+      sessionKey: "agent:main:chat:metadata-fence",
+      storePath: path.join(tmpDir, "agents", "main", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    expect(
+      replaceTranscriptEventsSync(scope, [
+        {
+          type: "message",
+          id: "admitted",
+          parentId: null,
+          message: { role: "user", content: "input" },
+        },
+      ]),
+    ).toBe(true);
+    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("expected persisted input anchor");
+    }
+    await appendTranscriptEvent(scope, { type: "reset", id: "later-reset", parentId: "admitted" });
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
+    expect(
+      await runWithSessionTranscriptReadFence(
+        { ...anchor, logicalTurnId: "metadata-read", role: "user" },
+        () => readSessionResetRecallCutoff(scope),
+      ),
+    ).toEqual({ state: "absent" });
   });
 
   it("accepts a transcript append but invalidates its prefix hash after reset", async () => {

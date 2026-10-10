@@ -1,24 +1,17 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseCommandArgs,
   substituteArgs,
 } from "../../../packages/agent-core/src/harness/prompt-template-arguments.js";
-/**
- * Prompt template discovery and loading.
- *
- * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
- */
+import { walkDirectorySync } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { expandTildePath } from "../../shared/tilde-path.js";
-import { CONFIG_DIR_NAME } from "../config.js";
+import { CONFIG_DIR_NAME } from "../package-metadata.js";
 import { parsePromptFrontmatter } from "../utils/frontmatter.js";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.js";
 
-/**
- * Represents a prompt template loaded from a markdown file
- */
 export interface PromptTemplate {
   name: string;
   description: string;
@@ -35,16 +28,11 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
 
     const name = basename(filePath).replace(/\.md$/, "");
 
-    // Get description from frontmatter or first non-empty line
     let description = frontmatter.description || "";
     if (!description) {
       const firstLine = body.split("\n").find((line) => line.trim());
       if (firstLine) {
-        // Truncate if too long
-        description = truncateUtf16Safe(firstLine, 60);
-        if (firstLine.length > 60) {
-          description += "...";
-        }
+        description = truncateUtf16Safe(firstLine, 60) + (firstLine.length > 60 ? "..." : "");
       }
     }
 
@@ -61,51 +49,6 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
   }
 }
 
-/**
- * Scan a directory for .md files (non-recursive) and load them as prompt templates.
- */
-function loadTemplatesFromDir(
-  dir: string,
-  getSourceInfo: (filePath: string) => SourceInfo,
-): PromptTemplate[] {
-  const templates: PromptTemplate[] = [];
-
-  if (!existsSync(dir)) {
-    return templates;
-  }
-
-  try {
-    const entries = readdirSync(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = join(dir, entry.name);
-
-      // For symlinks, check if they point to a file
-      let isFile = entry.isFile();
-      if (entry.isSymbolicLink()) {
-        try {
-          const stats = statSync(fullPath);
-          isFile = stats.isFile();
-        } catch {
-          // Broken symlink, skip it
-          continue;
-        }
-      }
-
-      if (isFile && entry.name.endsWith(".md")) {
-        const template = loadTemplateFromFile(fullPath, getSourceInfo(fullPath));
-        if (template) {
-          templates.push(template);
-        }
-      }
-    }
-  } catch {
-    return templates;
-  }
-
-  return templates;
-}
-
 interface LoadPromptTemplatesOptions {
   /** Working directory for project-local templates. */
   cwd: string;
@@ -113,8 +56,6 @@ interface LoadPromptTemplatesOptions {
   agentDir: string;
   /** Explicit prompt template paths (files or directories). */
   promptPaths: string[];
-  /** Include default prompt directories. */
-  includeDefaults: boolean;
 }
 
 function resolvePromptPath(p: string, cwd: string): string {
@@ -122,37 +63,25 @@ function resolvePromptPath(p: string, cwd: string): string {
   return isAbsolute(normalized) ? normalized : resolve(cwd, normalized);
 }
 
-/**
- * Load all prompt templates from:
- * 1. Global: agentDir/prompts/
- * 2. Project: cwd/{CONFIG_DIR_NAME}/prompts/
- * 3. Explicit prompt paths
- */
-export function loadPromptTemplates(options: LoadPromptTemplatesOptions): PromptTemplate[] {
-  const resolvedCwd = options.cwd;
-  const resolvedAgentDir = options.agentDir;
-  const promptPaths = options.promptPaths;
-  const includeDefaults = options.includeDefaults;
-
+/** Load explicit prompt paths with metadata for their source scope. */
+export function loadPromptTemplates({
+  cwd,
+  agentDir,
+  promptPaths,
+}: LoadPromptTemplatesOptions): PromptTemplate[] {
   const templates: PromptTemplate[] = [];
 
-  const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
-  const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
+  const globalPromptsDir = agentDir ? join(agentDir, "prompts") : agentDir;
+  const projectPromptsDir = resolve(cwd, CONFIG_DIR_NAME, "prompts");
 
   const getSourceInfo = (resolvedPath: string): SourceInfo => {
-    if (isPathInside(globalPromptsDir, resolvedPath)) {
-      return createSyntheticSourceInfo(resolvedPath, {
-        source: "local",
-        scope: "user",
-        baseDir: globalPromptsDir,
-      });
-    }
-    if (isPathInside(projectPromptsDir, resolvedPath)) {
-      return createSyntheticSourceInfo(resolvedPath, {
-        source: "local",
-        scope: "project",
-        baseDir: projectPromptsDir,
-      });
+    for (const [baseDir, scope] of [
+      [globalPromptsDir, "user"],
+      [projectPromptsDir, "project"],
+    ] as const) {
+      if (isPathInside(baseDir, resolvedPath)) {
+        return createSyntheticSourceInfo(resolvedPath, { source: "local", scope, baseDir });
+      }
     }
     return createSyntheticSourceInfo(resolvedPath, {
       source: "local",
@@ -160,27 +89,36 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
     });
   };
 
-  if (includeDefaults) {
-    templates.push(...loadTemplatesFromDir(globalPromptsDir, getSourceInfo));
-    templates.push(...loadTemplatesFromDir(projectPromptsDir, getSourceInfo));
-  }
-
-  // 3. Load explicit prompt paths
   for (const rawPath of promptPaths) {
-    const resolvedPath = resolvePromptPath(rawPath, resolvedCwd);
+    const resolvedPath = resolvePromptPath(rawPath, cwd);
     if (!existsSync(resolvedPath)) {
       continue;
     }
 
     try {
       const stats = statSync(resolvedPath);
+      let filePaths: string[] = [];
       if (stats.isDirectory()) {
-        templates.push(...loadTemplatesFromDir(resolvedPath, getSourceInfo));
+        const { entries } = walkDirectorySync(resolvedPath, {
+          maxDepth: 1,
+          symlinks: "follow",
+          include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+        });
+        filePaths = entries.map((entry) => join(resolvedPath, entry.name));
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {
-        const template = loadTemplateFromFile(resolvedPath, getSourceInfo(resolvedPath));
-        if (template) {
-          templates.push(template);
+        filePaths = [resolvedPath];
+      }
+      const loadedTemplates: PromptTemplate[] = [];
+      try {
+        for (const filePath of filePaths) {
+          const template = loadTemplateFromFile(filePath, getSourceInfo(filePath));
+          if (template) {
+            loadedTemplates.push(template);
+          }
         }
+      } finally {
+        // Keep the loaded prefix if metadata resolution fails on a later file.
+        templates.push(...loadedTemplates);
       }
     } catch {
       // Ignore read failures
@@ -195,10 +133,6 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
  * Returns the expanded content or the original text if not a template.
  */
 export function expandPromptTemplate(text: string, templates: PromptTemplate[]): string {
-  if (!text.startsWith("/")) {
-    return text;
-  }
-
   const match = text.match(/^\/([^\s]+)(?:\s+([\s\S]*))?$/);
   if (!match) {
     return text;

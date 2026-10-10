@@ -11,6 +11,7 @@ import {
 import { resolveSessionWorkerPlacementPatchError } from "../server-methods/sessions-shared.js";
 import {
   projectWorkerPlacementAgentRuntime,
+  resolveDefaultWorkerPlacementExecutionMode,
   resolveWorkerPlacementCapabilities,
   resolveWorkerPlacementExecutionMode,
   resolveWorkerPlacementSessionRuntime,
@@ -32,6 +33,59 @@ describe("worker placement runtime capabilities", () => {
       return;
     }
     resetPluginRuntimeStateForTest();
+  });
+
+  it("fails closed when residual auto policy lacks model and session context", () => {
+    expect(projectWorkerPlacementAgentRuntime({ id: "auto", source: "model" })).toEqual({
+      id: "auto",
+      cloudPlacementSupported: false,
+      devicePlacementSupported: false,
+      source: "model",
+    });
+  });
+
+  it("derives presence preparation mode from the default session runtime owner", () => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      cloudPlacement: {
+        mode: "remote-exec",
+        devicePlacement: {
+          requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+          consumesWorkerSlot: false,
+        },
+      },
+      supports: () => ({ supported: true }),
+      async runAttempt() {
+        throw new Error("not used");
+      },
+    });
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-test" },
+          models: { "openai/gpt-test": { agentRuntime: { id: "codex" } } },
+        },
+      },
+    };
+    const session = {
+      cfg,
+      entry: {
+        sessionId: "browser-created-codex",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-test",
+        agentRuntimeOverride: "codex",
+      },
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:browser-created-codex",
+    };
+    expect(resolveWorkerPlacementSessionRuntimeCapabilities(session).executionMode).toBe(
+      "remote-exec",
+    );
+    expect(resolveDefaultWorkerPlacementExecutionMode({ cfg, agentId: "main" })).toBe(
+      "remote-exec",
+    );
   });
 
   it.each([
@@ -85,6 +139,23 @@ describe("worker placement runtime capabilities", () => {
     ).toBe(expected);
   });
 
+  it("does not let a persisted runtime override bypass required worker inference", () => {
+    expect(
+      resolveWorkerPlacementSessionRuntime({
+        cfg: { cloudWorkers: { requiredProfile: "dedicated-native" } },
+        entry: {
+          sessionId: "required-placement-runtime",
+          updatedAt: 0,
+          providerOverride: "openai",
+          modelOverride: "gpt-test",
+          agentRuntimeOverride: "codex",
+        },
+        agentId: "main",
+        sessionKey: "agent:main:required-placement-runtime",
+      }),
+    ).toBe("openclaw");
+  });
+
   it.each([
     {
       name: "embedded worker turns support paired devices",
@@ -92,23 +163,6 @@ describe("worker placement runtime capabilities", () => {
       executionMode: "worker-turn",
       devicePlacementSupported: true,
       devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
-    },
-    {
-      name: "remote execution projects exact device commands without consuming a worker slot",
-      runtimeId: "device-harness",
-      cloudPlacement: {
-        mode: "remote-exec",
-        devicePlacement: {
-          requiredNodeCommands: ["runtime.exec-server.v1"],
-          consumesWorkerSlot: false,
-        },
-      },
-      executionMode: "remote-exec",
-      devicePlacementSupported: true,
-      devicePlacement: {
-        requiredNodeCommands: ["runtime.exec-server.v1"],
-        consumesWorkerSlot: false,
-      },
     },
     {
       name: "device command requirements are deterministic and deduplicated",

@@ -12,6 +12,17 @@ test.each(["darwin", "linux", "win32"] as const)(
   },
 );
 
+const defaultPolicyPlan: Omit<
+  ReturnType<typeof resolveExecWrapperTrustPlan>,
+  "argv" | "policyArgv" | "dispatchChain"
+> = {
+  wrapperChain: [],
+  wrapperInvocations: [],
+  policyBlocked: false,
+  shellWrapperExecutable: false,
+  shellInlineCommand: null,
+};
+
 describe("resolveExecWrapperTrustPlan", () => {
   test.each([
     {
@@ -25,39 +36,20 @@ describe("resolveExecWrapperTrustPlan", () => {
         wrapperInvocations: [
           { wrapper: "command", sourceArgv: ["command", "curl", "https://example.invalid"] },
         ],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
       name: "does not unwrap path-qualified command tokens as shell builtins",
       enabled: process.platform !== "win32",
       argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
-      expected: {
-        argv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
-        policyArgv: ["/tmp/openclaw-test/command", "curl", "https://example.invalid"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
-      },
+      expected: {},
     },
     {
       name: "does not unwrap command tokens on Windows",
       enabled: true,
       argv: ["command", "curl", "https://example.invalid"],
       platform: "win32" as const,
-      expected: {
-        argv: ["command", "curl", "https://example.invalid"],
-        policyArgv: ["command", "curl", "https://example.invalid"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
-      },
+      expected: {},
     },
     {
       name: "unwraps command argv carriers through transparent dispatch wrappers",
@@ -71,9 +63,6 @@ describe("resolveExecWrapperTrustPlan", () => {
           { wrapper: "env", sourceArgv: ["env", "command", "--", "python3", "/tmp/run.py"] },
           { wrapper: "command", sourceArgv: ["command", "--", "python3", "/tmp/run.py"] },
         ],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -85,9 +74,6 @@ describe("resolveExecWrapperTrustPlan", () => {
         policyArgv: ["printf", "ok"],
         wrapperChain: ["builtin"],
         wrapperInvocations: [{ wrapper: "builtin", sourceArgv: ["builtin", "printf", "ok"] }],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -101,9 +87,7 @@ describe("resolveExecWrapperTrustPlan", () => {
         wrapperInvocations: [
           { wrapper: "exec", sourceArgv: ["exec", "-a", "friendly-name", "bash", "/tmp/run.sh"] },
         ],
-        policyBlocked: false,
         shellWrapperExecutable: true,
-        shellInlineCommand: null,
       },
     },
     {
@@ -111,13 +95,7 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["tcsh", "-c", "echo hi"],
       expected: {
-        argv: ["tcsh", "-c", "echo hi"],
-        policyArgv: ["tcsh", "-c", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
-        shellInlineCommand: null,
       },
     },
     {
@@ -125,11 +103,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["nu", "--commands", "echo hi"],
       expected: {
-        argv: ["nu", "--commands", "echo hi"],
-        policyArgv: ["nu", "--commands", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -139,11 +112,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["nu", "--execute", "echo hi"],
       expected: {
-        argv: ["nu", "--execute", "echo hi"],
-        policyArgv: ["nu", "--execute", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -153,13 +121,7 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
       expected: {
-        argv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
-        policyArgv: ["nu", "--config=/tmp/evil.nu", "--commands", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
-        shellInlineCommand: null,
       },
     },
     {
@@ -167,13 +129,7 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
       expected: {
-        argv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
-        policyArgv: ["nu", "--env-config", "/tmp/evil.nu", "--commands", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
-        shellInlineCommand: null,
       },
     },
     {
@@ -181,11 +137,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["yash", "--cmdline", "echo hi"],
       expected: {
-        argv: ["yash", "--cmdline", "echo hi"],
-        policyArgv: ["yash", "--cmdline", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -195,11 +146,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["yash", "-xc", "echo hi"],
       expected: {
-        argv: ["yash", "-xc", "echo hi"],
-        policyArgv: ["yash", "-xc", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -209,14 +155,8 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: process.platform !== "win32",
       argv: ["command", "-v", "curl"],
       expected: {
-        argv: ["command", "-v", "curl"],
-        policyArgv: ["command", "-v", "curl"],
-        wrapperChain: [],
-        wrapperInvocations: [],
         policyBlocked: true,
         blockedWrapper: "command",
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -224,14 +164,8 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: process.platform !== "win32",
       argv: ["command", "-p", "curl", "https://example.invalid"],
       expected: {
-        argv: ["command", "-p", "curl", "https://example.invalid"],
-        policyArgv: ["command", "-p", "curl", "https://example.invalid"],
-        wrapperChain: [],
-        wrapperInvocations: [],
         policyBlocked: true,
         blockedWrapper: "command",
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -248,7 +182,6 @@ describe("resolveExecWrapperTrustPlan", () => {
             sourceArgv: ["/usr/bin/caffeinate", "-d", "-w", "42", "sh", "-c", "echo hi"],
           },
         ],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -268,7 +201,6 @@ describe("resolveExecWrapperTrustPlan", () => {
           },
           { wrapper: "busybox", sourceArgv: ["busybox", "sh", "-c", "echo hi"] },
         ],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -278,9 +210,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: process.platform === "darwin" || process.platform === "freebsd",
       argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
       expected: {
-        argv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
-        policyArgv: ["/usr/bin/script", "-q", "/dev/null", "sh", "-c", "echo hi"],
-        wrapperChain: [],
         wrapperInvocations: [
           {
             wrapper: "script",
@@ -289,8 +218,6 @@ describe("resolveExecWrapperTrustPlan", () => {
         ],
         policyBlocked: true,
         blockedWrapper: "script",
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -307,7 +234,6 @@ describe("resolveExecWrapperTrustPlan", () => {
             sourceArgv: ["/usr/bin/sandbox-exec", "-p", "(allow default)", "sh", "-c", "echo hi"],
           },
         ],
-        policyBlocked: false,
         shellWrapperExecutable: true,
         shellInlineCommand: "echo hi",
       },
@@ -316,42 +242,20 @@ describe("resolveExecWrapperTrustPlan", () => {
       name: "keeps package-manager exec argv as the execution trust target",
       enabled: true,
       argv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
-      expected: {
-        argv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
-        policyArgv: ["pnpm", "--reporter", "silent", "exec", "--", "tsx", "./run.ts"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
-      },
+      expected: {},
     },
     {
       name: "keeps package-manager shell-call mode outside generic wrapper policy",
       enabled: true,
       argv: ["npx", "--call", "sh -c 'echo hi'"],
-      expected: {
-        argv: ["npx", "--call", "sh -c 'echo hi'"],
-        policyArgv: ["npx", "--call", "sh -c 'echo hi'"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
-      },
+      expected: {},
     },
     {
       name: "omits startup shell inline payloads from trust plans",
       enabled: process.platform !== "win32",
       argv: ["bash", "--login", "-c", "echo hi"],
       expected: {
-        argv: ["bash", "--login", "-c", "echo hi"],
-        policyArgv: ["bash", "--login", "-c", "echo hi"],
-        wrapperChain: [],
-        wrapperInvocations: [],
-        policyBlocked: false,
         shellWrapperExecutable: true,
-        shellInlineCommand: null,
       },
     },
     {
@@ -359,14 +263,8 @@ describe("resolveExecWrapperTrustPlan", () => {
       enabled: true,
       argv: ["busybox", "sed", "-n", "1p"],
       expected: {
-        argv: ["busybox", "sed", "-n", "1p"],
-        policyArgv: ["busybox", "sed", "-n", "1p"],
-        wrapperChain: [],
-        wrapperInvocations: [],
         policyBlocked: true,
         blockedWrapper: "busybox",
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -387,8 +285,6 @@ describe("resolveExecWrapperTrustPlan", () => {
         ],
         policyBlocked: true,
         blockedWrapper: "busybox",
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
     {
@@ -398,7 +294,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       expected: {
         argv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
         policyArgv: ["/usr/bin/env", "FOO=bar", "sh", "-lc", "echo hi"],
-        wrapperChain: [],
         wrapperInvocations: [
           {
             wrapper: "time",
@@ -408,8 +303,6 @@ describe("resolveExecWrapperTrustPlan", () => {
         ],
         policyBlocked: true,
         blockedWrapper: "env",
-        shellWrapperExecutable: false,
-        shellInlineCommand: null,
       },
     },
   ])("$name", ({ enabled, argv, depth, platform, expected }) => {
@@ -421,6 +314,6 @@ describe("resolveExecWrapperTrustPlan", () => {
       depth,
       platform,
     );
-    expect(policyPlan).toEqual(expected);
+    expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
   });
 });

@@ -75,9 +75,10 @@ const stubManager = {
   close: vi.fn(async () => await closeImpl()),
 };
 
-const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) =>
-  getManagerImpl ? await getManagerImpl(params) : { manager: stubManager },
-);
+const getMemorySearchManagerMock = vi.fn(async (params: MemoryManagerParams) => ({
+  debug: { backend: "builtin", purpose: params.purpose ?? "default", managerMs: 0 },
+  ...(getManagerImpl ? await getManagerImpl(params) : { manager: stubManager }),
+}));
 const readAgentMemoryFileMock = vi.fn(
   async (params: MemoryReadParams) => await readFileImpl(params),
 );
@@ -168,10 +169,6 @@ export function getMemorySyncMockCalls(): number {
 
 export function getMemoryCloseMockCalls(): number {
   return stubManager.close.mock.calls.length;
-}
-
-export function getMemorySearchManagerMockConfigs(): unknown[] {
-  return getMemorySearchManagerMock.mock.calls.map(([params]) => params.cfg);
 }
 
 export function getMemorySearchManagerMockParams(): MemoryManagerParams[] {

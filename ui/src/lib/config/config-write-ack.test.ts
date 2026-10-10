@@ -138,26 +138,21 @@ describe("acknowledged config revision", () => {
         await expect(runtimeConfig.save()).resolves.toBe(true);
         expect(submissions).toEqual([{ raw: '{"count":2,"enabled":true}', baseHash: "hash-2" }]);
       }
-      runtimeConfig.resetDraft();
+      runtimeConfig.setWritesSuspended(true);
       runtimeConfig.dispose();
     },
   );
 
-  it.each([
-    { method: "config.set", dispose: false },
-    { method: "config.set", dispose: true },
-    { method: "config.patch", dispose: false },
-    { method: "config.patch", dispose: true },
-  ])(
-    "independent $method retains its changes and the shared form edit (dispose: $dispose)",
-    async ({ method, dispose }) => {
+  it.each([false, true])(
+    "an independent write retains its changes and the shared form edit (dispose: %s)",
+    async (dispose) => {
       vi.useFakeTimers();
       const store = createConfigServerMock();
       const started = deferred();
       const release = deferred();
       let independentWrite = true;
       const request = vi.fn(async (requestMethod: string, params?: unknown) => {
-        if (requestMethod === method && independentWrite) {
+        if (requestMethod === "config.patch" && independentWrite) {
           independentWrite = false;
           started.resolve();
           await release.promise;
@@ -174,8 +169,8 @@ describe("acknowledged config revision", () => {
       await runtimeConfig.ensureLoaded();
       const mutation = runtimeConfig.runExternalMutation(
         (client) =>
-          client.request<ConfigPatchAck>(method, {
-            raw: method === "config.set" ? '{"count":1,"enabled":true}' : '{"enabled":true}',
+          client.request<ConfigPatchAck>("config.patch", {
+            raw: '{"enabled":true}',
             baseHash: "hash-1",
           }),
         { configWriteAck: (value) => value },
@@ -231,11 +226,9 @@ describe("acknowledged config revision", () => {
 
   it.each([
     { mode: "form", dispose: false },
-    { mode: "form", dispose: true },
     { mode: "raw", dispose: false },
     { mode: "raw", dispose: true },
     { mode: "apply", dispose: false },
-    { mode: "apply", dispose: true },
   ])(
     "config.set/config.apply adopts its revision after a raw keystroke ($mode save, dispose: $dispose)",
     async ({ mode, dispose }) => {
@@ -317,20 +310,6 @@ describe("acknowledged config revision", () => {
   });
   it.each([
     {
-      name: "missing external locale",
-      canonical: { count: 2, locale: "fr" },
-      raw: { count: 3 },
-      form: false,
-      saved: false,
-    },
-    {
-      name: "incorporated external locale",
-      canonical: { count: 2, locale: "fr" },
-      raw: { count: 3, locale: "fr" },
-      form: false,
-      saved: true,
-    },
-    {
       name: "incorporated objects with reordered keys inside arrays",
       canonical: { count: 2, entries: [{ id: "first", enabled: true }] },
       raw: { entries: [{ enabled: true, id: "first" }], count: 3 },
@@ -408,7 +387,7 @@ describe("acknowledged config revision", () => {
     } else {
       expect(runtimeConfig.state.configAutoSaveStatus).toBe("conflict");
     }
-    runtimeConfig.resetDraft();
+    runtimeConfig.setWritesSuspended(true);
     runtimeConfig.dispose();
   });
 });

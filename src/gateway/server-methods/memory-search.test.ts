@@ -24,9 +24,15 @@ import {
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const getActiveMemorySearchManagerCore = vi.hoisted(() => vi.fn());
+const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
+const isActiveMemoryProviderNative = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 
-vi.mock("../../plugins/memory-runtime.js", () => ({ getActiveMemorySearchManagerCore }));
+vi.mock("../../plugins/memory-runtime.js", () => ({
+  getActiveMemorySearchManagerCore,
+  isActiveMemoryProviderNative,
+  resolveActiveMemoryBackendConfig,
+}));
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   resolveDefaultAgentId,
@@ -46,7 +52,7 @@ function createConfig(workspaceDir: string): OpenClawConfig {
     },
     agents: {
       defaults: { workspace: workspaceDir },
-      list: [{ id: "main", default: true }],
+      entries: { main: {} },
     },
   };
 }
@@ -87,6 +93,8 @@ describe("memory.search gateway method", () => {
       layout: "state-only",
     });
     getActiveMemorySearchManagerCore.mockReset();
+    resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
+    isActiveMemoryProviderNative.mockReset().mockReturnValue(false);
     resolveDefaultAgentId.mockClear();
   });
 
@@ -109,6 +117,32 @@ describe("memory.search gateway method", () => {
       );
     }
     expect(getActiveMemorySearchManagerCore).not.toHaveBeenCalled();
+  });
+
+  it("keeps automatic rebuild disclosure when subsequent retrieval fails", async () => {
+    const cfg = createConfig(testState.workspaceDir);
+    const manager = createStubManager();
+    const notice = { sequence: 0, warning: "" };
+    manager.status.mockReturnValue({
+      backend: "builtin",
+      provider: "none",
+      dirty: false,
+      custom: { automaticRebuildNotice: notice },
+    });
+    manager.search.mockImplementation(async () => {
+      notice.sequence += 1;
+      notice.warning =
+        "Rebuilding may call the configured embedding provider and can incur provider cost.";
+      throw new Error("query retrieval failed");
+    });
+    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
+    const respond = await invokeMemorySearch({ query: "alpha" }, cfg);
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining(notice.warning) }),
+    );
+    expect(manager.close).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -149,7 +183,7 @@ describe("memory.search gateway method", () => {
     cfg.agents = {
       ...cfg.agents,
       ownership: "explicit",
-      list: [{ id: "ops" }, { id: "research" }],
+      entries: { ops: {}, research: {} },
     };
     resolveDefaultAgentId.mockImplementationOnce(() => {
       throw new AgentSelectionRequiredError(["ops", "research"], {
@@ -214,7 +248,7 @@ describe("memory.search gateway method", () => {
     const cfg = createConfig(testState.workspaceDir);
     cfg.agents = {
       ...cfg.agents,
-      list: [{ id: "main", default: true }, { id: configured }],
+      entries: { main: {}, [configured]: {} },
     };
     const result = {
       path: "memory/project-lantern.md",
@@ -269,6 +303,19 @@ describe("memory.search gateway method", () => {
         message: "memory plugin unavailable",
       }),
     );
+  });
+
+  it("does not ask a legacy memory runtime for its backend before searching", async () => {
+    getActiveMemorySearchManagerCore.mockResolvedValue({
+      manager: null,
+      error: "memory plugin unavailable",
+    });
+
+    await invokeMemorySearch({ query: "lantern" }, {});
+
+    expect(isActiveMemoryProviderNative).toHaveBeenCalledWith({ cfg: {}, agentId: "main" });
+    expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
+    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledOnce();
   });
 
   it("does not qualify routine pending index work as a search failure", async () => {
@@ -367,12 +414,15 @@ describe("memory.search gateway method", () => {
   });
 
   it("shares one format repair across concurrent transient Gateway searches", async () => {
-    const { memoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-      memoryRuntime: MemoryPluginRuntime;
+    const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
+      createMemoryRuntime: (host: {
+        runInBackgroundContext: <T>(run: () => T) => T;
+      }) => MemoryPluginRuntime;
       configureMemoryCoreDreamingState: (
         openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
       ) => void;
     }>("../../../extensions/memory-core/runtime-api.js");
+    const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     const stateEnv = testState.env;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
       createPluginStateKeyedStore<T>("memory-core", { ...options, env: stateEnv }),
@@ -425,6 +475,7 @@ describe("memory.search gateway method", () => {
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({
+            warning: expect.stringContaining("does not call an embedding provider"),
             results: [
               expect.objectContaining({
                 path: "memory/orchard.md",

@@ -3,8 +3,6 @@ import type { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { PluginManifestChannelCommandDefaults } from "./manifest-types.js";
 
 /** package.json OpenClaw metadata used for plugin setup and catalog discovery. */
-type PluginPackageChannelApprovalFlag = "native";
-
 export type PluginPackageChannel = {
   id?: string;
   label?: string;
@@ -22,7 +20,7 @@ export type PluginPackageChannel = {
   selectionExtras?: readonly string[];
   markdownCapable?: boolean;
   /** Closed manifest flags for approval behavior available before the channel runtime loads. */
-  approvalFlags?: readonly PluginPackageChannelApprovalFlag[];
+  approvalFlags?: readonly "native"[];
   exposure?: {
     configured?: boolean;
     setup?: boolean;
@@ -43,6 +41,7 @@ export type PluginPackageChannel = {
   persistedAuthState?: {
     specifier?: string;
     exportName?: string;
+    backingStore?: "plugin-state";
   };
   doctorCapabilities?: PluginPackageChannelDoctorCapabilities;
   /** Typed, serializable setup fields available before plugin runtime load. */
@@ -123,12 +122,10 @@ export type PackageExtensionResolution =
   | { status: "empty"; entries: [] }
   | { status: "invalid"; entries: []; error: string };
 
-type ManifestKey = typeof MANIFEST_KEY;
-
 export type PackageManifest = {
   name?: string;
   version?: string;
   description?: string;
   dependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
-} & Partial<Record<ManifestKey, OpenClawPackageManifest>>;
+} & Partial<Record<typeof MANIFEST_KEY, OpenClawPackageManifest>>;

@@ -1,17 +1,26 @@
 import { consume } from "@lit/context";
-import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
+import type {
+  CanvasDocumentViewResult,
+  SessionsFilesAssetsResult,
+} from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_TIMEOUT_MS } from "../../../lib/widget-sandbox-host.ts";
 import { OpenClawLightDomContentsElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
+import { prepareHtmlPreviewAssets } from "./chat-html-preview-assets.ts";
+import { prepareHtmlPreviewLinks } from "./chat-html-preview-links.ts";
+import type { SessionFileSource } from "./chat-sidebar-content-types.ts";
+
+registerFilePreviewEnglish();
 
 type PreviewBinding = {
   context: ApplicationContext;
@@ -19,6 +28,7 @@ type PreviewBinding = {
   generation: number;
   html: string;
   sourceIdentity: string;
+  sessionFileSource?: SessionFileSource;
 };
 
 /** Only transfers document bytes. Ordinary files never receive widget host APIs. */
@@ -29,10 +39,12 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
 
   @property({ attribute: false }) html = "";
   @property() sourceIdentity = "";
+  @property({ attribute: false }) sessionFileSource?: SessionFileSource;
   @property() override title = "";
   @state() private view?: CanvasDocumentViewResult;
   @state() private error = "";
   @state() private rendered = false;
+  @state() private omittedAssets = 0;
   private binding?: PreviewBinding;
   private sandboxHost?: WidgetSandboxHost;
   private sandboxUrl = "";
@@ -59,9 +71,8 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
 
   constructor() {
     super();
-    void new SubscriptionsController(this).watch(
+    void new SubscriptionsController(this).watchStore(
       () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
       () => {
         if (this.binding && !this.isCurrent(this.binding)) {
           this.clearView();
@@ -86,6 +97,7 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     this.sandboxHost?.dispose();
     this.sandboxHost = undefined;
     this.rendered = false;
+    this.omittedAssets = 0;
   }
 
   private clearView(): void {
@@ -105,7 +117,10 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
       this.context.gateway.snapshot.client === binding.client &&
       binding.generation === getCanvasWidgetFrameConnectionGeneration() &&
       binding.html === this.html &&
-      binding.sourceIdentity === this.sourceIdentity,
+      binding.sourceIdentity === this.sourceIdentity &&
+      binding.sessionFileSource?.sessionKey === this.sessionFileSource?.sessionKey &&
+      binding.sessionFileSource?.agentId === this.sessionFileSource?.agentId &&
+      binding.sessionFileSource?.path === this.sessionFileSource?.path,
     );
   }
 
@@ -125,6 +140,7 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
       client,
       html: this.html,
       sourceIdentity: this.sourceIdentity,
+      sessionFileSource: this.sessionFileSource && { ...this.sessionFileSource },
       generation: getCanvasWidgetFrameConnectionGeneration(),
     };
     this.binding = binding;
@@ -160,14 +176,7 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     const binding = this.binding;
     const frame = this.querySelector<HTMLIFrameElement>("iframe");
     const view = this.view;
-    if (
-      this.mode === "strict" ||
-      !frame ||
-      !view ||
-      !this.isCurrent(binding) ||
-      this.sandboxHost ||
-      this.error
-    ) {
+    if (!frame || !view || !this.isCurrent(binding) || this.sandboxHost || this.error) {
       return;
     }
     const generation = this.frameGeneration;
@@ -180,12 +189,33 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
         this.fail(error);
       }
     };
+    const allowScripts = this.mode !== "strict";
     this.sandboxHost = new WidgetSandboxHost({
       frame,
       sandboxUrl: this.sandboxUrl,
       sandboxOrigin: this.sandboxOrigin,
       documentKey: String(this.frameGeneration),
-      loadDocument: async () => view.html,
+      allowScripts,
+      loadDocument: async () => {
+        let content = prepareHtmlPreviewLinks(view.html, allowScripts);
+        const source = binding.sessionFileSource;
+        if (source) {
+          const prepared = await prepareHtmlPreviewAssets(content, allowScripts, (refs) => {
+            if (!currentFrame()) {
+              throw new DOMException("Preview changed", "AbortError");
+            }
+            return binding.client.request<SessionsFilesAssetsResult>("sessions.files.assets", {
+              ...source,
+              refs,
+            });
+          });
+          if (currentFrame()) {
+            this.omittedAssets = prepared.omitted;
+          }
+          content = prepared.html;
+        }
+        return content;
+      },
       onLoaded: () => {},
       onRendered: () => {
         if (currentFrame()) {
@@ -213,11 +243,7 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     for (const port of event.ports) {
       port.close();
     }
-    if (
-      this.mode === "strict" ||
-      !this.isCurrent(this.binding) ||
-      event.origin !== this.sandboxOrigin
-    ) {
+    if (!this.isCurrent(this.binding) || event.origin !== this.sandboxOrigin) {
       return;
     }
     host.handleMessage(event);
@@ -242,19 +268,24 @@ export class ChatHtmlPreview extends OpenClawLightDomContentsElement {
     if (!this.view) {
       return html`<div role="status">${t("common.loading")}</div>`;
     }
-    const scripts = this.mode !== "strict";
     const binding = this.binding;
     const generation = this.frameGeneration;
     return html`
-      ${scripts && !this.rendered ? html`<div role="status">${t("common.loading")}</div>` : nothing}
+      ${
+        this.omittedAssets
+          ? html`<div class="file-view__save-notice" role="status">
+              ${t("chat.detailPanel.assetsUnavailable", { count: String(this.omittedAssets) })}
+            </div>`
+          : nothing
+      }
+      ${!this.rendered ? html`<div role="status">${t("common.loading")}</div>` : nothing}
       ${keyed(
         this.frameGeneration,
         html`<iframe
           class="chat-html-preview__frame"
           title=${this.title}
-          src=${scripts ? this.sandboxUrl : nothing}
-          srcdoc=${scripts ? nothing : this.view.html}
-          sandbox=${scripts ? "allow-scripts allow-same-origin allow-forms" : ""}
+          src=${this.sandboxUrl}
+          sandbox="allow-scripts allow-same-origin allow-forms"
           referrerpolicy="origin"
           @error=${(event: Event) => {
             if (

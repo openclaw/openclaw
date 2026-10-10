@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate, setTimeout } from "node:timers/promises";
-import { apfsFilesystem, type ApfsFileMetadata } from "./filesystem-apfs.native.js";
-import type { WorktreeFilesystemOptions } from "./filesystem-backend.js";
+import type { CloneFileMetadata } from "../../infra/fs-safe-copy-worker-contract.js";
+import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
+import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 type IndexEntry = { offset: number; name: string };
 
@@ -76,14 +77,14 @@ function parseIndex(data: Buffer) {
     }
     offset = next;
   }
-  return { algorithm, entries, entriesEnd, extensions };
+  return { algorithm, hashSize, entries, entriesEnd, extensions };
 }
 
 function low32(value: bigint): number {
   return Number(value & 0xffffffffn);
 }
 
-function matchesSource(data: Buffer, offset: number, stat: ApfsFileMetadata): boolean {
+function matchesSource(data: Buffer, offset: number, stat: CloneFileMetadata): boolean {
   const size = low32(stat.size) || (stat.size ? 0x80000000 : 0);
   return (
     stat.type === 1 &&
@@ -141,58 +142,79 @@ export async function copyApfsCloneIndex(
   if (remainingMs > 0) {
     await setTimeout(remainingMs, undefined, { signal: options.signal });
   }
-  const updated = Buffer.from(data.subarray(0, parsed.entriesEnd));
+  const bodySize =
+    parsed.entriesEnd + parsed.extensions.reduce((size, extension) => size + extension.length, 0);
+  const updated = Buffer.allocUnsafe(bodySize + parsed.hashSize);
+  data.copy(updated, 0, 0, parsed.entriesEnd);
+  let extensionOffset = parsed.entriesEnd;
+  for (const extension of parsed.extensions) {
+    extension.copy(updated, extensionOffset);
+    extensionOffset += extension.length;
+  }
   const sourcePrefix = path.join(source, ".") + path.sep;
   const destinationPrefix = path.join(destination, ".") + path.sep;
   const indexSecond = Number(stamp.mtimeNs / 1_000_000_000n);
-  for (const [i, entry] of parsed.entries.entries()) {
-    if (i % 256 === 0) {
-      await setImmediate();
-      options.signal?.throwIfAborted();
-      options.commitGuard();
+  for (let start = 0; start < parsed.entries.length; start += 256) {
+    const entries: IndexEntry[] = [];
+    const end = Math.min(start + 256, parsed.entries.length);
+    for (let index = start; index < end; index++) {
+      const entry = parsed.entries[index]!;
+      if (
+        (data.readUInt32BE(entry.offset + 24) & 0xf000) === 0x8000 &&
+        data.readUInt32BE(entry.offset + 8) < indexSecond
+      ) {
+        entries.push(entry);
+      }
     }
-    const offset = entry.offset;
-    if (
-      (data.readUInt32BE(offset + 24) & 0xf000) !== 0x8000 ||
-      data.readUInt32BE(offset + 8) >= indexSecond
-    ) {
+    options.signal?.throwIfAborted();
+    options.commitGuard();
+    if (entries.length === 0) {
+      await setImmediate();
       continue;
     }
     const snapshotSecond = Math.floor(Date.now() / 1000);
-    const original = apfsFilesystem.readFileMetadata(sourcePrefix + entry.name);
-    const cloned = apfsFilesystem.readFileMetadata(destinationPrefix + entry.name);
-    if (
-      !original ||
-      !cloned ||
-      !matchesSource(data, offset, original) ||
-      cloned.type !== 1 ||
-      cloned.ctimeSec >= snapshotSecond ||
-      !original.cloneId ||
-      original.cloneId !== cloned.cloneId ||
-      original.dev !== cloned.dev ||
-      original.ino === cloned.ino ||
-      original.size !== cloned.size ||
-      original.mtimeSec !== cloned.mtimeSec ||
-      original.mtimeNs !== cloned.mtimeNs ||
-      (original.mode & 0o100) !== (cloned.mode & 0o100)
-    ) {
-      continue;
+    const paths: string[] = [];
+    for (const entry of entries) {
+      paths.push(sourcePrefix + entry.name, destinationPrefix + entry.name);
     }
-    // Keep OIDs, modes, mtime and size. A mismatch or unsupported entry is left
-    // untouched for Git to rehash instead of blessing current filesystem data.
-    updated.writeUInt32BE(cloned.ctimeSec >>> 0, offset);
-    updated.writeUInt32BE(cloned.ctimeNs, offset + 4);
-    updated.writeUInt32BE(cloned.dev, offset + 16);
-    updated.writeUInt32BE(low32(cloned.ino), offset + 20);
-    updated.writeUInt32BE(cloned.uid, offset + 28);
-    updated.writeUInt32BE(cloned.gid, offset + 32);
+    const metadata = await nativeWorktreeFilesystem.readMetadata(paths, options);
+    options.signal?.throwIfAborted();
+    options.commitGuard();
+    for (let index = 0; index < entries.length; index++) {
+      const offset = entries[index]!.offset;
+      const original = metadata[index * 2];
+      const cloned = metadata[index * 2 + 1];
+      if (
+        !original ||
+        !cloned ||
+        !matchesSource(data, offset, original) ||
+        cloned.type !== 1 ||
+        cloned.ctimeSec >= snapshotSecond ||
+        !original.cloneId ||
+        original.cloneId !== cloned.cloneId ||
+        original.dev !== cloned.dev ||
+        original.ino === cloned.ino ||
+        original.size !== cloned.size ||
+        original.mtimeSec !== cloned.mtimeSec ||
+        original.mtimeNs !== cloned.mtimeNs ||
+        (original.mode & 0o100) !== (cloned.mode & 0o100)
+      ) {
+        continue;
+      }
+      // Keep OIDs, modes, mtime and size. A mismatch or unsupported entry is left
+      // untouched for Git to rehash instead of blessing current filesystem data.
+      updated.writeUInt32BE(cloned.ctimeSec >>> 0, offset);
+      updated.writeUInt32BE(cloned.ctimeNs, offset + 4);
+      updated.writeUInt32BE(cloned.dev, offset + 16);
+      updated.writeUInt32BE(low32(cloned.ino), offset + 20);
+      updated.writeUInt32BE(cloned.uid, offset + 28);
+      updated.writeUInt32BE(cloned.gid, offset + 32);
+    }
   }
-  const body = Buffer.concat([updated, ...parsed.extensions]);
+  const body = updated.subarray(0, bodySize);
   options.signal?.throwIfAborted();
   options.commitGuard();
-  await fs.writeFile(
-    destinationIndex,
-    Buffer.concat([body, createHash(parsed.algorithm).update(body).digest()]),
-  );
+  createHash(parsed.algorithm).update(body).digest().copy(updated, bodySize);
+  await fs.writeFile(destinationIndex, updated);
   return true;
 }

@@ -137,7 +137,8 @@ export type BaseOpenAIStreamOptions = StreamOptions & {
 
 /** Superset retained under the provider's published compatibility type name. */
 export type OpenAICompletionsOptions = BaseOpenAIStreamOptions & {
+  streaming?: boolean;
   toolChoice?: OpenAICompletionsToolChoice;
-  reasoning?: OpenAIReasoningEffort;
-  reasoningEffort?: OpenAIReasoningEffort;
+  reasoning?: OpenAIReasoningEffort | "off";
+  reasoningEffort?: OpenAIReasoningEffort | "off";
 };

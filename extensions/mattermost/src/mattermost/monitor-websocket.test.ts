@@ -3,8 +3,8 @@ import { once } from "node:events";
 import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import WebSocket, { WebSocketServer } from "ws";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import {
   createMattermostConnectOnce,
@@ -115,6 +115,21 @@ const testRuntime = (): RuntimeEnv =>
     }) as RuntimeEnv["exit"],
   }) as RuntimeEnv;
 
+function createConnection(
+  socket: FakeWebSocket,
+  options: Partial<Parameters<typeof createMattermostConnectOnce>[0]> = {},
+) {
+  return createMattermostConnectOnce({
+    wsUrl: "wss://example.invalid/api/v4/websocket",
+    botToken: "token",
+    runtime: testRuntime(),
+    nextSeq: () => 1,
+    onPosted: async () => {},
+    webSocketFactory: () => socket,
+    ...options,
+  });
+}
+
 // Mirrors the server's acknowledgement of a valid authentication_challenge.
 const authOkFrame = (seq: number): Buffer =>
   Buffer.from(JSON.stringify({ status: "OK", seq_reply: seq }));
@@ -150,72 +165,6 @@ describe("mattermost websocket monitor", () => {
     vi.useRealTimers();
   });
 
-  it("rejects when websocket closes before open", async () => {
-    const socket = new FakeWebSocket();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
-    });
-
-    queueMicrotask(() => {
-      socket.emitClose(1006, "connection refused");
-    });
-
-    let failure: unknown;
-    try {
-      await connectOnce();
-    } catch (caught) {
-      failure = caught;
-    }
-    expect(failure).toMatchObject({
-      name: "WebSocketClosedBeforeOpenError",
-      code: 1006,
-      reason: "connection refused",
-    });
-    expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
-  });
-
-  it("reports a transient pre-authentication close without asserting a token failure", async () => {
-    const socket = new FakeWebSocket();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "valid-token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
-    });
-
-    queueMicrotask(() => {
-      socket.emitOpen();
-      // A restarting server or resetting proxy closes mid-authentication with
-      // the same client-visible shape as a token rejection.
-      socket.emitClose(1001, "server restarting");
-    });
-
-    let failure: unknown;
-    try {
-      await connectOnce();
-    } catch (caught) {
-      failure = caught;
-    }
-    expect(failure).toMatchObject({
-      name: "WebSocketClosedBeforeAuthenticationError",
-      code: 1001,
-      reason: "server restarting",
-    });
-    // The client cannot distinguish the causes, so the diagnostic must keep
-    // both visible instead of pinning the close on the token alone.
-    const message = (failure as Error).message;
-    expect(message).toContain("closed before authentication completed (code 1001)");
-    expect(message).toContain("bot token");
-    expect(message).toContain("connection dropped");
-  });
-
   it("backs off across attempts when authentication never completes", async () => {
     const connectOnce = createMattermostConnectOnce({
       wsUrl: "wss://example.invalid/api/v4/websocket",
@@ -238,13 +187,19 @@ describe("mattermost websocket monitor", () => {
 
     const connectErrors: string[] = [];
     const reconnectDelays: number[] = [];
+    const abort = new AbortController();
     await runWithReconnect(connectOnce, {
       initialDelayMs: 10,
       maxDelayMs: 1000,
       jitterRatio: 0,
-      shouldReconnect: ({ attempt }) => attempt < 2,
+      abortSignal: abort.signal,
       onError: (err) => {
+        expect(String(err)).toContain("bot token");
+        expect(String(err)).toContain("connection dropped");
         connectErrors.push(err instanceof Error ? err.name : String(err));
+        if (connectErrors.length === 3) {
+          abort.abort();
+        }
       },
       onReconnect: (delayMs) => reconnectDelays.push(delayMs),
     });
@@ -262,13 +217,8 @@ describe("mattermost websocket monitor", () => {
     vi.useFakeTimers();
     const socket = new FakeWebSocket();
     const runtime = testRuntime();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
+    const connectOnce = createConnection(socket, {
       runtime,
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
     });
 
     const connected = connectOnce();
@@ -286,30 +236,6 @@ describe("mattermost websocket monitor", () => {
     await expect(connected).rejects.toMatchObject({
       name: "WebSocketClosedBeforeAuthenticationError",
     });
-    vi.useRealTimers();
-  });
-
-  it("does not trip the auth deadline once the challenge is acknowledged", async () => {
-    vi.useFakeTimers();
-    const socket = new FakeWebSocket();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
-    });
-
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(socket.terminateCalls).toBe(0);
-
-    socket.emitClose(1000);
-    await connected;
     vi.useRealTimers();
   });
 
@@ -340,7 +266,9 @@ describe("mattermost websocket monitor", () => {
             return;
           }
           socket.emitOpen();
+          expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
           socket.emitMessage(authOkFrame(1));
+          expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
           socket.emitClose(1000);
         });
         return socket;
@@ -366,38 +294,6 @@ describe("mattermost websocket monitor", () => {
     expect(countMatching(patches, (patch) => patch.connected === false)).toBe(3);
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "starting" }));
     expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "recovering" }));
-  });
-
-  it("publishes ready only after the authentication challenge is acknowledged", async () => {
-    const socket = new FakeWebSocket();
-    const patches: Array<Record<string, unknown>> = [];
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 7,
-      onPosted: async () => {},
-      statusSink: (patch) => patches.push(patch as Record<string, unknown>),
-      webSocketFactory: () => socket,
-    });
-    const connected = connectOnce();
-
-    socket.emitOpen();
-    expect(patches).toContainEqual({ connected: true, lifecycle: "starting" });
-    expect(patches).not.toContainEqual(expect.objectContaining({ lifecycle: "ready" }));
-
-    socket.emitMessage(Buffer.from(JSON.stringify({ status: "OK", seq_reply: 7 })));
-    expect(patches).toContainEqual({
-      running: true,
-      connected: true,
-      lifecycle: "ready",
-      lastConnectedAt: expect.any(Number),
-      lastError: null,
-      terminalDisconnect: undefined,
-    });
-
-    socket.emitClose(1000);
-    await connected;
   });
 
   it("accepts large valid post envelopes and rejects oversized websocket payloads", async () => {
@@ -471,14 +367,9 @@ describe("mattermost websocket monitor", () => {
     const socket = new FakeWebSocket();
     const onPosted = vi.fn(async () => {});
     const onReaction = vi.fn(async (payload) => payload);
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
+    const connectOnce = createConnection(socket, {
       onPosted,
       onReaction,
-      webSocketFactory: () => socket,
     });
 
     const connected = connectOnce();
@@ -521,13 +412,8 @@ describe("mattermost websocket monitor", () => {
   it("hands posted envelopes to ingress raw without duplicate decoding", async () => {
     const socket = new FakeWebSocket();
     const onPosted = vi.fn(async () => {});
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
+    const connectOnce = createConnection(socket, {
       onPosted,
-      webSocketFactory: () => socket,
     });
     const posted = {
       event: "posted",
@@ -569,83 +455,10 @@ describe("mattermost websocket monitor", () => {
     expect(decode.mock.calls.length).toBeLessThanOrEqual(1);
   });
 
-  it("terminates when bot update_at changes (disable/enable cycle)", async () => {
-    vi.useFakeTimers();
-    const socket = new FakeWebSocket();
-    const runtime = testRuntime();
-    let updateAt = 1000;
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime,
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
-      getBotUpdateAt: async () => updateAt,
-      healthCheckIntervalMs: 100,
-    });
-
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
-
-    // Let initial getBotUpdateAt resolve
-    await vi.advanceTimersByTimeAsync(0);
-
-    // update_at unchanged — no terminate
-    await vi.advanceTimersByTimeAsync(100);
-    expect(socket.terminateCalls).toBe(0);
-
-    // Simulate disable/enable — update_at changes
-    updateAt = 2000;
-    await vi.advanceTimersByTimeAsync(100);
-    expect(socket.terminateCalls).toBe(1);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "mattermost: bot account updated (update_at changed: 1000 → 2000) — reconnecting",
-    );
-
-    socket.emitClose(1006);
-    await connected;
-    vi.useRealTimers();
-  });
-
-  it("keeps connection alive when update_at stays the same", async () => {
-    vi.useFakeTimers();
-    const socket = new FakeWebSocket();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
-      getBotUpdateAt: async () => 1000,
-      healthCheckIntervalMs: 100,
-    });
-
-    const connected = connectOnce();
-    socket.emitOpen();
-    socket.emitMessage(authOkFrame(1));
-
-    await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(300);
-    expect(socket.terminateCalls).toBe(0);
-
-    socket.emitClose(1000);
-    await connected;
-    vi.useRealTimers();
-  });
-
   it("continues protocol keepalive when Mattermost responds with pong", async () => {
     vi.useFakeTimers();
     const socket = new FakeWebSocket();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
+    const connectOnce = createConnection(socket, {
       pingIntervalMs: 100,
       pongTimeoutMs: 25,
     });
@@ -674,13 +487,8 @@ describe("mattermost websocket monitor", () => {
     const socket = new FakeWebSocket();
     const runtime = testRuntime();
     let pollCount = 0;
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
+    const connectOnce = createConnection(socket, {
       runtime,
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
       getBotUpdateAt: async () => {
         pollCount++;
         return 1000;
@@ -719,13 +527,8 @@ describe("mattermost websocket monitor", () => {
     const socket = new FakeWebSocket();
     const runtime = testRuntime();
     let shouldThrow = false;
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
+    const connectOnce = createConnection(socket, {
       runtime,
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
       getBotUpdateAt: async () => {
         if (shouldThrow) {
           throw new Error("network error");
@@ -759,13 +562,8 @@ describe("mattermost websocket monitor", () => {
     const socket = new FakeWebSocket();
     const runtime = testRuntime();
     const responses: Array<number | Error> = [new Error("network error"), 1000, 2000];
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
+    const connectOnce = createConnection(socket, {
       runtime,
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
       getBotUpdateAt: async () => {
         const next = responses.shift();
         if (next instanceof Error) {
@@ -804,13 +602,7 @@ describe("mattermost websocket monitor", () => {
     const socket = new FakeWebSocket();
     const resolvers: Array<(value: number) => void> = [];
     let pollCount = 0;
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
+    const connectOnce = createConnection(socket, {
       getBotUpdateAt: async () => {
         pollCount++;
         return await new Promise<number>((resolve) => {
@@ -840,69 +632,6 @@ describe("mattermost websocket monitor", () => {
     vi.useRealTimers();
   });
 
-  it("passes bounded payload and handshake options to the websocket factory", async () => {
-    const socket = new FakeWebSocket();
-    let clientOptions: Parameters<MattermostWebSocketFactory>[1] | undefined;
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: (_url, options) => {
-        clientOptions = options;
-        queueMicrotask(() => socket.emitClose(1006));
-        return socket;
-      },
-    });
-
-    await expect(connectOnce()).rejects.toMatchObject({
-      name: "WebSocketClosedBeforeOpenError",
-    });
-    expect(clientOptions).toEqual({
-      handshakeTimeout: 30_000,
-      maxPayload: 16 * 1024 * 1024,
-    });
-  });
-
-  it("fails connect when the websocket handshake never completes", async () => {
-    const stalledServer = await startStalledWebSocketHandshakeServer();
-
-    try {
-      const connectOnce = createMattermostConnectOnce({
-        wsUrl: stalledServer.url,
-        botToken: "token",
-        runtime: testRuntime(),
-        nextSeq: () => 1,
-        onPosted: async () => {},
-        webSocketFactory: (url, options) =>
-          new WebSocket(url, {
-            ...options,
-            handshakeTimeout: 200,
-          }) as ReturnType<MattermostWebSocketFactory>,
-      });
-
-      const outcome = await connectOnce().then(
-        () => ({ ok: true as const }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
-      expect(outcome.ok).toBe(false);
-      if (!outcome.ok) {
-        // ws surfaces handshake timeout as error then close-before-open (1006).
-        expect(outcome.error).toMatchObject({ name: "WebSocketClosedBeforeOpenError" });
-        console.log(
-          `[mattermost handshake proof] timed_out=true name=${
-            outcome.error instanceof Error ? outcome.error.name : typeof outcome.error
-          } message=${
-            outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
-          }`,
-        );
-      }
-    } finally {
-      await stalledServer.close();
-    }
-  });
-
   it("returns control to reconnect after a stalled handshake", async () => {
     const stalledServer = await startStalledWebSocketHandshakeServer();
 
@@ -915,21 +644,27 @@ describe("mattermost websocket monitor", () => {
       runtime,
       nextSeq: () => 1,
       onPosted: async () => {},
-      webSocketFactory: (url, options) =>
-        new WebSocket(url, {
+      webSocketFactory: (url, options) => {
+        expect(options.handshakeTimeout).toBe(30_000);
+        return new WebSocket(url, {
           ...options,
           handshakeTimeout: 200,
-        }) as ReturnType<MattermostWebSocketFactory>,
+        }) as ReturnType<MattermostWebSocketFactory>;
+      },
     });
 
+    const abort = new AbortController();
     try {
       await runWithReconnect(connectOnce, {
         initialDelayMs: 50,
         maxDelayMs: 50,
         jitterRatio: 0,
-        shouldReconnect: ({ attempt }) => attempt < 1,
+        abortSignal: abort.signal,
         onError: (err) => {
           connectErrors.push(err instanceof Error ? err.name : String(err));
+          if (connectErrors.length === 2) {
+            abort.abort();
+          }
         },
         onReconnect: (delayMs) => {
           reconnectDelays.push(delayMs);

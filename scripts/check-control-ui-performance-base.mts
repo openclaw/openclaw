@@ -8,6 +8,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createControlUiPrecompressedAssetVariants } from "../ui/vite.config.ts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { isRecord } from "./lib/record-shared.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(path.join(repoRoot, "ui/package.json"));
@@ -19,9 +20,17 @@ const COMPARISON_BUILD_ENV = {
   OPENCLAW_CONTROL_UI_RELEASE_BUILD: "1",
 } satisfies NodeJS.ProcessEnv;
 
-function run(command: string, args: string[], cwd = repoRoot, env = process.env): void {
+function run(
+  command: string,
+  args: string[],
+  cwd = repoRoot,
+  env = process.env,
+  acceptFailure = false,
+): boolean {
   const result = spawnSync(command, args, { cwd, env, stdio: "inherit" });
-  if (result.error || result.status !== 0) {
+  // A historical source mismatch may exit nonzero; a signal means no trustworthy
+  // build outcome exists and must never enter the absolute-only fallback.
+  if (result.error || result.signal !== null || (!acceptFailure && result.status !== 0)) {
     throw new Error(
       `${path.basename(command)} failed (${result.signal ?? result.status ?? "launch"})`,
       {
@@ -29,6 +38,7 @@ function run(command: string, args: string[], cwd = repoRoot, env = process.env)
       },
     );
   }
+  return result.status === 0;
 }
 
 function resolveCommit(ref: string): string {
@@ -42,6 +52,29 @@ function resolveCommit(ref: string): string {
   return result.stdout.trim();
 }
 
+function declaredDependencyNames(root: string): string[] {
+  const file = path.join(root, "package.json");
+  if (!fs.existsSync(file)) {
+    return [];
+  }
+  const manifest: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (!isRecord(manifest)) {
+    throw new Error(`Invalid package manifest: ${file}`);
+  }
+  const names: string[] = [];
+  for (const key of ["dependencies", "devDependencies", "optionalDependencies"]) {
+    const entries = manifest[key];
+    if (entries === undefined) {
+      continue;
+    }
+    if (!isRecord(entries)) {
+      throw new Error(`Invalid ${key} in package manifest: ${file}`);
+    }
+    names.push(...Object.keys(entries));
+  }
+  return names;
+}
+
 function linkDependencies(baseRoot: string): void {
   const roots = ["", "ui"];
   for (const parent of ["packages", "extensions"]) {
@@ -50,6 +83,18 @@ function linkDependencies(baseRoot: string): void {
         roots.push(path.join(parent, entry.name));
       }
     }
+  }
+  if (
+    roots.some((root) => {
+      const candidate = new Set(declaredDependencyNames(path.join(repoRoot, root)));
+      return declaredDependencyNames(path.join(baseRoot, root)).some(
+        (name) => !candidate.has(name),
+      );
+    })
+  ) {
+    // A removal must not make the historical source unbuildable. Materialize
+    // its lockfile in this private archive without running historical hooks.
+    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts"], baseRoot);
   }
   const workspaceRoots = new Map(
     roots.map((root) => [fs.realpathSync(path.join(repoRoot, root)), root]),
@@ -74,6 +119,7 @@ function linkDependencies(baseRoot: string): void {
         const target = workspace === undefined ? installed : path.join(baseRoot, workspace);
         const destination = path.join(destinationRoot, "node_modules", name);
         fs.mkdirSync(path.dirname(destination), { recursive: true });
+        fs.rmSync(destination, { recursive: true, force: true });
         fs.symlinkSync(target, destination, "junction");
       }
     }
@@ -103,28 +149,44 @@ function main(): void {
   const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-performance-base-"));
   try {
     const baseRoot = path.join(temporaryRoot, "source");
-    const archive = path.join(temporaryRoot, "source.tar");
+    const archive = path.join(temporaryRoot, "source.tar.gz");
     const buildEnv = {
       ...process.env,
       ...COMPARISON_BUILD_ENV,
       GIT_DIR: path.join(temporaryRoot, "git-disabled"),
     };
     fs.mkdirSync(baseRoot);
-    run("git", ["archive", "--format=tar", "--output", archive, base]);
-    run("tar", ["-xf", archive, "-C", baseRoot]);
+    run("git", ["archive", "--format=tar.gz", "-1", "--output", archive, base]);
+    run("tar", ["-xzf", archive, "-C", baseRoot]);
     linkDependencies(baseRoot);
 
-    // Both builds use the candidate's dependency installation. Calling Vite
-    // directly keeps historical policy out; one identity isolates source bytes.
-    for (const root of [repoRoot, baseRoot]) {
-      run(process.execPath, [viteBin, "build"], path.join(root, "ui"), buildEnv);
-    }
+    // Both builds use the candidate's toolchain and shared dependencies; only
+    // base-only dependencies come from its lockfile. Calling Vite directly
+    // keeps historical policy out; one identity isolates source bytes.
+    const candidateUiRoot = path.join(repoRoot, "ui");
+    const baseUiRoot = path.join(baseRoot, "ui");
+    const candidateBuildArgs = [
+      viteBin,
+      "build",
+      "--config",
+      path.join(candidateUiRoot, "vite.config.ts"),
+    ];
+    const baseBuildArgs = [viteBin, "build", "--config", path.join(baseUiRoot, "vite.config.ts")];
+    run(process.execPath, candidateBuildArgs, candidateUiRoot, buildEnv);
+    const baseBuildPassed = run(process.execPath, baseBuildArgs, baseUiRoot, buildEnv, true);
     const loader = path.join(repoRoot, "scripts/tsx.mjs");
     run(process.execPath, [
       "--import",
       loader,
       "scripts/check-control-ui-precompressed-assets.mts",
     ]);
+    if (!baseBuildPassed) {
+      console.warn(
+        "Base Control UI source does not build with the candidate toolchain; enforcing candidate absolute budgets without a differential comparison.",
+      );
+      run(process.execPath, ["--import", loader, "scripts/check-control-ui-performance.mts"]);
+      return;
+    }
     const baseDist = path.join(baseRoot, "dist/control-ui");
     const baseAssets = path.join(baseDist, "assets");
     // Normalize historical CSS with the candidate's canonical compressor too:

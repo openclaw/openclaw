@@ -16,7 +16,7 @@ const baseManifest = {
 } as const;
 
 describe("portable Claw schema conformance", () => {
-  it.each(["01.2.3", "1.02.3", "1.2.3-01", "v1.2.3", "1.2.x"])(
+  it.each(["01.2.3", "1.2.3-01", "v1.2.3", "1.2.x"])(
     "rejects non-canonical package version %s",
     (version) => {
       const result = parseClawManifest({

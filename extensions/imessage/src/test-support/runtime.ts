@@ -1,57 +1,66 @@
 // Imessage plugin module implements runtime behavior.
 import fs from "node:fs";
-import path from "node:path";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type {
   OpenKeyedStoreOptions,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-  createPluginStateKeyedStoreForTests,
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import * as initialStateRuntime from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterAll, vi } from "vitest";
 import { setIMessageRuntime } from "../runtime.js";
+
+// Vitest runs afterAll hooks in reverse order, so databases close before directory removal.
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+
+afterAll(async () => {
+  const { closeOpenClawAgentDatabasesAsync, closeOpenClawStateDatabaseAsync } =
+    await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+});
 
 function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: string } {
   const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-state-")),
+    tempDirs.make("openclaw-imessage-state-", resolvePreferredOpenClawTmpDir()),
   );
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
 
 let imessageTestEnv = createIMessageTestEnv();
+let stateRuntime = initialStateRuntime;
+const reusedStoreCleanups = new Map<string, () => Promise<void>>();
 
 export function createIMessagePluginStateSyncStoreForTest<T>(
   options: OpenKeyedStoreOptions,
 ): PluginStateSyncKeyedStore<T> {
-  return createPluginStateSyncKeyedStoreForTests<T>("imessage", {
+  return stateRuntime.createPluginStateSyncKeyedStoreForTests<T>("imessage", {
     ...options,
     env: imessageTestEnv,
   });
 }
 
 export function installIMessageStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
   imessageTestEnv = createIMessageTestEnv();
-  resetPluginStateStoreForTests();
+  stateRuntime.resetPluginStateStoreForTests({ closeDatabase: false });
   setIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        options?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
       ) =>
-        createChannelIngressQueueForTests({
+        stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
       openKeyedStore: ((options) =>
-        createPluginStateKeyedStoreForTests("imessage", {
+        stateRuntime.createPluginStateKeyedStoreForTests("imessage", {
           ...options,
           env: imessageTestEnv,
         })) as PluginRuntime["state"]["openKeyedStore"],
@@ -60,7 +69,7 @@ export function installIMessageStateRuntimeForTest(): void {
           options,
         )) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-    channel: {},
+    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as PluginRuntime);
   createIMessagePluginStateSyncStoreForTest({
     namespace: "imessage.reply-cache",
@@ -74,36 +83,59 @@ export function installIMessageStateRuntimeForTest(): void {
 
 export async function loadFreshIMessageReplyCacheForTest(options?: {
   preservePersistentState?: boolean;
+  reuseDatabase?: boolean;
 }): Promise<typeof import("../monitor-reply-cache.js")> {
-  if (!options?.preservePersistentState) {
-    closeOpenClawStateDatabaseForTest();
+  if (options?.reuseDatabase && !options.preservePersistentState) {
+    // Clear through the real worker boundary while retaining its prepared database.
+    for (const clear of reusedStoreCleanups.values()) {
+      await clear();
+    }
+  } else if (!options?.preservePersistentState) {
+    const { closeOpenClawStateDatabaseAsync } =
+      await import("openclaw/plugin-sdk/sqlite-runtime-testing");
+    // Drain worker-only stores before rotating the fixture state directory.
+    await closeOpenClawStateDatabaseAsync();
+    stateRuntime.closeOpenClawStateDatabaseForTest();
     imessageTestEnv = createIMessageTestEnv();
   }
-  resetPluginStateStoreForTests();
+  if (!options?.preservePersistentState) {
+    reusedStoreCleanups.clear();
+  }
+  stateRuntime.resetPluginStateStoreForTests({ closeDatabase: !options?.reuseDatabase });
   vi.resetModules();
+  // Store factories and their lazy worker admissions must share one module generation.
+  stateRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
   const { setIMessageRuntime: setFreshIMessageRuntime } = await import("../runtime.js");
   setFreshIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        queueOptions?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        queueOptions?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
       ) =>
-        createChannelIngressQueueForTests({
+        stateRuntime.createChannelIngressQueueForTests({
           ...queueOptions,
           channelId: "imessage",
           stateDir: queueOptions?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
         }),
-      openKeyedStore: ((storeOptions) =>
-        createPluginStateKeyedStoreForTests("imessage", {
+      openKeyedStore: ((storeOptions) => {
+        const store = stateRuntime.createPluginStateKeyedStoreForTests("imessage", {
           ...storeOptions,
           env: imessageTestEnv,
-        })) as PluginRuntime["state"]["openKeyedStore"],
+        });
+        if (options?.reuseDatabase) {
+          reusedStoreCleanups.set(storeOptions.namespace, store.clear);
+        }
+        return store;
+      }) as PluginRuntime["state"]["openKeyedStore"],
       openSyncKeyedStore: ((storeOptions) =>
         createIMessagePluginStateSyncStoreForTest(
           storeOptions,
         )) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-    channel: {},
+    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as PluginRuntime);
   createIMessagePluginStateSyncStoreForTest({
     namespace: "imessage.reply-cache",
@@ -117,15 +149,18 @@ export async function loadFreshIMessageReplyCacheForTest(options?: {
 }
 
 export function installIMessageFailingStateRuntimeForTest(): void {
-  closeOpenClawStateDatabaseForTest();
+  stateRuntime.closeOpenClawStateDatabaseForTest();
   imessageTestEnv = createIMessageTestEnv();
   setIMessageRuntime({
     state: {
       resolveStateDir: () => imessageTestEnv.OPENCLAW_STATE_DIR,
       openChannelIngressQueue: (
-        options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        options?: Omit<
+          Parameters<typeof stateRuntime.createChannelIngressQueueForTests>[0],
+          "channelId"
+        >,
       ) =>
-        createChannelIngressQueueForTests({
+        stateRuntime.createChannelIngressQueueForTests({
           ...options,
           channelId: "imessage",
           stateDir: options?.stateDir ?? imessageTestEnv.OPENCLAW_STATE_DIR,
@@ -137,6 +172,6 @@ export function installIMessageFailingStateRuntimeForTest(): void {
         throw new Error("test plugin-state failure");
       }) as PluginRuntime["state"]["openSyncKeyedStore"],
     },
-    channel: {},
+    channel: { inbound: { ingress: createPluginRuntimeMock().channel.inbound.ingress } },
   } as PluginRuntime);
 }
