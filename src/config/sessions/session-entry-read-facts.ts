@@ -8,7 +8,6 @@ import { sessionChangeAffectsStoredRow } from "../../sessions/session-row-facts.
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import type { AgentDatabaseGenerationClaim } from "../../state/openclaw-agent-execution-admission-contract.js";
-import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
 import {
   readPreparedSessionEntryChange,
   readPreparedSessionEntryPublicationSource,
@@ -217,7 +216,7 @@ function matches(store: Store, database: Database) {
   );
 }
 
-/** Call only under the selected physical writer FIFO, retaining the caller's live assertions. */
+/** Hits require the current committed write token; callers keep their own live assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
@@ -377,71 +376,58 @@ export function retainSessionEntryReadFacts(
   remember(store);
 }
 
-/** Standalone reads join the same writer queue as admitted cohorts, then release before use. */
-export function readSessionEntriesWithRetainedFacts(
+/**
+ * Standalone reads stay off the writer FIFO, like the plain reader they replace. Retained facts
+ * are keyed by the committed write token, so a hit or an install never outlives a commit.
+ */
+export async function readSessionEntriesWithRetainedFacts(
   database: Database & { env: NodeJS.ProcessEnv },
   request: Selection,
   read: () => Promise<SessionExactEntriesWorkerResult>,
 ): Promise<SessionExactEntriesWorkerResult> {
   if (!eligible(request)) {
-    return read();
+    return await read();
   }
   const borrowed = readFromSessionWriter(database, (reads) => reads.entries(request));
   if (borrowed) {
-    return borrowed;
+    return await borrowed;
   }
-  return runOpenClawAgentWriteAdmissions(
-    [database],
-    async () => {
-      const cached = readRetainedSessionEntryFacts(database, request);
-      if (cached) {
-        return cached;
-      }
-      const before = readSqliteDatabaseWriteTokenForPath(database.path);
-      const result = await read();
-      retainSessionEntryReadFacts(database, request, result, before);
-      return result;
-    },
-    true,
-  );
+  const cached = readRetainedSessionEntryFacts(database, request);
+  if (cached) {
+    return cached;
+  }
+  const before = readSqliteDatabaseWriteTokenForPath(database.path);
+  const result = await read();
+  retainSessionEntryReadFacts(database, request, result, before);
+  return result;
 }
 
 /** Preserve the plain reader's error codec while retaining its successful fused facts. */
-export function readSessionEntryWithRetainedFacts(
+export async function readSessionEntryWithRetainedFacts(
   database: Database & { env: NodeJS.ProcessEnv },
   scope: SessionEntryReadScope & { agentId: string },
   read: () => ReturnType<SessionHistoryWorkerDatabase["readEntryResult"]>,
 ): ReturnType<SessionHistoryWorkerDatabase["readEntryResult"]> {
   const borrowed = readFromSessionWriter(database, (reads) => reads.entry(scope));
   if (borrowed) {
-    return borrowed;
+    return await borrowed;
   }
-  return runOpenClawAgentWriteAdmissions(
-    [database],
-    async () => {
-      const request = {
-        sessionKeys: [resolveSqliteSessionKey(scope.sessionKey, scope.agentId)],
-        projection: "full" as const,
-        snapshotFields:
-          scope.projection === "list"
-            ? []
-            : scope.projection === "full"
-              ? undefined
-              : scope.projection,
-      };
-      const cached = readRetainedSessionEntryFacts(database, request);
-      if (cached) {
-        return { ...ok(cached.entries[0]?.entry), source: cached.source };
-      }
-      const before = readSqliteDatabaseWriteTokenForPath(database.path);
-      const result = await read();
-      if (result.ok && result.facts) {
-        retainSessionEntryReadFacts(database, request, result.facts, before);
-      }
-      return result;
-    },
-    true,
-  );
+  const request = {
+    sessionKeys: [resolveSqliteSessionKey(scope.sessionKey, scope.agentId)],
+    projection: "full" as const,
+    snapshotFields:
+      scope.projection === "list" ? [] : scope.projection === "full" ? undefined : scope.projection,
+  };
+  const cached = readRetainedSessionEntryFacts(database, request);
+  if (cached) {
+    return { ...ok(cached.entries[0]?.entry), source: cached.source };
+  }
+  const before = readSqliteDatabaseWriteTokenForPath(database.path);
+  const result = await read();
+  if (result.ok && result.facts) {
+    retainSessionEntryReadFacts(database, request, result.facts, before);
+  }
+  return result;
 }
 
 // Private facts install before projection/public observers. Unknown and partial writes evict;
