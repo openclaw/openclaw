@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
-import { buildInterSessionPromptContext, type InputProvenance } from "../sessions/input-provenance.js";
+import {
+  buildInterSessionPromptContext,
+  type InputProvenance,
+} from "../sessions/input-provenance.js";
 import {
   claudeUser,
   cliMeta,
@@ -47,7 +50,11 @@ describe("routed CLI prompts in chat history", () => {
         sourceTool: "sessions_send",
       };
       expect(messages).toMatchObject([
-        { role: "user", content: `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`, provenance },
+        {
+          role: "user",
+          content: `${envelope}\n${DRIFT_NOTE}\nPlease check the build.`,
+          provenance,
+        },
         { role: "user", content: [{ type: "text", text: `${envelope}\nBlock body.` }], provenance },
         { role: "user" },
       ]);
@@ -78,7 +85,10 @@ describe("routed CLI prompts in chat history", () => {
           importedMessages: imported,
         });
 
-        expect(merged).toEqual([plain, { ...literal, __openclaw: cliMeta("routed-literal", sessionId) }]);
+        expect(merged).toEqual([
+          plain,
+          { ...literal, __openclaw: cliMeta("routed-literal", sessionId) },
+        ]);
         expect(imported[0]?.content).toEqual(content);
       });
     },
