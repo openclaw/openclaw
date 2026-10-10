@@ -9,6 +9,7 @@ import {
   type ConversationRef,
   type SessionBindingRecord,
 } from "../../infra/outbound/session-binding-service.js";
+import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import {
@@ -218,17 +219,21 @@ export function inspectRuntimeConversationBindingRoute(
  * Legacy adapters may still perform synchronous persistence during migration.
  */
 export async function resolveRuntimeConversationBindingRouteAsync(
-  params: { route: ResolvedAgentRoute } & ConfiguredBindingRouteConversationInput,
+  params: RuntimeConversationBindingRouteInput & {
+    touchBinding?: boolean;
+  } & ConfiguredBindingRouteConversationInput,
 ): Promise<RuntimeConversationBindingRouteResult> {
-  const route = { ...params.route };
+  const routeInput: RuntimeConversationBindingRouteInput = params.resolveRoute
+    ? { resolveRoute: params.resolveRoute }
+    : { route: { ...params.route } };
   const conversation = resolveConfiguredBindingConversationRef(params);
   const service = getSessionBindingService();
   let result = inspectRuntimeConversationBindingRoute({
-    route,
+    ...routeInput,
     inspection: await service.inspectByConversationAsync(conversation),
   });
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    if (!result.bindingRecord) {
+    if (!result.bindingRecord || params.touchBinding === false) {
       return result;
     }
     const { bindingId, boundAt, targetSessionKey, targetKind } = result.bindingRecord;
@@ -238,7 +243,7 @@ export async function resolveRuntimeConversationBindingRouteAsync(
     };
     await service.touchAsync(bindingId, undefined, scope);
     result = inspectRuntimeConversationBindingRoute({
-      route,
+      ...routeInput,
       inspection: await service.inspectByConversationAsync(conversation),
     });
     if (
@@ -259,11 +264,18 @@ export async function resolveRuntimeConversationBindingRouteAsync(
   );
 }
 
+/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removed in the next Plugin SDK major. */
 export function resolveRuntimeConversationBindingRoute(
   params: RuntimeConversationBindingRouteInput & {
     touchBinding?: boolean;
   } & ConfiguredBindingRouteConversationInput,
 ): RuntimeConversationBindingRouteResult {
+  warnPluginSdkDeprecation({
+    family: "conversation-bindings",
+    method: "resolveRuntimeConversationBindingRoute",
+    replacement: "resolveRuntimeConversationBindingRouteAsync",
+    compatibility: "The synchronous route retains its immediate inspection and touch behavior.",
+  });
   const inspection = inspectSessionBindingByConversation(
     resolveConfiguredBindingConversationRef(params),
   );

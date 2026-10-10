@@ -215,6 +215,11 @@ the destination and any same-plugin namespace conditions in one synchronous
 worker transaction. An explicit conflict requires fresh preparation. Neither an
 unknown outcome nor a failed worker request selects a native fallback.
 
+Conversation binding V2 adapters require awaited operations and coherent inspection
+snapshots with current-source assertions. Expiring lookup/list operations remain
+writer operations. The account manager uses the same current-binding worker and
+receipt owner; external adapters certify their own source.
+
 Native harness ownership prepares through the awaited harness hook. Descriptive
 session rows retain exact keyed-state read dependencies through acceptance and
 invalidate on matching committed receipts or unknown settlement. Pending writes
@@ -231,7 +236,7 @@ existing durable worker transaction; initialization, incognito, or a mixed
 released participant can explicitly select the existing native atomic settlement
 before dispatch. This compatibility selection is never a recovery fallback.
 
-Released synchronous stores and opaque callbacks remain named
+Released synchronous stores, binding services, and opaque callbacks remain named
 compatibility paths until removed in the next Plugin SDK major. They preserve
 commit-before-return and use one shared migration-warning budget per plugin and
 capability family. Exact final-authority reads remain at ClickClack/peer delivery,

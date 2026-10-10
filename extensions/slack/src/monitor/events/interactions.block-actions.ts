@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
-import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
+import { resolveCommandAuthorizationAsync } from "openclaw/plugin-sdk/command-auth-native";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
@@ -594,19 +594,21 @@ async function resolveSlackBlockActionCommandAuthorized(
     typeof commandsAllowFrom === "object" &&
     (Array.isArray(commandsAllowFrom.slack) || Array.isArray(commandsAllowFrom["*"]));
   if (commandsAllowFromConfigured) {
-    return resolveCommandAuthorization({
-      ctx: {
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        AccountId: params.ctx.accountId,
-        ChatType: params.auth.channelType === "im" ? "direct" : "group",
-        From: params.parsed.channelId ? `slack:${params.parsed.channelId}` : "slack",
-        SenderId: params.parsed.userId,
-      },
-      cfg: params.ctx.cfg,
-      commandAuthorized: false,
-    }).isAuthorizedSender;
+    return (
+      await resolveCommandAuthorizationAsync({
+        ctx: {
+          Provider: "slack",
+          Surface: "slack",
+          OriginatingChannel: "slack",
+          AccountId: params.ctx.accountId,
+          ChatType: params.auth.channelType === "im" ? "direct" : "group",
+          From: params.parsed.channelId ? `slack:${params.parsed.channelId}` : "slack",
+          SenderId: params.parsed.userId,
+        },
+        cfg: params.ctx.cfg,
+        commandAuthorized: false,
+      })
+    ).isAuthorizedSender;
   }
 
   const isDirectMessage = params.auth.channelType === "im";
@@ -652,12 +654,12 @@ async function resolveSlackBlockActionCommandAuthorized(
   return commandIngress.commandAccess.authorized;
 }
 
-function enqueueSlackBlockActionEvent(
+async function enqueueSlackBlockActionEvent(
   params: SlackBlockActionContext & {
     teamId?: string;
     auth: { channelType?: "im" | "mpim" | "channel" | "group" };
   },
-): void {
+): Promise<void> {
   const targetKind = params.auth.channelType === "im" ? "user" : "channel";
   const targetId = targetKind === "user" ? params.parsed.userId : params.parsed.channelId;
   const deferredTarget = targetId
@@ -683,7 +685,7 @@ function enqueueSlackBlockActionEvent(
   params.ctx.runtime.log?.(
     `slack:interaction action=${params.parsed.actionId} type=${params.parsed.actionSummary.actionType ?? "unknown"} user=${params.parsed.userId} channel=${params.parsed.channelId}`,
   );
-  const route = params.ctx.resolveSlackSystemEventRoute({
+  const route = await params.ctx.resolveSlackSystemEventRoute({
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
@@ -880,7 +882,7 @@ export function registerSlackBlockActionHandler(params: {
         return;
       }
     }
-    enqueueSlackBlockActionEvent({
+    await enqueueSlackBlockActionEvent({
       ...actionContext,
       teamId: args.context.teamId,
       auth,
