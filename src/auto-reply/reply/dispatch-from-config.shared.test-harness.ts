@@ -409,7 +409,7 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", async (importOrig
 vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../config/sessions/session-accessor.sqlite-entry.js")>();
-  const { reduceSessionEntryPatch } =
+  const { projectSessionEntryPatch } =
     await import("../../config/sessions/session-entry-patch-operation.js");
   return {
     ...actual,
@@ -419,9 +419,16 @@ vi.mock("../../config/sessions/session-accessor.sqlite-entry.js", async (importO
       let wrote = false;
       const result = await sessionStoreMocks.updateSessionEntry(scope, (entry) => {
         const currentEntry = { sessionId: "", updatedAt: 0, ...entry };
-        const patch = reduceSessionEntryPatch(operation, currentEntry, currentEntry);
-        wrote = patch !== null;
-        return patch;
+        const next = projectSessionEntryPatch({
+          existing: currentEntry,
+          writeBase: currentEntry,
+          sessionKey: scope.sessionKey,
+          operation,
+          replaceEntry: options?.replaceEntry,
+          preserveActivity: options?.preserveActivity,
+        });
+        wrote = next !== undefined;
+        return next ?? null;
       });
       const entry = result ? { sessionId: "", updatedAt: 0, ...result } : null;
       if (wrote && entry) {
