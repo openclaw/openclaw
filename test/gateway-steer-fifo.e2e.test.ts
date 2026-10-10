@@ -861,11 +861,7 @@ function userInputs(request: ModelRequest | undefined): string[] {
 
 function currentUserInput(request: ModelRequest | undefined): string {
   // Conversation metadata can follow the user message as a separate protected block.
-  return (
-    userInputs(request).findLast(
-      (text) => !text.startsWith(RUNTIME_CONTEXT_HEADER),
-    ) ?? ""
-  );
+  return userInputs(request).findLast((text) => !text.startsWith(RUNTIME_CONTEXT_HEADER)) ?? "";
 }
 
 describe("Gateway steer FIFO", () => {
