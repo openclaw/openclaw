@@ -54,9 +54,9 @@ vi.mock("./session-accessor.sqlite-reclamation-worker.js", async (importOriginal
           const spy = vi.spyOn(worker, "run").mockImplementation((params) =>
             originalRun({
               ...params,
-              onCommitRequest: () => {
+              withWriteAdmission: (admit, diagnostics) => {
                 hooks.beforeAuthorization?.();
-                return params.onCommitRequest();
+                return params.withWriteAdmission(admit, diagnostics);
               },
             }),
           );
@@ -348,7 +348,7 @@ test.each([false, true])(
     const stopObservingWorkers: Array<() => void> = [];
     const observeWorker = (worker: Worker) => {
       const onMessage = (message: unknown) => {
-        if (isRecord(message) && message.type === "commit-request") {
+        if (isRecord(message) && message.type === "admission-request") {
           reclamationWorker = worker;
           nativeSettled = false;
         }

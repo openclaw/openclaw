@@ -67,7 +67,6 @@ vi.mock("../../state/openclaw-agent-db.js", () => {
 vi.mock("./session-accessor.sqlite-worker-coordination.js", () => ({
   runWithSqliteMutationWorkerCoordination: <T>(
     _coordination: unknown,
-    _operationId: number,
     options: ReclamationDatabaseOptions,
     run: (options: ReclamationDatabaseOptions) => Promise<T>,
   ) => run(options),
@@ -108,7 +107,6 @@ it("keeps idle collection after buffered admission replies and cancels it for th
       {
         type: "reclaim",
         operationId: ++operationId,
-        commitGate: new SharedArrayBuffer(4),
         plan: {
           kind: "maintenance-finalize",
           agentId: databaseOptions.agentId,
