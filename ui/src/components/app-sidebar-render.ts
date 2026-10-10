@@ -1,12 +1,13 @@
 import { html, nothing } from "lit";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
-import { isRouteId } from "../app-route-paths.ts";
+import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -17,7 +18,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarPluginTab } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarNavLink } from "./app-sidebar-nav-menus.ts";
 import { renderSidebarSessionFilter } from "./app-sidebar-session-filter-summary.ts";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -53,10 +54,24 @@ function readSidebarNativeGateway(): NativeGateway | null {
 function renderSidebarAgentCard(host: AppSidebarRenderHost) {
   const {
     activeId: cardAgentId,
-    agent: cardAgent,
+    agent: rosterAgent,
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  const gateway = host.sessionDataContext?.gateway;
+  const bootstrapIdentity =
+    gateway && hasSameOriginGatewayTransport(gateway.connection.gatewayUrl)
+      ? host.sessionDataContext?.config.current.assistantIdentity
+      : undefined;
+  const cardAgent =
+    rosterAgent ??
+    (bootstrapIdentity?.agentId === cardAgentId
+      ? {
+          id: cardAgentId,
+          name: bootstrapIdentity.name,
+          identity: { avatar: bootstrapIdentity.avatar ?? undefined },
+        }
+      : undefined);
   if (!cardAgent) {
     return renderSidebarWorkspaceHeader(host);
   }
@@ -65,12 +80,12 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
   const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
-  const gateway = host.sessionDataContext?.gateway;
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
       gateway.connection.token.trim() ||
-      gateway.connection.password.trim()),
+      gateway.connection.password.trim() ||
+      bootstrapIdentity?.agentId === cardAgentId),
   );
   return html`
     <openclaw-sidebar-agent-card
@@ -264,7 +279,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
             class="sidebar-brand__icon sidebar-footer-bar__home"
             aria-label=${t("assistantPanel.toggle")}
             ?disabled=${!isHomePanelAvailable(host.sessionDataContext?.gateway)}
-            @click=${() => window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT))}
+            @click=${() => {
+              host.personalNavigationEpoch += 1;
+              window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
+            }}
           >
             ${home ? renderSessionLeadingState(home, undefined, "owned", undefined, undefined, false, html`<span class="nav-item__icon" aria-hidden="true">${icons.home}</span>`).leadingIndicator : icons.home}
             ${home ? renderSessionRowBadges({ outboxAttentionCount: home.outboxAttentionCount, hasComposerDraft: home.hasComposerDraft }) : nothing}
@@ -369,12 +387,15 @@ export function renderAppSidebarPluginTab(
     ? tab.placement.slice("route:".length)
     : "";
   const routeId = isRouteId(routePlacement) ? routePlacement : null;
-  return routeId
-    ? host.sidebarMenus.renderRoute(routeId)
-    : renderSidebarPluginTab({
-        tab,
-        basePath: host.basePath,
-        active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
-        onNavigate: (location) => host.onNavigate?.("plugin", location),
-      });
+  if (routeId) {
+    return host.sidebarMenus.renderRoute(routeId);
+  }
+  const location = pluginTabLocation(tab, host.basePath);
+  return renderSidebarNavLink({
+    href: `${location.pathname}${location.search}`,
+    icon: Object.entries(icons).find(([name]) => name === tab.icon)?.[1] ?? icons.plug,
+    label: tab.label,
+    active: host.activeRouteId === "plugin" && host.activePluginTabId === key,
+    onNavigate: () => host.onNavigate?.("plugin", location),
+  });
 }

@@ -22,7 +22,7 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 
-export const POST_ACTIVATION_INSPECTIONS_STEP = "post-activation doctor inspections";
+const POST_ACTIVATION_INSPECTIONS_STEP = "post-activation doctor inspections";
 
 /**
  * Runs the optional Doctor inspections that the update Doctor deferred out of the

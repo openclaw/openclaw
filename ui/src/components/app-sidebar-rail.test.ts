@@ -11,6 +11,7 @@ import {
 } from "../test-helpers/app-sidebar.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
+import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import "./app-sidebar.ts";
 
@@ -302,14 +303,17 @@ describe("personal navigation rail", () => {
     );
   });
 
-  it.each(["rail", "row", "main", "disconnect"] as const)(
+  it.each(["rail", "row", "main", "home", "disconnect"] as const)(
     "retires an unloaded pin lookup after newer %s intent without requiring a route change",
     async (target) => {
-      const { sidebar, sessions, result } = await fixture();
+      const { sidebar, sessions, gateway, result } = await fixture();
+      if (target === "home") {
+        gateway.publish({ hello: gatewayHelloForMethods(["chat.history", "chat.send"]) });
+      }
       const selected = target === "main" ? "agent:main:main" : "agent:main:mine";
       const missing = "agent:main:unloaded";
       sidebar.sessionKey = selected;
-      sidebar.activeRouteId = "chat";
+      sidebar.activeRouteId = target === "home" ? "sessions" : "chat";
       sidebar.sidebarEntries = [`session:${selected}`, `session:${missing}`];
       await sidebar.updateComplete;
       const pending = createDeferred<Awaited<ReturnType<typeof sessions.sessions.describe>>>();
@@ -326,6 +330,12 @@ describe("personal navigation rail", () => {
       expect(describeRead).toHaveBeenCalledWith({ key: missing });
       if (target === "disconnect") {
         sidebar.remove();
+      } else if (target === "home") {
+        const home = sidebar.querySelector<HTMLButtonElement>(".sidebar-footer-bar__home")!;
+        expect(home.disabled).toBe(false);
+        home.click();
+        expect(sidebar.activeRouteId).toBe("sessions");
+        expect(navigate).not.toHaveBeenCalled();
       } else {
         if (target === "main") {
           sidebar.openMainSession("main");

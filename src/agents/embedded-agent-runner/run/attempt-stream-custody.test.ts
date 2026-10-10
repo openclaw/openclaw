@@ -184,7 +184,7 @@ async function createFixture(
       sessionRuntime: {
         agentSession: { activeSession },
         sessionManager: manager,
-        contextGuards: { recordCacheTouch: () => {} },
+        contextGuards: { checkMidTurnPrecheck: () => {}, recordCacheTouch: () => {} },
         isOpenAIResponsesApi: !options.thinkingRecovery,
         state: { systemPromptText: "Synthetic system prompt" },
         transcriptPolicy: options.thinkingRecovery ? { preserveSignatures: true } : {},

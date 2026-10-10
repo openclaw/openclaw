@@ -63,7 +63,7 @@ function createEntryFixture(env: NodeJS.ProcessEnv) {
   return { database, scope };
 }
 
-it("reuses listing revisions without payload scans and invalidates foreign edits and reopened readers", async () => {
+it("reuses listing revisions without payload scans and invalidates sibling edits and reopened readers", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKey = "agent:main:catalog-revision";
@@ -74,7 +74,7 @@ it("reuses listing revisions without payload scans and invalidates foreign edits
     });
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = nodeSqlite.openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     const read = (ifRevision?: string) =>
       readSessionEntryList({
@@ -159,7 +159,7 @@ it("reuses listing revisions without payload scans and invalidates foreign edits
   });
 });
 
-it("resolves runtime targets through one fresh admitted reader", async () => {
+it("resolves runtime targets through an admitted reader without freshness probes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionId = "runtime-target-session";
@@ -189,7 +189,7 @@ it("resolves runtime targets through one fresh admitted reader", async () => {
         target: { agentId: "main", sessionId, sessionKey, storePath: database.path },
         source: { agentId: database.agentId, path: database.path },
       });
-      expect(queries.counts.freshness).toBe(1);
+      expect(queries.counts.freshness).toBe(0);
     } finally {
       queries.restore();
     }

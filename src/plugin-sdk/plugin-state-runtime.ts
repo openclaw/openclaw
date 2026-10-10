@@ -2,6 +2,16 @@
  * Runtime SDK type surface for plugin-scoped keyed state stores.
  */
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+export { PluginStateOperationInvalidatedError } from "../plugin-state/plugin-state-operation-error.js";
+
+export type {
+  PluginStateOperation,
+  PluginStateOperationCommand,
+  PluginStateOperationDefinitions,
+  PluginStateOperationHandler,
+  PluginStateOperationReceipt,
+  PluginStateOperationTransaction,
+} from "../plugin-state/plugin-state-store.types.js";
 
 export type {
   SessionEntryCurrentCheck,

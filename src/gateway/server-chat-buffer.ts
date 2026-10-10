@@ -12,7 +12,14 @@ export type ChatRunBufferState = {
   /** Positions are absolute; null ends retain identity facts after a source replacement. */
   assistantItems?: Map<
     string | symbol | undefined,
-    { itemId?: string; committed?: true; start?: number; end?: number | null; scope?: number }
+    {
+      itemId?: string;
+      committed?: true;
+      start?: number;
+      end?: number | null;
+      scope?: number;
+      publishThinkingReceipt?: (messageId: string, sessionKey?: string, sessionId?: string) => void;
+    }
   >;
   assistantScope?: AssistantTextSnapshot["scope"];
   assistantScopeOffset?: number;

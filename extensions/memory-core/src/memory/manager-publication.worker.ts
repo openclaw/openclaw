@@ -31,6 +31,7 @@ import type {
 import { assertMemoryShadowIdentity, type MemoryShadowFailure } from "./manager-shadow-task.js";
 import {
   MemorySourceIndexKernel,
+  readMemorySourceChunks,
   readMemorySourceHash,
   type MemorySourceIndexHeader,
   type MemorySourceIndexRow,
@@ -104,6 +105,8 @@ function createPublicationBackend(
       ))
     | undefined;
   let loadedExtension: string | undefined;
+  let scratchCreated = false;
+  let insert: ReturnType<DatabaseSync["prepare"]> | undefined;
   try {
     assertPath();
     for (const [name, value] of Object.entries(input.pragmas)) {
@@ -112,26 +115,24 @@ function createPublicationBackend(
       }
       if (ownsConnection) {
         db.exec(`PRAGMA ${name} = ${value}`);
-      } else {
-        const row = db.prepare(`PRAGMA ${name}`).get();
-        if (!row || Number(Object.values(row)[0]) !== value) {
-          throw new Error(
-            `Memory publication differs from its canonical connection policy: ${name}`,
-          );
-        }
       }
     }
-    // Connection-local scratch spills to SQLite's temporary storage instead of
-    // retaining a second complete source in the Worker or its broker queue.
+    // Borrowed connections retain the canonical executor's installed policy.
     if (ownsConnection) {
       db.exec("PRAGMA temp_store = FILE");
     }
-    db.exec(
-      "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
-    );
-    const insert = db.prepare(
-      "INSERT INTO temp.memory_publication_input (row, part, json) VALUES (?, ?, ?)",
-    );
+    const prepareScratch = () => {
+      if (!scratchCreated) {
+        // Large input spills to SQLite instead of retaining a second complete source.
+        db.exec(
+          "CREATE TEMP TABLE memory_publication_input (row INTEGER NOT NULL, part INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (row, part)) WITHOUT ROWID",
+        );
+        scratchCreated = true;
+        insert = db.prepare(
+          "INSERT INTO temp.memory_publication_input (row, part, json) VALUES (?, ?, ?)",
+        );
+      }
+    };
     const discard = () => {
       db.exec("DELETE FROM temp.memory_publication_input");
       staged = undefined;
@@ -221,6 +222,9 @@ function createPublicationBackend(
         if (command.type === "source.hash") {
           return readMemorySourceHash(db, command.input.source, command.input.path);
         }
+        if (command.type === "source.chunks") {
+          return readMemorySourceChunks(db, command.input.source, command.input.path);
+        }
         if (command.type === "source.state") {
           return loadMemorySourceFileState({ db, ...command.input });
         }
@@ -239,6 +243,7 @@ function createPublicationBackend(
           if (staged) {
             throw new Error("Memory publication input already belongs to another operation");
           }
+          prepareScratch();
           staged =
             command.type === "stage.start"
               ? { ...command.input, kind: "source", row: 0, part: 0 }
@@ -252,7 +257,7 @@ function createPublicationBackend(
           return undefined;
         }
         if (command.type === "stage.append") {
-          if (!staged || staged.operation !== command.input.operation) {
+          if (!staged || !insert || staged.operation !== command.input.operation) {
             throw new Error("Memory publication input owner changed");
           }
           for (const fragment of command.input.fragments) {
@@ -291,42 +296,50 @@ function createPublicationBackend(
             return true;
           });
         }
-        if (command.type === "cache.write") {
-          if (
-            !staged ||
-            staged.kind !== "cache" ||
-            staged.operation !== command.input.operation ||
-            staged.row !== staged.rows ||
-            staged.part !== 0
-          ) {
-            throw new Error("Memory cache input was not sealed");
+        if (command.type === "cache.write" || command.type === "cache.write.inline") {
+          let header: MemoryEmbeddingCacheHeader;
+          let readEntries: () => Iterable<MemoryEmbeddingCacheEntry>;
+          if (command.type === "cache.write.inline") {
+            header = command.input.header;
+            const entries = command.input.entries;
+            readEntries = () => entries;
+          } else {
+            if (
+              !staged ||
+              staged.kind !== "cache" ||
+              staged.operation !== command.input.operation ||
+              staged.row !== staged.rows ||
+              staged.part !== 0
+            ) {
+              throw new Error("Memory cache input was not sealed");
+            }
+            header = staged.header;
+            readEntries = () => readStagedRows<MemoryEmbeddingCacheEntry>(db);
           }
-          const header = staged.header;
-          return finish(
-            write(() => {
-              if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
-                return false;
-              }
-              const eligible = new Map<string, boolean>();
-              function* entries() {
-                for (const entry of readStagedRows<MemoryEmbeddingCacheEntry>(db)) {
-                  if (entry.sessionId) {
-                    let current = eligible.get(entry.sessionId);
-                    if (current === undefined) {
-                      current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
-                      eligible.set(entry.sessionId, current);
-                    }
-                    if (!current) {
-                      continue;
-                    }
+          const outcome = write(() => {
+            if (readMemoryDatabaseRevision(db) !== command.input.expectedRevision) {
+              return false;
+            }
+            const eligible = new Map<string, boolean>();
+            function* entries() {
+              for (const entry of readEntries()) {
+                if (entry.sessionId) {
+                  let current = eligible.get(entry.sessionId);
+                  if (current === undefined) {
+                    current = !hasMemorySessionTombstone(db, header.agentId, entry.sessionId);
+                    eligible.set(entry.sessionId, current);
                   }
-                  yield entry;
+                  if (!current) {
+                    continue;
+                  }
                 }
+                yield entry;
               }
-              upsertMemoryEmbeddingCache({ ...header, db, entries });
-              return true;
-            }),
-          );
+            }
+            upsertMemoryEmbeddingCache({ ...header, db, entries });
+            return true;
+          });
+          return command.type === "cache.write" ? finish(outcome) : outcome;
         }
         const extensionPath = command.input.state.extensionPath;
         if (extensionPath && extensionPath !== loadedExtension) {
@@ -374,18 +387,22 @@ function createPublicationBackend(
             );
           }
           const beforeRevision = readMemoryDatabaseRevision(db);
-          new MemorySourceIndexKernel(db, command.input.state).replaceRows(
-            header,
-            readStagedRows<MemorySourceIndexRow>(db),
-          );
-          return { beforeRevision, databaseRevision: readMemoryDatabaseRevision(db) };
+          const { retainedDrift } = new MemorySourceIndexKernel(
+            db,
+            command.input.state,
+          ).replaceRows(header, readStagedRows<MemorySourceIndexRow>(db));
+          return {
+            beforeRevision,
+            databaseRevision: readMemoryDatabaseRevision(db),
+            retainedDrift,
+          };
         });
         return finish(outcome);
       },
       close() {
         if (ownsConnection) {
           db.close();
-        } else {
+        } else if (scratchCreated) {
           db.exec("DROP TABLE temp.memory_publication_input");
         }
       },

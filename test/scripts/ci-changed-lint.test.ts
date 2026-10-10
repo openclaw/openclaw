@@ -18,6 +18,7 @@ import {
   parseShardRunnerArgs,
 } from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -178,7 +179,7 @@ describe("CI changed lint", () => {
       }),
     );
     mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
-    copyFileSync(".oxlintrc.json", path.join(cwd, ".oxlintrc.json"));
+    copyOxlintConfigFixture(cwd);
     copyFileSync(
       "config/tsconfig/oxlint.core.json",
       path.join(cwd, "config/tsconfig/oxlint.core.json"),

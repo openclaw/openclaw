@@ -139,6 +139,7 @@ suite.define(() => {
       await openDetailsPullRequests(page);
       const discovered = await gateway.waitForRequest("sessions.github.options");
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
+      await openDetailsPullRequests(page);
       const publish = page.getByRole("button", { name: "Publish PR", exact: true });
       try {
         await expect.poll(() => publish.count()).toBe(1);
@@ -185,6 +186,7 @@ suite.define(() => {
       await page.reload();
       await openDetailsPullRequests(page);
       await gateway.waitForRequest("sessions.github.options");
+      await openDetailsPullRequests(page);
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
       await screenshot(page, "04-guest-recovered.png");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
@@ -201,6 +203,7 @@ suite.define(() => {
         await page.getByText(historyText, { exact: true }).waitFor();
         await openDetailsPullRequests(page);
         await gateway.waitForRequest("sessions.github.options");
+        await openDetailsPullRequests(page);
         expect(await page.getByRole("button", { name: "Publish PR", exact: true }).count()).toBe(0);
         await expectNoPersonalActions(page);
         expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
