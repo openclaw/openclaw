@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isValidCronExpression } from "../../cron/schedule.js";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
@@ -60,9 +61,18 @@ export function resolveCronCreateScheduleFromArgs(
       );
     }
     normalized.every = /^every\s+(.+)$/iu.exec(positionalSchedule)?.[1]?.trim() ?? "";
-    const fields = positionalSchedule.split(/\s+/u).length;
-    normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
-    normalized.at = normalized.every || normalized.cronExpr ? "" : positionalSchedule;
+    if (normalized.every) {
+      // An every-prefixed positional owns the every slot: a valid cron expression
+      // starts with a minute field, so it can never begin with "every". Filling
+      // cronExpr from the word count here used to double-fill and surface
+      // "Choose exactly one schedule" for a single positional argument.
+      normalized.cronExpr = "";
+      normalized.at = "";
+    } else {
+      const fields = positionalSchedule.split(/\s+/u).length;
+      normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
+      normalized.at = normalized.cronExpr ? "" : positionalSchedule;
+    }
   }
   if (normalized.onExitCwd && !normalized.onExitCommand) {
     throw new CronCliError("--on-exit-cwd requires --on-exit.");
@@ -277,10 +287,16 @@ function resolveDirectSchedule(
     return { kind: "every", everyMs };
   }
   if (options.cronExpr) {
+    const tz = parseCronTimezoneOption(options.tz);
+    if (!isValidCronExpression(options.cronExpr, tz)) {
+      throw new CronCliError(
+        `Invalid cron expression "${options.cronExpr}". Use 5 fields like "0 9 * * *" or 6 fields like "0 0 9 * * *".`,
+      );
+    }
     return {
       kind: "cron",
       expr: options.cronExpr,
-      tz: parseCronTimezoneOption(options.tz),
+      tz,
       staggerMs: options.requestedStaggerMs,
     };
   }

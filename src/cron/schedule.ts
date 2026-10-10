@@ -348,3 +348,20 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
     ? normalizedPreviousMs
     : undefined;
 }
+
+/**
+ * Checks whether a cron expression parses under the same croner rules the scheduler
+ * applies, so callers can reject expressions the scheduler would throw on later.
+ */
+export function isValidCronExpression(expr: string, timezone?: string): boolean {
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    void new Cron(trimmed, { timezone: resolveCronTimezone(timezone), catch: false });
+    return true;
+  } catch {
+    return false;
+  }
+}
