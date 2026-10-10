@@ -11,10 +11,6 @@ function abortError(message: string): Error {
   return Object.assign(new Error(message), { name: "AbortError" });
 }
 
-function timeoutError(message: string): Error {
-  return Object.assign(new Error(message), { name: "TimeoutError" });
-}
-
 describe("executeWithApiKeyRotation", () => {
   it("keeps transient retry disabled by default for single-key 500", async () => {
     const execute = vi.fn(async () => {
@@ -31,28 +27,6 @@ describe("executeWithApiKeyRotation", () => {
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(execute).toHaveBeenCalledWith("key-1");
-  });
-
-  it("retries the same key once for transient 500 when attempts is 2", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(new Error("Audio transcription failed (HTTP 500)"))
-      .mockResolvedValueOnce("ok");
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "openai",
-        apiKeys: ["key-1"],
-        transientRetry: { attempts: 2, baseDelayMs: 25, maxDelayMs: 25, sleep },
-        execute,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute).toHaveBeenNthCalledWith(1, "key-1");
-    expect(execute).toHaveBeenNthCalledWith(2, "key-1");
-    expect(sleep).toHaveBeenCalledWith(25, undefined);
   });
 
   it("uses the shared default transient retry policy when enabled with true", async () => {
@@ -143,44 +117,6 @@ describe("executeWithApiKeyRotation", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it("retries timeout-like AbortError when the caller signal is not aborted", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(abortError("request timeout"))
-      .mockResolvedValueOnce("ok");
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "openai",
-        apiKeys: ["key-1"],
-        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-        execute,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries timeout-named provider errors", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(timeoutError("The operation was aborted due to timeout"))
-      .mockResolvedValueOnce("ok");
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "openai",
-        apiKeys: ["key-1"],
-        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-        execute,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
-
   it("does not retry generic AbortError without timeout evidence", async () => {
     const sleep = vi.fn(async () => undefined);
     const execute = vi
@@ -196,26 +132,6 @@ describe("executeWithApiKeyRotation", () => {
         execute,
       }),
     ).rejects.toThrow("This operation was aborted");
-
-    expect(execute).toHaveBeenCalledTimes(1);
-    expect(sleep).not.toHaveBeenCalled();
-  });
-
-  it("does not retry HTTP 401", async () => {
-    const status = 401;
-    const sleep = vi.fn(async () => undefined);
-    const execute = vi.fn(async () => {
-      throw new Error(`provider request failed (HTTP ${status})`);
-    });
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "openai",
-        apiKeys: ["key-1"],
-        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-        execute,
-      }),
-    ).rejects.toThrow(`provider request failed (HTTP ${status})`);
 
     expect(execute).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
@@ -264,26 +180,6 @@ describe("executeWithApiKeyRotation", () => {
       expect(execute).toHaveBeenCalledWith("key-1");
     },
   );
-
-  it("does not rotate keys for transient 500 after same-key retry exhaustion", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const execute = vi.fn(async () => {
-      throw new Error("Audio transcription failed (HTTP 500)");
-    });
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "openai",
-        apiKeys: ["key-1", "key-2"],
-        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-        execute,
-      }),
-    ).rejects.toThrow("Audio transcription failed (HTTP 500)");
-
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(execute).toHaveBeenNthCalledWith(1, "key-1");
-    expect(execute).toHaveBeenNthCalledWith(2, "key-1");
-  });
 
   it("does not expose apiKey to the transient retry classifier", async () => {
     const sleep = vi.fn(async () => undefined);

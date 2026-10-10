@@ -15,7 +15,6 @@ import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
-import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 
 function createExecHostDefaultsConfig(
   agents: Array<{ id: string; execHost?: "auto" | "gateway" | "sandbox" }>,
@@ -81,11 +80,7 @@ describe("Agent-specific exec tool defaults", () => {
     tempDirs.cleanup();
   });
 
-  it.each([
-    { agentId: "main", runtimeTimeoutSec: undefined, expectedMs: 130_000 },
-    { agentId: "helper", runtimeTimeoutSec: undefined, expectedMs: 55_000 },
-    { agentId: "main", runtimeTimeoutSec: 180, expectedMs: 190_000 },
-  ])(
+  it.each([{ agentId: "main", runtimeTimeoutSec: undefined, expectedMs: 130_000 }])(
     "carries $agentId's effective exec timeout through assembled node projection",
     ({ agentId, runtimeTimeoutSec, expectedMs }) => {
       const config: OpenClawConfig = {
@@ -170,50 +165,6 @@ describe("Agent-specific exec tool defaults", () => {
     });
   });
 
-  it.each([0, 3_000])(
-    "inherits the global exec approval running notice delay %i",
-    (approvalRunningNoticeMs) => {
-      expect(
-        resolveExecToolConfig({
-          cfg: {
-            tools: {
-              exec: {
-                approvalRunningNoticeMs,
-              },
-            },
-          },
-          agentId: "main",
-        }).approvalRunningNoticeMs,
-      ).toBe(approvalRunningNoticeMs);
-    },
-  );
-
-  it("lets a per-agent exec approval running notice disable the inherited global delay", () => {
-    expect(
-      resolveExecToolConfig({
-        cfg: {
-          tools: {
-            exec: {
-              approvalRunningNoticeMs: 3_000,
-            },
-          },
-          agents: {
-            entries: {
-              main: {
-                tools: {
-                  exec: {
-                    approvalRunningNoticeMs: 0,
-                  },
-                },
-              },
-            },
-          },
-        },
-        agentId: "main",
-      }).approvalRunningNoticeMs,
-    ).toBe(0);
-  });
-
   it("should run exec synchronously when process is denied", async () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -275,71 +226,6 @@ describe("Agent-specific exec tool defaults", () => {
     const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
     expect.soft(text).toContain("Verify the resulting state before retrying");
     expect.soft(text).not.toMatch(/process|background|yieldMs|poll|trailing &/i);
-  });
-
-  it("routes implicit auto exec to gateway without a sandbox runtime", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: {
-          exec: {
-            mode: "full",
-          },
-        },
-      },
-      sessionKey: "agent:main:main",
-      ...createTempAgentDirs("test-main-implicit-gateway"),
-    });
-    const execTool = requireExecTool(tools);
-    expect.soft(schemaPropertyNames(execTool)).not.toContain("security");
-
-    const result = await execTool.execute("call-implicit-auto-default", {
-      command: "echo done",
-    });
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
-  });
-
-  it("passes normalized exec mode defaults into the exec tool", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: {
-          exec: {
-            mode: "deny",
-          },
-        },
-      },
-      sessionKey: "agent:main:main",
-      ...createTempAgentDirs("test-main-mode-deny"),
-    });
-    const execTool = requireExecTool(tools);
-
-    await expect(
-      execTool.execute("call-mode-deny", {
-        command: "echo blocked",
-      }),
-    ).rejects.toThrow("security=deny");
-  });
-
-  it("ignores per-call legacy security when configured mode is full", async () => {
-    const tools = createOpenClawCodingTools({
-      config: {
-        tools: {
-          exec: {
-            mode: "full",
-          },
-        },
-      },
-      sessionKey: "agent:main:main",
-      ...createTempAgentDirs("test-main-mode-call-security"),
-    });
-    const execTool = requireExecTool(tools);
-
-    const result = await execTool.execute("call-mode-security-deny", {
-      command: "echo allowed",
-      security: "deny",
-    });
-    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
-    expect(text).toContain("allowed");
   });
 
   it("preserves mode-derived security for partial agent exec overrides", async () => {

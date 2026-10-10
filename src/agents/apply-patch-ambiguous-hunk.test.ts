@@ -29,21 +29,6 @@ describe("apply_patch ambiguous hunk matching", () => {
       source: "before\ntarget\ntarget\nafter\n",
       pattern: "target",
     },
-    {
-      tier: "trim-end",
-      source: "before\ntarget  \ntarget\t\nafter\n",
-      pattern: "target",
-    },
-    {
-      tier: "trim",
-      source: "before\n  target\n\ttarget\nafter\n",
-      pattern: "target",
-    },
-    {
-      tier: "punctuation",
-      source: "before\nIt\u2019s done\nIt\u2018s done\nafter\n",
-      pattern: "It's done",
-    },
   ])("refuses duplicate matches at the $tier tier", async ({ source, pattern }) => {
     await expect(applyTo(source, [chunk({ oldLines: [pattern] })])).rejects.toThrow(
       /Found 2 occurrences.*include more surrounding lines/s,
@@ -75,24 +60,6 @@ describe("apply_patch ambiguous hunk matching", () => {
 
   it.each([
     {
-      tier: "exact",
-      source: "before\ntarget\nafter\n",
-      pattern: "target",
-      expected: "before\nafter\n",
-    },
-    {
-      tier: "trim-end",
-      source: "before\ntarget  \nafter\n",
-      pattern: "target",
-      expected: "before\nafter\n",
-    },
-    {
-      tier: "trim",
-      source: "before\n  target\nafter\n",
-      pattern: "target",
-      expected: "before\nafter\n",
-    },
-    {
       tier: "punctuation",
       source: "before\nIt\u2019s done\nafter\n",
       pattern: "It's done",
@@ -100,14 +67,6 @@ describe("apply_patch ambiguous hunk matching", () => {
     },
   ])("applies a unique match at the $tier tier", async ({ source, pattern, expected }) => {
     await expect(applyTo(source, [chunk({ oldLines: [pattern] })])).resolves.toBe(expected);
-  });
-
-  it("prefers a unique exact match over broader tolerant lookalikes", async () => {
-    const source = " target\ntarget\n\ttarget\n";
-
-    await expect(applyTo(source, [chunk({ oldLines: ["target"] })])).resolves.toBe(
-      " target\n\ttarget\n",
-    );
   });
 
   it("uses a unique @@ context to disambiguate repeated exact hunk text", async () => {

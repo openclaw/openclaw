@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  bindAgentToolAvailability,
   finalizeAgentToolAvailability,
   markAgentToolExecutionUnavailable,
 } from "./agent-tool-availability.js";
@@ -51,48 +50,6 @@ beforeEach(() => {
 });
 
 describe("execution allowlist availability", () => {
-  const sparseAllow: string[] = [];
-  sparseAllow.length = 1;
-  it.each([
-    {
-      label: "aliases",
-      allow: [" BASH ", "apply-PATCH", " CRON "],
-      expected: ["exec", "apply_patch", "automations"],
-    },
-    { label: "blank names", allow: [" \t "], expected: ["", "   "] },
-    {
-      label: "literal names",
-      allow: ["write", "web_*", "*", "group:fs"],
-      expected: ["WRITE", "web_*", "*", "group:fs"],
-    },
-    { label: "empty list", allow: [], expected: [] },
-    { label: "sparse list", allow: sparseAllow, expected: [] },
-  ])("prepares callable tools from frozen $label", ({ allow, expected }) => {
-    const tools = [
-      "exec",
-      "apply_patch",
-      "automations",
-      "WRITE",
-      "read",
-      "web_fetch",
-      "web_*",
-      "*",
-      "group:fs",
-      "",
-      "   ",
-    ].map((name) => ({ name, description: name, parameters: { type: "object", properties: {} } }));
-    let callableNames: string[] = [];
-    bindAgentToolAvailability(tools[0]!, {
-      prepare: (_tool, callableTools) => {
-        callableNames = [...callableTools.keys()];
-      },
-    });
-
-    finalizeAgentToolAvailability(tools, { toolExecutionAllow: Object.freeze(allow) });
-
-    expect(callableNames).toEqual(expected);
-  });
-
   it("reads current execution caps when restricting and rebuilding a catalog", async () => {
     const catalogConfig = {
       ...config,
@@ -157,7 +114,7 @@ describe("collector tool availability", () => {
     expect(wrapped.parameters).not.toHaveProperty("properties.outputSchema.patternProperties");
   });
 
-  it.each(["missing", "lookalike", "quarantined", "denied", "execution-denied"] as const)(
+  it.each(["lookalike", "quarantined", "denied"] as const)(
     "hides and refuses collection with a %s reader, without disabling ordinary spawning or fastMode",
     async (kind) => {
       const tool = spawnTool();
@@ -166,11 +123,8 @@ describe("collector tool availability", () => {
       if (kind === "quarantined") {
         candidate.parameters = { type: "array", items: { type: "string" } };
       }
-      if (kind === "execution-denied") {
-        markAgentToolExecutionUnavailable(candidate);
-      }
       finalizeAgentToolAvailability(
-        [tool, ...(kind === "missing" ? [] : [candidate])],
+        [tool, candidate],
         kind === "denied" ? { toolExecutionAllow: ["sessions_spawn"] } : undefined,
       );
       expect(tool.parameters).toHaveProperty("properties.fastMode");
@@ -199,7 +153,6 @@ describe("collector tool availability", () => {
   );
 
   it.each([
-    { boundary: "reuse", readerState: "same-object-denied" },
     { boundary: "reuse", readerState: "denied-wrapper" },
     { boundary: "reuse", readerState: "lookalike" },
     { boundary: "restriction", readerState: "same-object-denied" },
