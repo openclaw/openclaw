@@ -383,28 +383,39 @@ describe("configured defaults", () => {
       control.reset();
     });
 
-    it("restores a deliberate same-route draft choice after agent/config hydration", async () => {
-      const { context } = setupDefaults();
-      const control = new NewSessionModelControl(() => undefined);
-      control.restoreDraftSelection({
-        agentId: "main",
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      control.load(context, "main", true, {
-        agent,
-        preference,
-        initialModel: "openai/default-model",
-      });
-      await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-      expect(control.selected).toBe("openai/other-model");
-      expect(control.thinkingLevel).toBe("low");
-      expect(control.draftSelection("main")).toMatchObject({
-        model: "openai/other-model",
-        thinkingLevel: "low",
-      });
-      control.reset();
-    });
+    it.each(["optional", "required", "required-after-hydration"])(
+      "restores a deliberate same-route draft choice after %s hydration",
+      async (placement) => {
+        const { context } = setupDefaults();
+        const control = new NewSessionModelControl(() => undefined);
+        control.restoreDraftSelection({
+          agentId: "main",
+          model: "openai/other-model",
+          thinkingLevel: "low",
+        });
+        control.load(context, "main", true, {
+          agent,
+          preference,
+          initialModel: "openai/default-model",
+          configuredDefaults: placement === "required",
+        });
+        await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
+        expect(control.selected).toBe("openai/other-model");
+        expect(control.thinkingLevel).toBe("low");
+        expect(control.draftSelection("main")).toMatchObject({
+          model: "openai/other-model",
+          thinkingLevel: "low",
+        });
+        control.load(context, "main", true, {
+          agent,
+          preference,
+          configuredDefaults: placement !== "optional",
+        });
+        expect(control.selected).toBe("openai/other-model");
+        expect(control.thinkingLevel).toBe("low");
+        control.reset();
+      },
+    );
 
     it("hydrates late Fast Mode preferences independently of a restored model", async () => {
       const { context, request } = setupDefaults();

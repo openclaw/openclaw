@@ -57,6 +57,20 @@ type DraftModelControlSelection = {
   fastMode?: FastMode;
 };
 
+export function resolveDraftDefaultModelTarget(params: {
+  agent?: GatewayAgentRow;
+  defaults?: SessionsListResult["defaults"];
+  catalog: ModelCatalogEntry[];
+  modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+}) {
+  const { agent, defaults, catalog, modelSelectionPolicy: policy } = params;
+  return resolveDraftModelTarget(
+    policy?.restricted ? policy.defaultModel : (agent?.model?.primary ?? defaults?.model),
+    policy?.restricted || agent?.model?.primary ? undefined : defaults?.modelProvider,
+    catalog,
+  );
+}
+
 export function resolveDraftModelControls(params: {
   model: string;
   selection: DraftModelControlSelection;
@@ -69,11 +83,12 @@ export function resolveDraftModelControls(params: {
   const agentDefaultModel = policy?.restricted
     ? (policy.defaultModel ?? undefined)
     : agent?.model?.primary;
-  const defaultTarget = resolveDraftModelTarget(
-    policy?.restricted ? policy.defaultModel : (agentDefaultModel ?? defaults?.model),
-    policy?.restricted || agentDefaultModel ? undefined : defaults?.modelProvider,
-    metadata.catalog,
-  );
+  const defaultTarget = resolveDraftDefaultModelTarget({
+    agent,
+    defaults,
+    catalog: metadata.catalog,
+    modelSelectionPolicy: policy,
+  });
   const selectedTarget = resolveDraftModelTarget(
     model,
     undefined,

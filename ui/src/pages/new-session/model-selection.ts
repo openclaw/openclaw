@@ -6,6 +6,7 @@ import type { DraftCloudProfile } from "./discovery.ts";
 import {
   reconcileDraftModelSelection,
   resolveDraftModelTarget,
+  resolveDraftDefaultModelTarget,
   resolveDraftDevicePlacementUnsupportedReason,
   resolveDraftCloudRuntimeUnsupportedReason,
 } from "./model-target.ts";
@@ -15,6 +16,7 @@ export type NewSessionModelLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
   initialModel?: string;
+  configuredDefaults?: boolean;
 };
 
 export type ModelSelectionChange = (
@@ -24,6 +26,32 @@ export type ModelSelectionChange = (
 /** Mutable intent belongs to this draft, separate from remembered defaults and catalog metadata. */
 export abstract class NewSessionModelSelection {
   abstract resolveAgentRuntime(): ModelRuntimeEntry["agentRuntime"];
+  abstract hostedEnvironments(): Array<{ id: string; model?: string }>;
+  abstract hostEnvironmentRuntime():
+    | { model: string; runtime: NonNullable<ModelRuntimeEntry["agentRuntime"]> }
+    | undefined;
+  abstract selectModel(model: string, agentRuntime?: string): void;
+
+  selectHostedEnvironment(id: string): boolean {
+    const choice = this.hostedEnvironments().find((entry) => entry.id === id);
+    if (!choice?.model) {
+      return false;
+    }
+    this.selectModel(choice.model, id);
+    return true;
+  }
+
+  selectHostEnvironment(): boolean {
+    if (!this.resolveAgentRuntime()?.workspaceEnvironment) {
+      return true;
+    }
+    const choice = this.hostEnvironmentRuntime();
+    if (!choice) {
+      return false;
+    }
+    this.selectModel(choice.model, choice.runtime.id);
+    return true;
+  }
 
   devicePlacementUnsupportedReason(): string | undefined {
     return resolveDraftDevicePlacementUnsupportedReason(this.resolveAgentRuntime());
@@ -33,8 +61,9 @@ export abstract class NewSessionModelSelection {
   // remote-exec runtimes select by eligible device order and must not be
   // described as least-busy. Unresolved (auto/default) runtimes fall back to
   // the worker-turn description, matching the server's default policy.
-  autoPlacementSelectionMode(): "least-busy" | "eligible-order" {
-    const runtime = this.resolveAgentRuntime();
+  autoPlacementSelectionMode(
+    runtime = this.resolveAgentRuntime(),
+  ): "least-busy" | "eligible-order" {
     return runtime?.cloudPlacementExecutionMode === "remote-exec" ? "eligible-order" : "least-busy";
   }
 
@@ -204,11 +233,7 @@ export abstract class NewSessionModelSelection {
     this.markExplicitSelection();
     const target =
       resolveDraftModelTarget(selection.model, undefined, options.catalog, this.agentRuntime) ??
-      resolveDraftModelTarget(
-        options.agent?.model?.primary ?? options.defaults?.model,
-        options.agent?.model?.primary ? undefined : options.defaults?.modelProvider,
-        options.catalog,
-      );
+      resolveDraftDefaultModelTarget(options);
     this.contextWindow = "";
     return { target, runtimeChanged };
   }

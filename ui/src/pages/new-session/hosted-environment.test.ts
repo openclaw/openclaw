@@ -2,9 +2,11 @@ import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
+import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { contextWith, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
@@ -252,6 +254,61 @@ describe("hosted environment selection", () => {
       }),
     ).toMatchObject({ catalogId: "native-cli", cwd: "/local/project", worktree: true });
   });
+  it("describes Auto using the eligible host runtime while a hosted workspace is selected", async () => {
+    const f = createDraftFixture({
+      methods: ["environments.list", "sessions.create"],
+      request: async () => ({
+        profiles: [],
+        environments: ["desktop", "laptop"].map((id) => ({
+          id: `node:${id}`,
+          type: "node",
+          status: "available",
+          sessionHost: true,
+          workerSlots: { total: 1, available: 1 },
+        })),
+      }),
+      agents: [{ ...agent, workspace: "/workspace" }],
+      modelCatalog: async () => ({
+        models: [
+          {
+            ...model,
+            agentRuntime: {
+              ...model.agentRuntime!,
+              id: "remote-runtime",
+              cloudPlacementExecutionMode: "remote-exec",
+            },
+          },
+        ],
+      }),
+    });
+    controls.push(f.place.modelControl);
+    await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+    f.place.selectHostedEnvironment("agentsapi");
+    expect(f.place.hostedEnvironment).toBeDefined();
+    await f.gateway.refreshCloudProfiles();
+    const element = document.createElement("div");
+    render(
+      renderNewSessionPlaceControls({
+        context: f.context,
+        data: undefined,
+        gateway: f.gateway,
+        place: f.place,
+        submitting: false,
+        pendingPlacement: false,
+        onConnectMachine: vi.fn(),
+        onNavigate: vi.fn(),
+        onFocusComposer: vi.fn(),
+        requestUpdate: vi.fn(),
+      }),
+      element,
+    );
+    expect(element.textContent).toContain("Chooses the first eligible connected device");
+    expect(element.textContent).not.toContain("Chooses the least-busy connected device");
+    f.place.selectDevice("", true);
+    expect(f.place.autoDevice).toBe(true);
+    expect(f.place.modelControl.resolveAgentRuntime()?.id).toBe("remote-runtime");
+  });
+
   it("suppresses remote clone and worktree payloads while preserving place intent", async () => {
     const fixture = createRepositoryFixture({ models: [model], workspaceGit: true });
     const { state, context } = fixture;
