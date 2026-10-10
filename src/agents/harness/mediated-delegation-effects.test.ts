@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -31,7 +30,6 @@ import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "../cli-runner/mcp-grant-context.js";
 import { resolveCliRuntimeToolPolicy } from "../cli-runner/prepare-tool-policy.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
-import * as shellSnapshot from "../shell-snapshot.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
@@ -58,7 +56,7 @@ beforeAll(async () => {
       entries: {
         intake: {
           tools: { deny: denied },
-          subagents: { allowAgents: ["coder"], delegateToolsTo: ["coder"] },
+          subagents: { allowAgents: ["coder"] },
         },
         coder: { workspace: state.workspaceDir },
       },
@@ -92,22 +90,10 @@ afterAll(async () => {
   await state?.cleanup();
 });
 
-function revoke() {
-  const next = structuredClone(config);
-  next.agents!.entries!.intake!.subagents!.delegateToolsTo = [];
-  setRuntimeConfigSnapshot(next);
-  return next;
-}
-
-async function createCaller(
-  route: Route,
-  currentConfig = config,
-  existingSessionKey = "",
-  senderRestricted = false,
-) {
+async function createCaller(route: Route, existingSessionKey = "", senderRestricted = false) {
   const runId = "mediated-" + ++sequence;
   const sessionKey = existingSessionKey || "agent:coder:dashboard:" + runId;
-  const scope = { cfg: currentConfig, agentId: "coder", sessionKey };
+  const scope = { cfg: config, agentId: "coder", sessionKey };
   let sessionEntry = await readResolvedSessionEntryInWorker(scope);
   if (!sessionEntry) {
     await replaceSessionEntry(scope, {
@@ -118,23 +104,11 @@ async function createCaller(
       inheritedToolPolicyVersion: 1,
       ...(senderRestricted ? { inheritedToolPolicySource: "sender" as const } : {}),
       inheritedToolDeny: denied,
-      delegatedToolPolicy: {
-        requesterSessionKey: requester,
-        targetAgentId: "coder",
-        deny: [],
-        requesterDeny: denied,
-      },
     });
     sessionEntry = await readResolvedSessionEntryInWorker(scope);
   }
-  expect(sessionEntry?.delegatedToolPolicy?.requesterDeny).toEqual(denied);
   expect(sessionEntry?.inheritedToolDeny).toEqual(denied);
-  const admission = prepareSystemAgentRunAdmission(
-    currentConfig,
-    runId,
-    "coder",
-    "mediated-effect-test",
-  );
+  const admission = prepareSystemAgentRunAdmission(config, runId, "coder", "mediated-effect-test");
   cleanups.push(admission.close);
   const admittedRunContext = await admission.admit(
     route === "cli-loopback" ? "embedded" : "plugin-harness",
@@ -143,7 +117,7 @@ async function createCaller(
   const workspaceDir = state.workspaceDir;
   if (route === "cli-loopback") {
     const run: RunCliAgentParams = {
-      config: currentConfig,
+      config,
       sessionId: sessionEntry!.sessionId,
       sessionKey,
       sessionEntry,
@@ -167,13 +141,10 @@ async function createCaller(
       isSideQuestion: false,
       skipsTurnPreparation: false,
     });
-    if (currentConfig === config) {
-      expect(policy.params.cliToolAvailability?.native).toEqual([]);
-      trace.push("native=[]");
-    }
+    expect(policy.params.cliToolAvailability?.native).toEqual(senderRestricted ? [] : undefined);
     const context = buildCliMcpGrantContext({
       run: policy.params,
-      config: currentConfig,
+      config,
       requireExplicitMessageTarget: false,
       agentId: "coder",
       modelProvider: "fixture",
@@ -181,7 +152,7 @@ async function createCaller(
       toolsAllow: policy.runtimeToolsAllowPolicy ?? ["read", "write", "exec"],
     });
     const projected = await resolveMcpLoopbackPolicyTools({
-      cfg: currentConfig,
+      cfg: config,
       context,
       admittedRunContext,
     });
@@ -251,7 +222,7 @@ async function createCaller(
   const host = createAgentHarnessHostCapabilities({
     pluginId: "fixture-mediated-harness",
     attempt: {
-      config: currentConfig,
+      config,
       runId,
       agentId: "coder",
       sessionId: sessionEntry!.sessionId,
@@ -263,7 +234,7 @@ async function createCaller(
   });
   cleanups.push(host.close);
   const tools = await host.capabilities.createToolSurfaceAsync!({
-    config: currentConfig,
+    config,
     agentId: "coder",
     sessionKey,
     workspaceDir,
@@ -321,12 +292,10 @@ function observeLaunches(trace: string[]) {
   return () => launches;
 }
 
-// Promise gates delay real preparation/I/O only. All authority, tool construction,
-// approval policy, command launch, mutation, and caller receipts remain production-owned.
 describe.each(["cli-loopback", "plugin-harness"] as const)(
-  "%s delegated final effects",
+  "%s cross-agent final effects",
   (route) => {
-    it("executes the persisted exception, then restores the deny fallback on resume", async () => {
+    it("executes with target policy despite a persisted requester lockdown, including on resume", async () => {
       const caller = await createCaller(route);
       expect(caller.names).toEqual(expect.arrayContaining(denied));
       const launches = observeLaunches(caller.trace);
@@ -343,28 +312,18 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
       const write = await caller.call("write", { path: target, content: "write-effect" });
       expect(write.isError, write.text).toBe(false);
       expect(await fs.readFile(target, "utf8")).toBe("write-effect");
-      const resumed = await createCaller(route, revoke(), caller.sessionKey);
-      expect(resumed.names).not.toContain("exec");
-      expect(resumed.names).not.toContain("write");
-      const refused = await resumed.call("write", { path: target, content: "must-not-write" });
-      expect(refused.isError).toBe(true);
+      const resumed = await createCaller(route, caller.sessionKey);
+      expect(resumed.names).toEqual(expect.arrayContaining(denied));
+      const resumedWrite = await resumed.call("write", { path: target, content: "resumed-effect" });
+      expect(resumedWrite.isError, resumedWrite.text).toBe(false);
       const read = await resumed.call("read", { path: target });
       expect(read.isError, read.text).toBe(false);
-      expect(read.text).toContain("write-effect");
-      expect(await fs.readFile(target, "utf8")).toBe("write-effect");
-      console.log(
-        JSON.stringify({
-          route,
-          trace: caller.trace,
-          launches: launches(),
-          finalFile: "write-effect",
-          resumed: { exec: false, write: false, read: true },
-        }),
-      );
+      expect(read.text).toContain("resumed-effect");
+      expect(await fs.readFile(target, "utf8")).toBe("resumed-effect");
     });
 
-    it("does not waive sender restrictions even with a persisted delegation exception", async () => {
-      const caller = await createCaller(route, config, "", true);
+    it("keeps persisted sender restrictions enforced on the target agent", async () => {
+      const caller = await createCaller(route, "", true);
       const launches = observeLaunches(caller.trace);
       const basename = route + "-sender-denied.txt";
       const target = path.join(state.workspaceDir, basename);
@@ -380,111 +339,6 @@ describe.each(["cli-loopback", "plugin-harness"] as const)(
       }
       expect(launches()).toBe(0);
       expect(await fs.readFile(target, "utf8")).toBe("original");
-      console.log(
-        JSON.stringify({
-          route,
-          stage: "sender-denied",
-          trace: caller.trace,
-          launches: launches(),
-          finalFile: "original",
-        }),
-      );
-    });
-
-    it("rejects revocation during awaited command preparation before process launch", async ({
-      signal,
-    }) => {
-      const caller = await createCaller(route);
-      const launches = observeLaunches(caller.trace);
-      const basename = route + "-revoked-command.txt";
-      const target = path.join(state.workspaceDir, basename);
-      await fs.writeFile(target, "original");
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const original = shellSnapshot.maybeWrapCommandWithShellSnapshot;
-      vi.spyOn(shellSnapshot, "maybeWrapCommandWithShellSnapshot").mockImplementation(
-        async (...args) => {
-          caller.trace.push("command-preparation:waiting");
-          entered.resolve();
-          await release.promise;
-          caller.trace.push("command-preparation:released");
-          return original(...args);
-        },
-      );
-      const running = caller.call("exec", {
-        command: "printf forbidden > " + basename,
-        yieldMs: 10_000,
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, running, "command did not reach preparation"),
-          signal,
-        );
-        revoke();
-        caller.trace.push("delegation:revoked");
-      } finally {
-        release.resolve();
-      }
-      const receipt = await running;
-      expect(receipt.isError, receipt.text).toBe(true);
-      expect(receipt.text).toMatch(/authorization changed|authority is no longer active/);
-      expect(launches()).toBe(0);
-      expect(await fs.readFile(target, "utf8")).toBe("original");
-      console.log(
-        JSON.stringify({
-          route,
-          stage: "command-preparation",
-          trace: caller.trace,
-          launches: launches(),
-          finalFile: "original",
-          denied: receipt.text,
-        }),
-      );
-    });
-
-    it("rejects revocation after the write descriptor opens but before mutation", async ({
-      signal,
-    }) => {
-      const caller = await createCaller(route);
-      const target = path.join(state.workspaceDir, route + "-revoked-write.txt");
-      await fs.writeFile(target, "original");
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
-      const originalOpen = fs.open;
-      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await originalOpen(...args);
-        if (args[0] === target && args[1] === "r+") {
-          caller.trace.push("file-open:waiting-before-mutation");
-          entered.resolve();
-          await release.promise;
-          caller.trace.push("file-open:released");
-        }
-        return handle;
-      });
-      const running = caller.call("write", { path: target, content: "forbidden" });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(entered.promise, running, "write did not open its descriptor"),
-          signal,
-        );
-        revoke();
-        caller.trace.push("delegation:revoked");
-      } finally {
-        release.resolve();
-      }
-      const receipt = await running;
-      expect(receipt.isError, receipt.text).toBe(true);
-      expect(receipt.text).toMatch(/authorization changed|authority is no longer active/);
-      expect(await fs.readFile(target, "utf8")).toBe("original");
-      console.log(
-        JSON.stringify({
-          route,
-          stage: "file-open",
-          trace: caller.trace,
-          finalFile: "original",
-          denied: receipt.text,
-        }),
-      );
     });
   },
 );

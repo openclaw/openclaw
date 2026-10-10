@@ -10,6 +10,70 @@ export function registerAcpSpawnPolicyTests(fixture: {
   upsertSessionEntryMock: unknown;
   callGatewayMock: unknown;
 }) {
+  it.each([{ allowed: true }, { allowed: false }])(
+    "drops the requester ceiling only for an allowed configured ACP agent (allowed=$allowed)",
+    async ({ allowed }) => {
+      fixture.state.cfg.agents = {
+        entries: {
+          main: { subagents: { allowAgents: allowed ? ["coder"] : [] } },
+          coder: { runtime: { type: "acp", acp: { agent: "codex" } } },
+        },
+      };
+      const result = await fixture.spawn(
+        { task: "Implement the change", agentId: "coder" },
+        {
+          agentSessionKey: "agent:main:main",
+          inheritedToolAllowlist: ["read", "sessions_spawn"],
+          inheritedToolDenylist: ["write", "exec"],
+        },
+      );
+      if (allowed) {
+        expect(result.status).toBe("accepted");
+        expect(result.childSessionKey).toMatch(/^agent:coder:acp:/);
+        expect(fixture.upsertSessionEntryMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ inheritedToolPolicyVersion: 1 }),
+        );
+        expect(fixture.upsertSessionEntryMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.not.objectContaining({ inheritedToolAllow: expect.anything() }),
+        );
+        expect(fixture.upsertSessionEntryMock).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.not.objectContaining({ inheritedToolDeny: expect.anything() }),
+        );
+      } else {
+        expect(result).toMatchObject({
+          status: "forbidden",
+          error: expect.stringContaining("agentId is not allowed"),
+        });
+        expect(fixture.initializeSessionMock).not.toHaveBeenCalled();
+        expect(fixture.upsertSessionEntryMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.each([
+    { policy: { inheritedToolDenylist: ["exec"] }, error: "requester denies exec" },
+    { policy: { inheritedToolDenylist: ["group:fs"] }, error: "requester denies apply_patch" },
+    { policy: { inheritedToolDenylist: ["exec*"] }, error: "requester denies exec" },
+    {
+      policy: { inheritedToolAllowlist: ["read", "sessions_spawn"] },
+      error: "requester does not allow apply_patch",
+    },
+  ])(
+    "keeps the requester ceiling for an external ACP harness: $error",
+    async ({ policy, error }) => {
+      const result = await fixture.spawn(
+        { task: "Inspect the project", agentId: "codex" },
+        { agentSessionKey: "agent:main:main", ...policy },
+      );
+      expect(result).toMatchObject({ status: "forbidden", error: expect.stringContaining(error) });
+      expect(fixture.initializeSessionMock).not.toHaveBeenCalled();
+      expect(fixture.upsertSessionEntryMock).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["codex", undefined])(
     "refuses restricted cross-agent ACP targets, including the default (%s)",
     async (agentId) => {

@@ -50,6 +50,7 @@ const {
 describe("worker session tool topology", () => {
   const getFixture = installWorkerSessionToolTestFixture(fixtureMocks, {
     operatorProfileId: "profile-worker-requester",
+    inheritedToolDenylist: ["write", "exec"],
   });
   let placements: ReturnType<typeof getFixture>["placements"];
   let identity: ReturnType<typeof getFixture>["identity"];
@@ -315,12 +316,18 @@ describe("worker session tool topology", () => {
   );
 
   it.each([
-    { name: "default", required: false, permissionMode: undefined },
-    { name: "required isolation", required: true, permissionMode: undefined },
-    { name: "read-only", required: false, permissionMode: "read-only" },
+    { name: "default", required: false, permissionMode: undefined, targetAgentId: "main" },
+    {
+      name: "required isolation",
+      required: true,
+      permissionMode: undefined,
+      targetAgentId: "main",
+    },
+    { name: "read-only", required: false, permissionMode: "read-only", targetAgentId: "main" },
+    { name: "cross-agent", required: false, permissionMode: undefined, targetAgentId: "coder" },
   ] as const)(
     "coalesces cloud spawns with inherited identity, permissions, and $name policy",
-    async ({ required, permissionMode }) => {
+    async ({ required, permissionMode, targetAgentId }) => {
       setEntry(SOURCE.sessionKey, SOURCE.sessionId);
       const creator = { type: "human", id: "profile-worker-creator" } as const;
       Object.assign(sessionEntries.get(SOURCE.sessionKey)!, {
@@ -340,9 +347,17 @@ describe("worker session tool topology", () => {
         await finishCreate.promise;
         return await create(request);
       });
-      const retries = Array.from({ length: 32 }, () =>
-        spawn("spawn-cloud-child", "run in the nested cloud session"),
-      );
+      const spawnChild = () =>
+        execute({
+          identity,
+          toolName: "sessions_spawn",
+          request: {
+            toolCallId: "spawn-cloud-child",
+            task: "run in the nested cloud session",
+            agentId: targetAgentId,
+          },
+        });
+      const retries = Array.from({ length: 32 }, spawnChild);
       await createStarted.promise;
       finishCreate.resolve();
       const results = await Promise.all(retries);
@@ -350,17 +365,23 @@ describe("worker session tool topology", () => {
       expect(dispatchChild).toHaveBeenCalledOnce();
       expect(gatewayRequest).toHaveBeenCalledOnce();
       const first = results[0]!;
-      const replay = await spawn("spawn-cloud-child", "run in the nested cloud session");
+      const replay = await spawnChild();
 
-      expect(spawnState.childSessionKey).toMatch(/^agent:main:dashboard:cloud-[a-f0-9]{32}$/u);
+      expect(spawnState.childSessionKey).toMatch(/:dashboard:cloud-[a-f0-9]{32}$/u);
+      expect(spawnState.childSessionKey?.startsWith(`agent:${targetAgentId}:`)).toBe(true);
       expect(spawnState.order).toEqual(["create", "dispatch", "send"]);
       expect(gatewayCreate).toHaveBeenCalledOnce();
+      const inheritedToolPolicy =
+        targetAgentId === SOURCE.agentId
+          ? { version: 1, allow: ["sessions_spawn", "sessions_send"], deny: ["write", "exec"] }
+          : { version: 1, allow: [], deny: [] };
       expect(gatewayCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           creation: expect.objectContaining({
             actor: { type: "agent", id: SOURCE.agentId },
             requesterSessionKey: SOURCE.sessionKey,
             via: "spawn",
+            inheritedToolPolicy,
           }),
           method: "sessions.create",
           options: {
@@ -376,7 +397,7 @@ describe("worker session tool topology", () => {
         {
           sessionId: CHILD.sessionId,
           sessionKey: spawnState.childSessionKey,
-          agentId: CHILD.agentId,
+          agentId: targetAgentId,
           executionMode: "worker-turn",
           profileId: "cloud-profile",
           inheritedProfile: {
@@ -436,11 +457,7 @@ describe("worker session tool topology", () => {
         operationalRunInstance: expect.objectContaining({ runId: sourceClaim.runId }),
         delegatedAuthority: expect.objectContaining({ kind: "worker", turnClaim: sourceClaim }),
         sessionSpawnContext: {
-          inheritedToolPolicy: {
-            version: 1,
-            allow: ["sessions_spawn", "sessions_send"],
-            deny: [],
-          },
+          inheritedToolPolicy,
         },
       });
       expect(readAgentRuntimeExecutionLineage(runtimeIdentity?.sessionSpawnContext)).toMatchObject({

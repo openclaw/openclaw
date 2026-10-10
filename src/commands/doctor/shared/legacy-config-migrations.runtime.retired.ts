@@ -20,7 +20,9 @@ import { migrateTierEvalTranche } from "./legacy-config-migrations.runtime.tier-
 import {
   deleteRetiredPath,
   moveLegacyConfigKey,
+  someAgentEntry,
   visitAgentConfigScopes,
+  visitAgentEntries,
   visitChannelEntries,
 } from "./legacy-config-record-shared.js";
 
@@ -397,6 +399,28 @@ function probedMigration(
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  {
+    id: "runtime.subagents-delegate-tools-to",
+    legacyRules: [
+      rule(
+        ["agents"],
+        'subagents.delegateToolsTo is retired; allowed cross-agent targets use their own tools. Run "openclaw doctor --fix".',
+        (value) =>
+          someAgentEntry(value, (agent) =>
+            Object.hasOwn(getRecord(agent.subagents) ?? {}, "delegateToolsTo"),
+          ),
+      ),
+    ],
+    apply: (raw, changes) => {
+      visitAgentEntries(raw, (agent, path) => {
+        if (deleteRetiredPath(agent.subagents, ["delegateToolsTo"])) {
+          changes.push(
+            `Removed ${path}.subagents.delegateToolsTo; allowAgents now controls cross-agent delegation.`,
+          );
+        }
+      });
+    },
+  },
   {
     id: "runtime.automatic-local-model-lean",
     legacyRules: [

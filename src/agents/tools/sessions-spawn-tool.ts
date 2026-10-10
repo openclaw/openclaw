@@ -17,12 +17,6 @@ import {
   normalizeAcceptedSessionSpawnResult,
 } from "../accepted-session-spawn.js";
 import { captureAgentToolSourceExecutionGuard } from "../agent-tool-source-execution-guard.js";
-import {
-  findAcpUnsupportedInheritedToolAllow,
-  findAcpUnsupportedInheritedToolDeny,
-  formatAcpInheritedToolAllowError,
-  formatAcpInheritedToolDenyError,
-} from "../inherited-tool-deny.js";
 import { optionalStringEnum, requesterProfileSchema } from "../schema/typebox.js";
 import { resolveSenderRestrictedSpawnError } from "../spawn-requester-policy.js";
 import { withParentExecutionIdentity } from "../subagents/spawn/execution-identity-spawn-context.js";
@@ -426,11 +420,6 @@ export function createSessionsSpawnTool(
         const taskName = taskNameResult.taskName;
         const label = readToolStringParam(params, "label") ?? "";
         const runtime = params.runtime === "acp" ? "acp" : "subagent";
-        if (runtime === "subagent" && opts?.delegatedToolPolicyUnavailable) {
-          throw new ToolInputError(
-            "This mediated tool surface cannot preserve the active delegated execution grant. Start the helper from a Gateway-side native tool surface.",
-          );
-        }
         const completionTarget = params.completionTarget;
         if (completionTarget !== undefined && completionTarget !== "parent") {
           throw new ToolInputError('sessions_spawn completionTarget must be "parent" or omitted.');
@@ -519,26 +508,6 @@ export function createSessionsSpawnTool(
             }),
           });
         }
-        const acpUnsupportedInheritedTool =
-          runtime === "acp"
-            ? findAcpUnsupportedInheritedToolDeny(opts?.inheritedToolDenylist)
-            : undefined;
-        if (acpUnsupportedInheritedTool) {
-          return spawnResult({
-            status: "forbidden",
-            error: formatAcpInheritedToolDenyError(acpUnsupportedInheritedTool),
-          });
-        }
-        const acpUnsupportedInheritedAllow =
-          runtime === "acp"
-            ? findAcpUnsupportedInheritedToolAllow(opts?.inheritedToolAllowlist)
-            : undefined;
-        if (acpUnsupportedInheritedAllow) {
-          return spawnResult({
-            status: "forbidden",
-            error: formatAcpInheritedToolAllowError(acpUnsupportedInheritedAllow),
-          });
-        }
         if (runtime === "acp" && lightContext) {
           throw new Error("lightContext is only supported for runtime='subagent'.");
         }
@@ -585,13 +554,6 @@ export function createSessionsSpawnTool(
           sandboxed: opts?.sandboxed,
           inheritedToolAllowlist: opts?.inheritedToolAllowlist,
           inheritedToolDenylist: opts?.inheritedToolDenylist,
-          ...(runtime === "subagent"
-            ? {
-                delegatedToolDenyFloor: opts?.delegatedToolDenyFloor,
-                requesterToolDenylist: opts?.requesterToolDenylist,
-                readDelegationConfig: opts?.readDelegationConfig,
-              }
-            : {}),
           inheritedToolPolicySource: opts?.inheritedToolPolicySource,
           workspaceDir: opts?.workspaceDir,
           sessionPermissionPolicy: opts?.sessionPermissionPolicy,

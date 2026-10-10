@@ -23,12 +23,12 @@ type PersistedSessionCapabilityEntry = Pick<
   | "subagentRole"
   | "subagentControlScope"
   | "spawnedBy"
+  | "parentSessionKey"
   | "completionOwnerSessionKey"
   | "inheritedToolPolicyVersion"
   | "inheritedToolPolicySource"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
-  | "delegatedToolPolicy"
 >;
 export type SessionCapabilityEntry = {
   [Key in keyof PersistedSessionCapabilityEntry]?: unknown;

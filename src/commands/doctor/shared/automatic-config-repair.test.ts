@@ -47,6 +47,43 @@ function invalidSnapshot(params: {
 }
 
 describe("automatic config repair", () => {
+  it("retires delegateToolsTo during update while preserving agent policy and the config backup", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync(
+        { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        async () => {
+          const intake = {
+            tools: { deny: ["write", "exec"] },
+            subagents: { allowAgents: ["coder"], delegateToolsTo: ["coder"] },
+          };
+          const configPath = await writeOpenClawConfig(home, {
+            agents: { entries: { intake, coder: {} } },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const originalBytes = await fs.readFile(configPath, "utf8");
+          const snapshot = await readConfigFileSnapshot();
+          expect(snapshot.valid).toBe(false);
+          const plan = planAutomaticConfigRepair(snapshot);
+          expect(plan?.snapshot.valid).toBe(true);
+          if (!plan) {
+            throw new Error("Expected the retired delegation setting to be repairable");
+          }
+          await commitAutomaticConfigRepair(plan, snapshot);
+          const reloaded = await readConfigFileSnapshot();
+          expect(reloaded.valid).toBe(true);
+          expect(reloaded.sourceConfig.agents?.entries?.intake).toEqual({
+            tools: intake.tools,
+            subagents: { allowAgents: ["coder"] },
+          });
+          expect(reloaded.sourceConfig.agents?.entries?.coder).toEqual({});
+          expect(planAutomaticConfigRepair(reloaded)).toBeNull();
+          await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(originalBytes);
+        },
+      );
+    });
+  });
+
   it("preserves a resolved legacy channel owner in the same repair as the explicit roster", async () => {
     const coreSourceRoot = fileURLToPath(new URL("../../../", import.meta.url));
     const loadModule = pluginModuleLoader.getCachedPluginModuleLoader;

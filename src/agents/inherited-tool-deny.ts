@@ -5,6 +5,20 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
+/** Sender restrictions follow descendants; agent-local policy stops at a known agent boundary. */
+export function shouldInheritSubagentToolPolicy(params: {
+  requesterAgentId?: string;
+  targetAgentId?: string;
+  inheritedToolPolicySource?: unknown;
+}): boolean {
+  return (
+    params.inheritedToolPolicySource === "sender" ||
+    !params.requesterAgentId ||
+    !params.targetAgentId ||
+    params.requesterAgentId === params.targetAgentId
+  );
+}
+
 const ACP_UNSUPPORTED_INHERITED_TOOL_DENY = [
   "apply_patch",
   "edit",

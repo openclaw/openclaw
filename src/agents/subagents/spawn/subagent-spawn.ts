@@ -11,7 +11,7 @@ import { recordSessionCreated } from "../../../sessions/session-created.js";
 import { recordSessionParticipantBestEffort } from "../../../sessions/session-participant-recording.js";
 import { recordSubagentSpawned } from "../../../sessions/session-state-events.js";
 import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
-import { prepareNativeDelegatedToolPolicy } from "../../delegated-tool-policy.js";
+import { shouldInheritSubagentToolPolicy } from "../../inherited-tool-deny.js";
 import {
   runSpawnPipeline,
   summarizeSpawnError,
@@ -68,11 +68,7 @@ export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
 ): Promise<SpawnSubagentResult> {
-  let assertDelegationCurrent: (() => void) | undefined;
-  const assertActive = () => {
-    ctx.assertActive?.();
-    assertDelegationCurrent?.();
-  };
+  const assertActive = () => ctx.assertActive?.();
   const promptedAt = Date.now();
   const task = params.task;
   const label = params.label?.trim() || "";
@@ -125,15 +121,13 @@ export async function spawnSubagentDirect(
   let provisionalCleanupOpen = true;
   let contextEnginePreparation: PreparedContextEngineSubagentSpawn | undefined;
   try {
-    const delegation = prepareNativeDelegatedToolPolicy({
-      config: cfg,
+    const inheritedToolPolicy = shouldInheritSubagentToolPolicy({
       requesterAgentId,
       targetAgentId,
-      requesterSessionKey: requesterInternalKey,
-      context: ctx,
-    });
-    const delegatedToolPolicy = delegation.policy;
-    assertDelegationCurrent = delegation.assertCurrent;
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
+    })
+      ? ctx
+      : undefined;
     assertActive();
     if (reservationPending && !swarmReservation?.isCurrent()) {
       return { status: "error", error: "Collector FIFO reservation is no longer current" };
@@ -198,10 +192,9 @@ export async function spawnSubagentDirect(
       sessionPermissionPolicy: ctx.sessionPermissionPolicy,
       worktree: params.worktree ? params : undefined,
       admissionPatch: admission.childSessionPatch,
-      inheritedToolAllowlist: ctx.inheritedToolAllowlist,
-      inheritedToolDenylist: ctx.inheritedToolDenylist,
-      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
-      delegatedToolPolicy,
+      inheritedToolAllowlist: inheritedToolPolicy?.inheritedToolAllowlist,
+      inheritedToolDenylist: inheritedToolPolicy?.inheritedToolDenylist,
+      inheritedToolPolicySource: inheritedToolPolicy?.inheritedToolPolicySource,
       modelPatch: plan.initialSessionPatch,
       swarmGroupId,
       collect: params.collect === true,
@@ -408,8 +401,8 @@ export async function spawnSubagentDirect(
               maxDepth: maxSpawnDepth,
               targetAgentId,
               sandbox: sandboxMode,
-              inheritedToolAllowlist: ctx.inheritedToolAllowlist,
-              inheritedToolDenylist: ctx.inheritedToolDenylist,
+              inheritedToolAllowlist: inheritedToolPolicy?.inheritedToolAllowlist,
+              inheritedToolDenylist: inheritedToolPolicy?.inheritedToolDenylist,
             }),
             parentExecutionIdentityToken: readParentExecutionIdentity(ctx),
           },

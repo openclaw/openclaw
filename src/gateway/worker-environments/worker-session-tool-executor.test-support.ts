@@ -208,7 +208,7 @@ type WorkerSessionToolTestOptions = {
   operatorProfileId?: string;
   operatorScopes?: readonly string[];
   inheritedToolPolicySource?: "sender";
-  delegatedToolPolicyActive?: boolean;
+  inheritedToolDenylist?: string[];
 };
 
 async function createWorkerSessionToolTestFixture(
@@ -367,11 +367,12 @@ async function createWorkerSessionToolTestFixture(
       return { ok: true, key: spawnState.childSessionKey, sessionId: CHILD.sessionId };
     },
   );
-  dispatchChild.mockImplementation(async (request: { sessionKey: string }) => {
+  dispatchChild.mockImplementation(async (request: { sessionKey: string; agentId: string }) => {
     spawnState.order.push("dispatch");
     expect(placements.get(CHILD.sessionId)).toBeUndefined();
     await activate({
       ...CHILD,
+      agentId: request.agentId,
       sessionKey: request.sessionKey,
     });
     return placements.get(CHILD.sessionId);
@@ -388,7 +389,7 @@ async function createWorkerSessionToolTestFixture(
   );
   const executorParams: Parameters<typeof createWorkerSessionToolExecutor>[0] = {
     inheritedToolPolicySource: options.inheritedToolPolicySource,
-    delegatedToolPolicyActive: options.delegatedToolPolicyActive,
+    inheritedToolDenylist: options.inheritedToolDenylist,
     resolveGatewayContext,
     placements,
     dispatchChild,

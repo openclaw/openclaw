@@ -915,32 +915,6 @@ describe("sessions_spawn tool", () => {
   });
 
   it.each([
-    [{ inheritedToolDenylist: ["exec"] }, "requester denies exec"],
-    [{ inheritedToolDenylist: ["group:fs"] }, "requester denies apply_patch"],
-    [{ inheritedToolDenylist: ["exec*"] }, "requester denies exec"],
-    [
-      { inheritedToolAllowlist: ["sessions_spawn", "custom_plugin_tool"] },
-      "requester does not allow apply_patch",
-    ],
-  ] satisfies Array<[SpawnOptions, string]>)(
-    "rejects ACP when the inherited policy is incompatible: %j",
-    async (policy, error) => {
-      registerAcpBackendForTest();
-      const result = await makeTool(policy).execute("acp-policy", {
-        runtime: "acp",
-        task: "inspect",
-        agentId: "codex",
-      });
-      expect(result.details).toMatchObject({
-        status: "forbidden",
-        role: "codex",
-        error: expect.stringContaining(error),
-      });
-      expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
     [
       "sandboxed requester",
       true,

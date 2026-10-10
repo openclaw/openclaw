@@ -17,10 +17,10 @@ import {
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
-import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
   normalizeInheritedToolDenylist,
+  shouldInheritSubagentToolPolicy,
 } from "../../inherited-tool-deny.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import {
@@ -47,7 +47,6 @@ type PersistedSubagentToolPolicyEnvelope = {
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
   inheritedToolPolicySource?: "sender";
-  delegatedToolPolicy?: DelegatedToolPolicy;
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -274,17 +273,12 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     store?: SessionCapabilityStore;
     agentId?: string;
   },
-  visited = new Set<string>(),
 ): PersistedSubagentToolPolicyEnvelope | undefined {
   const stored = resolveStoredSubagentToolPolicy(sessionKey, opts);
   if (!stored) {
     return undefined;
   }
   const { sessionKey: normalizedSessionKey, store, entry } = stored;
-  if (visited.has(normalizedSessionKey) || visited.size >= 32) {
-    return undefined;
-  }
-  visited.add(normalizedSessionKey);
   const spawnedBy = normalizeOptionalString(entry?.spawnedBy);
   const hasSpawnDepth =
     typeof entry?.spawnDepth === "number" &&
@@ -302,31 +296,12 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     return undefined;
   }
   const completionOwnerSessionKey = normalizeOptionalString(entry.completionOwnerSessionKey);
-  let delegatedToolPolicy = readDelegatedToolPolicy(entry.delegatedToolPolicy);
-  if (delegatedToolPolicy) {
-    const targetAgentId = delegatedToolPolicy.targetAgentId;
-    const direct = spawnedBy === delegatedToolPolicy.requesterSessionKey;
-    const parent =
-      !direct && isSameAgentSessionStore(normalizedSessionKey, spawnedBy)
-        ? resolvePersistedSubagentToolPolicyEnvelope(spawnedBy, { ...opts, store }, visited)
-        : undefined;
-    if (
-      parseAgentSessionKey(normalizedSessionKey)?.agentId !== targetAgentId ||
-      (!direct &&
-        (parent?.delegatedToolPolicy?.requesterSessionKey !==
-          delegatedToolPolicy.requesterSessionKey ||
-          parent?.delegatedToolPolicy?.targetAgentId !== targetAgentId))
-    ) {
-      delegatedToolPolicy = undefined;
-    }
-  }
   return {
     sessionKey: normalizedSessionKey,
     spawnedBy,
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
-    delegatedToolPolicy,
     ...(entry.inheritedToolPolicySource === "sender"
       ? { inheritedToolPolicySource: "sender" as const }
       : {}),
@@ -389,11 +364,28 @@ function resolveStoredSubagentToolPolicy(
     return undefined;
   }
   const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = resolveSessionCapabilityEntry({
+  let entry = resolveSessionCapabilityEntry({
     sessionKey: normalizedSessionKey,
     cfg: opts?.cfg,
     store,
   });
+  if (
+    entry &&
+    !shouldInheritSubagentToolPolicy({
+      requesterAgentId:
+        parseAgentSessionKey(normalizeOptionalString(entry.spawnedBy))?.agentId ??
+        parseAgentSessionKey(normalizeOptionalString(entry.parentSessionKey))?.agentId,
+      targetAgentId: parseAgentSessionKey(normalizedSessionKey)?.agentId,
+      inheritedToolPolicySource: entry.inheritedToolPolicySource,
+    })
+  ) {
+    // Keep lineage for subagent limits and senderless resumes, without rewriting stored sessions.
+    entry = {
+      ...entry,
+      inheritedToolAllow: undefined,
+      inheritedToolDeny: undefined,
+    };
+  }
   return { sessionKey: normalizedSessionKey, store, entry };
 }
 
