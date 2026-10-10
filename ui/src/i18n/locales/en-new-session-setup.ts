@@ -4,6 +4,13 @@ import { en } from "./en.ts";
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    openClawWorker: "OpenClaw worker",
+    requiredWorkerHint: "Say what you’d like to work on.",
+    requiredWorker: "Worker",
+    requiredWorkerUnavailable:
+      "The required worker is unavailable. Ask an administrator to check the worker profile, then retry.",
+    requiredWorkerChanged:
+      "The required worker policy changed. Start a new session; this saved message has not been sent.",
     title: en.newSession.title,
     hint: en.newSession.hint,
     environments: "Environments",
@@ -37,6 +44,14 @@ const enNewSessionSetup = {
     checkingGit: "Checking Git availability…",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
+    followUps: "Follow-up messages",
+    followUpCommandsUnavailable: "Commands are available after the session is created.",
+    followUpReloadBlocked:
+      "Finish starting the session or remove its follow-up messages and draft before reloading.",
+    followUpsPaused:
+      "The first message was not sent. Review it before retrying these follow-up messages.",
+    followUpsAdmissionFailed:
+      "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed:

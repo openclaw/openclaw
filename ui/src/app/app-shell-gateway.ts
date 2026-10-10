@@ -202,6 +202,10 @@ export class ShellGatewayOwner {
       this.host.recoverDeletedActiveSession();
       return;
     }
+    if (event.event === "agent.identity.changed") {
+      this.scheduleAgentRosterRefresh();
+      return;
+    }
     if (event.event === "config.changed") {
       // Bootstrap owns upload policy independently of an open configuration editor.
       void this.host.context?.config.refresh();

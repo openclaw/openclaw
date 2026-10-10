@@ -40,6 +40,9 @@ it.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       for (const suffix of ["", "-wal", "-shm"]) {
         await read.execute("read-live-file", { path: pathname + suffix });
       }
+      const alias = path.join(directory, "notes.txt");
+      fs.linkSync(`${pathname}-shm`, alias);
+      await read.execute("read-live-alias", { path: alias });
       // Fail before opening another SQLite connection: a lost DMS lock can SIGBUS this process.
       expect(readSqliteShmPosixLocks(`${pathname}-shm`)).toEqual(shmLocks);
       expect(readMainDatabasePosixLocks(pathname)).toEqual(mainLocks);

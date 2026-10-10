@@ -250,9 +250,9 @@ describe("read tool", () => {
     expect(textContent(result)).toBe("File is empty (0 bytes).");
   });
 
-  it("reads later lines from files larger than 16 MiB", async () => {
+  it("reads later lines from isolated files larger than 16 MiB", async () => {
     const tempDir = tempDirs.make("openclaw-read-large-");
-    const filePath = path.join(tempDir, "large.txt");
+    const filePath = path.join(tempDir, "large.sqlite");
     await fs.writeFile(filePath, `${"x".repeat(17 * 1024 * 1024)}\nlast line\n`);
 
     const result = await executeRead(createReadToolDefinition(tempDir), {

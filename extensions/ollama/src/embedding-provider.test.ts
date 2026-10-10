@@ -88,12 +88,15 @@ function mockEmbeddingFetch(embedding: number[]) {
   );
 }
 
-function mockBatchEmbeddingFetch(count: number) {
+function mockBatchEmbeddingFetch(count: number, promptEvalCount?: unknown) {
   const inputs: unknown[] = [];
   const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
     inputs.push(readEmbeddingRequestBody(init).input);
     return new Response(
-      JSON.stringify({ embeddings: Array.from({ length: count }, () => [1, 0]) }),
+      JSON.stringify({
+        embeddings: Array.from({ length: count }, () => [1, 0]),
+        prompt_eval_count: promptEvalCount,
+      }),
       {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -348,21 +351,28 @@ describe("ollama embedding provider", () => {
     },
   );
 
-  it("sends batch embeddings in one Ollama request", async () => {
-    const { fetchMock, inputs } = mockBatchEmbeddingFetch(3);
+  it.each([7, 0, undefined, -1, 1.5, "7"])(
+    "sends one batch and reports native usage %s",
+    async (tokens) => {
+      const { fetchMock, inputs } = mockBatchEmbeddingFetch(3, tokens);
 
-    const { provider } = await createEmbeddingProvider();
+      const { provider } = await createEmbeddingProvider();
 
-    await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(inputs).toEqual([["a", "bb", "ccc"]]);
-    expect(firstGuardedFetchCall()).toMatchObject({
-      url: "http://127.0.0.1:11434/api/embed",
-      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
-      auditContext: "ollama-memory-embedding",
-    });
-  });
+      const onUsage = vi.fn();
+      await expect(provider.embedBatch(["a", "bb", "ccc"], { onUsage })).resolves.toHaveLength(3);
+      expect(onUsage).toHaveBeenCalledExactlyOnceWith(
+        tokens === 7 || tokens === 0 ? { promptTokens: tokens, totalTokens: tokens } : undefined,
+      );
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(inputs).toEqual([["a", "bb", "ccc"]]);
+      expect(firstGuardedFetchCall()).toMatchObject({
+        url: "http://127.0.0.1:11434/api/embed",
+        policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+        configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+        auditContext: "ollama-memory-embedding",
+      });
+    },
+  );
 
   it("bounds embed error bodies without using response.text()", async () => {
     const tracked = createStreamingResponse({

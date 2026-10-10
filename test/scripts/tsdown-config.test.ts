@@ -54,6 +54,7 @@ const workerBuildTargets = [
     "worker/file-tool-planning.worker",
     "src/worker/worker-deploy-file-tool-planning.ts",
   ],
+  ["file-tool-read", "worker/file-tool-read.worker", "src/worker/worker-deploy-file-tool-read.ts"],
   [
     "image-processor",
     "worker/image-processor.worker",

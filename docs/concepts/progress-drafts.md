@@ -304,6 +304,10 @@ by default and does not bypass the normal activity gate for short turns;
 enabling `streaming.progress.commentary` hands preambles to the interleaved
 commentary lane instead.
 
+On Telegram, `/verbose on` and `/verbose full` keep this temporary preamble
+headline while sending tool diagnostics separately. The preamble is not copied
+into the final answer.
+
 On Discord, when a utility model resolves for the agent — an explicit
 [`utilityModel`](/gateway/config-agents/models#agents-defaults-model), or the primary
 provider's declared small-model default (OpenAI → `gpt-5.6-luna`,

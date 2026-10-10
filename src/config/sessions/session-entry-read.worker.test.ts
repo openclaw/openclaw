@@ -6,7 +6,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
@@ -52,6 +52,9 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
     const sessionKey = "agent:main:scoped-snapshots";
     const entry = {
       sessionId: "snapshot-session",
+      sidebarRoot: true,
+      parentSessionKey: "agent:main:dashboard:parent",
+      spawnedBy: "agent:main:dashboard:parent",
       updatedAt: 1,
       createdAt: 1,
       sessionStartedAt: 1,
@@ -108,6 +111,11 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
             payloads.textBytes.entry = 0;
             const selected = read(fields);
             expect(selected.entries).toHaveLength(1);
+            expect(selected.entries[0]?.entry).toMatchObject({
+              sidebarRoot: true,
+              parentSessionKey: entry.parentSessionKey,
+              spawnedBy: entry.spawnedBy,
+            });
             expect(selected.databaseIdentity?.identity).toBeTypeOf("string");
             expect(selected.lifecycleTimestamps.sessionStartedAt).toBe(1);
             expect(selected.members).toEqual({ [sessionKey]: [] });
@@ -138,6 +146,11 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       env,
       sessionKeys: [sessionKey],
       snapshotFields: ["sessionDiffBaseline"],
+    });
+    expect(transported.entries[0]?.entry).toMatchObject({
+      sidebarRoot: true,
+      parentSessionKey: entry.parentSessionKey,
+      spawnedBy: entry.spawnedBy,
     });
     expect(transported.entries[0]?.entry.sessionDiffBaseline).toEqual(entry.sessionDiffBaseline);
     expect(transported.entries[0]?.entry.skillsSnapshot).toBeUndefined();
@@ -445,7 +458,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
   });
 });
 
-it("consumes admitted board absence for a cohort and observes first use and foreign DDL", async () => {
+it("consumes admitted board absence for a cohort and observes first use and published DDL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKeys = Array.from(
@@ -458,7 +471,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
     database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       retained.run(target, () => {

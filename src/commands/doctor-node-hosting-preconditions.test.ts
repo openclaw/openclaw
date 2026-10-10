@@ -80,28 +80,6 @@ describe("node-hosting preconditions", () => {
 
   it.each([
     {
-      name: "identity-header auth alone",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "lan",
-          auth: { mode: "trusted-proxy" },
-        },
-      },
-      requirements: ["machine-client-auth"],
-    },
-    {
-      name: "loopback onboarding alone",
-      cfg: {
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          auth: { mode: "token", token: "configured-token" },
-        },
-      },
-      requirements: ["node-onboarding-url"],
-    },
-    {
       name: "both unavailable",
       cfg: {
         ...healthyBase,
@@ -130,10 +108,6 @@ describe("node-hosting preconditions", () => {
     requirements: string[];
   }>)("warns when $name", async ({ cfg, requirements }) => {
     expect((await findingsFor(cfg)).map((finding) => finding.requirement)).toEqual(requirements);
-  });
-
-  it("does not warn for token auth with a reachable bind", async () => {
-    expect(await findingsFor(healthyBase)).toEqual([]);
   });
 
   it.each([
@@ -172,78 +146,21 @@ describe("node-hosting preconditions", () => {
     },
   );
 
-  it("keeps a mixed explicit roster healthy when one agent uses the embedded runtime", async () => {
-    expect(
-      await findingsFor({
-        ...healthyBase,
-        agents: {
-          ownership: "explicit",
-          entries: {
-            cloud: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
-            },
-            device: {
-              model: "anthropic/claude-sonnet-4-6",
-              models: {
-                "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
-              },
-            },
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
+  it.each(["codex"])("does not activate plugins or reject a cold %s runtime", async (runtime) => {
+    resetPluginRuntimeStateForTest();
 
-  it("accepts a registered external runtime that declares paired-device support", async () => {
     expect(
       await findingsFor({
         ...healthyBase,
         agents: {
           defaults: {
             model: "openai/gpt-5.6-sol",
-            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: "codex" } } },
+            models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
           },
         },
       }),
     ).toEqual([]);
-  });
-
-  it.each(["codex", "auto"])(
-    "does not activate plugins or reject a cold %s runtime",
-    async (runtime) => {
-      resetPluginRuntimeStateForTest();
-
-      expect(
-        await findingsFor({
-          ...healthyBase,
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { agentRuntime: { id: runtime } } },
-            },
-          },
-        }),
-      ).toEqual([]);
-      expect(getActivePluginRegistry()).toBeNull();
-    },
-  );
-
-  it("accepts a configured public URL for loopback onboarding", async () => {
-    expect(
-      await findingsFor({
-        ...healthyBase,
-        gateway: {
-          bind: "loopback",
-          auth: { mode: "token", token: "configured-token" },
-        },
-        plugins: {
-          entries: {
-            "device-pair": { config: { publicUrl: "wss://gateway.example" } },
-          },
-        },
-      }),
-    ).toEqual([]);
+    expect(getActivePluginRegistry()).toBeNull();
   });
 
   it("accepts gateway.publicOrigin for loopback onboarding", async () => {

@@ -23,6 +23,7 @@ import {
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
+import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
@@ -37,7 +38,7 @@ import {
   readSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
 
-export async function createInitialSubagentSession(params: {
+export async function createInitialSubagentSession(input: {
   cfg: OpenClawConfig;
   requesterAgentId: string;
   targetAgentId: string;
@@ -61,6 +62,7 @@ export async function createInitialSubagentSession(params: {
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
   inheritedToolPolicySource?: "sender";
+  delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
   modelPatch: Partial<
     Extract<
       Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
@@ -71,11 +73,19 @@ export async function createInitialSubagentSession(params: {
   collect: boolean;
   outputSchema?: Record<string, unknown>;
 }): Promise<{ status: "ok"; entry?: SessionEntry } | { status: "error"; error: string }> {
+  const params = {
+    ...input,
+    assertActive: composeSessionSourceAssertion([
+      input.assertActive,
+      captureDelegatedToolPolicyAssertion(input.cfg, input.delegatedToolPolicy),
+    ]),
+  };
   const { subagentRole, ...admissionPatch } = params.admissionPatch ?? {};
   const initialChildSessionPatch: Partial<InternalSessionEntry> = {
     ...admissionPatch,
     ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
+    ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),
     ...(params.inheritedToolPolicySource
       ? { inheritedToolPolicySource: params.inheritedToolPolicySource }
       : {}),
