@@ -1,65 +1,60 @@
 // Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
-import { createRequire } from "node:module";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import { readProcessIdentity } from "@openclaw/proc-safe/identity";
 import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
 import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
 declare const SEALED_RUNTIME_BUILD: boolean;
-let darwinNative:
-  | {
-      library: import("koffi").LibraryHandle;
-      query: ReturnType<import("koffi").LibraryHandle["func"]>;
-    }
-  | undefined;
-
 function readDarwinNativeIdentity(
   pid: number,
-): { parentPid: number; startedAt: number; microseconds: number } | null {
+): { parentPid: number; startedAt: number; startTimeMicros: number } | null | undefined {
   if (
     process.platform !== "darwin" ||
-    // Koffi calls segfault the x86_64 worker under Rosetta, where release packaging
-    // proves it; Intel keeps the bounded ps path it used before this native query.
-    process.arch !== "arm64" ||
-    pid > 0x7fffffff ||
     (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
   ) {
-    return null;
+    return undefined;
   }
   try {
-    if (!darwinNative) {
-      const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
-      const library = koffi.load("/usr/lib/libproc.dylib");
-      const query = library.func(
-        "int proc_pidinfo(int pid, int flavor, uint64_t arg, _Out_ void *buffer, int buffersize)",
-      );
-      darwinNative = { library, query };
-    }
-    // Darwin's public PROC_PIDTBSDINFO ABI is 136 bytes on arm64.
-    // Query every foreign PID afresh; only the callable and its library are retained.
-    const bytes = Buffer.alloc(136);
-    if (darwinNative.query(pid, 3, 0, bytes, bytes.length) !== bytes.length) {
-      return null;
-    }
-    const parentPid = bytes.readUInt32LE(16);
-    const seconds = bytes.readBigUInt64LE(120);
-    const microseconds = bytes.readBigUInt64LE(128);
-    if (
-      bytes.readUInt32LE(12) !== pid ||
-      parentPid > 0x7fffffff ||
-      seconds === 0n ||
-      seconds > BigInt(Number.MAX_SAFE_INTEGER) ||
-      microseconds >= 1_000_000n
-    ) {
-      return null;
-    }
-    // Published Darwin leases use ps lstart's epoch seconds, not microseconds.
-    return { parentPid, startedAt: Number(seconds), microseconds: Number(microseconds) };
+    const identity = readProcessIdentity(pid);
+    // A retained zombie is not a live owner. Do not recover it through ps.
+    return identity && !identity.exited
+      ? {
+          parentPid: identity.parentPid,
+          // Published Darwin leases use epoch seconds, not microseconds.
+          startedAt: Math.floor(identity.startTimeMicros / 1_000_000),
+          startTimeMicros: identity.startTimeMicros,
+        }
+      : null;
   } catch {
-    // Missing native packages and denied queries retain the existing bounded ps path.
-    return null;
+    // Sealed or unavailable native runtimes retain the bounded diagnostic path.
+    return undefined;
+  }
+}
+
+/** Unknown observations never prove death; Linux keeps its thread-aware procfs policy. */
+function readNativeLiveness(pid: number): boolean | undefined {
+  if (
+    !["darwin", "win32", "freebsd"].includes(process.platform) ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return undefined;
+  }
+  try {
+    const identity = readProcessIdentity(pid);
+    return identity !== null && !identity.exited;
+  } catch (error) {
+    // Visibility policy can hide an existing PID even from kill(pid, 0).
+    if (
+      error instanceof ProcSafeError &&
+      (error.code === "helper-unavailable" || error.code === "unsupported-platform")
+    ) {
+      return undefined;
+    }
+    return true;
   }
 }
 // Bound corrupted/cyclic ancestry while allowing nested service supervisors.
@@ -127,35 +122,40 @@ function isExitedLinuxProcess(pid: number): boolean {
   return false;
 }
 
-/** Returns true only when a positive PID exists and is not a known terminal Linux task. */
+/** Returns true only when a positive PID exists and is not a known terminal task. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
   }
   try {
     process.kill(pid, 0);
-  } catch (err) {
-    // EPERM means the PID exists but we cannot signal it. Treat that as a
-    // successful existence probe, then still apply the Linux zombie check.
-    // Keep parity with isPidDefinitelyDead (EPERM is not "definitely dead").
-    if ((err as NodeJS.ErrnoException).code !== "EPERM") {
-      return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "EPERM") {
+      // A visibility policy can hide a live process even from the signal probe.
+      return code === "ESRCH" ? (readNativeLiveness(pid) ?? false) : false;
     }
   }
-  return !isExitedLinuxProcess(pid);
+  return readNativeLiveness(pid) ?? !isExitedLinuxProcess(pid);
 }
 
-/** Returns true only when the PID is invalid, missing, or a known terminal Linux task. */
+/** Returns true only when the PID is invalid, missing, or a known terminal task. */
 export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
   }
   try {
     process.kill(pid, 0);
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "ESRCH";
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+      return false;
+    }
+    const native = readNativeLiveness(pid);
+    // Without native visibility facts, FreeBSD ESRCH can still mean a hidden PID.
+    return native === undefined ? process.platform !== "freebsd" : !native;
   }
-  return isExitedLinuxProcess(pid);
+  const native = readNativeLiveness(pid);
+  return native === undefined ? isExitedLinuxProcess(pid) : !native;
 }
 
 function getDarwinProcessStartTime(
@@ -165,8 +165,8 @@ function getDarwinProcessStartTime(
 ): number | null {
   const started = performance.now();
   const native = readDarwinNativeIdentity(pid);
-  if (native) {
-    return native.startedAt;
+  if (native !== undefined) {
+    return native?.startedAt ?? null;
   }
   // The default bounds ps itself; explicit deadlines also pay for native loading.
   const remainingMs =
@@ -206,8 +206,8 @@ export function readDarwinProcessIdentity(
   }
   const started = performance.now();
   const native = readDarwinNativeIdentity(pid);
-  if (native) {
-    return { parentPid: native.parentPid, startedAt: native.startedAt };
+  if (native !== undefined) {
+    return native && { parentPid: native.parentPid, startedAt: native.startedAt };
   }
   const remainingMs =
     timeoutMs === undefined
@@ -293,7 +293,7 @@ export function getProcessInstanceStartTime(pid: number): number | null {
   if (!native) {
     return null;
   }
-  const startedAt = native.startedAt * 1_000_000 + native.microseconds;
+  const startedAt = native.startTimeMicros;
   return Number.isSafeInteger(startedAt) ? startedAt : null;
 }
 
