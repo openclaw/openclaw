@@ -13,7 +13,7 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { purgeDeletedAgentSessionEntries } from "./session-accessor.sqlite-projection.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.js";
-import { SessionMaintenancePreservationConflictError } from "./session-mutation-conflict-error.js";
+import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
@@ -200,7 +200,7 @@ it.each([false, true])(
       try {
         const purge = f.purge();
         if (protectAtCommit) {
-          await expect(purge).rejects.toBeInstanceOf(SessionMaintenancePreservationConflictError);
+          await expect(purge).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
           expect([f.read(), f.read(oldKey), f.read("agent:main:survivor")]).toEqual(previous);
           expect(f.transcript("current")).toEqual([{ type: "proof", data: "current" }]);
         } else {

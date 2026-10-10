@@ -112,6 +112,14 @@ export function createIncognitoSessionClaims(owner: {
           assertReadable();
           return structuredClone(current(sessionKey)?.steering);
         },
+        readPolicy(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.policy);
+        },
+        readCliHistory(this: void, sessionKey: string) {
+          assertReadable();
+          return structuredClone(current(sessionKey)?.cliHistory);
+        },
         readCapability(this: void, sessionKey: string) {
           assertReadable();
           return structuredClone(current(sessionKey)?.capability);
@@ -261,7 +269,7 @@ export function createIncognitoSessionGrants(withGrant: <T>(operation: () => T) 
 
 /** Store-wide reads share FIFO acceptance and one retained snapshot fence. */
 export function bindIncognitoSessionStoreReads(
-  read: <Key extends "session.entries.read" | "session.identities.read">(
+  read: <Key extends "session.entries.read" | "session.identities.read" | "session.entry.readById">(
     authority: IncognitoSessionAuthority,
     command: { type: Key; input: IncognitoSessionOperations[Key]["input"] },
     signal?: AbortSignal,
@@ -270,6 +278,13 @@ export function bindIncognitoSessionStoreReads(
   >,
 ) {
   return {
+    readById(
+      authority: IncognitoSessionAuthority,
+      input: IncognitoSessionOperations["session.entry.readById"]["input"],
+      signal?: AbortSignal,
+    ) {
+      return read(authority, { type: "session.entry.readById", input }, signal);
+    },
     readIdentities(
       authority: IncognitoSessionAuthority,
       input: IncognitoSessionOperations["session.identities.read"]["input"],

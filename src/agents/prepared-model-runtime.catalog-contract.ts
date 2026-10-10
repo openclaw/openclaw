@@ -6,15 +6,11 @@ import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-prov
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import type { PersistedPluginModelCatalog } from "./plugin-model-catalog.js";
 import type {
-  PreparedAccountCatalogAccess,
-  PreparedModelRuntimeAuth,
-  PreparedModelRuntimeAuthScope,
   PreparedModelCatalogAuth,
+  bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
 import type {
   PreparedConfiguredRuntimeModel,
-  PreparedModelCatalogRefreshOptions,
-  PreparedNativeModelSelection,
   PreparedRuntimeCapabilityModel,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -55,20 +51,16 @@ export type PreparedModelRuntimeCatalogSource = Readonly<{
 
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   initialAuth: PreparedModelCatalogAuth;
-  accountCatalog?: PreparedAccountCatalogAccess;
+  accountCatalog?: NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>;
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
   recheckNativeLogin: () => void;
   refreshExpiredModelCatalog: () => void;
   readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
-  loadFullModelCatalog: (
-    options?: PreparedModelCatalogRefreshOptions,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadNativeModelCatalog: (
-    selection: PreparedNativeModelSelection,
-  ) => Promise<ModelCatalogSnapshot>;
-  loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
+  loadFullModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadFullModelCatalog"]>;
+  loadNativeModelCatalog: NonNullable<PreparedModelRuntimeSnapshot["loadNativeModelCatalog"]>;
+  loadAuth: NonNullable<Parameters<typeof bindPreparedModelRuntimeAuth>[1]["load"]>;
 }>;
 export type PreparedModelRuntimeCatalogAccessParams = {
   catalogOwner: PreparedModelRuntimeSnapshot["catalogOwner"];

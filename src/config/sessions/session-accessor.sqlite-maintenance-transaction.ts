@@ -228,8 +228,6 @@ export function readSessionMaintenanceInWorker(
               readPreservation(input),
             );
             if (prepared.kind === "write") {
-              // Selected victims have not changed yet; their future age hint is not committed.
-              invalidateSessionEntryMaintenanceAgeFact(database.db);
               return {
                 kind:
                   plan.kind === "maintenance-plan"

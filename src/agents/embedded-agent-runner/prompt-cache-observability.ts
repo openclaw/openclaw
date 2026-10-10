@@ -604,7 +604,11 @@ export function completePromptCacheObservation(
   tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
-  if (typeof cacheRead !== "number" || !Number.isFinite(cacheRead)) {
+  if (
+    params.usage?.cacheTelemetry?.state === "unavailable" ||
+    typeof cacheRead !== "number" ||
+    !Number.isFinite(cacheRead)
+  ) {
     return null;
   }
   const previousCacheRead = tracker.lastCacheRead;

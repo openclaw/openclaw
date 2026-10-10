@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MessageChannel, Worker } from "node:worker_threads";
@@ -17,16 +18,20 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { settleSqliteWorkerJob } from "./sqlite-worker-broker-reply.js";
 import type { Job } from "./sqlite-worker-broker.types.js";
 import {
+  createSqliteDatabaseAdmissionRelay,
   createSqliteWorkerOperationAdmission,
+  exchangeSqliteDatabaseAdmissions,
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
   requestSqliteWorkerOperationAdmission,
   requestSqliteWorkerSchemaMaintenance,
-  settleSqliteWorkerOperationContext,
   withSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
-  type SqliteWorkerOperationContext,
 } from "./sqlite-worker-operation-admission.js";
+import {
+  settleSqliteWorkerOperationContext,
+  type SqliteWorkerOperationContext,
+} from "./sqlite-worker-operation-settlement.js";
 
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -237,6 +242,96 @@ it("refuses schema maintenance for a different database before acquiring authori
   }
 });
 
+it.each(["admitted", "facts-only", "revoked", "different-path"] as const)(
+  "keeps %s database creation under the current captured owner",
+  (scenario) => {
+    const root = tempDirs.make("sqlite-native-creation-");
+    const databasePath = path.join(root, "admitted.sqlite");
+    const requestedPath =
+      scenario === "different-path" ? path.join(root, "other.sqlite") : databasePath;
+    const admission = createSqliteWorkerOperationAdmission(() => {
+      throw new Error("Format exchange must not request transaction authority");
+    });
+    if (scenario !== "facts-only") {
+      admission.bindDatabaseAuthority({
+        databasePath,
+        assertAccess() {
+          if (scenario === "revoked") {
+            throw new Error("Captured creation owner was revoked");
+          }
+        },
+        assertCreate(location) {
+          if (location !== databasePath) {
+            throw new Error("Creation target changed");
+          }
+        },
+        acquireSchema() {
+          throw new Error("File creation must not borrow migration authority");
+        },
+      });
+    }
+    vi.spyOn(Atomics, "wait").mockImplementation(() => {
+      admission.service();
+      return "ok";
+    });
+    try {
+      const exchange = () =>
+        exchangeSqliteDatabaseAdmissions(admission.port, [], requestedPath, true);
+      if (scenario === "revoked" || scenario === "different-path") {
+        expect(exchange).toThrow("SQLite admission facts exchange failed");
+      } else {
+        expect(exchange).not.toThrow();
+      }
+      expect(existsSync(requestedPath)).toBe(scenario === "admitted");
+    } finally {
+      admission.finish();
+    }
+  },
+);
+
+it.each(["unadmitted", "retired"] as const)(
+  "refuses %s database creation relays before creating files",
+  (scenario) => {
+    const location = path.join(tempDirs.make("sqlite-refused-creation-relay-"), "absent.sqlite");
+    const admission =
+      scenario === "retired"
+        ? createSqliteDatabaseAdmissionRelay(() => {
+            throw new Error("Creation relay retired");
+          })
+        : createSqliteWorkerOperationAdmission(() => {
+            throw new Error("File creation must not request transaction authority");
+          });
+    const { port1, port2 } = new MessageChannel();
+    const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+    try {
+      admission.port.postMessage(
+        {
+          kind: "sqlite-database-admissions",
+          admissions: [],
+          location,
+          create: "admitted",
+          port: port2,
+          decision: decision.buffer,
+        },
+        [port2],
+      );
+      admission.service();
+      expect(Atomics.load(decision, 0)).toBe(2);
+      expect(admission.failure).toMatchObject({
+        message:
+          scenario === "retired"
+            ? "Creation relay retired"
+            : "SQLite creation relay is not admitted",
+      });
+      expect(existsSync(location)).toBe(false);
+    } finally {
+      port1.close();
+      port2.close();
+      admission.finish();
+    }
+  },
+);
+
 it("reads a queued worker commit before settlement and message callbacks run", async () => {
   const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
   const posted = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2));
@@ -386,6 +481,8 @@ it.each([
   { receipt: "native commit", publicationFails: true },
   { receipt: "settlement fallback", publicationFails: true },
   { receipt: "failed commit delivery", publicationFails: false },
+  { receipt: "settlement only", publicationFails: false },
+  { receipt: "settlement only", publicationFails: true },
 ] as const)(
   "installs $receipt before reply acknowledgement (publication failure: $publicationFails)",
   ({ receipt, publicationFails }) => {
@@ -438,12 +535,18 @@ it.each([
         withSqlitePostCommitPublications(db, () =>
           runSqliteImmediateTransactionSync(db, () => {
             db.prepare("INSERT INTO proof VALUES (1)").run();
-            deferSqliteWorkerCommitReceipt(db, { value: 1 });
+            deferSqliteWorkerCommitReceipt(
+              db,
+              { value: 1 },
+              receipt === "settlement only" ? "settlement" : "commit",
+            );
           }),
         ),
       );
       // Redelivery and settlement's retained copy must not repeat installation.
-      if (receipt !== "failed commit delivery") {
+      if (receipt === "settlement only") {
+        expect(nativeCommit).toBeUndefined();
+      } else if (receipt !== "failed commit delivery") {
         admission.port.postMessage(nativeCommit, []);
       }
       settleSqliteWorkerOperationContext(owner, "completed");

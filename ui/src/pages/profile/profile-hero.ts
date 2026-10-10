@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
+import { currentThemeBranding } from "../../app/theme-branding.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderSettingsGroup } from "../../components/settings-ui.ts";
@@ -47,7 +48,7 @@ export function renderProfileHero(props: ProfileHeroProps) {
       <div class="profile-hero__name">${name}</div>
       <div class="profile-hero__handle">
         ${handle ? html`<span class="profile-hero__email">${handle}</span>` : nothing}
-        <span class="profile-hero__badge">OpenClaw</span>
+        <span class="profile-hero__badge">${currentThemeBranding().brandName}</span>
       </div>
     </section>
   `);

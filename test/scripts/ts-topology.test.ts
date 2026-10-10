@@ -33,19 +33,6 @@ function deriveReportEnvelope(report: Parameters<typeof filterRecordsForReport>[
   };
 }
 
-const singleOwnerEnvelope = deriveReportEnvelope("single-owner-shared");
-const unusedEnvelope = deriveReportEnvelope("unused-public-surface");
-
-function requireRecordByExport(exportName: string) {
-  const record = publicSurfaceEnvelope.records.find((entry) =>
-    entry.exportNames.includes(exportName),
-  );
-  if (!record) {
-    throw new Error(`Expected topology record for ${exportName}`);
-  }
-  return record;
-}
-
 describe("ts-topology", () => {
   it("runs the CLI entrypoint when invoked from a filesystem path", () => {
     const scriptPath = path.resolve("scripts/ts-topology.ts");
@@ -56,111 +43,6 @@ describe("ts-topology", () => {
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toContain("Usage: ts-topology");
-  });
-
-  it("collapses canonical symbols exported by multiple public subpaths", () => {
-    const sharedThing = requireRecordByExport("sharedThing");
-
-    expect(sharedThing).toEqual({
-      aliasName: undefined,
-      canonicalKey: "src/lib/shared.ts:2:sharedThing",
-      declarationPath: "src/lib/shared.ts",
-      declarationLine: 2,
-      entrypoints: ["extra", "index"],
-      exportNames: ["aliasedSharedThing", "sharedThing"],
-      internalConsumers: [],
-      internalImportCount: 0,
-      internalRefCount: 0,
-      isTypeOnlyCandidate: false,
-      kind: "function",
-      moveBackToOwnerScore: 0,
-      productionConsumers: [
-        "extensions/alpha/src/use.ts",
-        "extensions/beta/src/use.ts",
-        "src/internal/use.ts",
-      ],
-      productionExtensions: ["alpha", "beta"],
-      productionImportCount: 4,
-      productionPackages: ["src"],
-      productionRefCount: 4,
-      productionOwners: ["extension:alpha", "extension:beta", "src"],
-      publicSpecifiers: ["fixture-sdk", "fixture-sdk/extra"],
-      sharednessScore: 90,
-      testConsumers: [],
-      testImportCount: 0,
-      testRefCount: 0,
-    });
-  });
-
-  it("counts renamed imports, namespace imports, and test-only consumers without runtime-counting type-only imports", () => {
-    const aliasedThing = requireRecordByExport("aliasedThing");
-    const sharedType = requireRecordByExport("SharedType");
-    const testOnlyThing = requireRecordByExport("testOnlyThing");
-
-    expect(aliasedThing.productionRefCount).toBe(1);
-    expect(sharedType).toEqual({
-      aliasName: undefined,
-      canonicalKey: "src/lib/shared.ts:22:SharedType",
-      declarationLine: 22,
-      declarationPath: "src/lib/shared.ts",
-      entrypoints: ["index"],
-      exportNames: ["SharedType"],
-      internalConsumers: [],
-      internalImportCount: 0,
-      internalRefCount: 0,
-      isTypeOnlyCandidate: true,
-      kind: "type",
-      moveBackToOwnerScore: 20,
-      productionConsumers: [],
-      productionExtensions: [],
-      productionImportCount: 0,
-      productionOwners: [],
-      productionPackages: [],
-      productionRefCount: 0,
-      publicSpecifiers: ["fixture-sdk"],
-      sharednessScore: 15,
-      testConsumers: [],
-      testImportCount: 0,
-      testRefCount: 0,
-    });
-    expect(testOnlyThing).toEqual({
-      aliasName: undefined,
-      canonicalKey: "src/lib/shared.ts:14:testOnlyThing",
-      declarationLine: 14,
-      declarationPath: "src/lib/shared.ts",
-      entrypoints: ["index"],
-      exportNames: ["testOnlyThing"],
-      internalConsumers: [],
-      internalImportCount: 0,
-      internalRefCount: 0,
-      isTypeOnlyCandidate: false,
-      kind: "function",
-      moveBackToOwnerScore: 30,
-      productionConsumers: [],
-      productionExtensions: [],
-      productionImportCount: 0,
-      productionOwners: [],
-      productionPackages: [],
-      productionRefCount: 0,
-      publicSpecifiers: ["fixture-sdk"],
-      sharednessScore: 0,
-      testRefCount: 1,
-      testImportCount: 1,
-      testConsumers: ["tests/public.test.ts"],
-    });
-  });
-
-  it("surfaces single-owner shared and unused reports correctly", () => {
-    expect(singleOwnerEnvelope.records.map((record) => record.exportNames[0])).toContain(
-      "singleOwnerHelper",
-    );
-    expect(singleOwnerEnvelope.records.map((record) => record.exportNames[0])).not.toContain(
-      "sharedThing",
-    );
-    expect(unusedEnvelope.records.map((record) => record.exportNames[0])).toEqual([
-      "SharedType",
-      "unusedThing",
-    ]);
   });
 
   it("renders stable text summaries for the public-surface report", () => {

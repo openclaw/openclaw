@@ -1863,6 +1863,15 @@ export const UI_E2E_OWNER_WATCHES: readonly UiE2eOwnerWatch[] = [
     sessionMenuOwnerRoots,
   ),
   pageWatch(
+    "ui/src/e2e/session-management.rename.e2e.test.ts",
+    ["chat"],
+    [
+      ...sessionMenuOwnerRoots,
+      "ui/src/components/session-organizer-operations.runtime.ts",
+      "ui/src/components/session-organizer-patch.runtime.ts",
+    ],
+  ),
+  pageWatch(
     "ui/src/e2e/session-management.trailing-state.e2e.test.ts",
     ["chat"],
     [...sessionMenuOwnerRoots, "ui/src/lib/session-pull-requests.ts"],

@@ -24,7 +24,10 @@ import { planRuntimePluginDiscovery } from "../plugins/provider-discovery.js";
 import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import {
+  listManifestSyntheticAuthProviderRefs,
+  resolveRuntimeSyntheticAuthProviderRefs,
+} from "../plugins/synthetic-auth.runtime.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
@@ -282,6 +285,9 @@ async function runCatalogRequest(
           syntheticAuthProviderRefs: scopeSyntheticAuthProviderRefs(
             [
               ...new Set([
+                ...listManifestSyntheticAuthProviderRefs(
+                  pluginGenerationScope.metadataSnapshot.index,
+                ),
                 ...resolveRuntimeSyntheticAuthProviderRefs(),
                 ...request.syntheticAuth.map(({ providerRef }) => providerRef),
               ]),
@@ -411,12 +417,14 @@ async function runCatalogRequest(
       value: source,
       providerExpiries,
       providerModels,
-    } = await captureProviderCatalogExpiries(() =>
-      prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
-        authStore,
-        providerDiscoveryProviderIds: request.providerIds,
-        providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-      }),
+    } = await captureProviderCatalogExpiries(
+      () =>
+        prepareAgentCatalogSource(exactAgentFacts, catalogGeneration, "live", false, {
+          authStore,
+          providerDiscoveryProviderIds: request.providerIds,
+          providerDiscoveryTimeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
+        }),
+      { refresh: request.refresh },
     );
     const facts = await prepareFullCatalogFacts(
       exactAgentFacts,
@@ -561,6 +569,7 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
     typeof value.clawInstallSchemaVersions.path === "string" &&
     isRecord(value.clawInstallSchemaVersions.snapshot) &&
     ((value.kind === "catalog" &&
+      (value.refresh === undefined || typeof value.refresh === "boolean") &&
       (value.providerIds === undefined || isStringArray(value.providerIds))) ||
       (value.kind === "auth-refresh" &&
         isStringArray(value.providerIds) &&

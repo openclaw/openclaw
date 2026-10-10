@@ -673,15 +673,23 @@ const SESSION_ID_TRIM_CHARACTERS =
 /** Uses the native current-ID and trimmed legacy-ID winner order inside the reader owner. */
 export function readSessionEntryByIdInDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path" | "db">,
-  selection: { sessionId: string; projection?: SessionEntryReadScope["projection"] },
+  selection: {
+    sessionId: string;
+    projection?: SessionEntryReadScope["projection"];
+    orderBy?: "updatedAt";
+  },
 ): ExactSessionEntry | undefined {
   return readWithCanonicalSessionAdmission(database, () => {
     assertCanonicalSqliteSessionKeysCurrent(database);
     const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
-    const query = db.selectFrom("session_nodes").select("session_key").orderBy("session_key");
-    // The common path uses the current-ID index. Only a miss scans for one
-    // legacy ID, preserving listing order without materializing other entries.
-    for (const trimLegacyId of [false, true]) {
+    const query = db
+      .selectFrom("session_nodes")
+      .select("session_key")
+      .$if(selection.orderBy === "updatedAt", (ordered) => ordered.orderBy("updated_at", "desc"))
+      .orderBy("session_key");
+    // Default reads prefer indexed exact IDs; recency selection considers
+    // trimmed legacy matches together so a newer alias can win.
+    for (const trimLegacyId of selection.orderBy === "updatedAt" ? [true] : [false, true]) {
       const matches = iterateSqliteQuerySync(
         database.db,
         trimLegacyId

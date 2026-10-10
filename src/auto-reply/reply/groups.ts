@@ -155,7 +155,7 @@ export function buildGroupChatContext(params: {
 }
 
 /** Builds system prompt context for direct conversations. */
-export function buildDirectChatContext(params: {
+function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): string {
@@ -171,6 +171,18 @@ export function buildDirectChatContext(params: {
           "Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
         ]),
   ].join(" ");
+}
+
+/** Selects the conversation guidance shared by incoming and continuation turns. */
+export function buildSourceConversationContext(
+  params: Parameters<typeof buildGroupChatContext>[0],
+): string {
+  const chatType = normalizeOptionalLowercaseString(params.sessionCtx.ChatType);
+  return chatType === "direct" || chatType === "dm"
+    ? buildDirectChatContext(params)
+    : chatType === "group" || chatType === "channel"
+      ? buildGroupChatContext(params)
+      : "";
 }
 
 /** Builds the channel-specific group intro injected into the system prompt. */

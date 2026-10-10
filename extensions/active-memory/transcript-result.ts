@@ -1,3 +1,4 @@
+import { rethrowIncognitoSessionError } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -150,7 +151,10 @@ async function waitForSubagentPartialTimeoutData(
         ...result,
         settled: true as const,
       }),
-      (error: unknown) => ({ ...readPartialTimeoutData(error), settled: true as const }),
+      (error: unknown) => {
+        rethrowIncognitoSessionError(error);
+        return { ...readPartialTimeoutData(error), settled: true as const };
+      },
     ),
     timeoutPartialDataGraceMs,
     () => ({ settled: false }),
