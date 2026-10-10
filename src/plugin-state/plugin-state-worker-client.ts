@@ -144,10 +144,10 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
         command.type === "pluginState.compareUpdate" ||
         command.type === "pluginState.compareDelete")
     ) {
-      context.admission.assertCurrent();
       const identity = context.admission.identity.key;
       const current = readPluginStateObservationCache(identity, command.input);
       if (command.type === "pluginState.observe" && !currentEntries) {
+        context.admission.assertCurrent();
         if (current) {
           assertStateDatabaseReadAllowed(databasePath);
           assertAdmission?.();
