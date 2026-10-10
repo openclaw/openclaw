@@ -4961,6 +4961,10 @@ marker does. ClickClack discussion open, attachment, retention, and history
 prepare session facts before their existing effects without expanding discussion
 permissions. Local TUI consumers retain their selected actor through accepted
 run settlement and stop, using the canonical creation and mutation owners.
+Bound local patches retain the existing ACP metadata read through transaction
+and commit admission. The commit receipt consumes that preimage; result
+publication then checks the committed generation. ACP metadata keeps its shared
+worker owner and persistence.
 
 This preparation is inactive for production incognito acquisition. Without an
 explicit host binding, incognito sessions retain the process-held native owner;

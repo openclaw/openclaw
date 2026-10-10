@@ -108,6 +108,8 @@ type SessionPatchProjectionParams = {
   preparedSessionRoot?: string;
   /** Trusted catalog runtime must own selection checks before the new row is persisted. */
   preparedAgentRuntime?: string;
+  /** Lifecycle-bound shared metadata; null is a prepared absence, undefined keeps native reads. */
+  preparedAcpMeta?: SessionEntry["acp"] | null;
   archivedBy?: SessionEntry["archivedBy"];
   providerAuthMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
   /** Exact harness owner authorized to project its new reserved session row. */
@@ -183,6 +185,10 @@ function* projectSessionPatchSteps(
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
+  const readAcpMeta = (entry?: SessionEntry) =>
+    params.preparedAcpMeta !== undefined
+      ? (params.preparedAcpMeta ?? undefined)
+      : readAcpSessionMetaForEntry({ sessionKey: storeKey, agentId: sessionAgentId, entry });
   const resolveThinkingRuntime = (
     provider: string,
     model: string,
@@ -190,11 +196,7 @@ function* projectSessionPatchSteps(
   ): string => {
     // ACP metadata can own canonical agent keys (for example agent:main:main),
     // so key shape alone cannot identify the runtime that validates thinking.
-    const acpMeta = readAcpSessionMetaForEntry({
-      sessionKey: storeKey,
-      agentId: sessionAgentId,
-      entry,
-    });
+    const acpMeta = readAcpMeta(entry);
     return (
       params.preparedAgentRuntime ??
       acpMeta?.backend ??
@@ -471,10 +473,7 @@ function* projectSessionPatchSteps(
   if (executionError) {
     return invalid(executionError);
   }
-  if (
-    "agentRuntime" in patch &&
-    readAcpSessionMetaForEntry({ sessionKey: storeKey, agentId: sessionAgentId, entry: existing })
-  ) {
+  if ("agentRuntime" in patch && readAcpMeta(existing)) {
     return invalid("Runtime selection is owned by this ACP session.");
   }
   if (patch.agentRuntime === null) {
@@ -591,11 +590,7 @@ function* projectSessionPatchSteps(
         agentId: sessionAgentId,
       };
       if (
-        !readAcpSessionMetaForEntry({
-          sessionKey: storeKey,
-          agentId: sessionAgentId,
-          entry: next,
-        }) &&
+        !readAcpMeta(next) &&
         requiresAgentHarnessPluginSelection(harnessSelection, cfg) &&
         resolveAgentHarnessOwnerPluginIds({
           ...harnessSelection,

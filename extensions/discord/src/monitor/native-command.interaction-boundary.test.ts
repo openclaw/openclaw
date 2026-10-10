@@ -9,7 +9,7 @@ import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import * as sessionBinding from "openclaw/plugin-sdk/session-binding-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachRestMock,
@@ -104,7 +104,14 @@ function createHarness() {
   });
   const patch = vi.fn(async () => undefined);
   attachRestMock(client, { post, get, patch });
-  const session = vi.spyOn(sessionStore, "getSessionEntryAsync").mockResolvedValue(undefined);
+  const session = vi
+    .spyOn(sessionBinding, "captureSessionEntryCurrentCheck")
+    .mockImplementation(async ({ agentId, sessionKey, storePath }) => ({
+      entry: undefined,
+      target: { agentId, sessionKey, storePath: storePath ?? "/tmp/discord-session-store" },
+      assertCurrent() {},
+      isCurrent: () => true,
+    }));
   vi.spyOn(pickerState, "loadDiscordModelPickerData").mockResolvedValue(
     createModelsProviderData({ "test-provider": ["test-model"] }),
   );

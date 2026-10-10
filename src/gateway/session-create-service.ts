@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -23,12 +24,10 @@ import {
 } from "../auto-reply/reply/session-fork.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   createSessionEntryWithTranscript,
   type SessionEntryCreateWithTranscriptOptions,
   deleteSessionEntryLifecycle,
-  loadExactSessionEntryFromStoreReadOnly,
   resolveSessionEntryAccessTarget,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
@@ -37,8 +36,6 @@ import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/sessio
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
-import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import {
   createInternalHookEvent,
   hasInternalHookListeners,
@@ -101,7 +98,11 @@ import type {
   GatewaySessionCommitResult,
   PreparedGatewaySessionLifecycle,
 } from "./session-create-service.types.js";
-import { finalizeSessionCreateTarget, readSessionCreateTarget } from "./session-create-target.js";
+import {
+  finalizeSessionCreateTarget,
+  prepareSessionCreateSource,
+  readSessionCreateTarget,
+} from "./session-create-target.js";
 import { resolveSessionCreateVisibility } from "./session-create-visibility.js";
 import {
   prepareGatewaySessionLifecycleTargets,
@@ -179,59 +180,13 @@ export async function createGatewaySession(
     agentId,
     requestedKey,
   });
-  const explicitTargetParts = parseAgentSessionKey(explicitTargetKey);
-  const explicitIncognito = isIncognitoSessionKey(explicitTargetKey);
-  const incognitoSource = explicitIncognito
-    ? captureIncognitoSessionSource({ agentId, sessionKey: explicitTargetKey })
-    : params.incognito === true
-      ? captureIncognitoSessionSource()
-      : undefined;
-  if (incognitoSource) {
-    const source = "kind" in incognitoSource ? incognitoSource : incognitoSource.actor;
-    if (source.agentId !== agentId) {
-      return invalidSessionRequest("session creation belongs to another incognito actor");
-    }
-    const assertCallerCurrent = commitGuard;
-    commitGuard = () => {
-      assertCallerCurrent?.();
-      incognitoSource.admissionSignal?.throwIfAborted();
-      source.assertCurrent();
-    };
+  const preparation = prepareSessionCreateSource(params, agentId, explicitTargetKey, commitGuard);
+  const preparedSource = isPromiseLike(preparation) ? await preparation : preparation;
+  if (!preparedSource.ok) {
+    return preparedSource;
   }
-  const explicitDashboardIncognito =
-    explicitIncognito &&
-    explicitTargetParts?.agentId === agentId &&
-    explicitTargetParts.rest.startsWith("dashboard:");
-  if (explicitIncognito && params.incognito !== true) {
-    return invalidSessionRequest("incognito-shaped session keys require incognito: true");
-  }
-  if (params.incognito === true && explicitTargetKey && !explicitDashboardIncognito) {
-    return invalidSessionRequest("incognito sessions are web-only");
-  }
-  const boundInitialEntry =
-    incognitoSource && explicitTargetKey
-      ? await readSessionEntryReadOnlyInWorker(
-          { agentId, sessionKey: explicitTargetKey },
-          commitGuard,
-        )
-      : undefined;
-  if (params.incognito === true && explicitTargetKey) {
-    const durableStorePath = resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-    const durableEntry = incognitoSource
-      ? undefined
-      : loadExactSessionEntryFromStoreReadOnly({
-          agentId,
-          storePath: durableStorePath,
-          sessionKey: explicitTargetKey,
-          projection: "list",
-        });
-    const privateEntry = incognitoSource
-      ? boundInitialEntry
-      : loadGatewaySessionEntryReadOnly(explicitTargetKey).entry;
-    if (durableEntry || privateEntry) {
-      return invalidSessionRequest("incognito is immutable and requires a new session key");
-    }
-  }
+  const { incognitoStorePath, boundInitialEntry } = preparedSource.value;
+  commitGuard = preparedSource.value.commitGuard;
   if (
     params.catalogTarget &&
     explicitTargetKey &&
@@ -256,7 +211,7 @@ export async function createGatewaySession(
     return invalidSessionRequest("trusted plugin session owner is not authorized");
   }
   // Capture the requested incarnation before worker discovery yields to authority preparation.
-  const initialTargetEntry = incognitoSource
+  const initialTargetEntry = incognitoStorePath
     ? boundInitialEntry
     : explicitTargetKey
       ? resolveSessionEntryAccessTarget({
@@ -338,10 +293,10 @@ export async function createGatewaySession(
   }
 
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const target: GatewaySessionStoreTarget = incognitoSource
+  const target: GatewaySessionStoreTarget = incognitoStorePath
     ? {
         agentId,
-        storePath: "kind" in incognitoSource ? incognitoSource.path : incognitoSource.actor.path,
+        storePath: incognitoStorePath,
         canonicalKey: targetSessionKey,
         storeKeys: [targetSessionKey],
       }

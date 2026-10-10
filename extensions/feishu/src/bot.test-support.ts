@@ -294,3 +294,19 @@ export function createBoundConversation(): NonNullable<BoundConversation> {
     boundAt: 0,
   };
 }
+
+export function createFeishuTestSentMessage(
+  messageId: string,
+  chatId: string,
+): Awaited<ReturnType<typeof import("./send.js").sendMessageFeishu>> {
+  return {
+    messageId,
+    chatId,
+    receipt: {
+      primaryPlatformMessageId: messageId,
+      platformMessageIds: [messageId],
+      parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
+      sentAt: 1,
+    },
+  };
+}

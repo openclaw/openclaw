@@ -1,4 +1,4 @@
-import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
@@ -55,10 +55,8 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-binding-runtime";
 import {
   readSessionUpdatedAtAsync,
-  resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -74,7 +72,6 @@ import {
   buildIMessageApprovalConversationKeyForInbound,
   resolveIMessageApprovalControlActor,
 } from "../approval-target-keys.js";
-import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
 import { resolveIMessageChatDbLookupPath } from "../cli-path.js";
@@ -84,7 +81,7 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
-import { imessageRpcSupportsMethod, probeIMessage, probeIMessagePrivateApi } from "../probe.js";
+import { probeIMessage } from "../probe.js";
 import {
   hasIMessageQuestionReactionTarget,
   maybeResolveIMessageQuestionReaction,
@@ -100,6 +97,7 @@ import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
+import { prepareIMessageEarlyTyping } from "./early-typing.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -157,31 +155,6 @@ function isIMessagePluginPayloadAttachment(attachment: {
     uti === "com.apple.messages.pluginpayloadattachment"
   );
 }
-
-const warnIfImsgUpgradeNeeded = (() => {
-  let fired = false;
-  return {
-    fireOnce: (
-      rpcMethods: readonly string[],
-      runtime: { log?: (msg: string) => void; error?: (msg: string) => void },
-    ) => {
-      if (fired) {
-        return;
-      }
-      fired = true;
-      const detail =
-        rpcMethods.length === 0
-          ? "imsg build pre-dates the rpc_methods capability list"
-          : `imsg rpc_methods=[${rpcMethods.join(", ")}] does not include typing/read`;
-      runtime.log?.(
-        warn(
-          `imessage: typing indicators / read receipts gated off (${detail}). ` +
-            `Upgrade imsg (current bridge needs typing+read in rpc_methods).`,
-        ),
-      );
-    },
-  };
-})();
 
 function isRetriableWatchSubscribeStartupError(error: unknown): boolean {
   return /imsg rpc timeout \(watch\.subscribe\)|imsg rpc (closed|exited|not running)/i.test(
@@ -759,73 +732,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
-    const typingSession = await captureSessionEntryCurrentCheck({
-      agentId: decision.route.agentId,
-      storePath,
-      sessionKey: decision.route.sessionKey,
-      fields: ["sendPolicy"],
-    });
-    // A stall invalidates capabilities; re-probing here restores typing/read after recovery.
-    const privateApiStatus = await probeIMessagePrivateApi(cliPath, probeTimeoutMs);
-    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
-    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
-    if (privateApiStatus.available) {
-      if (!supportsTyping || !supportsRead) {
-        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
-      }
-    }
-    const configuredTypingMode =
-      resolveAgentConfig(cfg, decision.route.agentId)?.typingMode ??
-      cfg.agents?.defaults?.typingMode;
-    const sendPolicy = resolveSendPolicy({
+    const {
+      supportsTyping,
+      supportsRead,
+      shouldUseDirectToolTypingOptions,
+      stopEarlyDirectTyping,
+    } = await prepareIMessageEarlyTyping({
       cfg,
-      entry: typingSession.entry,
-      sessionKey: decision.route.sessionKey,
-      channel: "imessage",
-      chatType: decision.isGroup ? "group" : "direct",
+      storePath,
+      cliPath,
+      probeTimeoutMs,
+      service: imessageCfg.service,
+      decision,
+      runtime,
+      sendTyping,
+      logTypingError,
     });
-    const shouldUseDirectToolTypingOptions =
-      !decision.isGroup &&
-      sendPolicy !== "deny" &&
-      (configuredTypingMode === undefined || configuredTypingMode === "instant");
-    const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
-    const earlyDirectTypingService =
-      resolveIMessageDirectChatService(imessageCfg.service, decision.chatGuid) ?? "auto";
-    const earlyDirectTypingTarget = shouldStartDirectTyping
-      ? `${earlyDirectTypingService}:${decision.sender}`
-      : undefined;
-    let stopEarlyDirectTyping: (() => void) | undefined;
-    if (earlyDirectTypingTarget) {
-      typingSession.assertCurrent();
-      // Start channel-native feedback before the expensive history/context/model
-      // path. Use a short-lived client so a slow typing RPC cannot block the
-      // monitor client's watch stream. Stop is sequenced after start so fast
-      // command replies cannot leave a late true after typing:false.
-      const earlyDirectTypingStarted = sendTyping(earlyDirectTypingTarget, true).then(
-        () => true,
-        (err: unknown) => {
-          logTypingError("start", earlyDirectTypingTarget, err);
-          return false;
-        },
-      );
-      let earlyTypingStopQueued = false;
-      stopEarlyDirectTyping = () => {
-        if (earlyTypingStopQueued) {
-          return;
-        }
-        earlyTypingStopQueued = true;
-        void earlyDirectTypingStarted
-          .then(async (started) => {
-            if (!started) {
-              return;
-            }
-            await sendTyping(earlyDirectTypingTarget, false);
-          })
-          .catch((err: unknown) => {
-            logTypingError("stop", earlyDirectTypingTarget, err);
-          });
-      };
-    }
     const staged = remoteHost
       ? {
           attachments: rawMediaAttachments,

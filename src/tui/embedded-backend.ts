@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type {
-  ErrorShape,
-  QuestionResolveParams,
-  SessionsPatchResult,
-} from "../../packages/gateway-protocol/src/index.js";
+import type { QuestionResolveParams } from "../../packages/gateway-protocol/src/index.js";
 import { CHAT_HISTORY_MAX_ENTRIES } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
@@ -31,7 +27,6 @@ import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
   readPreparedModelCatalog,
-  loadPreparedModelCatalogSnapshot,
   withPreparedModelCatalogOwner,
 } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
@@ -43,7 +38,6 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
-import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import {
   DEFAULT_QUEUE_CAP,
@@ -53,9 +47,6 @@ import {
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig, registerConfigWriteListener } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
-import { applySessionPatchProjection } from "../config/sessions/session-accessor.js";
-import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import {
   captureIncognitoSessionSource,
   withIncognitoSessionActor,
@@ -79,14 +70,11 @@ import {
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
 import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
-import { createGatewaySession } from "../gateway/session-create-service.js";
-import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
 import {
   createSessionRowProjection,
   type SessionRowProjection,
 } from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
-import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
 import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
 import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import {
@@ -94,11 +82,8 @@ import {
   listAgentsForGateway,
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
-  resolveCanonicalGatewaySessionStoreKey,
-  resolveGatewaySessionStoreTargetWithStore,
   resolveSessionModelRef,
 } from "../gateway/session-utils.js";
-import { projectSessionsPatchEntry } from "../gateway/sessions-patch.js";
 import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
@@ -140,6 +125,7 @@ import {
   type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
+import { createEmbeddedSessionCommands } from "./embedded-session-commands.js";
 import {
   createEmbeddedSessionReader,
   readEmbeddedHistorySessionInfo,
@@ -156,7 +142,6 @@ import type {
   TuiChatSendResult,
   TuiEvent,
   TuiModelChoice,
-  TuiSessionCreateOptions,
   TuiImageRequest,
   TuiImageData,
 } from "./tui-backend.js";
@@ -211,6 +196,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private readonly sessionReader = createEmbeddedSessionReader({
     ready: () => this.ready,
     projection: () => this.sessionProjection,
+  });
+  private readonly sessionCommands = createEmbeddedSessionCommands({
+    ready: () => this.ready,
+    modelRuntimeReady: () => this.preparedModelRuntime.waitUntilReady(),
   });
 
   start() {
@@ -676,173 +665,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     return await listAgentsForGateway(getRuntimeConfig());
   }
 
-  async patchSession(
-    opts: Parameters<TuiBackend["patchSession"]>[0],
-  ): Promise<SessionsPatchResult> {
-    return withEmbeddedSessionSource(opts.key, opts.agentId, (selected, assertSelected) =>
-      this.patchSessionFromSource(opts, selected, assertSelected),
-    );
-  }
-
-  private async patchSessionFromSource(
-    opts: Parameters<EmbeddedTuiBackend["patchSession"]>[0],
-    selected: SelectedEmbeddedSession | undefined,
-    assertSelected: () => void,
-  ) {
-    await this.ready;
-    await this.preparedModelRuntime.waitUntilReady();
-    const cfg = getRuntimeConfig();
-    const target =
-      selected ??
-      resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: opts.key,
-        agentId: opts.agentId,
-        exactRead: true,
-      });
-    assertSelected();
-    const applied = await applySessionPatchProjection<{ ok: false; error: ErrorShape }>({
-      assertCurrent: assertSelected,
-      ...(opts.label === undefined ? { sessionKeys: target.storeKeys } : {}),
-      storePath: target.storePath,
-      resolveTarget: ({ store }) => {
-        if (selected) {
-          return { primaryKey: selected.canonicalKey, candidateKeys: selected.storeKeys };
-        }
-        const { target: migratedTarget, primaryKey } = resolveCanonicalGatewaySessionStoreKey({
-          cfg,
-          key: opts.key,
-          store: store as Record<string, SessionEntry>,
-          agentId: opts.agentId,
-        });
-        return { primaryKey, candidateKeys: migratedTarget.storeKeys };
-      },
-      project: async ({ primaryKey, existingEntry, isLabelInUse }) =>
-        await projectSessionsPatchEntry({
-          cfg,
-          existingEntry,
-          isLabelInUse,
-          storeKey: primaryKey,
-          agentId: target.agentId,
-          patch: opts,
-          loadGatewayModelCatalogSnapshot: () =>
-            loadPreparedModelCatalogSnapshot({
-              config: cfg,
-              agentId: target.agentId,
-              readOnly: true,
-            }),
-        }),
-    });
-    if (!applied.ok) {
-      throw new Error(applied.error.message);
-    }
-
-    const canonicalKey = target.canonicalKey ?? opts.key;
-    const assertApplied = selected
-      ? captureSessionEntrySourceAssertion({
-          scope: { agentId: target.agentId, sessionKey: canonicalKey, storePath: target.storePath },
-          expected: applied.entry,
-          fields: ["sessionId", "lifecycleRevision"],
-          assertCurrent() {},
-          refuse() {
-            throw new Error("Local session changed while preparing the patch result");
-          },
-        })
-      : assertSelected;
-    assertApplied();
-    const [acpMeta] = await readAcpSessionMetaForEntries({
-      cfg,
-      entries: [{ agentId: target.agentId, sessionKey: canonicalKey, entry: applied.entry }],
-    });
-    assertApplied();
-    const projected = projectSessionPatchResult({
-      canonicalKey,
-      cfg,
-      entry: applied.entry,
-      preparedAcpMeta: acpMeta ?? null,
-      storePath: target.storePath,
-      targetAgentId: target.agentId,
-    });
-    return { ...projected, entry: { ...projected.entry } };
-  }
-
-  async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
-    return withEmbeddedSessionSource(key, opts?.agentId, (selected, assertSelected) =>
-      this.resetSessionFromSource(key, reason, opts, selected, assertSelected),
-    );
-  }
-
-  private async resetSessionFromSource(
-    key: string,
-    reason: "new" | "reset" | undefined,
-    opts: { agentId?: string } | undefined,
-    selected: SelectedEmbeddedSession | undefined,
-    assertSelected: () => void,
-  ) {
-    await this.ready;
-    assertSelected();
-    if ((selected ?? loadGatewaySessionEntryReadOnly(key, opts)).entry?.incognito === true) {
-      throw new Error("Incognito sessions cannot reset in place.");
-    }
-    const result = await performGatewaySessionReset({
-      key,
-      operatorRoleActor: { kind: "system" },
-      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
-      reason: reason === "new" ? "new" : "reset",
-      commandSource: "tui:embedded",
-      armSessionDiffBaselineCapture: true,
-    });
-    if (!result.ok) {
-      throw new Error(result.error.message);
-    }
-    if ("incognitoDeleted" in result) {
-      return { ok: true as const, key: result.key, deleted: true as const };
-    }
-    return { ok: true as const, key: result.key, entry: result.entry, resolved: result.resolved };
-  }
-
-  async createSession(opts: TuiSessionCreateOptions) {
-    const source = captureIncognitoSessionSource({ sessionKey: opts.key, agentId: opts.agentId });
-    const create = async () => {
-      await this.ready;
-      await this.preparedModelRuntime.waitUntilReady();
-      const cfg = getRuntimeConfig();
-      const result = await createGatewaySession({
-        cfg,
-        operatorRoleActor: { kind: "system" },
-        ...opts,
-        ...(source && !("kind" in source) && isIncognitoSessionKey(opts.key)
-          ? { incognito: true }
-          : {}),
-        creation: { via: "operator", actor: { type: "human", source: "unknown" } },
-        armSessionDiffBaselineCapture: true,
-        emitCommandHooks: Boolean(opts.parentSessionKey),
-        commandSource: "tui:embedded",
-        loadGatewayModelCatalogSnapshot: () =>
-          loadPreparedModelCatalogSnapshot({
-            config: cfg,
-            agentId: resolveSessionAgentId({
-              sessionKey: opts.key,
-              config: cfg,
-              agentId: opts.agentId,
-            }),
-            readOnly: true,
-          }),
-      });
-      if (!result.ok) {
-        throw new Error(result.error.message);
-      }
-      return {
-        ok: true as const,
-        key: result.key,
-        entry: result.entry,
-        resolved: result.resolved,
-      };
-    };
-    return source && !("kind" in source)
-      ? withIncognitoSessionActor(source.actor, create, source.admissionSignal)
-      : create();
-  }
+  patchSession = this.sessionCommands.patchSession;
+  resetSession = this.sessionCommands.resetSession;
+  createSession = this.sessionCommands.createSession;
 
   private async runBtwTurn(params: {
     runId: string;
@@ -963,67 +788,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
     );
   }
 
-  async runGoalCommand(opts: Parameters<NonNullable<TuiBackend["runGoalCommand"]>>[0]) {
-    return withEmbeddedSessionSource(opts.sessionKey, opts.agentId, (selected, assertSelected) =>
-      this.runGoalCommandFromSource(opts, selected, assertSelected),
-    );
-  }
-
-  private async runGoalCommandFromSource(
-    opts: Parameters<EmbeddedTuiBackend["runGoalCommand"]>[0],
-    selected: SelectedEmbeddedSession | undefined,
-    assertSelected: () => void,
-  ) {
-    await this.ready;
-    const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-    const { agentId, canonicalKey, storePath, entry } =
-      selected ?? loadSessionEntry(opts.sessionKey, loadOptions);
-    assertSelected();
-    const parsed = parseGoalCommand(opts.command.trim());
-    if (!parsed) {
-      throw new Error("invalid goal command");
-    }
-
-    const result = await executeSessionGoalCommand({
-      parsed,
-      sessionKey: canonicalKey,
-      storePath,
-      fallbackEntry: entry ?? { sessionId: randomUUID(), updatedAt: Date.now() },
-      agentId,
-    });
-    return result.continuationPrompt
-      ? { text: result.text, continuationPrompt: result.continuationPrompt }
-      : { text: result.text };
-  }
-
-  async runUsageCostCommand(opts: Parameters<NonNullable<TuiBackend["runUsageCostCommand"]>>[0]) {
-    return withEmbeddedSessionSource(opts.sessionKey, opts.agentId, (selected, assertSelected) =>
-      this.runUsageCostCommandFromSource(opts, selected, assertSelected),
-    );
-  }
-
-  private async runUsageCostCommandFromSource(
-    opts: Parameters<EmbeddedTuiBackend["runUsageCostCommand"]>[0],
-    selected: SelectedEmbeddedSession | undefined,
-    assertSelected: () => void,
-  ) {
-    await this.ready;
-    const { cfg, agentId, canonicalKey, storePath, entry } =
-      selected ??
-      loadSessionEntry(opts.sessionKey, opts.agentId ? { agentId: opts.agentId } : undefined);
-    const { formatSessionUsageCostSummary } =
-      await import("../auto-reply/reply/commands-session-cost.runtime.js");
-    assertSelected();
-    const text = await formatSessionUsageCostSummary({
-      cfg,
-      sessionKey: canonicalKey,
-      agentId,
-      sessionEntry: entry,
-      storePath,
-    });
-    assertSelected();
-    return { text };
-  }
+  runGoalCommand = this.sessionCommands.runGoalCommand;
+  runUsageCostCommand = this.sessionCommands.runUsageCostCommand;
 
   private enqueuePendingLocalMessage(params: {
     runScope: { sessionKey: string; agentId?: string };

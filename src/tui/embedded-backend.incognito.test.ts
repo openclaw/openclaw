@@ -1,6 +1,7 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
@@ -61,6 +62,71 @@ it("uses the bound actor for local history, describe, patch, goals, cost and res
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
+      await backend.stop();
+      await actor.release();
+      await actor.close();
+    }
+  });
+});
+
+it("refuses a local patch when actor authority changes during catalog preparation", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    setRuntimeConfigSnapshot({
+      agents: {
+        defaults: { model: { primary: "openai/gpt-4.1-mini" } },
+        entries: { main: { workspace: state.workspaceDir } },
+      },
+    });
+    const key = "agent:main:dashboard:incognito-local-patch";
+    let current = true;
+    const authority = {
+      assertCurrent() {
+        if (!current) {
+          throw new Error("Local patch authority revoked");
+        }
+      },
+    };
+    const actor = await openIncognitoTestActor(state.env, authority);
+    const backend = new EmbeddedTuiBackend();
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    const loadCatalog = preparedModelCatalog.loadPreparedModelCatalogSnapshot;
+    let patching: ReturnType<EmbeddedTuiBackend["patchSession"]> | undefined;
+    try {
+      await withIncognitoSessionBinding({ actor }, async () => {
+        const created = await backend.createSession({ key });
+        const catalog = vi
+          .spyOn(preparedModelCatalog, "loadPreparedModelCatalogSnapshot")
+          .mockImplementationOnce(async (options) => {
+            const snapshot = await loadCatalog(options);
+            entered.resolve();
+            await finish.promise;
+            return snapshot;
+          });
+        const sql = observeHostDataSql();
+        try {
+          patching = backend.patchSession({ key, thinkingLevel: "off" });
+          const rejected = expect(patching).rejects.toThrow("Local patch authority revoked");
+          await entered.promise;
+          current = false;
+          finish.resolve();
+          await rejected;
+          current = true;
+          const unchanged = await actor.sessions.read(authority, { sessionKey: key });
+          expect(unchanged.entry?.thinkingLevel).toBe(created.entry.thinkingLevel);
+          expect(unchanged.entry?.updatedAt).toBe(created.entry.updatedAt);
+          expect(sql.queries).toEqual([]);
+        } finally {
+          current = true;
+          finish.resolve();
+          await patching?.catch(() => undefined);
+          sql.restore();
+          catalog.mockRestore();
+        }
+      });
+    } finally {
+      current = true;
+      finish.resolve();
       await backend.stop();
       await actor.release();
       await actor.close();

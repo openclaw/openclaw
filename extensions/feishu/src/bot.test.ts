@@ -27,6 +27,7 @@ import {
   createFeishuTestConfig,
   createFeishuTestEvent,
   createFeishuTestRoute,
+  createFeishuTestSentMessage,
 } from "./bot.test-support.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { parseMergeForwardContent } from "./message-content.js";
@@ -66,22 +67,6 @@ type DeepPartial<T> = {
 };
 
 let currentRuntimeConfig = {} as ClawdbotConfig;
-
-function sentMessage(
-  messageId: string,
-  chatId: string,
-): Awaited<ReturnType<typeof import("./send.js").sendMessageFeishu>> {
-  return {
-    messageId,
-    chatId,
-    receipt: {
-      primaryPlatformMessageId: messageId,
-      platformMessageIds: [messageId],
-      parts: [{ platformMessageId: messageId, kind: "text", index: 0 }],
-      sentAt: 1,
-    },
-  };
-}
 
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
   const runtime = {
@@ -224,7 +209,7 @@ const {
   ),
   mockSendMessageFeishu: vi
     .fn<typeof import("./send.js").sendMessageFeishu>()
-    .mockResolvedValue(sentMessage("pairing-msg", "oc-dm")),
+    .mockResolvedValue(createFeishuTestSentMessage("pairing-msg", "oc-dm")),
   mockGetMessageFeishu: vi
     .fn<typeof import("./send.js").getMessageFeishu>()
     .mockResolvedValue(null),
@@ -506,7 +491,9 @@ describe("handleFeishuMessage ACP routing", () => {
       ...createFeishuTestRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
     });
-    mockSendMessageFeishu.mockReset().mockResolvedValue(sentMessage("reply-msg", "oc_dm"));
+    mockSendMessageFeishu
+      .mockReset()
+      .mockResolvedValue(createFeishuTestSentMessage("reply-msg", "oc_dm"));
     mockCreateFeishuReplyDispatcher.mockReset().mockReturnValue({
       dispatcherOptions: {},
       delivery: { deliver: vi.fn(async () => undefined) },

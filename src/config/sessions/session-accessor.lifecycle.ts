@@ -42,6 +42,8 @@ export async function applySessionPatchProjection<
   agentId?: string;
   /** Revalidates request-scoped authorization after projection and before persistence. */
   assertCurrent?: () => void;
+  /** Preimage authority retained through transaction and commit admission. */
+  assertCommitAllowed?: () => void;
   /** Complete key authority for resolvers that can operate on a bounded store view. */
   sessionKeys?: readonly string[];
   storePath: string;
@@ -50,8 +52,20 @@ export async function applySessionPatchProjection<
     context: SessionPatchProjectionContext,
   ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
 }): Promise<SessionPatchProjectionResult<TFailure>> {
+  let committed = false;
   return await applySessionEntryCanonicalReplacements<SessionPatchProjectionResult<TFailure>>({
     agentId: params.agentId,
+    ...(params.assertCommitAllowed && {
+      assertCommitAllowed: () => {
+        if (!committed) {
+          params.assertCommitAllowed?.();
+        }
+      },
+      onLifecycleCommitted: () => {
+        // The receipt consumes the preimage; actor lifetime and result guards remain current.
+        committed = true;
+      },
+    }),
     sessionKeys: params.sessionKeys,
     storePath: params.storePath,
     skipMaintenance: true,

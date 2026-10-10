@@ -260,3 +260,42 @@ export async function resolveFeishuMediaList(params: {
   }
   return out;
 }
+
+export async function resolveFeishuAudioTranscript(params: {
+  cfg: ClawdbotConfig;
+  mediaList: FeishuMediaInfo[];
+  content: string;
+  messageType: string;
+  chatType: "direct" | "group";
+  log: (msg: string) => void;
+}): Promise<string | undefined> {
+  if (params.messageType !== "audio") {
+    return undefined;
+  }
+  const audioMedia = params.mediaList.filter(
+    (media) =>
+      Boolean(media.path) && (media.kind === "audio" || media.contentType?.startsWith("audio/")),
+  );
+  if (audioMedia.length === 0) {
+    return undefined;
+  }
+  // Audio content is the server transcript. Return it for the shared marker path,
+  // but only after the media check so failed downloads retain their notice.
+  if (params.content.trim()) {
+    return params.content;
+  }
+
+  try {
+    const { transcribeFirstAudio } = await import("openclaw/plugin-sdk/media-runtime");
+    return await transcribeFirstAudio({
+      ctx: {
+        media: audioMedia,
+        ChatType: params.chatType,
+      },
+      cfg: params.cfg,
+    });
+  } catch (err) {
+    params.log(`feishu: audio preflight transcription failed: ${String(err)}`);
+    return undefined;
+  }
+}

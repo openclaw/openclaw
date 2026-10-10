@@ -25,7 +25,6 @@ import type { ClawdbotConfig, OutboundIdentity, ReplyPayload, RuntimeEnv } from 
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
-import { resolveFeishuIdentityEmoji } from "./identity-header.js";
 import {
   chunkFeishuPostMarkdown,
   materializeFeishuPostMarkdownSoftBreaks,
@@ -48,6 +47,11 @@ import {
   type FeishuReplyDeliveryResultWithFinalization,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
+import {
+  mergeStreamingFinalText,
+  resolveCardHeader,
+  resolveCardNote,
+} from "./reply-dispatcher-format.js";
 import { streamingStartBackoffUntilByAccount } from "./reply-dispatcher-state.js";
 import { getFeishuRuntime } from "./runtime.js";
 import {
@@ -55,7 +59,6 @@ import {
   sendCardFeishu,
   sendMessageFeishu,
   sendStructuredCardFeishu,
-  type CardHeaderConfig,
 } from "./send.js";
 import {
   FeishuStreamingFinalizationError,
@@ -65,20 +68,6 @@ import {
 import { queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
-
-function mergeStreamingFinalText(
-  previousText: string,
-  nextText: string,
-  appendError: boolean,
-): string {
-  if (!appendError || !previousText || nextText.startsWith(previousText)) {
-    return nextText;
-  }
-  if (previousText.endsWith(`\n\n${nextText}`)) {
-    return previousText;
-  }
-  return `${previousText}\n\n${nextText}`;
-}
 
 /** Maximum age (ms) for a message to receive a typing indicator reaction.
  * Messages older than this are likely replays after context compaction (#30418). */
@@ -107,38 +96,6 @@ function normalizeEpochMs(timestamp: number | undefined): number | undefined {
   // Defensive normalization: some payloads use seconds, others milliseconds.
   // Values below 1e12 are treated as epoch-seconds.
   return timestamp < MS_EPOCH_MIN ? timestamp * 1000 : timestamp;
-}
-
-function resolveCardHeader(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-): CardHeaderConfig | undefined {
-  const name = identity?.name?.trim() || (agentId === "main" ? "" : agentId);
-  const emoji = resolveFeishuIdentityEmoji(identity?.emoji);
-  const title = (emoji ? `${emoji} ${name}` : name).trim();
-  if (!title) {
-    return undefined;
-  }
-  return {
-    title,
-    template: identity?.theme ?? "blue",
-  };
-}
-
-function resolveCardNote(
-  agentId: string,
-  identity: OutboundIdentity | undefined,
-  prefixCtx: { model?: string; provider?: string },
-): string {
-  const name = identity?.name?.trim() || agentId;
-  const parts: string[] = [`Agent: ${name}`];
-  if (prefixCtx.model) {
-    parts.push(`Model: ${prefixCtx.model}`);
-  }
-  if (prefixCtx.provider) {
-    parts.push(`Provider: ${prefixCtx.provider}`);
-  }
-  return parts.join(" | ");
 }
 
 type CreateFeishuReplyDispatcherParams = {
