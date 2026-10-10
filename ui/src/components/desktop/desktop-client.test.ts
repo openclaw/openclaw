@@ -43,6 +43,7 @@ describe("DesktopClient", () => {
   it.each([
     { trusted: true, held: false },
     { trusted: true, held: true },
+    { trusted: false, held: false },
   ])(
     "reconciles keyboard focus snapshots only when trusted=$trusted, held=$held",
     async ({ trusted, held }) => {
@@ -162,7 +163,7 @@ describe("DesktopClient", () => {
     },
   );
 
-  it.each([false])(
+  it.each([false, true])(
     "opens a socket after the RFB loader only while the operation remains current (%s)",
     async (remainsCurrent) => {
       const { Rfb, instances } = createFakeRfb();
@@ -201,6 +202,7 @@ describe("DesktopClient", () => {
   );
 
   it.each([
+    ["http://control.example.test/chat", "ws://control.example.test/desktop/observe?token=abc"],
     ["https://control.example.test/chat", "wss://control.example.test/desktop/observe?token=abc"],
   ])("resolves relative observer URLs against %s", async (gatewayUrl, expectedUrl) => {
     const { Rfb, instances } = createFakeRfb();
@@ -277,6 +279,7 @@ describe("DesktopClient", () => {
     { canResize: true, viewOnly: false, resizes: true },
     { canResize: true, viewOnly: true, resizes: false },
     { canResize: false, viewOnly: false, resizes: false },
+    { canResize: undefined, viewOnly: false, resizes: false },
   ])(
     "gates Match at the authenticated controller boundary ($canResize/$viewOnly)",
     async ({ canResize, viewOnly, resizes }) => {
@@ -376,32 +379,34 @@ describe("DesktopClient", () => {
     }
   });
 
-  it.each([["LF", "é\nΩ", ["é", "Enter", "Ω"]]] as const)(
-    "sends %s text line breaks as single Enter presses",
-    async (_name, text, keys) => {
-      const { Rfb } = createFakeRfb();
-      const socket = new FakeSocket("ws://control.example.test/desktop/observe");
-      const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
-      const target = document.createElement("div");
-      const canvas = document.createElement("canvas");
-      const events: KeyboardEvent[] = [];
-      const onKey = (event: KeyboardEvent) => events.push(event);
-      canvas.addEventListener("keydown", onKey);
-      canvas.addEventListener("keyup", onKey);
-      target.append(canvas);
-      const handle = await client.connect({
-        wsUrl: "ws://control.example.test/desktop/observe",
-        isCurrent: () => true,
-        viewOnly: false,
-        target,
-      });
+  it.each([
+    ["LF", "é\nΩ", ["é", "Enter", "Ω"]],
+    ["CRLF", "é\r\nΩ", ["é", "Enter", "Ω"]],
+    ["CR", "é\rΩ", ["é", "Enter", "Ω"]],
+    ["blank lines", "\n\r\n\r", ["Enter", "Enter", "Enter"]],
+  ] as const)("sends %s text line breaks as single Enter presses", async (_name, text, keys) => {
+    const { Rfb } = createFakeRfb();
+    const socket = new FakeSocket("ws://control.example.test/desktop/observe");
+    const client = new DesktopClient(Rfb, () => socket as unknown as WebSocket);
+    const target = document.createElement("div");
+    const canvas = document.createElement("canvas");
+    const events: KeyboardEvent[] = [];
+    const onKey = (event: KeyboardEvent) => events.push(event);
+    canvas.addEventListener("keydown", onKey);
+    canvas.addEventListener("keyup", onKey);
+    target.append(canvas);
+    const handle = await client.connect({
+      wsUrl: "ws://control.example.test/desktop/observe",
+      isCurrent: () => true,
+      viewOnly: false,
+      target,
+    });
 
-      handle.sendText(text);
+    handle.sendText(text);
 
-      expect(events.map(({ type, key, code }) => ({ type, key, code }))).toEqual(
-        keys.map((key) => ({ type: "keydown", key, code: "Unidentified" })),
-      );
-      handle.disconnect();
-    },
-  );
+    expect(events.map(({ type, key, code }) => ({ type, key, code }))).toEqual(
+      keys.map((key) => ({ type: "keydown", key, code: "Unidentified" })),
+    );
+    handle.disconnect();
+  });
 });

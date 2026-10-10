@@ -29,6 +29,7 @@ import {
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
   createMockReplyOperation,
+  requireRecord,
   expectMockCallArgFields,
   requireMockCall,
   createMinimalRunAgentTurnParams,
@@ -218,6 +219,38 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       clearIdentitySink();
       audit.close();
     }
+  });
+
+  it("propagates reply aborts through fallback orchestration and candidates", async () => {
+    const controller = new AbortController();
+    const { replyOperation } = createMockReplyOperation({ abortSignal: controller.signal });
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    const fallbackCall = requireRecord(
+      state.runWithModelFallbackMock.mock.calls[0]?.[0],
+      "runWithModelFallback params",
+    );
+    const embeddedCall = requireRecord(
+      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedAgent params",
+    );
+    expect(fallbackCall.sessionId).toBe("session");
+    expect(embeddedCall.abortSignal).toBe(fallbackCall.abortSignal);
+    expect(embeddedCall.abortSignal).toMatchObject({ aborted: false });
+
+    controller.abort();
+
+    expect(fallbackCall.abortSignal).toMatchObject({ aborted: true });
+    expect(embeddedCall.abortSignal).toMatchObject({ aborted: true });
   });
 
   it("records diagnostic progress from global-lane wait notifications", async () => {

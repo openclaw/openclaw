@@ -219,6 +219,28 @@ describe("offline device placement abandonment", () => {
     expect(fixture.provider.destroy).toHaveBeenCalledOnce();
   }
 
+  it.each([false, true])(
+    "abandons an unreachable device through real teardown (live tunnel: %s)",
+    async (liveTunnel) => {
+      const fixture = await deviceTeardown(liveTunnel);
+      const { harness, active, transfer, invoke } = fixture;
+      const fail = vi.spyOn(placements, "fail");
+      await expect(harness.service.move(requestFor(active))).resolves.toMatchObject({
+        state: "local",
+      });
+      expectRetainedDeviceCleanup(fixture);
+      expect(fail).toHaveBeenCalledWith(
+        expect.objectContaining({ recoveryError: FORCED_WORKER_ABANDONMENT_ERROR }),
+        undefined,
+      );
+      expect(transfer.close).toHaveBeenCalledWith(active.environmentId);
+      expect(invoke).not.toHaveBeenCalled();
+      expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
+      await finishDeviceCleanup(fixture);
+      expect(invoke).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("abandons a device whose supervisor proof disappears after discovery", async () => {
     const fixture = await deviceTeardown(false);
     const { harness, active, reconnect, invoke } = fixture;
@@ -301,7 +323,7 @@ describe("offline device placement abandonment", () => {
     await expect(harness.service.move(request)).resolves.toMatchObject({ state: "local" });
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "still remotely stops a connected device during forced destruction (live tunnel: %s)",
     async (liveTunnel) => {
       const { harness, active, reconnect, invoke, provider } = await deviceTeardown(liveTunnel);
@@ -654,6 +676,25 @@ describe("offline device placement abandonment", () => {
     }
   });
 
+  it("keeps an ordinary offline move reconcile-first", async () => {
+    const harness = createHarness(database, placements);
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+    vi.mocked(harness.environments.startTunnel).mockRejectedValueOnce(
+      new Error("device worker node is not connected; reconnect it before retrying"),
+    );
+
+    await expect(harness.service.move(requestFor(active, false))).rejects.toThrow(
+      "reconnect it before retrying",
+    );
+    expect(placements.get(active.sessionId)).toMatchObject({ state: "draining" });
+    expect(placements.getPlacementMove(active.sessionId)).toMatchObject({
+      abandonSource: false,
+    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "available", available: true, providerId: "device", error: "use Move session" },
     { name: "unknown", available: false, providerId: "test", error: "known runner binding" },
@@ -790,5 +831,24 @@ describe("offline device placement abandonment", () => {
     });
     await harness.service.reconcile();
     expect(placements.get(active.sessionId)).toMatchObject({ state: "local" });
+  });
+
+  it("recovers a crash after the durable drain without remote reconciliation", async () => {
+    const harness = createHarness(database, placements, { failMoveAfterBegin: true });
+    const active = await harness.service.dispatch(REQUEST);
+    harness.markEnvironmentNodeDeviceId("device-1");
+    seedEnvironment(active);
+
+    await expect(harness.service.move(requestFor(active))).rejects.toThrow(
+      "move barrier interrupted",
+    );
+    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    const restarted = createHarness(database, restartedStore);
+    restarted.markEnvironmentNodeDeviceId("device-1");
+    await restarted.service.reconcile();
+
+    expect(restartedStore.get(active.sessionId)).toMatchObject({ state: "local" });
+    expect(restartedStore.getPlacementMove(active.sessionId)).toBeUndefined();
+    expect(restarted.log).not.toContain("workspace:reconcile");
   });
 });

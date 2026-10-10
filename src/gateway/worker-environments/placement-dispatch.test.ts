@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WORKER_LAUNCH_V2_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
@@ -21,6 +23,7 @@ import {
   advancePlacementFixtureToActive,
   seedAttachedPlacementEnvironment,
 } from "./placement-test-fixtures.js";
+import { deriveEnvironmentIntent } from "./service-contract.js";
 
 describe("worker placement dispatch", () => {
   let root: string;
@@ -86,7 +89,7 @@ describe("worker placement dispatch", () => {
     expect(states).toEqual(["requested", "provisioning", "syncing", "starting", "active"]);
   });
 
-  it.each([true])(
+  it.each([false, true])(
     "provisions an inherited dispatch with its exact profile and setup authority (%s)",
     async (runSetupScript) => {
       const harness = createTestHarness();
@@ -130,6 +133,21 @@ describe("worker placement dispatch", () => {
     ]) {
       expect(resolveWorkerPlacementDestination({ cfg, ...target }).ok).toBe(false);
     }
+  });
+
+  it("reports the final durable placement after startup failure teardown", async () => {
+    const harness = createTestHarness({ failAt: "sync" });
+    const states: string[] = [];
+
+    await expect(
+      harness.service.dispatch(REQUEST, (placement) => states.push(placement.state)),
+    ).rejects.toThrow("sync failed");
+
+    expect(states).toEqual(["requested", "provisioning", "syncing", "failed"]);
+    expect(harness.environments.stopTunnel).toHaveBeenCalledWith(
+      harness.attached.environmentId,
+      harness.attached.ownerEpoch,
+    );
   });
 
   it("recovers a completed turn's durable pending workspace result before stale-claim teardown", async () => {
@@ -390,6 +408,89 @@ describe("worker placement dispatch", () => {
     expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
+  it("coalesces overlapping reclaim requests and accepts completed retries", async () => {
+    const harness = createTestHarness();
+    await harness.service.dispatch(REQUEST);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
+
+    const [first, second] = await Promise.all([
+      harness.service.reclaim(request),
+      harness.service.reclaim(request),
+    ]);
+    const retry = await harness.service.reclaim(request);
+
+    expect(first).toMatchObject({ state: "reclaimed" });
+    expect(second).toEqual(first);
+    expect(retry).toEqual(first);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the worker draining when inbound workspace reconciliation conflicts", async () => {
+    const harness = createTestHarness({ reconcileFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace conflict");
+
+    expect(harness.placements.current()).toMatchObject({ state: "draining" });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
+  it("keeps the worker draining when the remote workspace changes after local acceptance", async () => {
+    const harness = createTestHarness({
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailurePhase: "after-apply",
+    });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace changed after reconciliation");
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "draining",
+      workspaceBaseManifestRef: harness.reconciledManifestRef,
+      turnClaim: { owner: "worker" },
+    });
+    expect(harness.log).toContain("workspace:apply-prepared");
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { workspaceAcceptedAtMs: null },
+    ]);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
+  it("keeps the worker draining when its quiescence lease expires", async () => {
+    const harness = createTestHarness({ leaseFails: true });
+    await harness.service.dispatch(REQUEST);
+
+    await expect(
+      harness.service.reclaim({
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
+      }),
+    ).rejects.toThrow("workspace quiescence expired");
+
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.log).toContain("workspace:resume");
+  });
+
   it("keeps the worker draining when the accepted local result changes", async () => {
     const harness = createTestHarness({ localVerifyFails: true });
     await harness.service.dispatch(REQUEST);
@@ -406,27 +507,32 @@ describe("worker placement dispatch", () => {
     expect(harness.log).toContain("workspace:resume");
   });
 
-  it.each<DispatchStage>(["barrier"])(
-    "fails closed and tears down acquired resources when %s fails",
-    async (failAt) => {
-      const harness = createTestHarness({ failAt });
+  it.each<DispatchStage>([
+    "barrier",
+    "workspace",
+    "create",
+    "sync",
+    "attach",
+    "tunnel:attached",
+    "activation",
+  ])("fails closed and tears down acquired resources when %s fails", async (failAt) => {
+    const harness = createTestHarness({ failAt });
 
-      await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(`${failAt} failed`);
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(`${failAt} failed`);
 
-      expect(harness.placements.current()).toMatchObject({
-        state: "failed",
-        recoveryError: `${failAt} failed`,
-      });
-      const failedAt = harness.log.indexOf("placement:failed");
-      expect(failedAt).toBeGreaterThan(-1);
-      const environmentAcquired = !["barrier", "workspace"].includes(failAt);
-      expect(harness.log.includes("teardown:stop")).toBe(environmentAcquired);
-      expect(harness.log.includes("teardown:destroy")).toBe(environmentAcquired);
-      if (environmentAcquired) {
-        expect(failedAt).toBeGreaterThan(harness.log.indexOf("teardown:destroy"));
-      }
-    },
-  );
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: `${failAt} failed`,
+    });
+    const failedAt = harness.log.indexOf("placement:failed");
+    expect(failedAt).toBeGreaterThan(-1);
+    const environmentAcquired = !["barrier", "workspace"].includes(failAt);
+    expect(harness.log.includes("teardown:stop")).toBe(environmentAcquired);
+    expect(harness.log.includes("teardown:destroy")).toBe(environmentAcquired);
+    if (environmentAcquired) {
+      expect(failedAt).toBeGreaterThan(harness.log.indexOf("teardown:destroy"));
+    }
+  });
 
   it("rejects workspace preflight before allocation and allows a corrected redispatch", async () => {
     const rejectedHarness = createTestHarness({ failAt: "preflight" });
@@ -448,6 +554,65 @@ describe("worker placement dispatch", () => {
       correctedHarness.log.indexOf("placement:requested"),
     );
   });
+
+  it.each(["requested", "syncing"] as const)(
+    "allows explicit redispatch after restart recovery fails an interrupted %s placement",
+    async (interruptedState) => {
+      let interrupted = await placementStore.startDispatch(REQUEST);
+      if (interruptedState !== "requested") {
+        interrupted = await placementStore.transition({
+          sessionId: REQUEST.sessionId,
+          from: "requested",
+          to: "provisioning",
+          expectedGeneration: interrupted.generation,
+          patch: {
+            environmentId: deriveEnvironmentIntent(
+              `session-dispatch:${REQUEST.sessionId}:${interrupted.generation}`,
+            ).environmentId,
+          },
+        });
+      }
+      if (interruptedState === "syncing") {
+        interrupted = await placementStore.transition({
+          sessionId: REQUEST.sessionId,
+          from: "provisioning",
+          to: "syncing",
+          expectedGeneration: interrupted.generation,
+          patch: { workerBundleHash: "a".repeat(64) },
+        });
+      }
+      const interruptedEnvironmentId = interrupted.environmentId;
+      const restartedHarness = createTestHarness();
+
+      await restartedHarness.service.reconcile();
+      const failed = restartedHarness.placements.current();
+      expect(failed).toMatchObject({
+        state: "failed",
+        recoveryError: `Worker dispatch interrupted in ${interruptedState}`,
+      });
+      if (failed?.state !== "failed") {
+        throw new Error("restart recovery did not fail the interrupted placement");
+      }
+      const environmentOwned = interruptedState !== "requested";
+      expect(restartedHarness.environments.stopTunnel).toHaveBeenCalledTimes(
+        environmentOwned ? 1 : 0,
+      );
+      expect(restartedHarness.environments.destroy).toHaveBeenCalledTimes(environmentOwned ? 1 : 0);
+      const redispatchHarness = createTestHarness({
+        environmentGeneration: failed.generation + 1,
+      });
+
+      const active = await redispatchHarness.service.dispatch(REQUEST);
+
+      expect(active).toMatchObject({
+        state: "active",
+        environmentId: redispatchHarness.ready.environmentId,
+      });
+      expect(active.generation).toBeGreaterThan(failed.generation);
+      expect(active.environmentId).not.toBe(interruptedEnvironmentId);
+      expect(redispatchHarness.log).toContain("placement:requested");
+    },
+  );
 
   it("tears down the attached owner after restart interrupts workspace sync", async () => {
     const harness = createTestHarness();
@@ -481,6 +646,146 @@ describe("worker placement dispatch", () => {
     expect(harness.log).not.toContain("teardown:destroy");
   });
 
+  it("rejects and tears down a freshly provisioned bundle without execution context", async () => {
+    const harness = createTestHarness();
+    harness.markEnvironmentProtocolFeatures(["worker-execution-context-v1"]);
+
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow(
+      "current worker launch contract",
+    );
+
+    expect(harness.placements.current()).toMatchObject({ state: "failed" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("persists pending teardown evidence after placement is fenced", async () => {
+    const harness = createTestHarness({ failAt: "sync", destroyFails: true });
+
+    await expect(harness.service.dispatch(REQUEST)).rejects.toThrow("sync failed");
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: expect.stringContaining("environment destroy: destroy pending"),
+    });
+    expect(harness.log.filter((entry) => entry === "placement:failed")).toHaveLength(1);
+  });
+
+  it("adopts an exact active environment after restart without reprovisioning", async () => {
+    const harness = createTestHarness();
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    await harness.placements.seedActive(harness.attached.ownerEpoch, "remote-exec");
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.log).toEqual(["environment:reconcile", "tunnel:attached", "placement:adopted"]);
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("reclaims an active worker missing execution context instead of adopting it", async () => {
+    const harness = createTestHarness();
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("fails an active placement whose environment disappeared before restart", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentFailed();
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      environmentId: harness.ready.environmentId,
+      activeOwnerEpoch: harness.attached.ownerEpoch,
+      recoveryError:
+        "cloud worker disappeared: Worker environment disappeared before teardown was requested",
+      terminalReason:
+        "cloud worker disappeared: Worker environment disappeared before teardown was requested",
+      terminalAtMs: expect.any(Number),
+    });
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "placement:draining",
+      "placement:reconciling",
+      "placement:failed",
+    ]);
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
+  it("does not reclaim an active placement with an unresolved workspace journal", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    const active = placementStore.get(REQUEST.sessionId);
+    expect(active?.state).toBe("active");
+    if (active?.state !== "active") {
+      return;
+    }
+    await placementStore.beginWorkspaceReconciliation(
+      {
+        sessionId: active.sessionId,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+        placementGeneration: active.generation,
+      },
+      {
+        version: 1,
+        temporaryNonce: "f".repeat(32),
+        baseManifestRef: active.workspaceBaseManifestRef,
+        currentManifestRef: harness.reconciledManifestRef,
+        baseEntries: [],
+        appliedEntries: [],
+        baseTree: "f".repeat(40),
+        basePackSha256: createHash("sha256").update("").digest("hex"),
+        basePack: Buffer.alloc(0),
+      },
+    );
+    harness.markEnvironmentDestroyed();
+    harness.log.length = 0;
+
+    await harness.service.reconcileActive();
+
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
+  });
+
+  it("fails closed instead of activating a synced placement after restart", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedStarting();
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      environmentId: harness.ready.environmentId,
+      recoveryError: "Worker dispatch interrupted in starting",
+    });
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it("tears down an attached starting placement after restart loses request authority", async () => {
     const harness = createTestHarness();
     await harness.placements.seedStarting();
@@ -495,6 +800,21 @@ describe("worker placement dispatch", () => {
       recoveryError: "Worker dispatch interrupted in starting",
     });
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("tears down a starting worker missing execution context instead of resuming it", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedStarting();
+    harness.markEnvironmentProtocolFeatures([WORKER_LAUNCH_V2_PROTOCOL_FEATURE]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError: "Worker dispatch interrupted in starting",
+    });
     expect(harness.environments.startTunnel).not.toHaveBeenCalled();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
@@ -518,6 +838,29 @@ describe("worker placement dispatch", () => {
       "teardown:destroy",
       "placement:failed",
     ]);
+  });
+
+  it("drains, tears down, and reclaims an idle active placement with a mismatched owner", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedActive(99);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "reclaimed",
+    });
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "placement:draining",
+      "placement:reconciling",
+      "teardown:stop",
+      "teardown:destroy",
+      "placement:reclaimed",
+    ]);
+
+    const destroyCalls = vi.mocked(harness.environments.destroy).mock.calls.length;
+    await harness.service.reconcile();
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(destroyCalls);
   });
 
   it("preserves a live active turn claim during runtime reconciliation", async () => {
@@ -643,6 +986,30 @@ describe("worker placement dispatch", () => {
     ]);
   });
 
+  it("fails an active placement when its environment disappears", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentFailed();
+    harness.log.length = 0;
+
+    await harness.service.reconcileActive();
+
+    expect(harness.placements.current()).toMatchObject({
+      state: "failed",
+      recoveryError:
+        "cloud worker disappeared: Worker environment disappeared before teardown was requested",
+      terminalReason:
+        "cloud worker disappeared: Worker environment disappeared before teardown was requested",
+    });
+    expect(harness.log).toEqual([
+      "environment:reconcile",
+      "placement:draining",
+      "placement:reconciling",
+      "placement:failed",
+    ]);
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+  });
+
   it("limits requested runtime reconciliation to one environment", async () => {
     const harness = createTestHarness();
     await harness.placements.seedActive(harness.attached.ownerEpoch);
@@ -698,5 +1065,18 @@ describe("worker placement dispatch", () => {
       "teardown:destroy",
       "placement:failed",
     ]);
+  });
+
+  it("leaves in-flight dispatch preparation untouched during runtime reconciliation", async () => {
+    const harness = createTestHarness();
+    await harness.placements.seedStarting();
+    harness.log.length = 0;
+
+    await harness.service.reconcileActive();
+
+    expect(harness.placements.current()).toMatchObject({ state: "starting" });
+    expect(harness.log).toEqual(["environment:reconcile"]);
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 });

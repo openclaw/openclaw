@@ -227,6 +227,41 @@ describe("worker placement dispatch coordinator", () => {
     );
   });
 
+  it.each(["dispatch", "move"] as const)(
+    "rejects admission-cancelled %s after its same-session predecessor settles",
+    async (kind) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const controller = new AbortController();
+      const dispatch = vi.fn(async () => ACTIVE_PLACEMENT);
+      const move = vi.fn(async () => LOCAL_PLACEMENT);
+      const coordinated = coordinateWorkerPlacementDispatch(
+        createCoordinatorTestService({
+          dispatch,
+          move,
+          reconcileActive: async (_environmentId, admit) => {
+            await admit!([REQUEST.sessionId], async () => {
+              entered.resolve();
+              await release.promise;
+            });
+          },
+        }),
+        (_request, run) => run(controller.signal),
+      );
+      const blocking = coordinated.reconcileActive("worker-active");
+      await entered.promise;
+      const queued =
+        kind === "dispatch" ? coordinated.dispatch(REQUEST) : coordinated.move(MOVE_REQUEST);
+      const result = queued.catch((error: unknown) => error);
+      controller.abort(new DOMException("Stop queued work", "AbortError"));
+      release.resolve();
+      await blocking;
+      expect(await result).toMatchObject({ name: "AbortError" });
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(move).not.toHaveBeenCalled();
+    },
+  );
+
   it("cancels a queued dispatch without releasing its same-session predecessor", async () => {
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -465,6 +500,39 @@ describe("worker placement dispatch coordinator", () => {
     },
   );
 
+  it("forwards in-process transition and authorization hooks outside request equality", async () => {
+    const observer = vi.fn();
+    const authorize = vi.fn();
+    const sessionCurrent = vi.fn();
+    const placement = { state: "active" };
+    const dispatch = vi.fn(async (_request, report, assertCurrent) => {
+      assertCurrent?.();
+      report?.(placement);
+      return placement;
+    });
+    const service = {
+      dispatch,
+      forceDestroyEnvironment: vi.fn(),
+      reclaim: vi.fn(),
+      reconcile: vi.fn(async () => {}),
+      reconcileActive: vi.fn(async () => {}),
+    } as unknown as DispatchService;
+
+    await coordinateWorkerPlacementDispatch(service, (_request, run) =>
+      run(undefined, sessionCurrent),
+    ).dispatch(REQUEST, observer, authorize);
+
+    expect(dispatch).toHaveBeenCalledWith(
+      REQUEST,
+      expect.any(Function),
+      expect.any(Function),
+      undefined,
+    );
+    expect(sessionCurrent).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledOnce();
+    expect(observer).toHaveBeenCalledExactlyOnceWith(placement);
+  });
+
   it("coalesces an identical dispatch and rejects a conflicting in-flight request", async () => {
     const dispatchStarted = createDeferredCore();
     const releaseDispatch = createDeferredCore();
@@ -652,6 +720,45 @@ describe("worker placement dispatch coordinator", () => {
     await dispatching;
     expect(move).toHaveBeenCalledOnce();
     expect(dispatch).toHaveBeenCalledOnce();
+  });
+
+  it("waits for same-session preparation before reclaim", async () => {
+    const dispatchStarted = createDeferredCore();
+    const releaseDispatch = createDeferredCore();
+    const dispatch = vi.fn(async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      return ACTIVE_PLACEMENT;
+    });
+    const reclaim = vi.fn(async () => ({ ...ACTIVE_PLACEMENT, state: "reclaimed" as const }));
+    const service = createCoordinatorTestService({
+      dispatch,
+      reclaim: async (_request, _authorize, _beforeDrain, serialize, pendingOperations) => {
+        await pendingOperations?.settled;
+        if (!serialize) {
+          throw new Error("Reclaim fixture requires session admission");
+        }
+        return await serialize(reclaim);
+      },
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(service, (_request, run) => run());
+
+    const dispatching = coordinated.dispatch(REQUEST);
+    await dispatchStarted.promise;
+    const reclaiming = coordinated.reclaim({
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    });
+
+    try {
+      await setImmediatePromise();
+      expect(reclaim).not.toHaveBeenCalled();
+    } finally {
+      releaseDispatch.resolve();
+      await Promise.all([dispatching, reclaiming]);
+    }
+    expect(reclaim).toHaveBeenCalledOnce();
   });
 
   it("coalesces full sweeps while unrelated targeted sweeps run independently", async () => {

@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
@@ -140,6 +142,45 @@ describe("worker placement idle suspension", () => {
     }
   });
 
+  it("suspends a never-run worker after its activation through the real reclaim teardown", async () => {
+    const { harness, idleSweep, info, warn } = createIdleFixture();
+    const active = await harness.service.dispatch(REQUEST);
+
+    nowMs += 59_999;
+    const sql = observeHostDataSql();
+    try {
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+      expect(sql.queries.length).toBeGreaterThan(0);
+      const beforeSweep = sql.queries.length;
+      await idleSweep.sweep();
+      expect(sql.queries.slice(beforeSweep)).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+    expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+
+    nowMs += 1;
+    await idleSweep.sweep();
+
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({
+      state: "reclaimed",
+      turnClaim: null,
+    });
+    expect(harness.environments.destroy).toHaveBeenCalledExactlyOnceWith(active.environmentId);
+    expect(harness.log).toEqual(
+      expect.arrayContaining([
+        "placement:draining",
+        "workspace:reconcile",
+        "teardown:destroy",
+        "placement:reclaimed",
+      ]),
+    );
+    expect(info).toHaveBeenCalledOnce();
+    expect(info).toHaveBeenCalledWith(expect.stringContaining(REQUEST.sessionKey));
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("starts the idle clock at the latest authoritative turn-claim release", async () => {
     const { harness, idleSweep } = createIdleFixture();
     await harness.service.dispatch(REQUEST);
@@ -159,7 +200,7 @@ describe("worker placement idle suspension", () => {
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it.each(["dispatch"] as const)(
+  it.each(["dispatch", "move"] as const)(
     "does not suspend while the real coordinator owns an in-flight %s",
     async (kind) => {
       const { harness, idleSweep, info, warn } = createIdleFixture({
@@ -216,28 +257,77 @@ describe("worker placement idle suspension", () => {
   );
 
   it.each([
+    { reason: "an active worker turn", kind: "worker-claim" },
     { reason: "an active local turn", kind: "local-claim" },
     { reason: "an admitted turn before its worker claim exists", kind: "admitted-turn" },
+    { reason: "a durable pending result after its claim was revoked", kind: "pending-result" },
+    { reason: "a durable workspace reconciliation journal", kind: "reconciling-result" },
+    { reason: "a profile without suspendAfter", kind: "no-suspend-after" },
+    { reason: "a placement still provisioning", kind: "provisioning" },
+    { reason: "a placement already draining", kind: "draining" },
   ] as const)("does not suspend when blocked by $reason", async ({ kind }) => {
     const getSessionWorkAdmissionCheck =
       kind === "admitted-turn" ? vi.fn(async () => () => true) : undefined;
-    const { harness, idleSweep, info, warn } = createIdleFixture({ getSessionWorkAdmissionCheck });
-
-    const active = await harness.service.dispatch({
-      ...REQUEST,
-      executionMode: kind === "local-claim" ? "remote-exec" : "worker-turn",
+    const { harness, idleSweep, info, warn } = createIdleFixture({
+      ...(kind === "no-suspend-after" ? { suspendAfter: null } : {}),
+      ...(getSessionWorkAdmissionCheck ? { getSessionWorkAdmissionCheck } : {}),
     });
-    if (kind === "local-claim") {
-      await placements.claimTurn({
-        ...REQUEST,
-        claimId: "busy-local-claim",
-        runId: "busy-local-run",
-        owner: {
-          kind: "local",
+
+    if (kind === "provisioning") {
+      await harness.placements.seedProvisioning();
+    } else {
+      const executionMode =
+        kind === "local-claim" || kind === "pending-result" ? "remote-exec" : "worker-turn";
+      const active = await harness.service.dispatch({ ...REQUEST, executionMode });
+      if (kind === "worker-claim") {
+        await claimWorkerTurn();
+      } else if (kind === "local-claim" || kind === "pending-result") {
+        const claim = await placements.claimTurn({
+          ...REQUEST,
+          claimId: "busy-local-claim",
+          runId: "busy-local-run",
+          owner: {
+            kind: "local",
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+          },
+        });
+        if (kind === "pending-result") {
+          await placements.markWorkspaceResultPending(claim);
+          placements.clearLocalTurnClaimsAfterRestart();
+          expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
+        }
+      } else if (kind === "reconciling-result") {
+        const basePack = Buffer.from("idle workspace journal");
+        await placements.beginWorkspaceReconciliation(
+          {
+            sessionId: active.sessionId,
+            environmentId: active.environmentId,
+            ownerEpoch: active.activeOwnerEpoch,
+            placementGeneration: active.generation,
+          },
+          {
+            version: 1,
+            temporaryNonce: "a".repeat(32),
+            baseManifestRef: active.workspaceBaseManifestRef,
+            currentManifestRef: `sha256:${"c".repeat(64)}`,
+            baseEntries: [],
+            appliedEntries: [],
+            baseTree: "f".repeat(40),
+            basePackSha256: createHash("sha256").update(basePack).digest("hex"),
+            basePack,
+          },
+        );
+        expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
+      } else if (kind === "draining") {
+        await placements.startDrain({
+          sessionId: active.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
-        },
-      });
+          expectedGeneration: active.generation,
+        });
+      }
     }
 
     nowMs += 120_000;
@@ -304,7 +394,7 @@ describe("worker placement idle suspension", () => {
     },
   );
 
-  it.each(["activity"])(
+  it.each(["activity", "disabled policy", "longer timeout"])(
     "rechecks %s after delayed automatic reclaim preparation",
     async (change) => {
       const reclaimStarted = createDeferredCore();

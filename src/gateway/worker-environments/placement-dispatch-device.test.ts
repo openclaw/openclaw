@@ -3,7 +3,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -15,6 +18,7 @@ import {
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { VERSION } from "../../version.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
+import { resolveDevicePlacementEligibility } from "./device-placement-eligibility.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -119,6 +123,170 @@ describe("device worker placement dispatch", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
+  it("provisions, syncs, and activates a local-install device environment", async () => {
+    const harness = createHarness(database, placementStore);
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node: deviceProof(),
+    }));
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue({
+      ...harness.ready,
+      providerId: "device",
+      profileId: "device:device-1",
+      profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+      sshEndpoint: null,
+      bootstrapReceipt: {
+        bundleHash: "a".repeat(64),
+        openclawVersion: "2026.8.12",
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
+        installKind: "bundle",
+      },
+      sharedHost: true,
+      tunnelStatus: "stopped",
+    });
+    const request = {
+      ...REQUEST,
+      profileId: "device:device-1",
+      deviceId: "device-1",
+      devicePlacement: OPENCLAW_DEVICE_REQUIREMENT,
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
+      },
+    };
+
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      workerBundleHash: "a".repeat(64),
+      remoteWorkspaceDir: "/worker/workspace",
+    });
+
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: request.profileId,
+      idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+      executionMode: REQUEST.executionMode,
+      projectPath: "/gateway/workspace",
+      inheritedProfile: request.inheritedProfile,
+    });
+    expect(harness.environments.startTunnel).toHaveBeenCalledWith({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: expect.any(Number),
+      authorize: expect.any(Function),
+    });
+    expect(harness.environments.attachSession).toHaveBeenCalledWith({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+  });
+
+  it("syncs paired-device remote-exec without launching an OpenClaw worker child", async () => {
+    const harness = createHarness(database, placementStore);
+    const node = deviceProof(0);
+    delete node.workerHost.capturedExecPolicy;
+    bindDeviceWorkerAvailability(harness.environments, async () => ({
+      available: true,
+      node,
+    }));
+    const nodeEnvironment = {
+      ...harness.ready,
+      providerId: "device",
+      profileId: "device:device-1",
+      profileSnapshot: { install: "bundle", settings: { device: "device-1" } },
+      nodeDeviceId: "device-1",
+      sshEndpoint: null,
+      sharedHost: true,
+    } as const;
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(nodeEnvironment);
+    vi.mocked(harness.environments.get).mockImplementation((environmentId) => {
+      if (environmentId !== nodeEnvironment.environmentId) {
+        return undefined;
+      }
+      return vi.mocked(harness.environments.attachSession).mock.calls.length > 0
+        ? {
+            ...harness.attached,
+            providerId: "device",
+            profileId: "device:device-1",
+            nodeDeviceId: "device-1",
+            sshEndpoint: null,
+            sharedHost: true,
+          }
+        : nodeEnvironment;
+    });
+    const request = {
+      ...REQUEST,
+      executionMode: "remote-exec" as const,
+      profileId: "device:device-1",
+      deviceId: "device-1",
+      devicePlacement: CODEX_DEVICE_REQUIREMENT,
+      inheritedProfile: {
+        providerId: "device",
+        profileSnapshot: { install: "bundle" as const, settings: { device: "device-1" } },
+      },
+    };
+
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      executionMode: "remote-exec",
+      remoteWorkspaceDir: "/worker/workspace",
+    });
+
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: request.profileId,
+      idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+      executionMode: "remote-exec",
+      projectPath: "/gateway/workspace",
+      inheritedProfile: request.inheritedProfile,
+    });
+    const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
+      ?.value;
+    expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: request.sessionId,
+        source: { kind: "local", path: "/gateway/workspace" },
+        generation: expect.any(Number),
+      }),
+    );
+    expect(workspaceTunnel?.launchTurn).not.toHaveBeenCalled();
+  });
+
+  it("activates non-device node remote-exec without a worker slot or worker child", async () => {
+    const harness = createHarness(database, placementStore);
+    const resolveAvailability = vi.fn(async () => ({
+      available: true,
+      node: deviceProof(0),
+    }));
+    bindDeviceWorkerAvailability(harness.environments, resolveAvailability);
+    const request = prepareCloudNodeDispatch(harness);
+
+    await expect(harness.service.dispatch(request)).resolves.toMatchObject({
+      state: "active",
+      executionMode: "remote-exec",
+      remoteWorkspaceDir: "/worker/workspace",
+    });
+
+    expect(resolveAvailability).toHaveBeenCalledWith("device-1");
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: "multi-mode-cloud",
+      idempotencyKey: expect.stringMatching(/^session-dispatch:/u),
+      executionMode: "remote-exec",
+      projectPath: "/gateway/workspace",
+      admittedIntent: {
+        providerId: harness.ready.providerId,
+        profileSnapshot: harness.ready.profileSnapshot,
+      },
+    });
+    const workspaceTunnel = await vi.mocked(harness.environments.startTunnel).mock.results[0]
+      ?.value;
+    expect(workspaceTunnel?.syncWorkspace).toHaveBeenCalledOnce();
+    expect(workspaceTunnel?.launchTurn).not.toHaveBeenCalled();
+  });
+
   it("does not require node command approval for an SSH-only remote-exec profile", async () => {
     const harness = createHarness(database, placementStore);
     runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
@@ -132,6 +300,21 @@ describe("device worker placement dispatch", () => {
     ).resolves.toMatchObject({ state: "active", executionMode: "remote-exec" });
 
     expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a remote-exec-only enrolled node before provider allocation when its command is denied", async () => {
+    const harness = createHarness(database, placementStore);
+    const request = prepareCloudNodeDispatch(harness);
+    runtimeNodeCommandPolicy.commands = { deny: [CODEX_COMMAND] };
+    Object.assign(harness.environments, {
+      supportsExecutionMode: (_profileId: string, mode: string) => mode === "remote-exec",
+      requiresNodeEnrollment: () => true,
+    });
+
+    await expect(harness.service.dispatch(request)).rejects.toThrow(CODEX_COMMAND);
+
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
+    expect(harness.environments.attachSession).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -433,6 +616,22 @@ describe("device worker placement dispatch", () => {
     });
   });
 
+  it("rejects a replaced node connection", async () => {
+    const service = {};
+    bindDeviceWorkerAvailability(service, async () => ({ available: true, node: deviceProof() }));
+
+    const result = await resolveDevicePlacementEligibility({
+      environmentService: service,
+      deviceId: "device-1",
+      requirement: OPENCLAW_DEVICE_REQUIREMENT,
+      executionMode: "worker-turn",
+      config: {},
+      currentNode: { nodeId: "device-1", connId: "replaced-connection" },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: expect.stringContaining("reconnect") });
+  });
+
   it.each([
     {
       name: "saturated worker-turn node",
@@ -447,6 +646,20 @@ describe("device worker placement dispatch", () => {
       node: deviceProof(0, ["system.run"]),
       providerId: "device",
       expectedMessage: "not advertised by node",
+    },
+    {
+      name: "non-device remote-exec cloud node missing its required command",
+      executionMode: "remote-exec" as const,
+      node: deviceProof(0, ["system.run"]),
+      providerId: "generic-cloud-node",
+      expectedMessage: "not advertised by node",
+    },
+    {
+      name: "saturated non-device worker-turn cloud node",
+      executionMode: "worker-turn" as const,
+      node: deviceProof(0),
+      providerId: "generic-cloud-node",
+      expectedMessage: "at capacity",
     },
   ])("fences recovery of a $name before workspace sync", async (scenario) => {
     const harness = createHarness(database, placementStore);
@@ -476,6 +689,25 @@ describe("device worker placement dispatch", () => {
       state: "failed",
       recoveryError: expect.stringContaining(scenario.expectedMessage),
     });
+  });
+
+  it("adopts an offline paired-device placement without eagerly starting its tunnel", async () => {
+    const harness = createHarness(database, placementStore);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: REQUEST.sessionId,
+    });
+    await harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentNodeDeviceId("offline-device");
+    harness.log.length = 0;
+
+    await harness.service.reconcile();
+
+    expect(harness.log).toEqual(["environment:reconcile", "placement:adopted"]);
+    expect(harness.placements.current()).toMatchObject({ state: "active" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it("never hands a descriptor to a same-version local worker with the older strict parser", async () => {

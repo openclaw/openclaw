@@ -171,6 +171,28 @@ describe("openshell cli helpers", () => {
     ]);
   });
 
+  it("preserves the ambient workspace when workspace is not configured", async () => {
+    process.env.OPENSHELL_WORKSPACE = "ambient";
+    const openshellCommand = await makeExecutable({
+      name: "openshell",
+      script: ["#!/bin/sh", `printf '%s\\n' "$OPENSHELL_WORKSPACE|$*" >> "__LOG__"`, "exit 0"].join(
+        "\n",
+      ),
+    });
+
+    await runOpenShellCli({
+      context: {
+        sandboxName: "demo",
+        config: resolveOpenShellPluginConfig({ command: openshellCommand }),
+      },
+      args: ["sandbox", "get", "demo"],
+    });
+
+    await expect(fs.readFile(process.env.OPEN_SHELL_CLI_TEST_LOG as string, "utf8")).resolves.toBe(
+      "ambient|sandbox get demo\n",
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "preserves workspace selection when adding a direct gateway endpoint",
     async () => {
@@ -291,7 +313,10 @@ describe("openshell backend manager", () => {
     );
   });
 
-  it.each([["", "openshell sandbox get failed"]])(
+  it.each([
+    ["gateway authentication expired", "gateway authentication expired"],
+    ["", "openshell sandbox get failed"],
+  ])(
     "does not create a sandbox after a failed control-plane lookup: %s",
     async (stderr, expected) => {
       cliMocks.runOpenShellCli.mockResolvedValue({ code: 1, stdout: "", stderr });
@@ -436,6 +461,55 @@ describe("openshell backend manager", () => {
     },
   );
 
+  it("checks runtime status with config override from OpenClaw config", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ phase: "Ready" }),
+      stderr: "",
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+        from: "openclaw",
+      }),
+    });
+
+    const result = await manager.describeRuntime({
+      entry: createOpenShellRuntimeEntryFixture("openclaw-session-1234", "custom-source"),
+      config: {
+        plugins: {
+          entries: {
+            openshell: {
+              enabled: true,
+              config: {
+                command: "openshell",
+                from: "custom-source",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      running: true,
+      actualConfigLabel: "custom-source",
+      configLabelMatch: true,
+    });
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "openshell",
+      from: "custom-source",
+    });
+    expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
+      context: {
+        sandboxName: "openclaw-session-1234",
+        config: expectedConfig,
+      },
+      args: ["sandbox", "get", "openclaw-session-1234", "--output", "json"],
+    });
+  });
+
   it("does not report a provisioning OpenShell runtime as running", async () => {
     cliMocks.runOpenShellCli.mockResolvedValue({
       code: 0,
@@ -516,27 +590,43 @@ describe("openshell backend manager", () => {
     });
   });
 
-  it.each([["", "openshell sandbox delete failed"]])(
-    "preserves deletion failures for sandbox lifecycle owners: %s",
-    async (stderr, expected) => {
-      cliMocks.runOpenShellCli.mockResolvedValue({
-        code: 1,
-        stdout: "",
-        stderr,
-      });
+  it.each([
+    ["gateway unavailable", "gateway unavailable"],
+    ["", "openshell sandbox delete failed"],
+  ])("preserves deletion failures for sandbox lifecycle owners: %s", async (stderr, expected) => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr,
+    });
 
-      const manager = createOpenShellSandboxBackendManager({
-        pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
-      });
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({ command: "openshell" }),
+    });
 
-      await expect(
-        manager.removeRuntime({
-          entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
-          config: {},
-        }),
-      ).rejects.toThrow(expected);
-    },
-  );
+    await expect(
+      manager.removeRuntime({
+        entry: createOpenShellRuntimeEntryFixture("openclaw-session-5678"),
+        config: {},
+      }),
+    ).rejects.toThrow(expected);
+  });
+
+  it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: "/tmp/workspace",
+      mode: "mirror",
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "workflow install <name>",
+        env: {},
+        usePty: false,
+      }),
+    ).rejects.toThrow(/unresolved placeholder token <name>/);
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
+  });
 
   it.each(["remote", "mirror"] as const)(
     "rejects invalid exec environment before SSH staging and releases the %s session",
@@ -654,7 +744,34 @@ describe("openshell backend manager", () => {
     );
   });
 
+  it("disposes the OpenShell SSH session when secure exec staging fails", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({ code: 0, stdout: "", stderr: "" });
+    sandboxMocks.runSshSandboxCommand.mockResolvedValueOnce({
+      stdout: Buffer.from("1\n"),
+      stderr: Buffer.alloc(0),
+      code: 0,
+    });
+    sandboxMocks.prepareSshSandboxExec.mockRejectedValueOnce(
+      new Error("synthetic staging failure"),
+    );
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir: "/tmp/openclaw-synthetic-workspace",
+      mode: "remote",
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "true",
+        env: { SYNTHETIC_VALUE: "synthetic-openshell-env-value" },
+        usePty: false,
+      }),
+    ).rejects.toThrow("synthetic staging failure");
+
+    expect(sandboxMocks.disposeSshSandboxSession).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
+    "success",
     "source cleanup failure",
     "retained source replacement",
     "restore cleanup failure",
@@ -750,44 +867,54 @@ describe("openshell backend manager", () => {
 
         expect(renameSpy).toHaveBeenCalled();
         expect(preservedPath).toBeDefined();
-        expect(finalizeError).toMatchObject({
-          cause: { code: outcome === "retained source replacement" ? "ESTALE" : "EACCES" },
-        });
-        const backup = expectDefined(preservedPath, "completed shadow publication");
-        const completeCopy =
-          outcome === "restore cleanup failure" ? path.dirname(shadowFile) : backup;
-        for (const [name, contents] of sourceContents) {
-          await expect(fs.readFile(path.join(completeCopy, name), "utf8")).resolves.toBe(contents);
-        }
-        if (outcome === "restore cleanup failure") {
+        if (outcome === "success") {
+          expect(finalizeError).toBeUndefined();
+          await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("local shadow");
           await expect(
             fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8"),
           ).resolves.toBe("remote");
         } else {
-          await expectPathMissing(path.join(workspaceDir, "from-remote.txt"));
+          expect(finalizeError).toMatchObject({
+            cause: { code: outcome === "retained source replacement" ? "ESTALE" : "EACCES" },
+          });
+          const backup = expectDefined(preservedPath, "completed shadow publication");
+          const completeCopy =
+            outcome === "restore cleanup failure" ? path.dirname(shadowFile) : backup;
+          for (const [name, contents] of sourceContents) {
+            await expect(fs.readFile(path.join(completeCopy, name), "utf8")).resolves.toBe(
+              contents,
+            );
+          }
+          if (outcome === "restore cleanup failure") {
+            await expect(
+              fs.readFile(path.join(workspaceDir, "from-remote.txt"), "utf8"),
+            ).resolves.toBe("remote");
+          } else {
+            await expectPathMissing(path.join(workspaceDir, "from-remote.txt"));
+          }
+          if (outcome === "source cleanup failure" || outcome === "restore cleanup failure") {
+            expect(sourceCleanupFailed).toBe(true);
+            expect(removedSourceFiles).toHaveLength(1);
+            await expectPathMissing(expectDefined(removedSourceFiles[0], "removed source file"));
+            const retained = expectDefined(retainedSourceFile, "refused source unlink");
+            expect(sourceAtCleanupFailure).toEqual([path.basename(retained)]);
+            await expect(fs.readFile(retained, "utf8")).resolves.toBe(
+              sourceContents.get(path.basename(retained)),
+            );
+          } else {
+            await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("concurrent replacement");
+          }
+          // The caller must be able to locate its retained original after a partial move.
+          expect(
+            String(finalizeError),
+            JSON.stringify({
+              outcome,
+              sourceFiles: await fs.readdir(path.dirname(shadowFile)),
+              backupFiles: await fs.readdir(backup),
+              sourceAtCleanupFailure,
+            }),
+          ).toContain(backup);
         }
-        if (outcome === "source cleanup failure" || outcome === "restore cleanup failure") {
-          expect(sourceCleanupFailed).toBe(true);
-          expect(removedSourceFiles).toHaveLength(1);
-          await expectPathMissing(expectDefined(removedSourceFiles[0], "removed source file"));
-          const retained = expectDefined(retainedSourceFile, "refused source unlink");
-          expect(sourceAtCleanupFailure).toEqual([path.basename(retained)]);
-          await expect(fs.readFile(retained, "utf8")).resolves.toBe(
-            sourceContents.get(path.basename(retained)),
-          );
-        } else {
-          await expect(fs.readFile(shadowFile, "utf8")).resolves.toBe("concurrent replacement");
-        }
-        // The caller must be able to locate its retained original after a partial move.
-        expect(
-          String(finalizeError),
-          JSON.stringify({
-            outcome,
-            sourceFiles: await fs.readdir(path.dirname(shadowFile)),
-            backupFiles: await fs.readdir(backup),
-            sourceAtCleanupFailure,
-          }),
-        ).toContain(backup);
         await expectPathMissing(
           path.join(workspaceDir, ".openclaw", "sandbox-skills", "skills", "generated.txt"),
         );
