@@ -17,7 +17,6 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withIncognitoSessionActor } from "../../config/sessions/session-incognito-binding.js";
-import * as transcriptEvent from "../../config/sessions/session-transcript-event.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readConversationDeliveryStateForTest } from "../../gateway/conversation-delivery.test-support.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
@@ -987,16 +986,19 @@ it.each([false, true])(
     const id = "private-capture";
     const pending = await registerCapture(setup, id);
     pending.markReady();
-    if (auditFailure) {
-      vi.spyOn(transcriptEvent, "appendPreparedTranscriptEvent").mockRejectedValueOnce(
-        new Error("optional audit unavailable"),
-      );
-    }
+    const append = auditFailure
+      ? vi
+          .spyOn(actor.sessions, "transcript")
+          .mockRejectedValueOnce(new Error("optional audit unavailable"))
+      : undefined;
     try {
       await withIncognitoSessionActor(actor, async () => {
         const input = { cfg: setup.cfg, ctx: inboundReply(setup, id) };
         await expect(capturePendingConversationTurnReply(input)).resolves.toBe(true);
         await expect(capturePendingConversationTurnReply(input)).resolves.toBe(true);
+        if (append) {
+          expect(append).toHaveBeenCalledTimes(1);
+        }
         const events = await sessionAccessor.loadTranscriptEvents({
           agentId: "main",
           storePath: actor.path,
