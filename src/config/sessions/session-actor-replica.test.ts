@@ -215,13 +215,16 @@ it("retains unrelated session postimages but invalidates a shared physical sessi
     replaceSessionEntrySync(other, { sessionId: "other-session", updatedAt: 2, label: "changed" });
     expect(fixture.replica.read()).toEqual(snapshot);
     using sibling = openNodeSqliteDatabase(fixture.database.path);
-    withSqliteDatabaseWriteScope(sibling, [other.sessionKey], () =>
-      runSqliteImmediateTransactionSync(sibling, () => {
-        sibling
-          .prepare("UPDATE session_nodes SET updated_at = 3 WHERE session_key = ?")
-          .run(other.sessionKey);
-        expect(fixture.replica.read()).toBeUndefined();
-      }),
+    withSqliteDatabaseWriteScope(
+      sibling,
+      [other.sessionKey, sqliteSessionIdWriteScope("other-session")],
+      () =>
+        runSqliteImmediateTransactionSync(sibling, () => {
+          sibling
+            .prepare("UPDATE session_windows SET display_name = ? WHERE session_id = ?")
+            .run("sibling-window", "other-session");
+          expect(fixture.replica.read()).toBeUndefined();
+        }),
     );
     expect(fixture.replica.read()).toEqual(snapshot);
 
