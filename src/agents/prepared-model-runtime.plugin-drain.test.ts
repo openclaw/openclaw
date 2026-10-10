@@ -30,7 +30,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
+  activateStandalonePreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeInput,
 } from "./prepared-model-runtime.js";
@@ -480,7 +480,7 @@ it("refuses admitted auth republication waits after an initial owner is invalida
   const instance = new PluginInstance("fixture");
   const consumer = instance.retainConsumer();
   const releaseReplacement = instance.reserveReplacement();
-  const first = publishPreparedModelRuntimeSnapshot(input, { catalogMode: "static" }).catch(
+  const first = activateStandalonePreparedModelRuntime(input, { catalogMode: "static" }).catch(
     (error: unknown) => error,
   );
   await started.promise;

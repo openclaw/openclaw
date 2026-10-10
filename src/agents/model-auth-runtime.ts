@@ -137,10 +137,7 @@ type RuntimeProviderAuthParams = {
   store?: AuthProfileStore;
 };
 
-function resolveRuntimeAvailableProviderAuth<T>(
-  params: RuntimeProviderAuthParams,
-  resolveSyntheticAuth: (provider: string) => T,
-): boolean | T {
+export function hasRuntimeAvailableProviderAuth(params: RuntimeProviderAuthParams): boolean {
   const provider = normalizeProviderId(params.provider);
   const authOverride = authConfig.resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
@@ -222,32 +219,16 @@ function resolveRuntimeAvailableProviderAuth<T>(
       runtimeLookup: params.runtimeLookup,
     })
   ) {
-    return resolveSyntheticAuth(provider);
-  }
-  return false;
-}
-
-export function hasRuntimeAvailableProviderAuth(params: RuntimeProviderAuthParams): boolean {
-  return resolveRuntimeAvailableProviderAuth(params, (provider) =>
-    Boolean(
+    return Boolean(
       resolveSyntheticLocalProviderAuth({
         cfg: params.cfg,
         provider,
         workspaceDir: params.workspaceDir,
         env: params.env,
       }),
-    ),
-  );
-}
-
-/** Prepare external auth only after immediate credentials and discovery scope permit it. */
-export async function prepareRuntimeAvailableProviderAuth(
-  params: RuntimeProviderAuthParams & { signal?: AbortSignal },
-): Promise<boolean> {
-  params.signal?.throwIfAborted();
-  return resolveRuntimeAvailableProviderAuth(params, async (provider) =>
-    Boolean(await prepareSyntheticLocalProviderAuth({ ...params, cfg: params.cfg, provider })),
-  );
+    );
+  }
+  return false;
 }
 
 type SyntheticProviderAuthResolution = {

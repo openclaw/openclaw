@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import { fixtureReceiptWorkerClientSource } from "../../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +15,7 @@ import {
 } from "../prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
+  activateStandalonePreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
 } from "../prepared-model-runtime.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
@@ -136,18 +137,21 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     const snapshots: PreparedModelRuntimeSnapshot[] = [];
     if (options.publication === "individual") {
       // Fleet refresh deliberately renews every credentialed provider after publication.
-      // Cold scoped tests use the individual lifecycle publisher and one loader workspace.
+      // Cold scoped tests activate standalone owners in one loader workspace.
       for (const agentId of agentIds) {
         snapshots.push(
-          await publishPreparedModelRuntimeSnapshot(
-            {
-              agentId,
-              agentDir: entries[agentId]!.agentDir,
-              workspaceDir: entries[agentId]!.workspace,
-              config,
-              allowGatewaySubagentBinding: true,
-            },
-            { provenance: "configured", catalogMode: "static" },
+          expectDefined(
+            await activateStandalonePreparedModelRuntime(
+              {
+                agentId,
+                agentDir: entries[agentId]!.agentDir,
+                workspaceDir: entries[agentId]!.workspace,
+                allowGatewaySubagentBinding: true,
+                config,
+              },
+              { catalogMode: "static" },
+            ),
+            "standalone activation",
           ),
         );
       }

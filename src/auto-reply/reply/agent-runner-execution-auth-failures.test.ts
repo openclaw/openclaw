@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { createCliOutputFailoverError } from "../../agents/cli-runner/output-error.js";
 import { FailoverError } from "../../agents/failover-error.js";
-import { MissingProviderAuthError, ProviderAuthError } from "../../agents/model-auth.js";
+import {
+  MissingProviderAuthError,
+  ProviderAuthError,
+} from "../../agents/model-auth-runtime-shared.js";
 import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,

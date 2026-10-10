@@ -1,6 +1,7 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -32,7 +33,7 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
+  activateStandalonePreparedModelRuntime,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -90,7 +91,10 @@ async function setup(preparedMap = false, profile?: AuthProfileCredential) {
   }
   const owner = profile
     ? await prepareModelRuntimeSnapshot(input)
-    : await publishPreparedModelRuntimeSnapshot(input, { catalogMode: "static" });
+    : expectDefined(
+        await activateStandalonePreparedModelRuntime(input, { catalogMode: "static" }),
+        "standalone activation",
+      );
   await owner.loadFullModelCatalog!({ refresh: true });
   runOpenClawAgentWriteTransaction(
     () => {
@@ -197,33 +201,36 @@ describe("catalog publication session rows", () => {
     mocks.authStorage.getAll.mockReturnValue({});
     mocks.modelRegistry.getAll.mockReturnValue([model]);
     mocks.resolveNativeModelPrimary.mockReturnValue("custom/synthetic-model");
-    const owner = await publishPreparedModelRuntimeSnapshot(
-      {
-        config: {
-          agents: { defaults: { model: "custom/synthetic-model" } },
-          models: {
-            providers: {
-              custom: {
-                api: "openai-completions",
-                baseUrl: "https://synthetic.example.test/v1",
-                models: [
-                  {
-                    id: model.id,
-                    name: model.name,
-                    contextWindow: 32_000,
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 1_000,
-                  },
-                ],
+    const owner = expectDefined(
+      await activateStandalonePreparedModelRuntime(
+        {
+          config: {
+            agents: { defaults: { model: "custom/synthetic-model" } },
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-completions",
+                  baseUrl: "https://synthetic.example.test/v1",
+                  models: [
+                    {
+                      id: model.id,
+                      name: model.name,
+                      contextWindow: 32_000,
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      maxTokens: 1_000,
+                    },
+                  ],
+                },
               },
             },
           },
+          agentDir: fixture.state.agentDir("default"),
         },
-        agentDir: fixture.state.agentDir("default"),
-      },
-      { catalogMode: "static" },
+        { catalogMode: "static" },
+      ),
+      "standalone activation",
     );
     const changes: (boolean | undefined)[] = [];
     const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {

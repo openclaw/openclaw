@@ -108,7 +108,6 @@ const hoisted = vi.hoisted(() => {
     allowed: true,
     inCatalog: true,
   }));
-  const prepareModelRuntimeSnapshot = vi.fn(async () => ({}));
   const refreshPreparedModelRuntimeSnapshots = vi.fn<
     typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots
   >(async () => {});
@@ -137,7 +136,6 @@ const hoisted = vi.hoisted(() => {
     loadFullModelCatalog,
     loadModelCatalog,
     getModelRefStatus,
-    prepareModelRuntimeSnapshot,
     refreshPreparedModelRuntimeSnapshots,
     prewarmConfigDrivenReplyRuntime,
     scheduleGatewayHandlerPrewarm,
@@ -225,8 +223,8 @@ vi.mock("../agents/model-selection.js", () => ({
   resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
 }));
 
-vi.mock("../agents/prepared-model-runtime.js", () => ({
-  publishPreparedModelRuntimeSnapshot: hoisted.prepareModelRuntimeSnapshot,
+vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
   refreshPreparedModelRuntimeSnapshots: hoisted.refreshPreparedModelRuntimeSnapshots,
 }));
 
@@ -506,8 +504,6 @@ describe("startGatewayPostAttachRuntime", () => {
       allowed: true,
       inCatalog: true,
     });
-    hoisted.prepareModelRuntimeSnapshot.mockReset();
-    hoisted.prepareModelRuntimeSnapshot.mockResolvedValue({});
     hoisted.refreshPreparedModelRuntimeSnapshots.mockReset();
     hoisted.refreshPreparedModelRuntimeSnapshots.mockResolvedValue(undefined);
     hoisted.prewarmConfigDrivenReplyRuntime.mockReset();

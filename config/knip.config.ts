@@ -860,6 +860,11 @@ const config = {
       ignoreBinaries: ["convex"],
       project: ["convex/**/*.ts!"],
     },
+    "tools/solid-lint": {
+      // Oxlint loads the required default export through .oxlintrc.json's jsPlugins path.
+      entry: ["index.mjs!"],
+      project: ["**/*.mjs!"],
+    },
     ui: {
       entry: [
         // The standalone proof-video skill imports this developer API by path.

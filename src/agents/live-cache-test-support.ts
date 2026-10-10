@@ -10,12 +10,8 @@ import { discoverAuthStorageFacts, discoverModels } from "./agent-model-discover
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { completeSimpleWithTimeout, isLiveTestEnabled } from "./live-test-helpers.js";
-import {
-  getApiKeyForModelCore,
-  isMissingProviderAuthError,
-  isProviderAuthError,
-  requireApiKey,
-} from "./model-auth.js";
+import { isProviderAuthError, MissingProviderAuthError } from "./model-auth-runtime-shared.js";
+import { getApiKeyForModelCore, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
 
@@ -58,7 +54,10 @@ export function toLiveCachePrerequisiteSkip(
   provider: "anthropic" | "openai",
   error: unknown,
 ): LiveCachePrerequisiteSkip | undefined {
-  if (isMissingProviderAuthError(error) || isProviderAuthError(error, "missing-provider-auth")) {
+  if (
+    error instanceof MissingProviderAuthError ||
+    isProviderAuthError(error, "missing-provider-auth")
+  ) {
     return new LiveCachePrerequisiteSkip(provider, error.message);
   }
   return undefined;

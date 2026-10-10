@@ -38,6 +38,8 @@ const config = {
   ignoreWorkspaces: [
     "apps/**",
     "extensions/**",
+    // Application lint plugins are audited by their production/full-tree workspace owner.
+    "tools/**",
     ...fs
       .readdirSync("packages")
       .filter((name) => name !== "gateway-protocol")

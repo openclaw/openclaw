@@ -23,6 +23,7 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
+import { isProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import {
   mergeModelProviderRequestOverrides,
   sanitizeConfiguredModelProviderRequest,
@@ -409,8 +410,7 @@ async function resolveProviderExecutionAuth(
   if (literalApiKey) {
     return apiKeyAuth(literalApiKey, `models.providers.${params.providerId}.apiKey`);
   }
-  const { isProviderAuthError, requireApiKey, resolveApiKeyForProviderCore } =
-    await loadModelAuth();
+  const { requireApiKey, resolveApiKeyForProviderCore } = await loadModelAuth();
   try {
     const auth = await resolveApiKeyForProviderCore({
       provider: params.providerId,

@@ -32,7 +32,6 @@ import {
   getApiKeyForModelCore as resolveModelAuth,
   hasAvailableAuthForProvider as hasAuth,
   hasRuntimeAvailableProviderAuth,
-  prepareRuntimeAvailableProviderAuth,
   resolveApiKeyForProviderCore as resolveAuth,
   resolveEnvApiKey,
 } from "./model-auth.js";
@@ -517,22 +516,25 @@ describe("getApiKeyForModelCore", () => {
   it.each([
     ["vllm", "http://127.0.0.1:8000/v1", true],
     ["remote", "https://remote.example.com/v1", false],
-  ] as const)("reports prepared auth availability for %s", async (provider, baseUrl, available) => {
-    await expect(
-      prepareRuntimeAvailableProviderAuth({
-        provider,
-        cfg: configForProviders({
-          [provider]: {
-            api: "openai-completions",
-            baseUrl,
-            models: [testModelDefinition("fixture-model")],
-          },
+  ] as const)(
+    "reports immediate local auth availability for %s",
+    (provider, baseUrl, available) => {
+      expect(
+        hasRuntimeAvailableProviderAuth({
+          provider,
+          cfg: configForProviders({
+            [provider]: {
+              api: "openai-completions",
+              baseUrl,
+              models: [testModelDefinition("fixture-model")],
+            },
+          }),
+          env: {},
+          store: authStore({}),
         }),
-        env: {},
-        store: authStore({}),
-      }),
-    ).resolves.toBe(available);
-  });
+      ).toBe(available);
+    },
+  );
 
   it.each([false, true])(
     "honors inline cooldown with healthy profile available = %s",

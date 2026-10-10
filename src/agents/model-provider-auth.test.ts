@@ -32,8 +32,6 @@ const modelAuthMocks = vi.hoisted(() => ({
     },
     syntheticAuthProviderRefs: [],
   })),
-  prepareRuntimeAvailableProviderAuth:
-    vi.fn<typeof import("./model-auth-runtime.js").prepareRuntimeAvailableProviderAuth>(),
 }));
 
 const modelAuthAvailabilityMocks = vi.hoisted(() => {
@@ -72,24 +70,19 @@ describe("model auth checker", () => {
     });
   });
 
-  it("consumes prepared native auth when checking runtime availability", async () => {
+  it("waits for and consumes exact prepared native auth", async () => {
     const nativeAuth = { apiKey: "native-marker", source: "Native auth", mode: "oauth" as const };
     const prepared = createDeferredCore<typeof nativeAuth | undefined>();
     syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin.mockImplementationOnce(
       async () => await prepared.promise,
     );
-    const { prepareRuntimeAvailableProviderAuth } =
+    const { prepareSyntheticLocalProviderAuth } =
       await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
     let settled = false;
-    const answer = prepareRuntimeAvailableProviderAuth({
+    const answer = prepareSyntheticLocalProviderAuth({
       provider: "native",
       cfg: {},
       env: {},
-      store: { version: 1, profiles: {} },
-      runtimeLookup: {
-        ...modelAuthMocks.createRuntimeProviderAuthLookup(),
-        syntheticAuthProviderRefs: ["native"],
-      },
     }).finally(() => {
       settled = true;
     });
@@ -99,7 +92,7 @@ describe("model auth checker", () => {
         .toBe(1);
       expect(settled).toBe(false);
       prepared.resolve(nativeAuth);
-      await expect(answer).resolves.toBe(true);
+      await expect(answer).resolves.toEqual(nativeAuth);
       expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).toHaveBeenCalledOnce();
     } finally {
       prepared.resolve(undefined);
@@ -107,30 +100,10 @@ describe("model auth checker", () => {
     }
   });
 
-  it("honors cancellation before returning fast-path auth", async () => {
-    const { prepareRuntimeAvailableProviderAuth } =
-      await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
-    const lookup = modelAuthMocks.createRuntimeProviderAuthLookup();
-    const params = {
-      provider: "native",
-      env: { NATIVE_FIXTURE_AUTH: "fixture-auth" },
-      runtimeLookup: {
-        ...lookup,
-        envApiKey: { ...lookup.envApiKey, candidateMap: { native: ["NATIVE_FIXTURE_AUTH"] } },
-      },
-    };
-    await expect(prepareRuntimeAvailableProviderAuth(params)).resolves.toBe(true);
-    const reason = new Error("availability cancelled");
-    await expect(
-      prepareRuntimeAvailableProviderAuth({ ...params, signal: AbortSignal.abort(reason) }),
-    ).rejects.toBe(reason);
-    expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
-  });
-
   it.each([false, true])(
     "does not prepare native auth for a managed SecretRef (available: %s)",
     async (available) => {
-      const { prepareRuntimeAvailableProviderAuth } =
+      const { prepareSyntheticLocalProviderAuth } =
         await vi.importActual<typeof import("./model-auth-runtime.js")>("./model-auth-runtime.js");
       const cfg: OpenClawConfig = {
         models: {
@@ -152,13 +125,20 @@ describe("model auth checker", () => {
           setRuntimeConfigSnapshot(runtimeConfig, cfg);
         }
         await expect(
-          prepareRuntimeAvailableProviderAuth({
+          prepareSyntheticLocalProviderAuth({
             provider: "managed-native",
             cfg,
             env: {},
-            store: { version: 1, profiles: {} },
           }),
-        ).resolves.toBe(available);
+        ).resolves.toEqual(
+          available
+            ? {
+                apiKey: "runtime-auth-not-real",
+                source: "models.providers.managed-native",
+                mode: "api-key",
+              }
+            : null,
+        );
         expect(syntheticAuthMocks.prepareProviderSyntheticAuthWithPlugin).not.toHaveBeenCalled();
       } finally {
         clearRuntimeConfigSnapshot();
@@ -206,7 +186,7 @@ describe("model auth checker", () => {
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledTimes(2);
   });
 
-  it("does not let legacy provider auth override an unresolved model SecretRef", async () => {
+  it("keeps unresolved model SecretRef availability unknown", async () => {
     const evaluation = {
       availability: undefined,
       routeResolution: null,
@@ -214,13 +194,11 @@ describe("model auth checker", () => {
       evidence: "provider-config" as const,
     };
     modelAuthAvailabilityMocks.evaluateModelAuth.mockReturnValue(evaluation);
-    modelAuthMocks.prepareRuntimeAvailableProviderAuth.mockResolvedValue(true);
     const hasAuth = createProviderAuthChecker({ cfg: {} as OpenClawConfig });
     const ref = { modelId: "claude-sonnet-4-6", api: "anthropic-messages" };
 
     await expect(hasAuth.evaluateModelAuth("anthropic", ref)).resolves.toBe(evaluation);
     await expect(hasAuth("anthropic", { ...ref })).resolves.toBe(false);
     expect(modelAuthAvailabilityMocks.evaluateModelAuth).toHaveBeenCalledWith("anthropic", ref);
-    expect(modelAuthMocks.prepareRuntimeAvailableProviderAuth).not.toHaveBeenCalled();
   });
 });

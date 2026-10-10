@@ -11,7 +11,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
-  publishPreparedModelRuntimeSnapshot,
+  loadPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   retirePreparedModelRuntimeAgent,
 } from "./prepared-model-runtime.js";
@@ -35,11 +35,15 @@ describe("prepared model runtime owner selection", () => {
   it("retires only the deleted agent's physical owners", async () => {
     mocks.configuredAgentIds = ["worker"];
     mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));
-    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
-    const separate = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+    const separateInput = {
+      config: {},
+      agentId: "worker",
+      agentDir: fixture.state.agentDir("isolated-worker"),
+    };
+    const separate = await loadPreparedModelRuntimeSnapshot(separateInput);
     const input = { config: {}, agentId: "worker", agentDir: fixture.state.agentDir("worker") };
-    const deleted = await publishPreparedModelRuntimeSnapshot(input);
-    const sharing = await publishPreparedModelRuntimeSnapshot({ ...input, agentId: "survivor" });
+    const deleted = await loadPreparedModelRuntimeSnapshot(input);
+    const sharing = await loadPreparedModelRuntimeSnapshot({ ...input, agentId: "survivor" });
 
     const options = { env: fixture.state.env };
     await withAgentDeletion(
@@ -78,9 +82,8 @@ describe("prepared model runtime owner selection", () => {
 
     expect(deleted.isCurrent()).toBe(false);
     expect(sharing.isCurrent()).toBe(true);
-    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).resolves.toBe(
-      separate,
-    );
+    expect(getPreparedModelRuntimeSnapshot(separateInput)).toBe(separate);
+    expect(separate.isCurrent()).toBe(true);
   });
 
   it.each(["lost claim", "invalidation", "close"] as const)(

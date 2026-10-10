@@ -75,10 +75,6 @@ export function isProviderAuthError(
   return err instanceof ProviderAuthError && (!code || err.code === code);
 }
 
-export function isMissingProviderAuthError(err: unknown): err is MissingProviderAuthError {
-  return err instanceof MissingProviderAuthError;
-}
-
 export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): string | undefined {
   if (env[AWS_BEARER_ENV]?.trim()) {
     return AWS_BEARER_ENV;

@@ -32,8 +32,9 @@ import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.j
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
+  activateStandalonePreparedModelRuntime,
   refreshPreparedModelRuntimeCatalog,
+  refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
@@ -129,9 +130,12 @@ describe("prepared model catalog worker plugin scope", () => {
     retireAfterTest(() => {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
-    const snapshot = await publishPreparedModelRuntimeSnapshot(
-      { agentId: "main", agentDir, inheritedAuthDir: agentDir, workspaceDir, config, env },
-      { provenance: "configured", catalogMode: "static" },
+    const snapshot = expectDefined(
+      await activateStandalonePreparedModelRuntime(
+        { agentId: "main", agentDir, inheritedAuthDir: agentDir, workspaceDir, config, env },
+        { catalogMode: "static" },
+      ),
+      "standalone activation",
     );
 
     const catalog = expectDefined(
@@ -247,9 +251,6 @@ describe("prepared model catalog worker plugin scope", () => {
     const workspaceDir = path.join(root, "workspace");
     const marker = path.join(root, "worker-marker.txt");
     const catalogHold = `${marker}.hold`;
-    if (selection.first === "scoped") {
-      fs.writeFileSync(catalogHold, "");
-    }
     const unrelatedMarker = path.join(root, "unrelated-worker-plugin.txt");
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
@@ -329,10 +330,31 @@ describe("prepared model catalog worker plugin scope", () => {
     retireAfterTest(() => {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
-    const snapshot = await publishPreparedModelRuntimeSnapshot(input, {
-      provenance: "configured",
-      catalogMode: "static",
-    });
+    if (selection.first === "scoped") {
+      for (const name of [
+        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_WORKER_CATALOG_MARKER",
+        UNRELATED_PLUGIN_WORKER_MARKER_ENV,
+        REF_ONLY_API_ENV,
+        REF_ONLY_TOKEN_ENV,
+      ] as const) {
+        vi.stubEnv(name, env[name]);
+      }
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        allowGatewaySubagentBinding: true,
+        catalogMode: "static",
+      });
+    }
+    const snapshot = expectDefined(
+      selection.first === "scoped"
+        ? getPreparedModelRuntimeSnapshot({ agentId: "main", agentDir, workspaceDir, config })
+        : await activateStandalonePreparedModelRuntime(input, {
+            catalogMode: "static",
+          }),
+      "published catalog owner",
+    );
     const projectSnapshot = async (
       full: boolean,
       providerIds?: readonly string[],
@@ -363,6 +385,12 @@ describe("prepared model catalog worker plugin scope", () => {
         )
         .toBe(true);
     };
+    if (selection.first === "scoped") {
+      // Gateway commit renews provider inventory before demand. Hold only the next scoped
+      // refresh; injecting a cold configured owner would bypass this publication contract.
+      await waitForPublication(undefined);
+      fs.writeFileSync(catalogHold, "");
+    }
     const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
       async (params) => {
         const {
@@ -403,7 +431,7 @@ describe("prepared model catalog worker plugin scope", () => {
       if (selection.first === "held") {
         fs.writeFileSync(hold, "");
       }
-      // The first worker operation must enter through the registered scoped refresh.
+      // Explicit provider demand enters through the registered scoped refresh.
       const params = { view: "all", provider: PROVIDER_ID, refresh: true };
       const previousCatalog = snapshot.readFullModelCatalog?.();
       const refresh = Promise.resolve(
@@ -411,7 +439,7 @@ describe("prepared model catalog worker plugin scope", () => {
           modelsHandlers["models.list"],
           "models.list test invariant",
         )({
-          req: { type: "req", id: "models-list-cold-scoped", method: "models.list", params },
+          req: { type: "req", id: "models-list-provider-scoped", method: "models.list", params },
           params,
           respond: respond as RespondFn,
           client: null,
@@ -463,14 +491,16 @@ describe("prepared model catalog worker plugin scope", () => {
               },
             },
           };
-          const publishedReplacement = await publishPreparedModelRuntimeSnapshot(replacementInput, {
-            force: true,
-            provenance: "configured",
-            catalogMode: "static",
-          }).then((replacement) => ({
+          const replacement = expectDefined(
+            await activateStandalonePreparedModelRuntime(replacementInput, {
+              catalogMode: "static",
+            }),
+            "standalone activation",
+          );
+          const publishedReplacement = {
             snapshot: replacement,
             elapsedMs: performance.now() - publicationStarted,
-          }));
+          };
           expect(readMs).toBeLessThan(5_000);
           expect(publishedReplacement.elapsedMs).toBeLessThan(5_000);
           expect(readRespond).toHaveBeenCalledWith(

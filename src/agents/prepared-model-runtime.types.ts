@@ -184,7 +184,6 @@ export type PreparedModelRuntimeLeaseOptions = {
 
 export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
-  provenance?: PreparedModelRuntimeOwner["provenance"];
   catalogMode?: PreparedModelRuntimeCatalogMode;
   /** Discovery deadline for this publication only; omitted publications retain the short default. */
   providerDiscoveryTimeoutMs?: number;

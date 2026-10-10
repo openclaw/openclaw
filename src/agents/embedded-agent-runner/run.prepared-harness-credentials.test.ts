@@ -28,9 +28,6 @@ describe("prepared plugin harness credentials", () => {
     vi.mocked(modelAuth.resolveProviderEntryApiKeyProfileReference).mockImplementation(
       actual.resolveProviderEntryApiKeyProfileReference,
     );
-    vi.mocked(modelAuth.shouldPreferExplicitConfigApiKeyAuth).mockImplementation(
-      actual.shouldPreferExplicitConfigApiKeyAuth,
-    );
   });
   beforeEach(async () => {
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");

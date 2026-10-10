@@ -14,7 +14,6 @@ import {
   loadPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
   rejectPendingPreparedModelRuntimeReplacement,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -86,7 +85,7 @@ describe("prepared model runtime snapshots", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const snapshot = await publishPreparedModelRuntimeSnapshot({
+    const snapshot = await loadPreparedModelRuntimeSnapshot({
       agentId: "main",
       config,
       agentDir: fixture.state.agentDir("claude-cli-capabilities"),
@@ -183,7 +182,7 @@ describe("prepared model runtime snapshots", () => {
       return { agentDir: fixture.state.agentDir("provider-outcome-agent"), wrote: false };
     });
 
-    const snapshot = await publishPreparedModelRuntimeSnapshot(inputFor("provider-outcome-agent"));
+    const snapshot = await loadPreparedModelRuntimeSnapshot(inputFor("provider-outcome-agent"));
 
     expect(snapshot.modelCatalog.providerOutcomes).toEqual([
       { provider: "openai", status: "auth-rejected" },
@@ -218,7 +217,7 @@ describe("prepared model runtime snapshots", () => {
     } as OpenClawConfig;
     mocks.runtimeSyntheticAuthProviderRefs = ["selected-runtime", "sibling-runtime"];
 
-    await publishPreparedModelRuntimeSnapshot({
+    await loadPreparedModelRuntimeSnapshot({
       agentId: "selected",
       config,
       agentDir: fixture.state.agentDir("selected-provider-scope"),
@@ -237,7 +236,7 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("prepares inline provider models when no default model is configured", async () => {
-    const snapshot = await publishPreparedModelRuntimeSnapshot(
+    const snapshot = await loadPreparedModelRuntimeSnapshot(
       inputFor("inline", {
         models: {
           providers: {
@@ -298,9 +297,9 @@ describe("prepared model runtime snapshots", () => {
   it("builds credential-free command owners separately from runtime owners", async () => {
     const config = {};
     const agentDir = fixture.state.agentDir("credential-free");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir });
+    await loadPreparedModelRuntimeSnapshot({ config, agentDir });
 
-    const credentialFree = await publishPreparedModelRuntimeSnapshot({
+    const credentialFree = await loadPreparedModelRuntimeSnapshot({
       config,
       agentDir,
       readOnly: true,
@@ -326,7 +325,7 @@ describe("prepared model runtime snapshots", () => {
       const config = configFor("openai/gpt-5.4");
       mocks.authStorage.getAll.mockReturnValue({ openai: credential });
 
-      const snapshot = await publishPreparedModelRuntimeSnapshot(inputFor("cli-startup", config));
+      const snapshot = await loadPreparedModelRuntimeSnapshot(inputFor("cli-startup", config));
 
       const discoveryOptions = mocks.discoverAuthStorage.mock.calls[0]?.[1] as {
         externalCli?: unknown;
@@ -338,7 +337,7 @@ describe("prepared model runtime snapshots", () => {
 
   it("reuses read-only owners for equivalent config clones but rejects projections", async () => {
     const input = { ...inputFor("read-only-config", configFor()), readOnly: true };
-    const first = await publishPreparedModelRuntimeSnapshot(input);
+    const first = await loadPreparedModelRuntimeSnapshot(input);
     const equivalent = { ...input, config: configFor() };
     const different = { ...input, config: configFor("anthropic/claude-opus-4-6") };
     expect(getPreparedModelRuntimeSnapshot(equivalent)).toBe(first);

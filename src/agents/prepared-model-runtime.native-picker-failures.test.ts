@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -28,7 +29,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
+  activateStandalonePreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
@@ -82,7 +83,7 @@ async function renewProvider(owner: PreparedModelRuntimeSnapshot, provider: stri
   }
 }
 
-async function fixture(standalone = false, cold = false, runtimeA = "native-a") {
+async function fixture(standalone = false, runtimeA = "native-a") {
   const { resolveNativeModelPrimary } =
     await vi.importActual<typeof import("./agent-scope.js")>("./agent-scope.js");
   mocks.resolveNativeModelPrimary.mockImplementation(resolveNativeModelPrimary);
@@ -120,25 +121,19 @@ async function fixture(standalone = false, cold = false, runtimeA = "native-a") 
   mocks.configuredAgentIds = ["pro"];
   setProviderCatalog([]);
   if (!standalone) {
-    // Gateway commits start background discovery. Publish the cold owner separately after activation.
-    if (cold) {
-      mocks.configuredAgentIds = [];
-    }
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
       catalogMode: "static",
       allowGatewaySubagentBinding: true,
     });
-    mocks.configuredAgentIds = ["pro"];
   }
-  const owner =
-    standalone || cold
-      ? await publishPreparedModelRuntimeSnapshot(input, {
-          catalogMode: "static",
-          provenance: standalone ? "standalone" : "configured",
-        })
-      : getPreparedModelRuntimeSnapshot(input)!;
-  if (!standalone && !cold) {
+  const owner = standalone
+    ? expectDefined(
+        await activateStandalonePreparedModelRuntime(input, { catalogMode: "static" }),
+        "standalone activation",
+      )
+    : getPreparedModelRuntimeSnapshot(input)!;
+  if (!standalone) {
     await owner.loadFullModelCatalog!();
   }
   return { input, owner, a, b, loadA, loadB };
@@ -286,7 +281,7 @@ it("reuses published native facts without renewing providers during warm API and
 it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
   "keeps native selection bound to its admitted lease (publication/authority=%s)",
   async (transition) => {
-    const { input, owner, b, loadB } = await fixture(false, true);
+    const { input, owner, b, loadB } = await fixture(true);
     const lease = await acquirePreparedModelRuntimeSnapshot(input);
     let leaseOpen = true;
     let runCurrent = true;
@@ -297,11 +292,10 @@ it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
       }
     };
     const replacePublication = async () => {
-      await publishPreparedModelRuntimeSnapshot(input, {
-        force: true,
-        catalogMode: "static",
-        provenance: "configured",
-      });
+      await activateStandalonePreparedModelRuntime(
+        { ...input, config: { ...input.config, messages: { responsePrefix: "replacement" } } },
+        { catalogMode: "static" },
+      );
       expect(owner.isCurrent()).toBe(false);
     };
     const entered = createDeferredCore();
@@ -381,59 +375,52 @@ it.each(["before", "during", "closed", "revoked", "shutdown"] as const)(
   },
 );
 
-it.each([false, true])(
-  "carries a cold native selection into a stable run lease (standalone=%s)",
-  async (standalone) => {
-    const { input, owner, b, loadA, loadB } = await fixture(standalone, true);
-    expect(loadA).not.toHaveBeenCalled();
-    expect(loadB).not.toHaveBeenCalled();
-    const selected = {
-      ...input,
-      workspaceDir: owner.workspaceDir,
-      runtimePluginSelections: [
-        {
-          provider: b.provider,
-          modelId: b.id,
-          runtime: b.nativeRuntime,
-          agentId: "pro",
-        },
-      ],
-    };
-    await using lease = await acquireAgentRunPreparedModelRuntime(selected, {
-      catalogMode: "static",
-    });
-    const coldCatalog = lease.snapshot.modelCatalog;
-    const setup = await resolveNativeSelection(input, lease, b);
-    expect(setup.nativeModelOwned).toBe(true);
-    expect(setup.agentHarness.id).toBe(b.nativeRuntime);
-    expect(setup.model).toMatchObject({ provider: b.provider, id: b.id });
-    expect(loadB).toHaveBeenCalledOnce();
-    if (standalone) {
-      expect(loadA).not.toHaveBeenCalled();
-    }
-    await using reused = await acquireAgentRunPreparedModelRuntime(selected, {
-      catalogMode: "static",
-    });
-    expect(reused.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(b));
-    expect(loadB).toHaveBeenCalledOnce();
-    const captured = reused.snapshot.modelCatalog;
-    const catalogOwner = standalone ? reused.snapshot : owner;
-    loadA.mockResolvedValue([]);
-    loadB.mockResolvedValue([]);
-    const empty = await catalogOwner.loadFullModelCatalog!({ refresh: true });
-    expect(fullCatalog.isPreparedModelCatalogFull(empty)).toBe(true);
-    await using next = await acquireAgentRunPreparedModelRuntime(selected, {
-      catalogMode: "static",
-    });
-    expect(next.snapshot.modelCatalog.entries.some((entry) => entry.nativeRuntime)).toBe(false);
-    expect(next.snapshot.modelCatalog.routeVariants.some((entry) => entry.nativeRuntime)).toBe(
-      false,
-    );
-    expect(lease.snapshot.modelCatalog).toBe(coldCatalog);
-    expect(reused.snapshot.modelCatalog).toBe(captured);
-    expect(captured.entries).toContainEqual(expect.objectContaining(b));
-  },
-);
+it("carries a cold native selection into a stable standalone run lease", async () => {
+  const { input, owner, b, loadA, loadB } = await fixture(true);
+  expect(loadA).not.toHaveBeenCalled();
+  expect(loadB).not.toHaveBeenCalled();
+  const selected = {
+    ...input,
+    workspaceDir: owner.workspaceDir,
+    runtimePluginSelections: [
+      {
+        provider: b.provider,
+        modelId: b.id,
+        runtime: b.nativeRuntime,
+        agentId: "pro",
+      },
+    ],
+  };
+  await using lease = await acquireAgentRunPreparedModelRuntime(selected, {
+    catalogMode: "static",
+  });
+  const coldCatalog = lease.snapshot.modelCatalog;
+  const setup = await resolveNativeSelection(input, lease, b);
+  expect(setup.nativeModelOwned).toBe(true);
+  expect(setup.agentHarness.id).toBe(b.nativeRuntime);
+  expect(setup.model).toMatchObject({ provider: b.provider, id: b.id });
+  expect(loadB).toHaveBeenCalledOnce();
+  expect(loadA).not.toHaveBeenCalled();
+  await using reused = await acquireAgentRunPreparedModelRuntime(selected, {
+    catalogMode: "static",
+  });
+  expect(reused.snapshot.modelCatalog.entries).toContainEqual(expect.objectContaining(b));
+  expect(loadB).toHaveBeenCalledOnce();
+  const captured = reused.snapshot.modelCatalog;
+  const catalogOwner = reused.snapshot;
+  loadA.mockResolvedValue([]);
+  loadB.mockResolvedValue([]);
+  const empty = await catalogOwner.loadFullModelCatalog!({ refresh: true });
+  expect(fullCatalog.isPreparedModelCatalogFull(empty)).toBe(true);
+  await using next = await acquireAgentRunPreparedModelRuntime(selected, {
+    catalogMode: "static",
+  });
+  expect(next.snapshot.modelCatalog.entries.some((entry) => entry.nativeRuntime)).toBe(false);
+  expect(next.snapshot.modelCatalog.routeVariants.some((entry) => entry.nativeRuntime)).toBe(false);
+  expect(lease.snapshot.modelCatalog).toBe(coldCatalog);
+  expect(reused.snapshot.modelCatalog).toBe(captured);
+  expect(captured.entries).toContainEqual(expect.objectContaining(b));
+});
 
 it("does not share a failed pending native discovery with another runtime, and recovers explicitly", async () => {
   const { owner, a, b, loadA, loadB } = await fixture(true);
@@ -469,7 +456,7 @@ it("does not share a failed pending native discovery with another runtime, and r
 });
 
 it("keeps observed untagged models without restoring API rows deleted during native discovery", async () => {
-  const { owner, a, b, loadA, loadB } = await fixture(true, true);
+  const { owner, a, b, loadA, loadB } = await fixture(true);
   const siblingHost = { provider: a.provider, id: "sibling-host", name: "Sibling host" };
   loadA.mockResolvedValue([siblingHost]);
   const previousApi = {
@@ -568,7 +555,7 @@ it("keeps observed untagged models without restoring API rows deleted during nat
 });
 
 it("publishes fresh API models when every native harness fails during a full refresh", async () => {
-  const { owner, a, b, loadA, loadB } = await fixture(true, true);
+  const { owner, a, b, loadA, loadB } = await fixture(true);
   const previousApi = { provider: "api-provider", id: "old-api", name: "Old API model" };
   const ready = { provider: previousApi.provider, status: "ready" } as const;
   setProviderCatalog([previousApi], [ready]);
@@ -591,7 +578,7 @@ it("publishes fresh API models when every native harness fails during a full ref
 });
 
 it("keeps a newly selected native model when a queued full refresh partly fails", async () => {
-  const { owner, a, b, loadA, loadB } = await fixture(true, true);
+  const { owner, a, b, loadA, loadB } = await fixture(true);
   await owner.loadFullModelCatalog!({ refresh: true });
   const updatedA = { ...a, id: "updated-a", name: "Updated A" };
   const updatedB = { ...b, id: "selected-b", name: "Selected B" };
@@ -641,7 +628,7 @@ it("keeps a newly selected native model when a queued full refresh partly fails"
 it.each(["__proto__", "constructor"])(
   "preserves native auth rejection through provider renewals without a refresh error (%s)",
   async (runtimeA) => {
-    const { owner, a, b, loadA, loadB } = await fixture(true, false, runtimeA);
+    const { owner, a, b, loadA, loadB } = await fixture(true, runtimeA);
     const api = { provider: "api-provider", id: "model", name: "API model" };
     setProviderCatalog([api], [{ provider: api.provider, status: "ready" }]);
     loadB.mockResolvedValue({
@@ -717,7 +704,7 @@ it("keeps API provider readiness independent of a failed native runtime for the 
 it.each([false, true])(
   "rejects native readiness that retires its owner (after queue: %s)",
   async (afterQueue) => {
-    const { owner, b, loadB } = await fixture(true, true);
+    const { owner, b, loadB } = await fixture(true);
     await owner.loadFullModelCatalog!({ refresh: true });
     const calls = loadB.mock.calls.length;
     const readReadiness = vi.fn(() => {

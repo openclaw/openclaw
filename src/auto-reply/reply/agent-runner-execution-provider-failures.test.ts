@@ -4,7 +4,7 @@ import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout
 import { FailoverError } from "../../agents/failover-error.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { ProviderAuthError } from "../../agents/model-auth.js";
+import { ProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";

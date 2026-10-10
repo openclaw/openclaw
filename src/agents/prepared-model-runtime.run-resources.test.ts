@@ -37,7 +37,7 @@ import {
   activateStandalonePreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
-  publishPreparedModelRuntimeSnapshot,
+  markPreparedModelRuntimeSnapshotsStale,
   refreshPreparedModelRuntimeSnapshots,
   type PreparedModelRuntimeLease,
 } from "./prepared-model-runtime.js";
@@ -292,14 +292,10 @@ function expectReopened(record: Registration) {
 }
 
 it("retains a replaced RUN generation without letting its release retire the replacement", async () => {
-  await withRunFixture(async ({ acquire, input, original, registrations }) => {
+  await withRunFixture(async ({ acquire, original, registrations }) => {
     const first = await acquire();
     const old = original();
-    await publishPreparedModelRuntimeSnapshot(input, {
-      provenance: "run",
-      catalogMode: "static",
-      force: true,
-    });
+    markPreparedModelRuntimeSnapshotsStale("replace admitted RUN generation");
     const second = await acquire();
     expect(first.snapshot === second.snapshot).toBe(false);
     const replacement = expectDefined(

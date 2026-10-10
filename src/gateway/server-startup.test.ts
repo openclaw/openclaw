@@ -2,7 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 
-const prepareModelRuntimeSnapshotMock = vi.fn(async (_params: unknown) => ({}));
 const refreshPreparedModelRuntimeSnapshotsMock = vi.fn<
   typeof import("../agents/prepared-model-runtime.js").refreshPreparedModelRuntimeSnapshots
 >(async () => {});
@@ -13,8 +12,8 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "default",
 }));
 
-vi.mock("../agents/prepared-model-runtime.js", () => ({
-  publishPreparedModelRuntimeSnapshot: (params: unknown) => prepareModelRuntimeSnapshotMock(params),
+vi.mock("../agents/prepared-model-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/prepared-model-runtime.js")>()),
   refreshPreparedModelRuntimeSnapshots: refreshPreparedModelRuntimeSnapshotsMock,
 }));
 
@@ -28,7 +27,6 @@ describe("gateway startup model runtime publication", () => {
   });
 
   beforeEach(() => {
-    prepareModelRuntimeSnapshotMock.mockClear();
     refreshPreparedModelRuntimeSnapshotsMock.mockClear();
   });
 

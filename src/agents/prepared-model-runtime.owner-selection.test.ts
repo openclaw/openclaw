@@ -18,7 +18,6 @@ import {
   loadPreparedModelRuntimeSnapshot,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
@@ -325,11 +324,12 @@ describe("prepared model runtime owner selection", () => {
   it("does not choose between configured owners sharing one agent directory", async () => {
     const config = {};
     const agentDir = fixture.state.agentDir("shared-configured-agent");
-    const input = { agentId: "shared", config, agentDir };
-    const first = await publishPreparedModelRuntimeSnapshot(
-      { ...input, workspaceDir: "/tmp/shared-workspace-a" },
-      { provenance: "configured" },
-    );
+    mocks.configuredAgentIds = ["first"];
+    mocks.configuredAgentDirs.set("first", agentDir);
+    mocks.configuredWorkspaces.set("first", "/tmp/shared-workspace-a");
+    await refreshPreparedModelRuntimeSnapshots(config);
+    const input = { config, agentDir };
+    const first = await prepareModelRuntimeSnapshot(input);
     const readError = new Error("nested catalog read failed");
     expect(() =>
       withPreparedModelRuntimeReadBatch(() => {
@@ -345,10 +345,11 @@ describe("prepared model runtime owner selection", () => {
       }),
     ).toThrow(readError);
 
-    const second = await publishPreparedModelRuntimeSnapshot(
-      { ...input, workspaceDir: "/tmp/shared-workspace-b" },
-      { provenance: "configured" },
-    );
+    mocks.configuredAgentIds = ["first", "second"];
+    mocks.configuredAgentDirs.set("second", agentDir);
+    mocks.configuredWorkspaces.set("second", "/tmp/shared-workspace-b");
+    await refreshPreparedModelRuntimeSnapshots(config);
+    const second = await prepareModelRuntimeSnapshot({ ...input, agentId: "second" });
     expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
     withPreparedModelRuntimeReadBatch(() => {
       expect(getPreparedModelRuntimeSnapshot(input)).toBeUndefined();
@@ -418,8 +419,8 @@ describe("prepared model runtime owner selection", () => {
     const config = {};
     const supersededDir = fixture.state.agentDir("auth-retry-superseded");
     const siblingDir = fixture.state.agentDir("auth-retry-sibling");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
-    const firstSibling = await publishPreparedModelRuntimeSnapshot({
+    await loadPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
+    const firstSibling = await loadPreparedModelRuntimeSnapshot({
       config,
       agentDir: siblingDir,
     });
@@ -433,11 +434,11 @@ describe("prepared model runtime owner selection", () => {
       return { agentDir: String(agentDir), wrote: false };
     });
 
-    let siblingPending: ReturnType<typeof publishPreparedModelRuntimeSnapshot> | undefined;
+    let siblingPending: ReturnType<typeof loadPreparedModelRuntimeSnapshot> | undefined;
     try {
       mocks.mutationListener?.({ affectsInheritedStores: true });
       await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4));
-      siblingPending = publishPreparedModelRuntimeSnapshot({
+      siblingPending = loadPreparedModelRuntimeSnapshot({
         config,
         agentDir: siblingDir,
       });
@@ -738,8 +739,8 @@ describe("prepared model runtime snapshots", () => {
     const config = {};
     const supersededDir = fixture.state.agentDir("auth-superseded-sibling");
     const failingDir = fixture.state.agentDir("auth-failing-sibling");
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
-    await publishPreparedModelRuntimeSnapshot({ config, agentDir: failingDir });
+    await loadPreparedModelRuntimeSnapshot({ config, agentDir: supersededDir });
+    await loadPreparedModelRuntimeSnapshot({ config, agentDir: failingDir });
     const supersededWrite = holdNextCatalogWrite();
     const siblingGate = createDeferred<{ agentDir: string; wrote: false }>();
     let failSiblingRefresh: (() => void) | undefined;
@@ -773,16 +774,13 @@ describe("prepared model runtime snapshots", () => {
 
   it("preserves an authoritative workspace override across config refresh", async () => {
     mocks.configuredAgentIds = ["default"];
-    const config = {};
+    const config = gatewayConfig();
     const agentDir = fixture.state.agentDir("default");
     const input = {
       ...fixture.agentInput("default", config),
       workspaceDir: "/tmp/explicit-workspace",
     };
-    await publishPreparedModelRuntimeSnapshot(
-      { ...input, preserveWorkspaceDirOnRefresh: true },
-      { provenance: "configured" },
-    );
+    await refreshPreparedModelRuntimeSnapshots(config, { defaultWorkspaceDir: input.workspaceDir });
 
     await refreshPreparedModelRuntimeSnapshots({
       agents: { defaults: { model: "openai/gpt-5.5" } },

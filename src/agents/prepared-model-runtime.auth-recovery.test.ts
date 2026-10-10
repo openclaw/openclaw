@@ -56,7 +56,7 @@ import {
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
-  publishPreparedModelRuntimeSnapshot,
+  loadPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
   type PreparedModelRuntimeSnapshot,
@@ -546,7 +546,7 @@ describe("prepared model auth publication", () => {
       profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
     };
     snapshots.setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-    const initial = await publishPreparedModelRuntimeSnapshot(input);
+    const initial = await loadPreparedModelRuntimeSnapshot(input);
     const events = vi.fn();
     const unregisterEvents = registerPreparedModelRuntimePublicationListener(events);
     const unregisterAuth = snapshots.registerRuntimeAuthProfileStoreMutationListener((event) => {

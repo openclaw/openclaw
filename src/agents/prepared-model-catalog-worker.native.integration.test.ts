@@ -8,17 +8,24 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
   createCatalogFixture,
+  EXTERNAL_AUTH_PATH_ENV,
+  REF_ONLY_API_ENV,
+  REF_ONLY_TOKEN_ENV,
   expectNativeHarnessModelsPublishedFromWorker,
   PROVIDER_ID,
 } from "./prepared-model-catalog-worker.test-support.js";
 import { loadPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
+import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
+import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
-import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
+import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 import { expectLegacyWorkerCatalogRetention } from "./test-helpers/prepared-model-catalog-legacy-fixture.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
@@ -175,30 +182,96 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     Atomics.notify(gate, 0);
   };
   let unsubscribe = () => {};
+  const retirement = new AbortController();
+  let current = true;
+  let releaseGeneration: (() => Promise<void>) | undefined;
   let closing: Promise<void> | undefined;
   const close = () =>
     (closing ??= (async () => {
       unsubscribe();
+      current = false;
+      retirement.abort();
       for (const gate of gates) {
         release(gate);
       }
       fs.rmSync(providerHold, { force: true });
       fs.rmSync(authHold, { force: true });
       try {
-        await closePreparedModelRuntimeSnapshots();
+        // Global retirement joins retained generations; release this fixture's owner first.
+        try {
+          await releaseGeneration?.();
+        } finally {
+          await closePreparedModelRuntimeSnapshots();
+        }
       } finally {
         broadcastChannel.close();
       }
     })());
   retireAfterTest(close);
-  const fleet = await createCatalogFleetFixture(makeTempDir)(
-    (seed) => {
-      seed.config.plugins.load.paths = [path.join(pluginRoot, "index.cjs")];
+  for (const name of [
+    "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_WORKER_CATALOG_MARKER",
+    EXTERNAL_AUTH_PATH_ENV,
+    REF_ONLY_API_ENV,
+    REF_ONLY_TOKEN_ENV,
+  ] as const) {
+    vi.stubEnv(name, fixture.env[name]);
+  }
+  const config = {
+    ...fixture.config,
+    agents: {
+      defaults: { ...fixture.config.agents.defaults, models: {} },
+      entries: { main: { agentDir: fixture.agentDir, workspace: fixture.workspaceDir } },
     },
-    true,
-    { agentCount: 1, publication: "individual" },
+  };
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: {
+        [`${PROVIDER_ID}:default`]: {
+          type: "api_key",
+          provider: PROVIDER_ID,
+          key: "synthetic-native-admission",
+        },
+      },
+    },
+    fixture.agentDir,
   );
-  const snapshot = fleet.snapshots[0]!;
+  const input = {
+    agentId: "main",
+    agentDir: fixture.agentDir,
+    inheritedAuthDir: fixture.agentDir,
+    workspaceDir: fixture.workspaceDir,
+    allowGatewaySubagentBinding: true,
+    config,
+  };
+  // Exercise the configured catalog owner's bounded foreground and shared worker admission.
+  // Gateway commit eagerly renews providers; build this owner boundary before starting its clock.
+  const inventoryOwner: Pick<PreparedModelRuntimeOwner, "catalogInventory" | "provenance"> = {
+    provenance: "configured",
+  };
+  const [build] = await startSerializedSnapshotBuildBatch(
+    [
+      {
+        input,
+        catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
+        inventoryOwner,
+        prepareInboundPluginRegistry: true,
+        isGenerationCurrent: () => current,
+        isBuildCurrent: () => current,
+        retirementSignal: retirement.signal,
+      },
+    ],
+    new Map(),
+    30_000,
+    "static",
+  ).pending;
+  if (!build) {
+    throw new Error("native admission owner was not built");
+  }
+  releaseGeneration = retainPreparedPluginGeneration(build.pluginGeneration);
+  const snapshot = build.snapshot;
   const failures: Error[] = [];
   let waiting: ReturnType<typeof createDeferred<ModelCatalogSnapshot>> | undefined;
   unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {

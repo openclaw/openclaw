@@ -5,7 +5,6 @@ export {
   ensureAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-export { resolveAuthProfileOrderWithMetadata } from "./auth-profiles/order.js";
 export { resolveEnvApiKey } from "./model-auth-env.js";
 export {
   applyAuthHeaderOverride,
@@ -24,21 +23,16 @@ export {
   resolveProviderEntryApiKeyBinding,
   resolveProviderEntryApiKeyProfileReference,
   resolveUsableCustomProviderApiKey,
-  shouldPreferExplicitConfigApiKeyAuth,
 } from "./model-auth-provider-config.js";
 export { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 export {
   createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth,
-  prepareRuntimeAvailableProviderAuth,
 } from "./model-auth-runtime.js";
 export type { RuntimeProviderAuthLookup } from "./model-auth-runtime.js";
 export {
   formatMissingAuthError,
-  isMissingProviderAuthError,
-  isProviderAuthError,
   MissingProviderAuthError,
-  ProviderAuthError,
   requireApiKey,
 } from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";

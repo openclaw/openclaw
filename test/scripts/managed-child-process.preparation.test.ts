@@ -12,6 +12,40 @@ import { runNodeScript } from "../helpers/run-node-script.js";
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
+it.skipIf(process.platform === "win32").for(["signal", "numeric"] as const)(
+  "preserves a managed shim's %s termination without inferring signal provenance",
+  async (mode) => {
+    await fixture.run(async () => {
+      const cwd = fixture.createTempDir("managed-shim-termination-");
+      const shimPath = path.join(cwd, "shim.mjs");
+      fs.writeFileSync(
+        path.join(cwd, "implementation.mjs"),
+        mode === "signal" ? 'process.kill(process.pid, "SIGKILL");' : "process.exit(137);",
+      );
+      fs.writeFileSync(
+        shimPath,
+        `import { runNodeCliShim } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/tsx-cli-shim.mjs")).href)};
+await runNodeCliShim(import.meta.url, { implementation: "./implementation.mjs", terminationOwner: "implementation" });
+`,
+      );
+      let observedExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+      const result = await runNodeScript(shimPath, process.env, undefined, {
+        cwd,
+        onReady(child) {
+          child.once("exit", (code, signal) => {
+            observedExit = { code, signal };
+          });
+        },
+      });
+      expect(result.error, result.stderr).toBeUndefined();
+      expect(result.status, result.stderr).toBe(137);
+      expect(observedExit).toEqual(
+        mode === "signal" ? { code: null, signal: "SIGKILL" } : { code: 137, signal: null },
+      );
+    });
+  },
+);
+
 it.skipIf(process.platform === "win32")(
   "joins an implementation-owned shim and synchronous preparation on outer SIGINT",
   async ({ signal }) => {

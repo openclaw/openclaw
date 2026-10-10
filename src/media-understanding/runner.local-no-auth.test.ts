@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "../agents/model-auth-markers.js";
+import { ProviderAuthError } from "../agents/model-auth-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
@@ -30,7 +31,7 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
       ...args: Parameters<typeof actual.resolveApiKeyForProviderCore>
     ) => {
       if (modelAuthTestControl.forceMissingProvider) {
-        throw new actual.ProviderAuthError(
+        throw new ProviderAuthError(
           "missing-provider-auth",
           args[0].provider,
           `No API key found for provider "${args[0].provider}".`,

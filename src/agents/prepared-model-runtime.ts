@@ -238,8 +238,8 @@ export function getPendingPreparedModelRuntimeReplacement(): Promise<void> | und
 /** Fence new execution while plugin work drains, without withdrawing the active catalog. */
 export const beginPreparedModelRuntimePluginDrain = modelRuntimeDrain.begin;
 
-/** Publishes one owner from an explicit startup/activation lifecycle boundary. */
-export async function publishPreparedModelRuntimeSnapshot(
+/** Publishes the standalone owner admitted by the activation lifecycle. */
+async function publishPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
   options: PreparedModelRuntimePublicationOptions = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
@@ -276,7 +276,7 @@ export async function publishPreparedModelRuntimeSnapshot(
       ? modelRuntimeBuildTimeoutMs
       : modelRuntimeBuildTimeoutMs + options.providerDiscoveryTimeoutMs,
     existing,
-    options.provenance,
+    "standalone",
     options.catalogMode,
     undefined,
     undefined,
@@ -287,10 +287,7 @@ export async function publishPreparedModelRuntimeSnapshot(
 /** Activates lifecycle publication for direct embedded runtimes without a gateway startup. */
 export async function activateStandalonePreparedModelRuntime(
   rawInput: PreparedModelRuntimeInput,
-  options: Pick<
-    PreparedModelRuntimePublicationOptions,
-    "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
-  > = {},
+  options: PreparedModelRuntimePublicationOptions = {},
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   const assertLifetime = captureModelRuntimeLifetime();
   const input = normalizePreparedModelRuntimeInput(rawInput);
@@ -318,10 +315,7 @@ export async function activateStandalonePreparedModelRuntime(
 async function activateStandalonePreparedModelRuntimeNow(
   input: PreparedModelRuntimeInput,
   assertLifetime: () => void,
-  options: Pick<
-    PreparedModelRuntimePublicationOptions,
-    "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
-  >,
+  options: PreparedModelRuntimePublicationOptions,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
     assertLifetime();
@@ -343,7 +337,7 @@ async function activateStandalonePreparedModelRuntimeNow(
           ...input,
           preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
         },
-        { ...options, provenance: "standalone" },
+        options,
       );
     } catch (error) {
       if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {

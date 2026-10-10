@@ -18,7 +18,7 @@ import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
-  publishPreparedModelRuntimeSnapshot,
+  cancelPreparedModelRuntimeRefresh,
   refreshPreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimePublicationListener,
 } from "./prepared-model-runtime.js";
@@ -291,7 +291,7 @@ describe("prepared fleet batches", () => {
     expect(events.indexOf("event-loop")).toBeLessThan(events.indexOf("last"));
   });
 
-  it("does not start plugin callbacks after cancellation at an event-loop boundary", async () => {
+  it("does not start plugin callbacks for a cancelled queued configured publication", async () => {
     let cancelled = false;
     let lateLoads = 0;
     mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
@@ -300,14 +300,10 @@ describe("prepared fleet batches", () => {
       }
       return createEmptyPluginRegistry();
     });
-    const publication = publishPreparedModelRuntimeSnapshot({
-      config: {},
-      agentDir: fixture.state.agentDir("cancelled"),
-      workspaceDir: fixture.state.workspaceDir,
-    });
+    const publication = refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
     cancelled = true;
-    markPreparedModelRuntimeSnapshotsStale("cancel before workspace preparation");
-    await expect(publication).rejects.toThrow("superseded");
+    cancelPreparedModelRuntimeRefresh();
+    await expect(publication).resolves.toBeUndefined();
     expect(lateLoads).toBe(0);
   });
 

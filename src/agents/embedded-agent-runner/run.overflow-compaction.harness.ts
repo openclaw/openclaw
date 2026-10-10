@@ -381,7 +381,7 @@ export const mockedResolveAuthProfileOrder = vi.fn<(_params?: unknown) => string
   (_params?: unknown) => [],
 );
 type AuthProfileOrderResolution = ReturnType<
-  typeof import("../model-auth.js").resolveAuthProfileOrderWithMetadata
+  typeof import("../auth-profiles/order.js").resolveAuthProfileOrderWithMetadata
 >;
 const mockedResolveAuthProfileOrderWithMetadata = vi.fn<
   (_params?: unknown) => AuthProfileOrderResolution

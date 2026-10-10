@@ -9,16 +9,22 @@ import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
-import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import {
   encodePluginModelCatalogRelativePath,
   loadPersistedPluginModelCatalogsReadOnly,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
-import { createCatalogFixture, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
+import {
+  createCatalogFixture,
+  EXTERNAL_AUTH_PATH_ENV,
+  PROVIDER_ID,
+  REF_ONLY_API_ENV,
+  REF_ONLY_TOKEN_ENV,
+} from "./prepared-model-catalog-worker.test-support.js";
 import { getPublishedPreparedModelCatalogOwnerSnapshot } from "./prepared-model-catalog.js";
 import {
-  publishPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeSnapshots,
+  prepareModelRuntimeSnapshot,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
@@ -37,8 +43,16 @@ describe("chat metadata with published model owners", () => {
         ]),
       );
       const expectedModel = expect.objectContaining({ provider: PROVIDER_ID, id: "sqlite-model" });
-      vi.stubEnv("OPENCLAW_STATE_DIR", fixture.env.OPENCLAW_STATE_DIR);
-      vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+      for (const name of [
+        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_WORKER_CATALOG_MARKER",
+        EXTERNAL_AUTH_PATH_ENV,
+        REF_ONLY_API_ENV,
+        REF_ONLY_TOKEN_ENV,
+      ] as const) {
+        vi.stubEnv(name, fixture.env[name]);
+      }
       let counting = false;
       let reads = 0;
       const entries: Record<string, AgentEntryConfig> = {};
@@ -91,28 +105,33 @@ describe("chat metadata with published model owners", () => {
         { concurrency: 2, stopOnError: false },
       );
       const published = new Map<string, PreparedModelRuntimeSnapshot>();
-      const publish = async (entry: Awaited<ReturnType<typeof add>>, force = false) => {
-        const snapshot = await publishPreparedModelRuntimeSnapshot(
-          {
-            agentId: entry.id,
-            agentDir: entry.agentDir,
-            workspaceDir: entry.workspace,
-            inheritedAuthDir: resolveLegacyInheritedAuthDir(config, fixture.env),
-            allowGatewaySubagentBinding: true,
-            config,
-            env: fixture.env,
-          },
-          { provenance: "configured", catalogMode: "static", force },
-        );
+      const publicationOptions = {
+        gatewayLifecycle: true,
+        catalogMode: "static" as const,
+        allowGatewaySubagentBinding: true,
+      };
+      const observePublication = async (entry: Awaited<ReturnType<typeof add>>) => {
+        const snapshot = await prepareModelRuntimeSnapshot({
+          agentId: entry.id,
+          agentDir: entry.agentDir,
+          config,
+        });
         expect(snapshot.modelCatalog.entries).toContainEqual(expectedModel);
         published.set(entry.id, snapshot);
-        // The request omits authoritative workspace/binding facts. Keep the real fallback lookup.
         expect(getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: entry.id, config })).toBe(
           snapshot,
         );
         return snapshot;
       };
-      await Promise.all(configured.map((entry) => publish(entry)));
+      const publish = async (entry: Awaited<ReturnType<typeof add>>) => {
+        await refreshPreparedModelRuntimeSnapshots(config, {
+          ...publicationOptions,
+          agentIds: new Set([entry.id]),
+        });
+        return await observePublication(entry);
+      };
+      await refreshPreparedModelRuntimeSnapshots(config, publicationOptions);
+      await Promise.all(configured.map(observePublication));
       let builds = 0;
       // Projection leaves are supplied below; the real roster and published-owner chain is retained.
       const context = {} as GatewayRequestContext;
@@ -158,7 +177,7 @@ describe("chat metadata with published model owners", () => {
             sessionModelCatalog: published.get(entry.id)!.modelCatalog.entries,
           });
         }
-        const replacement = await publish(configured[0]!, true);
+        const replacement = await publish(configured[0]!);
         await runtime.refresh();
         expect(builds).toBe(count);
         expect(getPublishedPreparedModelCatalogOwnerSnapshot({ agentId: "main", config })).toBe(
