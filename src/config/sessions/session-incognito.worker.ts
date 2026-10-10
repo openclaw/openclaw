@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { chatMetadataSessionFields } from "../../gateway/server-methods/chat-metadata-contract.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
 import {
@@ -36,7 +34,6 @@ import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sql
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
 import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
-import { sessionEntryReadRevision } from "./session-entry-read-revision.js";
 import {
   isIncognitoComputeCommand,
   isIncognitoComputeWrite,
@@ -69,6 +66,7 @@ import {
 import { createIncognitoManagerWorker } from "./session-incognito-manager.worker.js";
 import { isIncognitoOutboxCommand } from "./session-incognito-outbox-contract.js";
 import { createIncognitoOutboxWorker } from "./session-incognito-outbox.worker.js";
+import { projectIncognitoSessionReadRevisions } from "./session-incognito-read-revisions.js";
 import { projectIncognitoSessionRuntimeFacts } from "./session-incognito-runtime-facts.js";
 import {
   incognitoSideDataKeys,
@@ -115,12 +113,7 @@ export function createIncognitoSessionWorker(
           revision: sessionRevisions.get(sessionKey) ?? 0,
           completionSources: history.completionFacts(sessionKey),
           capability: entry ? projectSessionEntryCapabilityFacts(entry) : undefined,
-          entryReadRevision: entry ? sessionEntryReadRevision(entry) : undefined,
-          chatMetadataRevision: entry
-            ? createHash("sha256")
-                .update(JSON.stringify(chatMetadataSessionFields.map((field) => entry[field])))
-                .digest("hex")
-            : undefined,
+          ...projectIncognitoSessionReadRevisions(entry),
           ...projectIncognitoSessionRuntimeFacts(entry),
           cliHistory:
             entry?.cliHistoryBoundary?.state === "known"

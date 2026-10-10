@@ -3128,7 +3128,6 @@
 ["src/agents/sessions/session-manager.import-boundary.test.ts","../../plugin-sdk/agent-core.js","e37b1d071232174a8b049c1bee74174e8804d6252ac550839a74a6e7fa607440",1]
 ["src/agents/sessions/session-manager.import-boundary.test.ts","../runtime/index.js","a2508fb47efa0ed2167609ece67ee0bb21426aab6024d30c022511da3dd9aa45",1]
 ["src/agents/sessions/tools/read.images.test.ts","../../../media/image-ops.js","b7a1401c375660f9087c7a991488a9734f5279cc912dd6101218a02ebcc5818d",1]
-["src/agents/sessions/tools/read.test.ts","../../../infra/windows-encoding.js","6333edfd9358137a3443ace0f74cb73197fba7a3e21aac66eebeaeeddf44b677",1]
 ["src/agents/shell-snapshot.cache.test.ts","../process/spawn-utils.js","4d514446035b6c543714b23120b8877044d73a9f3e2c38f8176767ae795ea1da",1]
 ["src/agents/shell-snapshot.spawn.test.ts","../process/kill-tree.js","f7da4a376891e2e1e4bda5def58c15a6a13b818190246aca2fb9c8751d941be9",1]
 ["src/agents/simple-completion-execution.test.ts","../llm/stream.js","f302b8e4b958c47519f529f7e4f473e8cd1226d9141083a38386bcd8985ac190",1]

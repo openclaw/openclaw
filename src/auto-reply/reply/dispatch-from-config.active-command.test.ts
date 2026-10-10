@@ -15,7 +15,7 @@ import {
   globalBeforeAll0,
   replyRunRegistry,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 

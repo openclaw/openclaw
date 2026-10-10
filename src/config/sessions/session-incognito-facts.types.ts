@@ -14,6 +14,7 @@ export type IncognitoSessionFacts = {
   capability?: SessionEntryCurrentFacts;
   chatMetadataRevision?: string;
   entryReadRevision?: string;
+  initializationFingerprint?: string;
   delivery?: Pick<SessionEntry, "sessionId" | "updatedAt" | "delivery">;
   media?: Pick<
     SessionEntry,
