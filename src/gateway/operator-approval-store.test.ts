@@ -300,6 +300,9 @@ describe("operator approval store", () => {
     using _ = vi
       .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
       .mockImplementation(() => {});
+    const receiptTransport = vi
+      .spyOn(workerAdmission, "deferSqliteWorkerCommitReceipt")
+      .mockImplementation(() => {});
     const releaseWriter = vi.fn(() => {
       writer.exec("COMMIT");
       // Retain the getter's exact-deadline boundary after the real lock wait.
@@ -325,6 +328,7 @@ describe("operator approval store", () => {
       });
     } finally {
       writer.close();
+      receiptTransport.mockRestore();
     }
   });
 

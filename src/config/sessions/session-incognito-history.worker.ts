@@ -3,7 +3,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareSessionHistorySubagentFacts } from "../../gateway/session-history-delta-visibility.js";
 import { createBoundSessionHistorySubagentProjection } from "../../gateway/session-history-readonly-reader.js";
 import { selectSessionTranscriptProjection } from "../../gateway/session-transcript-read-kernel.js";
-import type { SessionTranscriptProjectionSelection } from "../../gateway/session-transcript-read.types.js";
 import {
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
@@ -17,15 +16,16 @@ import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "./ses
 import {
   readLatestSessionTranscriptMessageEvent,
   readRecentSessionTranscriptActiveEvents,
+  readSessionTranscriptVisibleMessageDeltaCore,
 } from "./session-accessor.sqlite-active-events.js";
 import { resolveConversationInDatabase } from "./session-accessor.sqlite-conversation-read.js";
 import { readSessionTranscriptCurrentTurnEntry } from "./session-accessor.sqlite-current-turn.js";
+import { readTranscriptRawDeltaInDatabase } from "./session-accessor.sqlite-delta.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import {
   loadTranscriptReadSnapshotSync,
-  hasSessionTranscriptMessageInDatabase,
   readTranscriptExportSnapshotReadOnlySync,
 } from "./session-accessor.sqlite-read.js";
 import {
@@ -33,7 +33,12 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import {
+  hasSessionTranscriptMessageInDatabase,
+  readLatestAssistantTextFromDatabase,
+} from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
+import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import {
   prepareSessionHistoryReadOperation,
   type SessionHistoryReadOperationRequest,
@@ -43,14 +48,19 @@ import type {
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
+import { resolveIncognitoHistoryProjectionSelection } from "./session-incognito-history-selection.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
-import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
+import {
+  prepareSessionTranscriptAnchorMessageReader,
+  readSessionTranscriptAnchorFactsInDatabase,
+} from "./session-transcript-anchor-read.kernel.js";
 import { isSessionTranscriptIndexStatusClean } from "./session-transcript-index-status.worker.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
   runWithSessionTranscriptReadFence,
+  resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
 
@@ -80,6 +90,10 @@ export function createIncognitoHistoryWorker(
   database: OpenClawAgentDatabase,
   env: NodeJS.ProcessEnv,
 ) {
+  const completionSources = new Map<
+    string,
+    IncognitoHistoryOperations["session.history.completion-source.open"]["input"]
+  >();
   let prepared: PreparedHistoryRead<Command["type"]> | undefined;
   const prepare = async (command: Command) => {
     if (command.type === "session.history.memory-targets") {
@@ -203,7 +217,7 @@ export function createIncognitoHistoryWorker(
       });
       return;
     }
-    const selection = historySelection(command);
+    const selection = resolveIncognitoHistoryProjectionSelection(command);
     if (selection) {
       prepared = prepareHistoryRead(command.type, () =>
         runWithSessionTranscriptReadFence(admission, () => {
@@ -220,6 +234,58 @@ export function createIncognitoHistoryWorker(
     }
     let request: SessionHistoryReadOperationRequest;
     switch (command.type) {
+      case "session.history.completion-source.open":
+        prepared = prepareHistoryRead(command.type, () => {
+          if (
+            command.input.claim.requesterAgentId !== database.agentId ||
+            command.input.claim.requesterSessionKey !== sessionKey ||
+            command.input.claim.sessionId !== sessionId ||
+            command.input.claim.lifecycleRevision !== command.input.lifecycleRevision
+          ) {
+            throw new Error("Incognito completion source belongs to another session");
+          }
+          if (completionSources.has(command.input.sourceId)) {
+            throw new Error("Incognito completion source is already registered");
+          }
+          completionSources.set(command.input.sourceId, command.input);
+        });
+        return;
+      case "session.history.completion-source.release":
+        prepared = prepareHistoryRead(command.type, () => {
+          completionSources.delete(command.input.sourceId);
+        });
+        return;
+      case "session.history.harness-completion-source":
+        if (
+          command.input.claim.requesterAgentId !== database.agentId ||
+          command.input.claim.requesterSessionKey !== sessionKey ||
+          command.input.claim.sessionId !== sessionId
+        ) {
+          throw new Error("Harness completion source belongs to another incognito session");
+        }
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readHarnessCompletionSourceInDatabase(database, command.input.claim, "committed"),
+          ),
+        );
+        return;
+      case "session.history.raw-delta":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readTranscriptRawDeltaInDatabase(database, resolvedScope, command.input.limits),
+          ),
+        );
+        return;
+      case "session.history.visible-delta":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readSessionTranscriptVisibleMessageDeltaCore(target, command.input.limits, {
+              readOnly: true,
+              resolvedScope,
+            }),
+          ),
+        );
+        return;
       case "session.history.conversation-binding":
         prepared = prepareHistoryRead(command.type, () => {
           const conversation = resolveConversationInDatabase(
@@ -233,11 +299,18 @@ export function createIncognitoHistoryWorker(
           return { channel, accountId, target: address, threadId, nativeChannelId };
         });
         return;
-      case "session.history.anchors":
+      case "session.history.anchors": {
+        const readMessage = await prepareSessionTranscriptAnchorMessageReader(command.input);
         prepared = prepareHistoryRead(command.type, () =>
-          readSessionTranscriptAnchorFactsInDatabase(database, resolvedScope, command.input),
+          readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            resolvedScope,
+            command.input,
+            readMessage,
+          ),
         );
         return;
+      }
       case "session.history.accounting":
       case "session.history.bounded-tail":
         prepared = prepareHistoryRead(command.type, () =>
@@ -293,6 +366,13 @@ export function createIncognitoHistoryWorker(
               readOnly: true,
               resolvedScope,
             }),
+          ),
+        );
+        return;
+      case "session.history.latest-assistant":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readLatestAssistantTextFromDatabase(database, resolvedScope),
           ),
         );
         return;
@@ -550,6 +630,37 @@ export function createIncognitoHistoryWorker(
   };
   return {
     prepare,
+    completionFacts(sessionKey: string): IncognitoSessionFacts["completionSources"] {
+      return [...completionSources.values()]
+        .filter((source) => source.sessionKey === sessionKey)
+        .map((source) => {
+          let valid = false;
+          try {
+            valid = runWithSessionTranscriptReadFence(source.admission, () => {
+              // Even an original admitted delivery must retain its exact branch/reset fence.
+              if (source.admission) {
+                resolveSqliteSessionTranscriptReadFence({
+                  database,
+                  agentId: database.agentId,
+                  sessionKey,
+                  sessionId: source.sessionId,
+                });
+              }
+              const snapshot = readHarnessCompletionSourceInDatabase(database, source.claim);
+              return (
+                snapshot.entry?.sessionId === source.sessionId &&
+                snapshot.entry?.lifecycleRevision === source.lifecycleRevision &&
+                snapshot.validInput
+              );
+            });
+          } catch (error) {
+            if (!(error instanceof SessionTranscriptReadFenceError)) {
+              throw error;
+            }
+          }
+          return { sourceId: source.sourceId, valid };
+        });
+    },
     execute(command: Command, facts: IncognitoSessionFacts[]) {
       const targets =
         command.type === "session.history.search" ||
@@ -557,6 +668,9 @@ export function createIncognitoHistoryWorker(
           ? command.input.sessions
           : [command.input];
       for (const target of targets) {
+        if (command.type === "session.history.completion-source.release") {
+          continue;
+        }
         const entry = readExactSessionEntryRow(database, target.sessionKey)?.entry;
         if (target.allowMissing) {
           if (
@@ -564,7 +678,13 @@ export function createIncognitoHistoryWorker(
             (command.type !== "session.history.context" &&
               command.type !== "session.history.native-context" &&
               command.type !== "session.history.native-context-current" &&
-              command.type !== "session.history.anchors")
+              command.type !== "session.history.anchors" &&
+              command.type !== "session.history.raw-delta" &&
+              command.type !== "session.history.visible-delta" &&
+              command.type !== "session.history.latest-assistant" &&
+              command.type !== "session.history.hydrate" &&
+              command.type !== "session.history.stats" &&
+              command.type !== "session.history.watermark")
           ) {
             throw new Error("Incognito missing context no longer matches its captured session");
           }
@@ -590,28 +710,9 @@ export function createIncognitoHistoryWorker(
     assertSettled() {
       prepared = undefined;
     },
+    close() {
+      prepared = undefined;
+      completionSources.clear();
+    },
   };
-}
-
-function historySelection(command: Command): SessionTranscriptProjectionSelection | undefined {
-  switch (command.type) {
-    case "session.history.delta":
-      return { kind: "delta", options: command.input.options };
-    case "session.history.count":
-      return { kind: "count" };
-    case "session.history.recent":
-      return { kind: "recent", options: command.input.options };
-    case "session.history.page":
-      return { kind: "page", options: command.input.options };
-    case "session.history.around-id":
-      return { kind: "around-id", options: command.input.options };
-    case "session.history.source":
-      return { kind: "source", options: command.input.options };
-    case "session.history.by-id":
-      return { kind: "by-id", messageId: command.input.messageId, options: command.input.options };
-    case "session.history.lookup":
-      return { kind: "lookup", messageId: command.input.messageId };
-    default:
-      return undefined;
-  }
 }

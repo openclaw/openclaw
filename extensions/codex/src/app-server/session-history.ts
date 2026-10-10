@@ -3,15 +3,15 @@ import { resolveAgentHarnessHistoryLimits } from "openclaw/plugin-sdk/agent-harn
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   parseSqliteSessionFileMarker,
-  resolveTranscriptSessionKeyBySessionId,
   type SqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import type {
   TranscriptTurnAdmission,
   SessionTranscriptTargetParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { resolveSessionTranscriptIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   consumeCodexHistory,
   readCodexNativeHistory,
@@ -26,10 +26,10 @@ export type CodexMirroredSessionHistoryTarget = {
   sessionTarget?: Partial<SessionTranscriptTargetParams>;
 };
 
-export function resolveCodexHistoryTarget(
+export async function resolveCodexHistoryTarget(
   target: CodexMirroredSessionHistoryTarget,
   admission?: TranscriptTurnAdmission,
-): ResolvedCodexHistoryTarget {
+): Promise<ResolvedCodexHistoryTarget> {
   if (target.sessionTarget) {
     const { agentId, sessionId, sessionKey, storePath } = target.sessionTarget;
     if (
@@ -53,7 +53,7 @@ export function resolveCodexHistoryTarget(
     ) {
       return { kind: "empty" };
     }
-    const sessionKey = resolveSqliteMarkerSessionKey(target, sqliteMarker);
+    const sessionKey = await resolveSqliteMarkerSessionKey(target, sqliteMarker);
     return sessionKey
       ? {
           kind: "sqlite",
@@ -97,7 +97,7 @@ export async function readCodexMirroredSessionHistoryMessages(
   signal?.throwIfAborted();
   try {
     let result: AgentMessage[] | undefined;
-    const resolved = resolveCodexHistoryTarget(target, admission);
+    const resolved = await resolveCodexHistoryTarget(target, admission);
     const read = (messages: Iterable<AgentMessage>) => Array.from(messages);
     if (resolved.kind === "sqlite") {
       const loaded = await SessionManager.openModelContextAsync(resolved.target, {
@@ -125,14 +125,13 @@ export async function readCodexMirroredSessionHistoryMessages(
   }
 }
 
-function resolveSqliteMarkerSessionKey(
+async function resolveSqliteMarkerSessionKey(
   target: CodexMirroredSessionHistoryTarget,
   marker: SqliteSessionFileMarker,
-): string | undefined {
+): Promise<string | undefined> {
   const explicitSessionKey = target.sessionKey?.trim();
   if (explicitSessionKey) {
-    // The SDK exact-entry accessor uses a read-only database handle.
-    const explicitEntry = getSessionEntry({
+    const explicitEntry = await getSessionEntryAsync({
       agentId: marker.agentId,
       sessionKey: explicitSessionKey,
       storePath: marker.storePath,
@@ -141,9 +140,14 @@ function resolveSqliteMarkerSessionKey(
       return explicitEntry.sessionId === marker.sessionId ? explicitSessionKey : undefined;
     }
   }
-  return resolveTranscriptSessionKeyBySessionId({
-    agentId: marker.agentId,
-    sessionId: marker.sessionId,
-    storePath: marker.storePath,
-  });
+  return (
+    (
+      await resolveSessionTranscriptIdentity({
+        agentId: marker.agentId,
+        sessionId: marker.sessionId,
+        storePath: marker.storePath,
+        sessionKey: "",
+      })
+    ).sessionKey || undefined
+  );
 }

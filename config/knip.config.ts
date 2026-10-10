@@ -41,6 +41,8 @@ const repositoryScriptEntries = [
   ".github/actions/frozen-node-test-compat/apply.mjs!",
   // The compiler below exposes this workflow's inline and generated-config imports.
   ".github/workflows/plugin-prerelease.yml!",
+  // Labeler steps import their shared helper through workspace file URLs.
+  ".github/workflows/labeler.yml!",
   // setup-node-env invokes this helper from composite-action YAML.
   ".github/actions/setup-node-env/dependency-fingerprint.mjs!",
   ".github/actions/setup-node-env/seed-bun-from-image.mjs!",
@@ -157,6 +159,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/missing-configured-plugin-migration.mjs!",
   // run.sh starts this persistent native peer as a separate process.
   "scripts/e2e/lib/upgrade-survivor/native-assignment-app-server.mjs!",
+  // package-activation-recovery.sh preloads this observer into the released updater.
+  "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
@@ -265,6 +269,8 @@ const repositoryScriptEntries = [
   "scripts/github/security-review.mjs!",
   "scripts/sync-labels.ts!",
   "scripts/test-built-bundled-channel-entry-smoke.mts!",
+  // CI launches the desktop resize proof through its bootstrap path.
+  "scripts/test-desktop-resize-real.mts!",
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/test-ios-sidebar-attention-gateway.mjs!",
@@ -300,7 +306,21 @@ function listScriptShimEntries(dir = "scripts"): string[] {
   });
 }
 
-function compileFrvWorkflowConsumers(source: string, filePath: string): string {
+function compileWorkflowConsumers(source: string, filePath: string): string {
+  if (path.resolve(filePath) === path.resolve(".github/workflows/labeler.yml")) {
+    return [
+      ...new Set(
+        [
+          ...source.matchAll(
+            /\bconst\s*\{([^}]+)\}\s*=\s*await\s+import\(\s*pathToFileURL\(`\$\{process\.env\.GITHUB_WORKSPACE\}\/(scripts\/[^`\r\n]+)`\)\.href\s*\)/gu,
+          ),
+        ].map(
+          ([, names, specifier]) =>
+            `import {${names}} from ${JSON.stringify(`../../${specifier}`)};`,
+        ),
+      ),
+    ].join("\n");
+  }
   if (path.resolve(filePath) !== path.resolve(".github/workflows/plugin-prerelease.yml")) {
     return "";
   }
@@ -413,7 +433,6 @@ const rootEntries = [
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
   // Worker-thread and script entrypoints import contracts that production Knip cannot trace.
-  "src/agents/compaction-planning.worker.ts!",
   "src/config/sessions/disk-budget.worker.ts!",
   "scripts/print-cli-backend-live-metadata.ts!",
   // Workflow/package-script entrypoints are not imported from production modules.
@@ -625,7 +644,7 @@ function compileNativeProtocolConsumer(source: string, filePath: string): string
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
-    project: ["**/*.{js,mjs,ts}!"],
+    project: ["**/*.{js,mjs,ts,tsx}!"],
     ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
   } as const;
 }
@@ -689,7 +708,7 @@ const ignoredTestSupportFiles = [
 
 const config = {
   compilers: {
-    yml: compileFrvWorkflowConsumers,
+    yml: compileWorkflowConsumers,
     sh: compileShellConsumers,
     mjs: compileNativeProtocolConsumer,
   },
@@ -705,12 +724,21 @@ const config = {
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.
     "src/worker/repro-worker-connection-closing-window.ts",
+    // Dormant host half of the durable cross-store source fence (#168018). Its real
+    // broker tests are the only importer until GitHub publication, session titles,
+    // or worktree finalization adopt it; drop this entry with that first caller.
+    "src/infra/sqlite-source-fence-admission.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],
   // Knip's `ignoreFiles` only suppresses unused-file findings. Test helpers
   // belong in `ignore` so they do not inflate unused-export/type findings.
-  ignore: ["dist/**", "packages/*/dist/**", "**/.boundary-stubs/**", ...ignoredTestSupportFiles],
+  ignore: [
+    "dist/**",
+    "packages/*/dist/**",
+    "**/.boundary-stubs/**",
+    ...ignoredTestSupportFiles.map((pattern) => pattern.replace(/\.ts$/u, ".{ts,tsx}")),
+  ],
   // Script exports are checked with every script as an entry and entry-export
   // reporting enabled. Suppress them only in this application-production scan.
   ignoreIssues: {
@@ -736,8 +764,8 @@ const config = {
     "src/plugins/session-discussion-registry.ts": ["exports"],
     // Focused Control UI tests consume these explicit state-machine seams;
     // production uses them through their owning module/controller.
-    "ui/src/pages/chat/chat-state-refresh.ts": ["exports"],
-    "ui/src/pages/chat/composer-persistence.ts": ["exports"],
+    "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
+    "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
     // Focused media tests consume these explicit seams; production uses the helpers in-module.
     "src/agents/embedded-agent-subscribe.handlers.lifecycle.ts": ["exports"],
     "src/gateway/server-methods/chat-webchat-media.ts": ["exports"],
@@ -823,8 +851,8 @@ const config = {
         // The standalone proof-video skill imports this developer API by path.
         "src/test-helpers/proof-video.ts!",
         "index.html!",
-        "src/main.ts!",
-        "src/lib/browser-redact.ts!",
+        "src/main.{ts,tsx}!",
+        "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",
       ],
@@ -1063,7 +1091,7 @@ const config = {
     [`${BUNDLED_PLUGIN_ROOT_DIR}/xai`]: bundledPluginWorkspace(),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/llama-cpp`]: {
       entry: bundledPluginEntries,
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/lmstudio`]: bundledPluginWorkspace(),
@@ -1073,14 +1101,14 @@ const config = {
       // public surface, so its exports are intentional even where the channel
       // consumes only a subset.
       entry: [...bundledPluginEntries, "protocol/index.ts!"],
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/*`]: {
       // Bundled plugins often load their public surface via string specifiers in
       // `index.ts` contracts, so Knip needs these convention-based entry files.
       entry: bundledPluginEntries,
-      project: ["**/*.{js,mjs,ts}!"],
+      project: ["**/*.{js,mjs,ts,tsx}!"],
       ignoreDependencies: bundledPluginIgnoredRuntimeDependencies,
     },
   },

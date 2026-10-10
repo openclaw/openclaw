@@ -41,6 +41,7 @@ backup and its matching build, not just reinstalling the older package.
 | 22      | Exact transcript FTS row ownership for session-local deletion and reconciliation ([#153834](https://github.com/openclaw/openclaw/pull/153834))                                                                                                         | `v2026.9.6`  |
 | 23      | Selective transcript compression, binary memory embeddings, and stable memory full-text index identities                                                                                                                                               | `v2026.9.6`  |
 | 24      | Canonical session hot facts separated from keyed diff, skills, and system-prompt snapshots                                                                                                                                                             | `v2026.9.7`  |
+| 25      | Canonical writers validate their own rows; offline import and repair explicitly queue admission work instead of per-write invalidation triggers                                                                                                        | `Unreleased` |
 
 Schema 1 first appeared in `v2026.5.30-beta.1` and was also written by the
 extended-stable `v2026.7.35`. Versions 2, 4, 5–6, and 7 were development-only
@@ -60,6 +61,42 @@ including shared agent registration. Run `openclaw doctor --fix` with OpenClaw
 be verified, follow the explicit agent-restoration instructions it reports, then
 rerun Doctor before upgrading the copy. Schema-8 and later session migrations
 remain supported.
+
+### Canonical writer validation
+
+Agent schema **25** retires the three `entry_valid` reset triggers and the nine
+node, window, and main-key canonical-validation triggers. The canonical session
+writer validates its serialized row before persisting it and writes the final
+validity value directly. Ordinary writes leave no pending validation marker and
+need no post-write row reread or validity update.
+
+`session_canonical_validation_pending` remains a derived admission queue.
+Offline imports, Doctor repairs, and main-key policy changes explicitly queue
+affected keys and revoke the canonical receipt. Gateway startup applies policy
+changes before readiness; external imports and repairs require exclusive
+maintenance custody while the Gateway is stopped. Other processes cannot write
+session tables alongside the Gateway. Live-authority checks remain with the
+existing effect and transaction owners.
+
+Doctor retains its backed-up orphan-window repair for both schemas 24 and 25
+before migration or the full migration backup. It validates the exact historical
+schema and removes only windows without a logical node, preserving their original
+history in the repair backup. Older media migrations use the same historical
+schema owner as the database upgrader.
+
+The migration checks the previous schema before retiring its triggers, seeds
+every existing node, and clears the persisted canonical receipt in the same
+transaction as both version markers. Admission then validates imported rows,
+including rows whose old pending table was empty. Invalid rows still require
+Doctor repair. Failed publication rolls back the trigger retirement, pending
+work, receipt change, and schema markers together. The migration preserves
+canonical session and transcript payloads; retention, permissions, and durability
+are unchanged.
+
+Schema 24 and older builds refuse schema 25. Binary rollback requires restoring
+the verified pre-upgrade backup with its matching older build and loses later
+writes; manually lowering version markers is unsupported. Published updaters use
+the existing [schema migration handoff](/reference/database-schemas/versioning#schema-bumps-and-older-updaters).
 
 ### Session hot facts and snapshots
 

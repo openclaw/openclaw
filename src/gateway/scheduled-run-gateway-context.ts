@@ -3,14 +3,16 @@
  *
  * Timer ticks, hook dispatch queues, and heartbeat wakeups have no Gateway
  * request of their own, so trusted built-in tools (terminal, dashboard) resolve
- * no context and fail mid-run. RPC-triggered runs already inherit a scope from
- * their caller and must keep it.
+ * no context and fail mid-run. RPC admission keeps its caller scope; accepted
+ * scheduler-owned execution replaces that scope for work that can outlive the request.
  */
 import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
+  withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -50,19 +52,23 @@ export function fenceScheduledGatewayContextResolver(
 /** Capture host resources; detached runs replace inherited request and tool-caller scopes. */
 export function createScheduledGatewayRunner(
   resolveGatewayContext?: ScheduledGatewayContextResolver,
+  resolvePluginRegistry?: () => PluginRegistry | undefined,
 ) {
   const spawnBroker = getSpawnBroker();
   const runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   return async <T>(run: () => Promise<T>): Promise<T> =>
     await withoutGatewayToolCallerIdentity(() =>
       runWithSpawnBroker(spawnBroker, async () => {
-        const runWithWorkers = () => runWithReadOnlyWorkers(run);
+        const runWithRegistry = () =>
+          withPluginRuntimeRegistryScope(resolvePluginRegistry?.(), () =>
+            runWithReadOnlyWorkers(run),
+          );
         if (!resolveGatewayContext) {
-          return await runWithWorkers();
+          return await runWithRegistry();
         }
         return await withPluginRuntimeGatewayContextResolver(
           resolveGatewayContext,
-          runWithWorkers,
+          runWithRegistry,
           {
             inheritRequestScope: false,
           },

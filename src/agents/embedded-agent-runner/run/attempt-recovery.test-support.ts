@@ -164,6 +164,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   if (scenario.retryAvailable === false) {
     failoverRetryController.observeAttempt({ providerRetryMaxRetries: 0 });
   }
+  vi.spyOn(failoverRetryController, "advanceAuthProfile");
   vi.spyOn(failoverRetryController, "maybeMarkAuthProfileFailure");
   const onAgentEvent = vi.fn();
   const recover = () =>
@@ -173,6 +174,8 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
           config: scenario.config ?? {},
           agentId: "main",
           sessionId: "session:transport-drop",
+          // This fixture owns no durable session, including under a frozen retry clock.
+          sessionPersistence: "detached",
           runId: "run:transport-drop",
           onAgentEvent,
         },

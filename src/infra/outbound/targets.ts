@@ -360,14 +360,17 @@ export async function resolveHeartbeatDeliveryTarget(
   if (execOwnsRoute && execRouteKey === undefined) {
     return rejectDelivery("exec-route-conflict");
   }
+  const targetParams = {
+    channel: resolvedTarget.channel,
+    to: resolvedTarget.to,
+    cfg,
+    accountId: effectiveAccountId,
+  };
   const resolved = resolveOutboundTargetWithPlugin({
     plugin,
     target: {
-      channel: resolvedTarget.channel,
-      to: resolvedTarget.to,
+      ...targetParams,
       allowFrom: ownerRoute ? [ownerRoute.ownerId] : undefined,
-      cfg,
-      accountId: effectiveAccountId,
       mode: "heartbeat",
     },
   });
@@ -379,12 +382,7 @@ export async function resolveHeartbeatDeliveryTarget(
     execOwnsRoute &&
     execRouteKey !==
       heartbeatExecRouteKey(
-        {
-          channel: resolvedTarget.channel,
-          to: resolved.to,
-          accountId: effectiveAccountId,
-          threadId: resolvedTarget.threadId,
-        },
+        { ...resolvedTarget, to: resolved.to, accountId: effectiveAccountId },
         plugin,
       )
   ) {
@@ -427,13 +425,7 @@ export async function resolveHeartbeatDeliveryTarget(
   if (plugin?.config.resolveAllowFrom) {
     const explicit = resolveOutboundTargetWithPlugin({
       plugin,
-      target: {
-        channel: resolvedTarget.channel,
-        to: resolvedTarget.to,
-        cfg,
-        accountId: effectiveAccountId,
-        mode: "explicit",
-      },
+      target: { ...targetParams, mode: "explicit" },
     });
     if (explicit?.ok && explicit.to !== resolved.to) {
       reason = "allowFrom-fallback";

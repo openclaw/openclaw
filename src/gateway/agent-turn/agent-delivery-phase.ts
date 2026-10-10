@@ -93,18 +93,33 @@ export async function resolveAgentDeliveryPhase(params: {
     }
   }
 
-  const wantsDelivery = params.request.deliver === true;
-  const explicitThreadId = normalizeOptionalString(params.recipientThreadId);
-  const turnSourceChannel = normalizeOptionalString(params.recipientChannel);
+  const turnSourceChannel = normalizeMessageChannel(params.recipientChannel);
+  const webchatClient = params.client?.connect && params.isWebchatConnect(params.client.connect);
+  const requestedChannel = normalizeMessageChannel(
+    params.request.replyChannel ?? turnSourceChannel,
+  );
+  // WebChat owns its reply; saved external routes are only a fallback for unbound callers.
+  const sessionOnly =
+    requestedChannel === INTERNAL_MESSAGE_CHANNEL ||
+    (webchatClient &&
+      (!requestedChannel || requestedChannel === "last") &&
+      !params.replyTo &&
+      !params.to);
+  const wantsDelivery = params.request.deliver === true && !sessionOnly;
+  const explicitThreadId = sessionOnly
+    ? undefined
+    : normalizeOptionalString(params.recipientThreadId);
   const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
     cfg: params.cfgForAgent ?? params.cfg,
     agentId: activeSessionAgentId,
     currentSessionKey: params.resolvedSessionKey,
-    sessionEntry: params.sessionEntry,
-    requestedChannel: params.request.replyChannel ?? params.recipientChannel,
-    explicitTo: params.replyTo || params.to || undefined,
+    sessionEntry: sessionOnly ? undefined : params.sessionEntry,
+    requestedChannel: sessionOnly ? INTERNAL_MESSAGE_CHANNEL : requestedChannel,
+    explicitTo: sessionOnly ? undefined : params.replyTo || params.to || undefined,
     explicitThreadId,
-    accountId: params.request.replyAccountId ?? params.recipientAccountId,
+    accountId: sessionOnly
+      ? undefined
+      : (params.request.replyAccountId ?? params.recipientAccountId),
     wantsDelivery,
     turnSourceChannel,
     turnSourceTo: params.to || undefined,
@@ -172,58 +187,38 @@ export async function resolveAgentDeliveryPhase(params: {
     }
   }
 
-  if (wantsDelivery && isDeliverableMessageChannel(resolvedChannel) && !resolvedTo) {
+  const missingTarget = isDeliverableMessageChannel(resolvedChannel) && !resolvedTo;
+  if (wantsDelivery && (missingTarget || resolvedChannel === INTERNAL_MESSAGE_CHANNEL)) {
     if (!params.bestEffortDeliver) {
       respond(
         false,
         undefined,
-        deliveryTargetResolutionError
+        missingTarget && deliveryTargetResolutionError
           ? errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError)
           : errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
+              missingTarget
+                ? `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`
+                : "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
             ),
       );
       return undefined;
     }
     params.context.logGateway.info(
-      deliveryTargetResolutionError && !isIncognito
-        ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
-        : "agent delivery target missing (bestEffortDeliver): no deliverable target",
+      missingTarget
+        ? deliveryTargetResolutionError && !isIncognito
+          ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
+          : "agent delivery target missing (bestEffortDeliver): no deliverable target"
+        : deliveryResolutionError && !isIncognito
+          ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
+          : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
     );
   }
 
-  if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-    if (
-      !shouldDowngradeDeliveryToSessionOnly({
-        wantsDelivery,
-        bestEffortDeliver: params.bestEffortDeliver,
-        resolvedChannel,
-      })
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
-      );
-      return undefined;
-    }
-    params.context.logGateway.info(
-      deliveryResolutionError && !isIncognito
-        ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
-        : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
-    );
-  }
-
-  const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
   const turnSourceMessageChannel =
-    normalizedTurnSource &&
-    (isGatewayMessageChannel(normalizedTurnSource) ||
-      isInternalNonDeliveryChannel(normalizedTurnSource))
-      ? normalizedTurnSource
+    turnSourceChannel &&
+    (isGatewayMessageChannel(turnSourceChannel) || isInternalNonDeliveryChannel(turnSourceChannel))
+      ? turnSourceChannel
       : undefined;
   return {
     activeSessionAgentId,
@@ -234,7 +229,7 @@ export async function resolveAgentDeliveryPhase(params: {
     resolvedTo,
     originMessageChannel:
       turnSourceMessageChannel ??
-      (params.client?.connect && params.isWebchatConnect(params.client.connect)
+      (webchatClient
         ? INTERNAL_MESSAGE_CHANNEL
         : resolvedChannel !== INTERNAL_MESSAGE_CHANNEL ||
             deliveryPlan.baseDelivery.channel ||

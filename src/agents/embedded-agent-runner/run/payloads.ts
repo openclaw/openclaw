@@ -40,6 +40,7 @@ import type {
 } from "../../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentSubscribeState } from "../../embedded-agent-subscribe.handlers.types.js";
 import type { ToolResultFormat } from "../../embedded-agent-subscribe.shared-types.js";
+import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import {
   extractAssistantThinking,
   extractAssistantVisibleText,
@@ -106,22 +107,22 @@ export function buildEmbeddedRunPayloads(params: {
   if (params.heartbeatToolResponse && !heartbeatTerminalToolFailure) {
     return [createHeartbeatToolResponsePayload(params.heartbeatToolResponse)];
   }
-  // Internal source replies always need transcript/UI mirrors. Only a
-  // message_tool_only run suppresses the separate automatic final answer.
-  const {
-    replyItems,
-    hasSourceReplyPayload,
-    deliveredSourceReplyViaMessageTool,
-    completedSourceReplyViaMessageTool,
-  } = buildSourceReplyPayloadState({
-    payloads: params.messagingToolSourceReplyPayloads,
-    sentTargets: params.messagingToolSentTargets,
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    didDeliverSourceReplyViaMessageTool: params.didDeliverSourceReplyViaMessageTool,
-    runId: params.runId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
+  // Internal source replies always need transcript/UI mirrors. A committed
+  // tool-authored batch replaces the model answer in either delivery mode.
+  const sourceReplyStateFor = (payloads: MessagingToolSourceReplyPayload[]) =>
+    buildSourceReplyPayloadState({
+      ...params,
+      payloads,
+      sentTargets: params.messagingToolSentTargets,
+    });
+  const sourceReplies = params.messagingToolSourceReplyPayloads ?? [];
+  const ordinarySourceReplies = sourceReplyStateFor(
+    sourceReplies.filter((payload) => !payload.toolAuthored),
+  );
+  const replyItems = ordinarySourceReplies.replyItems;
+  const pendingAuthoredReplies = new Set(sourceReplies.filter((payload) => payload.toolAuthored));
+  const { deliveredSourceReplyViaMessageTool, completedSourceReplyViaMessageTool } =
+    ordinarySourceReplies;
   if (params.heartbeatToolResponse) {
     const heartbeatPayload = createHeartbeatToolResponsePayload(params.heartbeatToolResponse);
     replyItems.push({
@@ -133,11 +134,13 @@ export function buildEmbeddedRunPayloads(params: {
   const suppressAssistantArtifacts =
     params.heartbeatToolResponse !== undefined ||
     params.didSendDeterministicApprovalPrompt === true ||
-    (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
+    (params.sourceReplyDeliveryMode === "message_tool_only" &&
+      ordinarySourceReplies.hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
   const suppressFailureArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
-    (params.sourceReplyDeliveryMode === "message_tool_only" && completedSourceReplyViaMessageTool);
+    (params.sourceReplyDeliveryMode === "message_tool_only" &&
+      ordinarySourceReplies.completedSourceReplyViaMessageTool);
   let hasUserFacingReply =
     completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
   let hasIntentionalSilentFinal = false;
@@ -154,6 +157,19 @@ export function buildEmbeddedRunPayloads(params: {
     // Silence belongs to this input's answer. An earlier steered input must not
     // hide a later input that actually failed without producing an answer.
     hasIntentionalSilentFinal = false;
+    hasUserFacingReply =
+      completedSourceReplyViaMessageTool || params.heartbeatToolResponse?.notify === true;
+    const authoredReplies = [...pendingAuthoredReplies].filter((payload) =>
+      isToolAuthoredSourceReplyForAssistant(payload, currentAssistant ?? lastAssistant),
+    );
+    if (authoredReplies.length > 0) {
+      for (const payload of authoredReplies) {
+        pendingAuthoredReplies.delete(payload);
+      }
+      replyItems.push(...sourceReplyStateFor(authoredReplies).replyItems);
+      hasUserFacingReply = true;
+      return;
+    }
     const nonEmptyAssistantTexts = assistantTexts
       .map((text) => sanitizeAssistantVisibleStreamText(text))
       .filter((text) => text.trim().length > 0);
@@ -348,13 +364,9 @@ export function buildEmbeddedRunPayloads(params: {
     }
     textStart = segment.textEnd;
   }
-  appendSegmentAnswer({
-    assistantTexts: params.assistantTexts.slice(textStart),
-    lastAssistant: params.lastAssistant,
-    currentAssistant: params.currentAssistant,
-    assistantMessageIndex: params.assistantMessageIndex,
-    keptAnswer: params.keptAnswer,
-  });
+  appendSegmentAnswer({ ...params, assistantTexts: params.assistantTexts.slice(textStart) });
+  // Native projections with no assistant text still deliver their committed reply.
+  replyItems.push(...sourceReplyStateFor([...pendingAuthoredReplies]).replyItems);
   // A conversational NO_REPLY is an authored outcome, not a missing answer.
   // Native shell calls are conservatively classified as mutating even when
   // they only search files. That replay-safety classification must not replace

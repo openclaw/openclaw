@@ -8,6 +8,7 @@ import type {
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { GitHubPublicationRow as PublicationRow } from "../state/github-publication-read.types.js";
+import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { readGitHubPublicationSessionLifecycleInWorker } from "../state/github-publication-session-lifecycles.js";
 import {
   openOpenClawStateDatabase,
@@ -19,6 +20,7 @@ import {
   prepareCurrentGitHubPublicationIdentity,
   readGitHubPublicationWorktreeOwner,
   type PublicationSessionIdentity,
+  readGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
@@ -36,7 +38,6 @@ import {
   projectGitHubPublicationResult as publicationResult,
   readGitHubPublicationRequest,
 } from "./github-publication-store.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { projectWorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 import type {
   WorkerSessionPlacementStore,
@@ -184,7 +185,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         throw new Error("GitHub publication requires an authoritative session.");
       }
       assertRequester();
-      const initialLoaded = loadGatewaySessionEntryReadOnly(input.sessionKey, {
+      const initialLoaded = readGitHubPublicationSession(input.sessionKey, {
         agentId: input.agentId,
       });
       const sessionId = initialLoaded.entry?.sessionId;
@@ -530,14 +531,18 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       ensureSchema();
       runOpenClawStateWriteTransaction(
         ({ db }) => {
-          executeSqliteQuerySync(
+          const changed = executeSqliteQuerySync(
             db,
             publicationDb(db)
               .updateTable("github_publication_requests")
               .set({ reported_at_ms: Date.now(), updated_at_ms: Date.now() })
               .where("request_id", "=", requestId)
-              .where("reported_at_ms", "is", null),
-          );
+              .where("reported_at_ms", "is", null)
+              .returningAll(),
+          ).rows;
+          for (const row of changed) {
+            githubPublicationReceipts.stageRow(db, "shared", row);
+          }
         },
         undefined,
         { operationLabel: "github-publication.report" },

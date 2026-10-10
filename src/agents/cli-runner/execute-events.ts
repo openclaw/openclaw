@@ -11,6 +11,7 @@ import type {
   CliStreamingDelta,
   CliThinkingDelta,
   CliThinkingProgress,
+  CliToolInputDelta,
   CliToolResultDelta,
   CliToolUseStartDelta,
 } from "../cli-output-contracts.js";
@@ -24,6 +25,7 @@ import {
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
+import { cliAssistantItemId } from "./assistant-identity.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
 import { normalizeCliToolName, stripOpenClawMcpToolPrefix } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -398,6 +400,7 @@ export function createCliEventHandlers(params: {
       signalExecutionPhase("assistant_output_started");
     }
     emitLiveEvent("assistant", () => ({
+      itemId: cliAssistantItemId(runParams.runId),
       text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
       delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
     }));
@@ -433,8 +436,14 @@ export function createCliEventHandlers(params: {
     emitLiveEvent("thinking", () => ({ progressTokens }));
   };
 
+  const emitCliToolInputDelta = (progress: CliToolInputDelta) => {
+    observedCliActivity = true;
+    emitLiveEvent("tool", () => ({ phase: "input_delta", ...progress }));
+  };
+
   return {
     emitLiveEvents,
+    emitCliToolInputDelta,
     // Display-only native events never enter host-tool correlation or delivery accounting.
     emitCliDisplayToolUseStart: (event: CliToolUseStartDelta) => emitToolUseStart(event, false),
     emitCliDisplayToolResult: (event: CliToolResultDelta) => emitToolResult(event, false),

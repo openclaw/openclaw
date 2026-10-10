@@ -11,6 +11,7 @@ export const TRIAGE_EXTERNAL_AGENTS = [
   "cursor",
   "kimi",
   "qwen",
+  "agy",
 ] as const;
 export type TriageExternalAgent = (typeof TRIAGE_EXTERNAL_AGENTS)[number];
 
@@ -30,6 +31,14 @@ export function formatTriageHandoffCommands(params: {
       ...(stdinPath ? { stdinPath } : {}),
     });
   const external = {
+    // agy takes its initial prompt in argv, not plain-text stdin. Keep native approvals.
+    agy: format([
+      "agy",
+      "--prompt-interactive",
+      promptPath
+        ? `Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.`
+        : prompt,
+    ]),
     claude: format(["claude", "-p", ...(promptPath ? [] : [prompt])], promptPath),
     codex: format(
       ["codex", "exec", "--skip-git-repo-check", promptPath ? "-" : prompt],

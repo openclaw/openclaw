@@ -69,6 +69,14 @@ export function createSlackDraftStream(params: {
     lastVisibleUpdate = undefined;
     lastSentKey = "";
   };
+  const editPreview = (message: SlackDraftMessage, text: string, blocks?: (Block | KnownBlock)[]) =>
+    edit(message.channelId, message.messageId, text, {
+      cfg: params.cfg,
+      token: params.token,
+      accountId: params.accountId,
+      ...(params.eventScope ? { client: params.eventScope.client } : {}),
+      ...(blocks ? { blocks } : {}),
+    });
 
   const sendOrEditStreamMessage = async (pending: SlackDraftStreamUpdate) => {
     const update = normalizeUpdate(pending);
@@ -94,13 +102,7 @@ export function createSlackDraftStream(params: {
     try {
       if (streamMessage) {
         const message = streamMessage;
-        await edit(streamMessage.channelId, streamMessage.messageId, trimmed, {
-          cfg: params.cfg,
-          token: params.token,
-          accountId: params.accountId,
-          ...(params.eventScope ? { client: params.eventScope.client } : {}),
-          ...(blocks ? { blocks } : {}),
-        });
+        await editPreview(message, trimmed, blocks);
         if (streamMessage === message) {
           lastVisibleUpdate = { text: trimmed, ...(blocks ? { blocks } : {}) };
         }
@@ -281,13 +283,7 @@ export function createSlackDraftStream(params: {
     // A human spoke while the final edit was in flight. Preserve the earlier
     // progress they responded to and let the final answer land below them.
     try {
-      await edit(channelId, messageId, previousUpdate.text, {
-        cfg: params.cfg,
-        token: params.token,
-        accountId: params.accountId,
-        ...(params.eventScope ? { client: params.eventScope.client } : {}),
-        ...(previousUpdate.blocks ? { blocks: previousUpdate.blocks } : {}),
-      });
+      await editPreview(currentMessage, previousUpdate.text, previousUpdate.blocks);
     } catch (err) {
       params.warn?.(`slack stream preview restore failed: ${formatSlackError(err)}`);
     }

@@ -13,7 +13,7 @@ import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { flushLogger, setLoggerOverride } from "../../../logging/logger.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";

@@ -148,12 +148,10 @@ export function resolveConfiguredProviderDefaultApi(params: {
     return undefined;
   }
   const normalized = resolveProviderTransport({
-    provider: params.provider,
+    ...params,
+    modelId: undefined,
     api: undefined,
     baseUrl: providerConfiguredBaseUrl,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
   });
   return normalized.api ?? "openai-completions";
 }
@@ -235,32 +233,33 @@ export function mergeConfiguredModelCost(params: {
   return normalizeResolvedPricing(mergeModelCost(params.catalogCost, authoredCost) ?? {});
 }
 
-export function mergeStaticCatalogInlineModel(
-  staticCatalogModel: ProviderRuntimeModel | undefined,
+export function mergeCatalogInlineModel(
+  catalogModel: ProviderRuntimeModel | undefined,
   inlineModel: Model,
 ): Model {
-  if (!staticCatalogModel) {
+  if (!catalogModel) {
     return inlineModel;
   }
   const compat = resolveCatalogOwnedModelCompat({
-    catalogRoute: staticCatalogModel,
-    catalogCompat: staticCatalogModel.compat,
+    catalogRoute: catalogModel,
+    catalogCompat: catalogModel.compat,
     configuredRoute: inlineModel,
     configuredCompat: inlineModel.compat,
   });
-  const mediaInput = mergeModelMediaInput(staticCatalogModel.mediaInput, inlineModel.mediaInput);
+  const mediaInput = mergeModelMediaInput(catalogModel.mediaInput, inlineModel.mediaInput);
   const params = mergeModelParams(
-    readModelParams(staticCatalogModel.params),
+    readModelParams(catalogModel.params),
     readModelParams(inlineModel.params),
   );
   return {
-    ...staticCatalogModel,
+    ...catalogModel,
     ...inlineModel,
-    api: inlineModel.api ?? staticCatalogModel.api,
+    api: inlineModel.api ?? catalogModel.api,
     baseUrl:
-      normalizeOptionalString(inlineModel.baseUrl) ??
-      normalizeOptionalString(staticCatalogModel.baseUrl),
-    headers: inlineModel.headers ?? staticCatalogModel.headers,
+      normalizeOptionalString(inlineModel.baseUrl) ?? normalizeOptionalString(catalogModel.baseUrl),
+    headers: inlineModel.headers ?? catalogModel.headers,
+    contextWindow: inlineModel.contextWindow ?? catalogModel.contextWindow,
+    contextTokens: inlineModel.contextTokens ?? catalogModel.contextTokens,
     compat,
     ...(mediaInput ? { mediaInput } : {}),
     ...(params ? { params } : {}),
@@ -389,14 +388,10 @@ export function applyConfiguredProviderOverrides(params: {
     );
     const aliasTransport = manifestAliasTransport
       ? resolveProviderTransport({
-          provider: params.provider,
-          modelId,
+          ...params,
           api: manifestAliasTransport.api ?? discoveredModel.api,
           baseUrl:
             normalizeOptionalString(manifestAliasTransport.baseUrl) ?? discoveredModel.baseUrl,
-          cfg: params.cfg,
-          workspaceDir: params.workspaceDir,
-          runtimeHooks: params.runtimeHooks,
         })
       : undefined;
     const requestConfig = resolveProviderRequestConfig({
@@ -514,13 +509,10 @@ export function applyConfiguredProviderOverrides(params: {
         configuredStaticCatalogModel,
       ];
   const resolvedTransport = resolveProviderTransport({
-    provider: params.provider,
+    ...params,
     modelId: discoveredModel.id,
     api: transportSources.find((entry) => entry?.api != null)?.api ?? providerDefaultApi,
     baseUrl: transportSources.map((entry) => normalizeOptionalString(entry?.baseUrl)).find(Boolean),
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    runtimeHooks: params.runtimeHooks,
   });
   if (
     !hasConfiguredModelRouteSupport({

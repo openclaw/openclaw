@@ -79,25 +79,6 @@ function readCursorSequence(valueJson: string): number | undefined {
   }
 }
 
-function prepareSequencedEntry(params: PluginStateSequencedJournalParams, sequence: number) {
-  const fields: unknown = JSON.parse(params.journalValueJson);
-  if (!isRecord(fields)) {
-    throw journalValueErrors.invalid(
-      "Plugin state journal value must be an object without a sequence field.",
-    );
-  }
-  const journalKey = validatePluginStoreKey({
-    value: `${params.journalKeyPrefix}${sequence.toString().padStart(16, "0")}`,
-    label: "plugin state",
-    invalid: journalValueErrors.invalid,
-  });
-  return {
-    cursorValueJson: serializeJournalValue({ kind: "cursor", lastSequence: sequence }),
-    journalKey,
-    journalValueJson: serializeJournalValue({ ...fields, sequence }),
-  };
-}
-
 /** The worker owns the transaction containing allocation, both writes, and retention. */
 export function registerPluginStateSequencedJournalEntryInDatabase(
   store: PluginStateDatabase,
@@ -152,10 +133,22 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   if (!Number.isSafeInteger(sequence)) {
     throw new RangeError("Plugin state journal sequence exhausted safe integer range");
   }
-  const prepared = prepareSequencedEntry(params, sequence);
+  const fields: unknown = JSON.parse(params.journalValueJson);
+  if (!isRecord(fields)) {
+    throw journalValueErrors.invalid(
+      "Plugin state journal value must be an object without a sequence field.",
+    );
+  }
+  const journalKey = validatePluginStoreKey({
+    value: `${params.journalKeyPrefix}${sequence.toString().padStart(16, "0")}`,
+    label: "plugin state",
+    invalid: journalValueErrors.invalid,
+  });
+  const cursorValueJson = serializeJournalValue({ kind: "cursor", lastSequence: sequence });
+  const journalValueJson = serializeJournalValue({ ...fields, sequence });
   if (
-    prepared.journalKey < params.journalKeyRange.keyStartInclusive ||
-    prepared.journalKey >= params.journalKeyRange.keyEndExclusive
+    journalKey < params.journalKeyRange.keyStartInclusive ||
+    journalKey >= params.journalKeyRange.keyEndExclusive
   ) {
     throw createPluginStateError({
       code: "PLUGIN_STATE_INVALID_INPUT",
@@ -165,7 +158,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
   }
   const existingJournalEntry = hasPluginStateEntry(store.db, {
     ...journalScope,
-    key: prepared.journalKey,
+    key: journalKey,
     now,
   });
   if (existingJournalEntry) {
@@ -181,7 +174,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
     bindPluginStateEntry({
       ...cursorScope,
       key: params.cursorKey,
-      valueJson: prepared.cursorValueJson,
+      valueJson: cursorValueJson,
       createdAt: now,
       expiresAt: null,
     }),
@@ -197,8 +190,8 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
     store.db,
     bindPluginStateEntry({
       ...journalScope,
-      key: prepared.journalKey,
-      valueJson: prepared.journalValueJson,
+      key: journalKey,
+      valueJson: journalValueJson,
       createdAt: allocatePluginStateNamespaceCreatedAt(store.db, {
         ...journalScope,
         now,
@@ -211,7 +204,7 @@ export function registerPluginStateSequencedJournalEntryInDatabase(
     ...journalScope,
     overflowPolicy: "evict-oldest",
     now,
-    protectedKey: prepared.journalKey,
+    protectedKey: journalKey,
   });
   return sequence;
 }

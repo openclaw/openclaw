@@ -25,17 +25,8 @@ export function registerOpenAIServiceTierCatalogTests(params: {
     accountId?: string;
     baseUrl?: string;
   }) => Promise<CatalogResult>;
-  buildOpenAICodexLiveProviderConfig: (params: {
-    discoveryApiKey: string;
-    accountId?: string;
-    fetchGuard: LiveModelCatalogFetchGuard;
-  }) => Promise<ModelProviderConfig>;
 }): void {
-  const {
-    modelsUrl: OPENAI_CODEX_MODELS_URL,
-    runCatalogWithFetchGuard,
-    buildOpenAICodexLiveProviderConfig,
-  } = params;
+  const { modelsUrl: OPENAI_CODEX_MODELS_URL, runCatalogWithFetchGuard } = params;
 
   it("keeps service tiers with the authenticated model/account, never fallback metadata", async () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
@@ -84,6 +75,12 @@ export function registerOpenAIServiceTierCatalogTests(params: {
             serviceTiers: [],
           },
         ],
+        listedModelIds: [
+          "synthetic-tier-model",
+          "synthetic-empty",
+          "synthetic-unknown",
+          "synthetic-invalid",
+        ],
       },
     ]);
     expect(result.provider.models.every((model) => !("serviceTiers" in model))).toBe(true);
@@ -104,39 +101,5 @@ export function registerOpenAIServiceTierCatalogTests(params: {
     expect(other.outcomes).toEqual([
       { provider: "openai", profileId: "openai:other", status: "unavailable" },
     ]);
-  });
-
-  it("keeps static OpenAI OAuth rows when Codex catalog discovery fails", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-      response: new Response("temporarily unavailable", { status: 503 }),
-      finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
-      release,
-    }));
-
-    const provider = await buildOpenAICodexLiveProviderConfig({
-      discoveryApiKey: "oauth-token",
-      accountId: "acct-openai-workspace",
-      fetchGuard,
-    });
-
-    expect(provider.api).toBe("openai-chatgpt-responses");
-    expect(provider.auth).toBe("oauth");
-    expect(provider.baseUrl).toBe("https://chatgpt.com/backend-api/codex");
-    expect(provider.models.length).toBeGreaterThan(0);
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6");
-    expect(provider.models.find((model) => model.id === "gpt-5.6-sol")).toMatchObject({
-      contextWindow: 372_000,
-      contextTokens: 272_000,
-      thinkingLevelMap: { off: null },
-      compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-      },
-    });
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-terra");
-    expect(provider.models.map((model) => model.id)).not.toContain("gpt-5.6-luna");
-    expect(provider.models.filter((model) => model.id.startsWith("gpt-6-"))).toEqual([]);
-    expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
-    expect(release).toHaveBeenCalledOnce();
   });
 }

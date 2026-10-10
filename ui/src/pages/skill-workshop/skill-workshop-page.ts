@@ -22,7 +22,16 @@ import { resolveWorkshopAccess } from "./access.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
-import { renderSkillWorkshop, type WorkshopViewer, type WorkshopViewerTarget } from "./view.ts";
+import {
+  archivedWorkshopSkills,
+  renderSkillWorkshop,
+  sortWorkshopSkills,
+  type WorkshopFilter,
+  type WorkshopSort,
+  type WorkshopTab,
+  type WorkshopViewer,
+  type WorkshopViewerTarget,
+} from "./view.ts";
 
 registerSkillWorkshopEnglish();
 
@@ -57,6 +66,9 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
   private modeError: string | null = null;
   private learningBusy = false;
   private learningError: string | null = null;
+  private filter: WorkshopFilter = "active";
+  private sort: WorkshopSort = "uses";
+  private tab: WorkshopTab = "instructions";
 
   private readonly subscriptions = new SubscriptionsController(this)
     .watchStore(() => this.context?.gateway)
@@ -89,18 +101,6 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
   }
 
-  override updated() {
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (
-      this.scope &&
-      runtimeConfig &&
-      !runtimeConfig.state.configSnapshot &&
-      !runtimeConfig.state.configLoading
-    ) {
-      void runtimeConfig.ensureLoaded();
-    }
-  }
-
   private async load(): Promise<void> {
     const scope = this.scope;
     if (!scope) {
@@ -109,6 +109,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     const generation = this.generation;
     const sequence = ++this.loadSequence;
     const isCurrent = () => generation === this.generation && sequence === this.loadSequence;
+    void this.context?.runtimeConfig.ensureLoaded();
     this.loading = true;
     this.error = null;
     this.requestUpdate();
@@ -125,6 +126,9 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         !snapshot.list.archived.some((skill) => skill.name === selected)
       ) {
         this.viewer = null;
+      }
+      if (!this.viewer) {
+        this.selectFirst();
       }
     } catch (error) {
       if (isCurrent()) {
@@ -147,21 +151,48 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     const viewer: WorkshopViewer = { target, status: "loading" };
     this.viewer = viewer;
     this.requestUpdate();
-    let next: WorkshopViewer;
-    try {
-      const result = await scope.client.request<SkillsWorkshopReadResult>("skills.workshop.read", {
+    const read = (params: Partial<WorkshopViewerTarget>) =>
+      scope.client.request<SkillsWorkshopReadResult>("skills.workshop.read", {
         agentId: scope.agentId,
         name: target.name,
-        filePath: target.filePath,
-        ...(target.versionId ? { versionId: target.versionId } : {}),
+        filePath: params.filePath,
+        ...(params.versionId ? { versionId: params.versionId } : {}),
       });
-      next = { target, status: "ready", result };
+    // A past SKILL.md of a live skill is compared against today's copy.
+    const compare =
+      target.versionId !== undefined &&
+      target.filePath === "SKILL.md" &&
+      this.snapshot?.list.skills.some((skill) => skill.name === target.name) === true;
+    let next: WorkshopViewer;
+    try {
+      const [result, current] = await Promise.all([
+        read(target),
+        compare ? read({ filePath: "SKILL.md" }) : undefined,
+      ]);
+      next = { target, status: "ready", result, ...(current ? { current: current.content } : {}) };
     } catch (error) {
       next = { target, status: "error", error: formatUiError(error) };
     }
     if (generation === this.generation && this.viewer === viewer) {
       this.viewer = next;
       this.requestUpdate();
+    }
+  }
+
+  /** Selects the top row of the current list so the detail pane is never empty. */
+  private selectFirst() {
+    const snapshot = this.snapshot;
+    if (!snapshot) {
+      return;
+    }
+    const name =
+      this.filter === "active"
+        ? sortWorkshopSkills(snapshot.list.skills, snapshot.changes, this.sort)[0]?.name
+        : archivedWorkshopSkills(snapshot.list)[0]?.name;
+    if (name) {
+      this.selectSkill(name);
+    } else {
+      this.viewer = null;
     }
   }
 
@@ -173,8 +204,36 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       ? undefined
       : list?.archived.find((skill) => skill.name === name)?.versions[0]?.id;
     if (live || versionId) {
+      if (this.tab === "files" || this.viewer?.target.name !== name) {
+        this.tab = this.tab === "history" ? "history" : "instructions";
+      }
       void this.open({ name, filePath: "SKILL.md", versionId });
     }
+  };
+
+  private readonly setFilter = (filter: WorkshopFilter) => {
+    if (filter === this.filter) {
+      return;
+    }
+    this.filter = filter;
+    this.tab = "instructions";
+    this.selectFirst();
+    this.requestUpdate();
+  };
+
+  private readonly setTab = (tab: WorkshopTab) => {
+    this.tab = tab;
+    const target = this.viewer?.target;
+    if (target) {
+      const files = this.viewer?.status === "ready" ? this.viewer.result.files : [];
+      const support = files.find((file) => file !== "SKILL.md");
+      if (tab === "files" && target.filePath === "SKILL.md" && support) {
+        void this.open({ name: target.name, filePath: support, versionId: target.versionId });
+      } else if (tab === "instructions" && target.filePath !== "SKILL.md") {
+        void this.open({ name: target.name, filePath: "SKILL.md", versionId: target.versionId });
+      }
+    }
+    this.requestUpdate();
   };
 
   private readonly mutate = async (mutation: WorkshopMutation, key: string) => {
@@ -196,7 +255,13 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         return;
       }
       await this.load();
-      if (generation === this.generation && this.viewer?.target.name === mutation.name) {
+      if (generation !== this.generation) {
+        return;
+      }
+      // Archiving or restoring moves the skill between lists; follow it there.
+      const live = this.snapshot?.list.skills.some((skill) => skill.name === mutation.name);
+      if (this.viewer?.target.name === mutation.name || this.viewer === null) {
+        this.filter = live ? "active" : "archived";
         this.selectSkill(mutation.name);
       }
     } catch (error) {
@@ -341,8 +406,13 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       access: resolveWorkshopAccess(context.gateway.snapshot),
       snapshot: this.snapshot,
       loading: this.loading,
-      error: this.error,
+      error:
+        this.error ??
+        (context.runtimeConfig.state.configSnapshot ? null : context.runtimeConfig.state.lastError),
       viewer: this.viewer,
+      filter: this.filter,
+      sort: this.sort,
+      tab: this.tab,
       pendingAction: this.pendingAction,
       actionError: this.actionError,
       mode: resolveWorkshopMode(context.runtimeConfig),
@@ -359,6 +429,12 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       onMutate: (mutation, key) => void this.mutate(mutation, key),
       onModeChange: (mode) => void this.setMode(mode),
       onLearn: () => void this.learn(),
+      onFilter: this.setFilter,
+      onSort: (sort) => {
+        this.sort = sort;
+        this.requestUpdate();
+      },
+      onTab: this.setTab,
     });
   }
 }

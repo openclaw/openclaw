@@ -6,7 +6,7 @@ import {
   checkClientVoiceToolConfirmationPolicy,
 } from "../../../talk/client-voice-confirmation.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
-import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session-write.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
 import type {
   RealtimeVoiceAgentConsultRunner,

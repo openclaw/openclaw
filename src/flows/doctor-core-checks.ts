@@ -36,6 +36,7 @@ import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
+import { legacyOwnedRepair } from "./doctor-health-contribution.js";
 import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import {
@@ -218,27 +219,26 @@ const hooksModelCheck: CoreHealthCheck = {
   async detect(ctx) {
     const { collectHooksModelIssues } = await import("../commands/doctor-hooks-model.js");
     return (await collectHooksModelIssues(ctx.cfg)).map(({ kind, model }): HealthFinding => {
-      if (kind === "unresolved") {
-        return {
-          checkId: "core/doctor/hooks-model",
-          severity: "warning",
-          path: "hooks.gmail.model",
-          message: `hooks.gmail.model "${model}" could not be resolved.`,
-        };
-      }
-      return {
+      const finding: HealthFinding = {
         checkId: "core/doctor/hooks-model",
         severity: "warning",
         path: "hooks.gmail.model",
         message:
-          kind === "not-allowed"
-            ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
-            : `hooks.gmail.model "${model}" is not in the model catalog.`,
-        fixHint:
-          kind === "not-allowed"
-            ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
-            : "Choose a model from the configured provider catalog.",
+          kind === "unresolved"
+            ? `hooks.gmail.model "${model}" could not be resolved.`
+            : kind === "not-allowed"
+              ? `hooks.gmail.model "${model}" is not allowed by agents.defaults.modelPolicy.allow.`
+              : `hooks.gmail.model "${model}" is not in the model catalog.`,
       };
+      if (kind !== "unresolved") {
+        Object.assign(finding, {
+          fixHint:
+            kind === "not-allowed"
+              ? "Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or remove hooks.gmail.model."
+              : "Choose a model from the configured provider catalog.",
+        });
+      }
+      return finding;
     });
   },
 };
@@ -364,18 +364,17 @@ function inferCapturedNoteSeverity(text: string): HealthFinding["severity"] {
   if (text.includes("CRITICAL")) {
     return "error";
   }
-  if (
-    text.includes("- Fix:") ||
-    text.includes("unavailable") ||
-    text.includes("not found") ||
-    text.includes("missing") ||
-    text.includes("not readable") ||
-    text.includes("not writable") ||
-    text.includes("readonly")
-  ) {
-    return "warning";
-  }
-  return "info";
+  return [
+    "- Fix:",
+    "unavailable",
+    "not found",
+    "missing",
+    "not readable",
+    "not writable",
+    "readonly",
+  ].some((marker) => text.includes(marker))
+    ? "warning"
+    : "info";
 }
 
 function createNoteCollector(checkId: string): {
@@ -383,26 +382,19 @@ function createNoteCollector(checkId: string): {
   readonly noteFn: (message: unknown) => void;
 } {
   const findings: HealthFinding[] = [];
-  const noteFn = (message: unknown): void => {
-    const text = noteMessageToText(message);
-    if (!text.trim()) {
-      return;
-    }
-    const severity = inferCapturedNoteSeverity(text);
-    if (severity === "info") {
-      return;
-    }
-    findings.push(
-      noteTextToFinding({
-        checkId,
-        severity,
-        text,
-      }),
-    );
-  };
   return {
     findings,
-    noteFn,
+    noteFn(message: unknown): void {
+      const text = noteMessageToText(message);
+      if (!text.trim()) {
+        return;
+      }
+      const severity = inferCapturedNoteSeverity(text);
+      if (severity === "info") {
+        return;
+      }
+      findings.push(noteTextToFinding({ checkId, severity, text }));
+    },
   };
 }
 
@@ -740,19 +732,9 @@ const shellCompletionCheck: CoreHealthCheck = {
   async detect() {
     return shellCompletionStatusToHealthFindings(await checkShellCompletionStatus());
   },
-  async repair(ctx) {
-    const status = await checkShellCompletionStatus();
-    const effects = shellCompletionStatusToRepairEffects(status);
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor shell-completion repair owns real mutations",
-      changes: [],
-      effects,
-    };
-  },
+  repair: legacyOwnedRepair(async () => {
+    return shellCompletionStatusToRepairEffects(await checkShellCompletionStatus());
+  }, "legacy doctor shell-completion repair owns real mutations"),
 };
 
 const uiProtocolFreshnessCheck: CoreHealthCheck = {
@@ -761,20 +743,11 @@ const uiProtocolFreshnessCheck: CoreHealthCheck = {
   async detect() {
     return (await detectUiProtocolFreshnessIssues()).map(uiProtocolFreshnessIssueToHealthFinding);
   },
-  async repair(ctx) {
-    const effects = (await detectUiProtocolFreshnessIssues()).flatMap(
+  repair: legacyOwnedRepair(async () => {
+    return (await detectUiProtocolFreshnessIssues()).flatMap(
       uiProtocolFreshnessIssueToRepairEffects,
     );
-    if (ctx.dryRun === true) {
-      return { status: "repaired", changes: [], effects };
-    }
-    return {
-      status: "skipped",
-      reason: "legacy doctor UI freshness repair owns real mutations",
-      changes: [],
-      effects,
-    };
-  },
+  }, "legacy doctor UI freshness repair owns real mutations"),
 };
 
 const workspaceSuggestionsCheck: CoreHealthCheck = {

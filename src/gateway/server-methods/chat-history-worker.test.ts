@@ -2,6 +2,7 @@ import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
@@ -17,7 +18,11 @@ import type {
   SessionHistoryWorkerRequest,
 } from "../../config/sessions/session-history-types.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
+import * as projectionWriter from "../../config/sessions/session-transcript-projection-writer.js";
+import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
+import { historyLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { SerializedJsonArray, serializeGatewayFrame } from "../serialized-json.js";
 import {
@@ -30,14 +35,82 @@ import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
 
 function expectHistoryThreadSql(queries: string[]) {
+  const isVersionProbe = (sql: string) =>
+    /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql);
   // Pending-input reconciliation is still local; schema admission needs one freshness probe.
   expect(
-    queries.filter(
-      (sql) => sql !== "PRAGMA data_version" && !sql.includes('"session_pending_inputs"'),
-    ),
+    queries.filter((sql) => !isVersionProbe(sql) && !sql.includes('"session_pending_inputs"')),
   ).toEqual([]);
-  expect(queries.filter((sql) => sql === "PRAGMA data_version").length).toBeLessThanOrEqual(1);
+  expect(queries.filter(isVersionProbe).length).toBeLessThanOrEqual(1);
 }
+
+it("serves committed history while transcript searches wait on a stuck writer", async (test) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:writer-isolation",
+      sessionId: "writer-isolation",
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    await appendTranscriptMessage(scope, {
+      eventId: "committed-message",
+      now: 1,
+      message: { role: "user", content: "Committed needle", timestamp: 1 },
+    });
+    const context = await createHistoryReadContext();
+    const request = async () => {
+      const respond = vi.fn<RespondFn>();
+      await chatHistoryHandlers["chat.history"]!({
+        params: { sessionKey: scope.sessionKey },
+        client: null,
+        context,
+        respond,
+        req: { type: "req", id: "writer-isolation", method: "chat.history" },
+        isWebchatConnect: () => false,
+      });
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      return asOptionalRecord(respond.mock.calls[0]?.[1])?.messages;
+    };
+    const committed = await request();
+    expect(committed).toMatchObject([{ content: "Committed needle" }]);
+    const writerEntered = createDeferred();
+    const releaseWriter = createDeferred();
+    const writer = runOpenClawAgentWorkerWrite({ agentId: "main" }, async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    });
+    const searchesEntered = createDeferred();
+    const count = historyLane.pool.getSnapshot().maxWorkers;
+    let entered = 0;
+    const readStatus = projectionWriter.readSessionTranscriptIndexStatus;
+    const status = vi
+      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
+      .mockImplementation((...args) => {
+        if (++entered === count) {
+          searchesEntered.resolve();
+        }
+        return readStatus(...args);
+      });
+    const searches: ReturnType<typeof searchSessionTranscripts>[] = [];
+    let history: ReturnType<typeof request> | undefined;
+    try {
+      await withinTest(writerEntered.promise, test.signal);
+      for (let index = 0; index < count; index++) {
+        const search = searchSessionTranscripts({ ...scope, query: "needle" });
+        void search.catch(() => {});
+        searches.push(search);
+      }
+      await withinTest(searchesEntered.promise, test.signal);
+      history = request();
+      expect(await withinTest(history, test.signal)).toEqual(committed);
+    } finally {
+      releaseWriter.resolve();
+      await writer;
+      await Promise.allSettled([...searches, ...(history ? [history] : [])]);
+      status.mockRestore();
+    }
+  });
+});
 
 it.each(["native", "acp"])(
   "keeps cursor bytes and %s coordination visibility without request-thread transcript reads",

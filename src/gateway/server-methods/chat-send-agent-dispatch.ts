@@ -25,8 +25,9 @@ import { updateChatRunProvider } from "../chat-abort.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
 import { chatRunBelongsToSelectedAgent } from "../chat-run-owner.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { prepareGatewaySkillLibraryTurn } from "../skill-library-authoring.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
-import { broadcastChatDelta, broadcastChatError } from "./chat-broadcast.js";
+import { broadcastChatDelta } from "./chat-broadcast.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
   resolveWebchatPromptCacheKey,
@@ -69,7 +70,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
-    prepareSkillLibraryAuthoring,
+    skillLibrary,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
     externalAuthorityAdmission,
@@ -143,6 +144,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     !activeRunAbort.controller.signal.aborted &&
     context.chatAbortControllers.get(clientRunId) === activeRunAbort.entry;
   const replyDispatch = createChatSendReplyDispatch({
+    getRuntimeConfig: context.getRuntimeConfig,
+    assertWorkCurrent: admission.assertWorkAdmissionCurrent,
     requesterContext: ctx,
     accountId,
     prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
@@ -299,9 +302,11 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             }
           }
           phase?.mark("preparation");
-          await turn.prepareSessionCreation();
-          phase?.mark("authoring");
-          const skillLibraryAuthoring = await prepareSkillLibraryAuthoring();
+          const skillLibraryAuthoring = await prepareGatewaySkillLibraryTurn(
+            skillLibrary,
+            turn.prepareSessionCreation,
+            () => phase?.mark("authoring"),
+          );
           admission.assertWorkAdmissionCurrent();
           phase?.mark("preparation");
           const pluginBoundMedia = await pluginBoundMediaPromise;
@@ -580,6 +585,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           ) {
             await persistGatewayUserTurnTranscriptBestEffort();
           }
+          const replyFinalization = {
+            terminalEntry: sessionBinding,
+            requesterContext: ctx,
+            abortSignal: activeRunAbort.controller.signal,
+            accountId,
+            context,
+            deliveredReplies: replyDispatch.deliveredReplies,
+            emitFirstAssistantServerTiming,
+            session,
+          };
           let finalizedSourceReply = false;
           // A dispatched runtime owns its persisted turn; this owner projects
           // only settled, post-hook replies. Native runtimes project their own stream.
@@ -590,15 +605,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             !context.chatRunState.hasAbortMarker(clientRunId)
           ) {
             await finalizeChatSendDispatchedReplies({
-              requesterContext: ctx,
-              abortSignal: activeRunAbort.controller.signal,
-              accountId,
-              context,
-              deliveredReplies: replyDispatch.deliveredReplies,
-              emitFirstAssistantServerTiming,
+              ...replyFinalization,
               foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
-              session,
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
               // Bound ACP writes its own transcript; the dashboard still needs its reply.
               runtimeOwnsTranscript:
@@ -611,32 +620,22 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             });
           } else if (!progressRefresh && !context.chatRunState.hasAbortMarker(clientRunId)) {
             finalizedSourceReply = await finalizeChatSendSourceReplies({
-              requesterContext: ctx,
-              abortSignal: activeRunAbort.controller.signal,
-              accountId,
-              context,
-              deliveredReplies: replyDispatch.deliveredReplies,
-              emitFirstAssistantServerTiming,
+              ...replyFinalization,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
-              session,
               suppressFinal: runtimeFailed,
             });
           }
-          const shouldBroadcastAgentError =
+          const hasTerminalAgentError =
             hasReturnedAgentError && (runtimeFailed || !finalizedSourceReply);
           if (!context.chatRunState.hasAbortMarker(clientRunId)) {
-            if (shouldBroadcastAgentError) {
-              broadcastChatError({
-                context,
-                runId: clientRunId,
-                sessionKey,
-                agentId,
+            if (hasTerminalAgentError) {
+              dispatchErrorLifecycle.broadcastError({
                 errorMessage: returnedAgentErrorMessage,
                 errorKind: runtimeClassification === "timeout" ? "timeout" : undefined,
                 stopReason: runtimeOutcome?.stopReason,
               });
             }
-            const returnedAgentError = shouldBroadcastAgentError
+            const returnedAgentError = hasTerminalAgentError
               ? errorShape(
                   ErrorCodes.UNAVAILABLE,
                   returnedAgentErrorMessage ?? "agent returned an error payload",
@@ -648,8 +647,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
               session: captureAgentJobSession(sessionBinding),
               entry: {
                 ts: Date.now(),
-                ok: !shouldBroadcastAgentError,
-                payload: shouldBroadcastAgentError
+                ok: !hasTerminalAgentError,
+                payload: hasTerminalAgentError
                   ? {
                       runId: clientRunId,
                       status: runtimeClassification === "timeout" ? "timeout" : "error",
@@ -708,7 +707,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       emitSessionsChanged(
         context,
         { sessionKey, agentId, reason: "agent.input.settled" },
-        { accessChanged: false },
+        { accessChanged: false, rowScope: "runtime" },
       );
       if (userTurnRecorder.isBlocked() && attachments.offloadedRefs.length > 0) {
         // A blocked turn persists only the redacted block reason — no media

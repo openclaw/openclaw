@@ -50,6 +50,16 @@ When you run several Gateways, set `gateway.controlUi.environment` to distinguis
 
 The environment adds a 2 px top stripe, an agent-avatar ring, label pills in the sidebar and narrow topbar, a browser-title suffix, and a matching favicon. The label is trimmed and must contain 1–24 characters. Available colors are `teal`, `amber`, `purple`, `coral`, `pink`, `blue`, `green`, `red`, and `gray`. The label and color are intentionally visible before sign-in; leave `environment` unset to keep the standard appearance unchanged.
 
+## Browser tab icon
+
+In **Settings → Appearance → Browser tab icon**, choose **Default**, **Agent avatar**, or **Lobsterdex**. Default keeps the theme and Gateway environment icon. Agent avatar follows the explicitly selected agent, fitting its image without cropping and falling back to Default when it is unavailable. Lobsterdex lets you choose a static canonical lobster from those already unlocked in this browser. Activity and attention dots remain visible in every mode.
+
+Lobsterdex unlocks stay browser-local; this setting does not sync your collection. On another browser where your chosen lobster is not unlocked, OpenClaw keeps the choice but shows Default until that lobster is unlocked or you select another source. There are no custom uploads, per-tab choices, or agent-specific overrides.
+
+This setting only changes your tab icon. To customize an agent's image, use **Agent settings → Overview → Identity**; editing that image changes the shared agent identity, not only your favicon.
+
+The choice is saved to your authenticated profile on the connected Gateway and has a browser-local mirror. Without a writable profile it stays local to the browser. This setting does not change other people's tab icons.
+
 ## Community invitation
 
 The sidebar shows a community invitation with Reddit, Discord, and X links by default. Its first appearance waits until sidebar interaction finishes, so it does not move session controls while you use them. Its close button dismisses it for the current browser origin. The redesigned invitation appears again for browsers that dismissed the older Discord-only card. Dismissing this version keeps it hidden across routine updates. To hide the invitation for everyone using a Control UI deployment, run this on the Gateway serving that UI:
@@ -157,11 +167,19 @@ The Appearance panel has the built-in Claw, Knot, Dash, Absolutely, Tide, Beacon
 
 Theme stylesheets can set `--chat-composer-corner-shape` (default `superellipse(1.5)`) to give the chat composer a different corner family, such as `scoop scoop round round`, in browsers that draw `corner-shape`; other browsers keep the circular corners.
 
-Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
+Themes can choose a neutral prompt mark instead of the lobster mascot and supply their own long-wait status vocabulary. They can also add occasional penguin or fedora visitors to the composer ledge and occasional hats on agent avatars from the `fedora`, `crown`, `santa`, `party`, and `pumpkin` catalog. A theme without the mascot hides the resident lobster and visiting lobster strangers while ordinary ledge traffic continues under the unchanged **Lobster visits** toggle. A theme can also hide **Lobsterdex**, including its visit and sound controls and collected-lobster tab icons. This preserves your collection, saved tab icon, and visit preferences; switching back to a theme that shows Lobsterdex restores them. Hiding Lobsterdex alone does not change mascot or critter behavior. See the [theme definition fields](/tools/theme#create-and-apply-a-personal-theme) for the portable settings and limits.
 
 Plugin themes can also bring their own SVG hats and composer visitors through [declared artwork](/plugins/manifest/surfaces#themes).
 
-Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images stay quiet behind content and follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. New-session and chat composers use a lightly translucent surface instead of repeating the image; navigation, menus, and reading cards retain their own surfaces. No external image requests are required. Increased contrast and forced colors hide the artwork and make composers opaque; reduced transparency also makes composers opaque.
+Every built-in theme includes matching light and dark background artwork across the app canvas. The small, bundled lossless WebP images follow the selected mode, including System. Plugin, personal, and imported palettes use neutral artwork. Existing users keep this theme artwork until they change their background preference.
+
+In **Appearance → Background**, choose **None**, **Theme artwork**, or **Custom image**. **New session page** and **Conversations** are independent: hiding a background does not delete your image. Choosing a custom image for the first time starts with conversation backgrounds off. Later edits preserve your placement choices. Changing themes, fonts, accent, or color mode does not replace an explicit image or re-enable **None**. Without a personal profile, None, theme artwork, placement, presentation, and visibility are saved only in this browser for the selected Gateway. You can opt out without signing in; private uploads still require a profile.
+
+Custom images belong to your authenticated profile, not the shared conversation. Upload a static JPEG, PNG, or WebP up to 8 MiB and 25 megapixels. The Gateway resizes it to at most 2560 pixels on the longest side, strips metadata, and saves a normalized JPEG of at most 2 MiB. The original file is not retained. You can keep one image; **Replace image** replaces it and **Remove image** deletes it. Choosing None or theme artwork retains the image for later use. Uploading requires profile write access; the Control UI explains when a personal profile or permission is unavailable.
+
+Choose **Faded** to fade artwork into the canvas, or **Full bleed** to keep it across the full canvas. Both protect text contrast using the active palette; the modes change coverage, not readability. Custom-image visibility is bounded even at maximum strength, and Full bleed always retains a theme-colored overlay. Faded is the default when no presentation mode is saved. Both modes keep the composer and user-message bubbles solid and fade the artwork near the top bar. **Image visibility** adjusts decorative strength; moving its slider briefly previews the background in Settings. Source and presentation are independent, so changing or removing an image does not reset the selected mode.
+
+A missing image leaves the normal theme-colored canvas. Disabled surfaces do not request the private image. Increased contrast and forced colors suppress decorative imagery; reduced transparency suppresses custom artwork and restores opaque writing surfaces. No external image host is contacted.
 
 Themes imported from tweakcn are stored only in the current browser profile; they are not written to gateway config and do not sync across devices. Replacing the imported theme updates the one local slot; clearing it switches back to Claw if the imported theme was active.
 
@@ -391,6 +409,11 @@ discard them and load the current configuration. A successful reload resumes
 autosave for new edits; an offline reload keeps the pending draft.
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
+
+When Advanced settings reconnects, a form with an already loaded schema stays
+visible at your reading position while the schema refreshes. Form and Setup
+controls cannot be edited until that refresh finishes. The first load still
+shows **Loading schema…** until a schema is available.
 
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or

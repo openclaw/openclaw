@@ -43,6 +43,7 @@ import {
   assertSingleAdmissionOwner,
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
+  getFollowupOriginRouting,
   hasExclusiveTurnAdmission,
   hasPreparedCurrentTurnImages,
   prepareNextDeliveryGroup,
@@ -52,10 +53,12 @@ import {
 import {
   admitFollowupRunLifecycle,
   completeFollowupRunLifecycle,
+  completeFollowupRuns,
   retireFollowupRunCancellation,
 } from "./lifecycle.js";
 import {
   clearFollowupQueue,
+  clearFollowupQueueContent,
   FOLLOWUP_QUEUES,
   followupQueueSources,
   trimSummaryElisionsToCap,
@@ -187,12 +190,7 @@ export function prepareStaleFollowupDrainRetirement(key: string): (() => void) |
       FOLLOWUP_QUEUES.delete(key);
       clearFollowupDrainCallback(key);
     }
-    queue.items.length = 0;
-    queue.droppedCount = 0;
-    queue.summaryLines = [];
-    queue.summarySources = [];
-    queue.summaryElisions = [];
-    queue.evictedSummaryCount = 0;
+    clearFollowupQueueContent(queue);
     queue.abortController.abort();
     completeFollowupRuns(activeSources);
     if (hasPendingWork) {
@@ -201,19 +199,7 @@ export function prepareStaleFollowupDrainRetirement(key: string): (() => void) |
   };
 }
 
-type OriginRoutingMetadata = Pick<
-  FollowupRun,
-  | "originatingChannel"
-  | "originatingTo"
-  | "originatingAccountId"
-  | "originatingThreadId"
-  | "originatingChatId"
-  | "originatingReplyToId"
-  | "originatingReplyToMode"
-  | "originatingChatType"
->;
-
-function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
+function resolveOriginRoutingMetadata(items: FollowupRun[]) {
   const source =
     items.find((item) => item.originatingChannel && item.originatingTo) ??
     items.find(
@@ -227,30 +213,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
         item.originatingReplyToMode ||
         item.originatingChatType,
     );
-  if (!source) {
-    return {};
-  }
-  return {
-    originatingChannel: source.originatingChannel,
-    originatingTo: source.originatingTo,
-    originatingAccountId: source.originatingAccountId,
-    originatingThreadId: source.originatingThreadId,
-    originatingChatId: source.originatingChatId,
-    originatingReplyToId: source.originatingReplyToId,
-    originatingReplyToMode: source.originatingReplyToMode,
-    originatingChatType: source.originatingChatType,
-  };
-}
-
-function renderCollectItem(item: FollowupRun, idx: number): string {
-  return renderCollectItemPrompt(
-    item,
-    idx,
-    resolveCollectedSourceText(
-      item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
-      item.prompt,
-    ),
-  );
+  return source ? getFollowupOriginRouting(source) : {};
 }
 
 function resolveCollectedSourceText(
@@ -289,12 +252,8 @@ function collectQueuedPromptMedia(
   for (const item of items) {
     const mediaOffset = media.length;
     const internalItem = item as InternalFollowupRun;
-    if (item.images) {
-      images.push(...item.images);
-    }
-    if (item.imageOrder) {
-      imageOrder.push(...item.imageOrder);
-    }
+    images.push(...(item.images ?? []));
+    imageOrder.push(...(item.imageOrder ?? []));
     if (currentTurnImagesPrepared) {
       const itemSlots: MediaImageLayout["slots"] =
         internalItem.mediaImageLayout?.slots ?? item.imageOrder?.map((kind) => ({ kind })) ?? [];
@@ -311,9 +270,7 @@ function collectQueuedPromptMedia(
         ),
       );
     }
-    if (item.media) {
-      media.push(...item.media);
-    }
+    media.push(...(item.media ?? []));
   }
   const mediaImageLayout =
     mediaImageSlots.length > 0 || suppressedFactIndexes.length > 0
@@ -440,12 +397,6 @@ function createCollectUserTurnTranscriptRecorder(items: FollowupRun[]) {
   });
 }
 
-function completeFollowupRuns(items: Iterable<FollowupRun>): void {
-  for (const item of items) {
-    completeFollowupRunLifecycle(item);
-  }
-}
-
 function resolveAggregateOwner(items: readonly FollowupRun[]): FollowupRun | undefined {
   // Keep the latest cancelable source as the aggregate owner even when a
   // later transport-only source has no cancellation identity.
@@ -516,15 +467,23 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
   };
 }
 
-function resolveQueuedCronCreatorAuthorityUnavailable(
+function createAggregateLifecycle(
   items: readonly FollowupRun[],
-): "queued-local-operator" | undefined {
-  return items.some(
-    (item) =>
-      item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
-  )
-    ? "queued-local-operator"
-    : undefined;
+  onAdopted: NonNullable<FollowupRun["turnAdoptionLifecycle"]>["onAdopted"],
+  onSettled: () => void,
+): NonNullable<FollowupRun["turnAdoptionLifecycle"]> {
+  return {
+    // Synthetic aggregates own cancellation; sources keep their own admission.
+    admission: "cancel-only",
+    ...(items.some(
+      (item) =>
+        item.turnAdoptionLifecycle?.cronCreatorAuthorityUnavailable === "queued-local-operator",
+    )
+      ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
+      : {}),
+    onAdopted,
+    onSettled,
+  };
 }
 
 type FollowupQueueSummaryState = Pick<
@@ -687,13 +646,9 @@ export async function dropAbortedFollowups(
   // Detach identities and release both dedupe owners before ingress can retry.
   removeQueuedItemsByRef(queue.items, pending);
   consumeQueueSummaryDelivery(queue, { sources: summaries, droppedCount: summaries.length }, false);
-  for (const item of [...pending, ...summaries]) {
-    try {
-      completeFollowupRunLifecycle(item);
-    } catch (error) {
-      defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-    }
-  }
+  completeFollowupRuns([...pending, ...summaries], (error) => {
+    defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
+  });
   await Promise.all(
     pending.map(async (item) => {
       try {
@@ -833,22 +788,18 @@ async function runSyntheticOverflowSummary(params: {
     replyOperationRunStates: runtimeMetadata.replyOperationRunStates,
     ...(params.onAdmitted
       ? {
-          turnAdoptionLifecycle: {
-            // Synthetic aggregate owner — not a durable exclusive ingress identity.
-            admission: "cancel-only" as const,
-            ...(resolveQueuedCronCreatorAuthorityUnavailable(params.sources)
-              ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-              : {}),
-            onAdopted: async () => {
+          turnAdoptionLifecycle: createAggregateLifecycle(
+            params.sources,
+            async () => {
               await params.onAdmitted?.();
               admitted = true;
             },
-            onSettled: () => {
+            () => {
               if (admitted) {
                 completeFollowupRuns(params.sources);
               }
             },
-          },
+          ),
         }
       : {}),
     ...resolveOriginRoutingMetadata([params.source]),
@@ -1043,7 +994,15 @@ export function scheduleFollowupDrain(
           const prompt = buildCollectPrompt({
             title: "[Queued messages while agent was busy]",
             items: activeGroupItems,
-            renderItem: renderCollectItem,
+            renderItem: (item, index) =>
+              renderCollectItemPrompt(
+                item,
+                index,
+                resolveCollectedSourceText(
+                  item.userTurnTranscriptRecorder?.getPendingInputMessage?.(),
+                  item.prompt,
+                ),
+              ),
           });
           const transcriptPrompt = buildCollectTranscriptInput(activeGroupItems).text;
           const userTurnTranscriptRecorder =
@@ -1090,19 +1049,15 @@ export function scheduleFollowupDrain(
               ...collectRuntimeMetadata(activeGroupItems, cancellation.signal),
               ...(needsGroupAdmission
                 ? {
-                    turnAdoptionLifecycle: {
-                      // Synthetic aggregate owner — sources keep their own admission.
-                      admission: "cancel-only" as const,
-                      ...(resolveQueuedCronCreatorAuthorityUnavailable(activeGroupItems)
-                        ? { cronCreatorAuthorityUnavailable: "queued-local-operator" as const }
-                        : {}),
-                      onAdopted: admitGroupSources,
-                      onSettled: () => {
+                    turnAdoptionLifecycle: createAggregateLifecycle(
+                      activeGroupItems,
+                      admitGroupSources,
+                      () => {
                         if (admitted) {
                           completeGroup();
                         }
                       },
-                    },
+                    ),
                   }
                 : {}),
               ...collectQueuedPromptMedia(activeGroupItems),
@@ -1110,10 +1065,7 @@ export function scheduleFollowupDrain(
           } catch (err) {
             if (admitted) {
               completeGroup();
-            } else if (
-              FOLLOWUP_QUEUES.get(key) === queue &&
-              !queue.abortController.signal.aborted
-            ) {
+            } else if (reserveOptions.shouldRestoreOnError()) {
               restoreGroupItems(activeGroupItems);
             } else {
               completeFollowupRuns(activeGroupItems);
@@ -1131,7 +1083,7 @@ export function scheduleFollowupDrain(
               removeQueuedItemsByRef(queue.items, canceledSources);
               completeFollowupRuns(canceledSources);
               const survivors = activeGroupItems.filter((item) => !canceledSources.includes(item));
-              if (FOLLOWUP_QUEUES.get(key) === queue && !queue.abortController.signal.aborted) {
+              if (reserveOptions.shouldRestoreOnError()) {
                 restoreGroupItems(survivors);
               } else {
                 completeFollowupRuns(survivors);

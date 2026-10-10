@@ -10,8 +10,9 @@ import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions } from "../../process/exec.js";
 import { resolveNodeRunner, type UpdateCommandOptions } from "./shared.js";
 import {
   requiresRetainedUpdateCommandOwner,
@@ -53,6 +54,20 @@ function formatCommandFailure(stdout: string, stderr: string): string {
   return detail ? detail.split("\n").slice(-3).join("\n") : "command returned a non-zero exit code";
 }
 
+async function runSettledGatewayCommand(argv: string[], options: CommandOptions) {
+  const result = await runCommandWithTimeout(argv, {
+    ...options,
+    // The complete owned env must not regain selectors removed during capture.
+    baseEnv: {},
+    killProcessTree: true,
+    requireProcessTreeExtinction: true,
+  });
+  if (result.cleanup === "forced" || result.cleanup === "uncertain") {
+    throw new CommandProcessCleanupError();
+  }
+  return result;
+}
+
 /** Probe the staged target before activation, retaining the original child owner. */
 export async function isUpdatedInstallGatewayExecutorSupported(params: {
   root: string;
@@ -84,24 +99,16 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
   const check = await withUpdateCommandExecutorChild(
     params.executor,
     params.root,
-    async (_grant, bindChild) => {
-      const result = await runCommandWithTimeout(argv, {
+    (_grant, bindChild) =>
+      runSettledGatewayCommand(argv, {
         input: "",
         beforeInput: bindChild,
-        baseEnv: {},
         cwd: params.root,
         env: { ...params.env, OPENCLAW_NO_RESPAWN: "1" },
         timeoutMs: params.timeoutMs,
-        killProcessTree: true,
-        requireProcessTreeExtinction: true,
         ...(params.signal ? { signal: params.signal } : {}),
         maxOutputBytes: 64 * 1024,
-      });
-      if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-        throw new CommandProcessCleanupError();
-      }
-      return result;
-    },
+      }),
   );
   params.signal?.throwIfAborted();
   params.executor.assertCurrent();
@@ -144,6 +151,8 @@ export async function runUpdatedInstallGatewayCommand(
     assertCurrent?: () => void;
     definitionRecovery?: UpdateServiceDefinitionRecovery;
     onWarnings?: (warnings: string[]) => void;
+    /** Receives each completed probe or child phase with its measured wall time. */
+    onTimedStep?: (step: UpdateStepResult) => void;
     onGatewayStartAttempted?: () => void;
     originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   },
@@ -190,35 +199,7 @@ export async function runUpdatedInstallGatewayCommand(
     commandEnv.OPENCLAW_NO_RESPAWN = "1";
   }
   assertCurrent();
-  const receiveInstallResult = (response: Record<string, unknown> | undefined) => {
-    if (!installing || !response) {
-      return;
-    }
-    const warnings = Array.isArray(response.warnings)
-      ? response.warnings.filter((message): message is string => typeof message === "string")
-      : [];
-    if (warnings.length) {
-      params.onWarnings?.(warnings);
-    }
-    if (params.definitionRecovery) {
-      const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
-        response.definitionBackup,
-      );
-      const error = typeof response.error === "string" ? response.error : "";
-      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
-      if (backup.success && !recoveryFailed) {
-        params.definitionRecovery.backup = backup.data;
-        params.definitionRecovery.unverified = false;
-      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
-        params.definitionRecovery.preserved = true;
-        params.definitionRecovery.unverified = false;
-      } else {
-        params.onWarnings?.([
-          "Service definition backup receipt could not be verified; retained recovery data must be inspected before rollback.",
-        ]);
-      }
-    }
-  };
+
   const installTimeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
   if (run && !executor) {
     throw new UpdateCommandRecoveryPendingError(
@@ -227,6 +208,7 @@ export async function runUpdatedInstallGatewayCommand(
   }
   if (executor) {
     let definitionBackupSupported = false;
+    const checkStartedAtMs = Date.now();
     if (
       !params.result.root ||
       !(await isUpdatedInstallGatewayExecutorSupported({
@@ -253,6 +235,13 @@ export async function runUpdatedInstallGatewayCommand(
       );
     }
     assertCurrent();
+    params.onTimedStep?.({
+      name: "managed-service-executor-check",
+      command: "openclaw gateway install --update-executor check --json",
+      cwd: params.result.root,
+      durationMs: Math.max(0, Date.now() - checkStartedAtMs),
+      exitCode: 0,
+    });
     if (installing && params.definitionRecovery && !definitionBackupSupported) {
       params.definitionRecovery.preserved = true;
       const message =
@@ -272,9 +261,7 @@ export async function runUpdatedInstallGatewayCommand(
   ) => {
     const argv = [nodeRunner, entrypoint, ...args, ...(grant ? ["--update-executor", "run"] : [])];
     params.onGatewayStartAttempted?.();
-    const result = await runCommandWithTimeout(argv, {
-      // The complete owned env must not regain selectors removed during capture.
-      baseEnv: {},
+    return await runSettledGatewayCommand(argv, {
       ...(grant
         ? {
             input: JSON.stringify({
@@ -296,22 +283,51 @@ export async function runUpdatedInstallGatewayCommand(
       env: commandEnv,
       timeoutMs: installing ? installTimeoutMs : params.timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),
-      killProcessTree: true,
-      requireProcessTreeExtinction: true,
     });
-    if (result.cleanup === "forced" || result.cleanup === "uncertain") {
-      throw new CommandProcessCleanupError();
-    }
-    return result;
   };
+  const childStartedAtMs = Date.now();
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
   assertCurrent();
   const exited = res.termination === "exit" && res.signal === null && !res.killed;
   const complete = !res.stdoutTruncatedBytes && !res.outputLimitExceeded && !res.outputErrorStream;
+  if (exited && res.code === 0) {
+    params.onTimedStep?.({
+      name: `managed-service-${action}`,
+      command: ["openclaw", ...args].join(" "),
+      cwd: params.result.root ?? "",
+      durationMs: Math.max(0, Date.now() - childStartedAtMs),
+      exitCode: 0,
+    });
+  }
   const response = complete ? safeParseJsonRecord(res.stdout) : undefined;
-  receiveInstallResult(response);
+  if (installing && response) {
+    const warnings = Array.isArray(response.warnings)
+      ? response.warnings.filter((message): message is string => typeof message === "string")
+      : [];
+    if (warnings.length) {
+      params.onWarnings?.(warnings);
+    }
+    if (params.definitionRecovery) {
+      const backup = GatewayServiceDefinitionBackupReceiptSchema.safeParse(
+        response.definitionBackup,
+      );
+      const error = typeof response.error === "string" ? response.error : "";
+      const recoveryFailed = error.includes("UPDATE_NATIVE_AUTHORITY:");
+      if (backup.success && !recoveryFailed) {
+        params.definitionRecovery.backup = backup.data;
+        params.definitionRecovery.unverified = false;
+      } else if (!recoveryFailed && DEFINITION_DENIAL.test(error)) {
+        params.definitionRecovery.preserved = true;
+        params.definitionRecovery.unverified = false;
+      } else {
+        params.onWarnings?.([
+          "Service definition backup receipt could not be verified; retained recovery data must be inspected before rollback.",
+        ]);
+      }
+    }
+  }
 
   const original = params.originalManagedServiceRuntime;
   if (installing && original && exited && complete) {

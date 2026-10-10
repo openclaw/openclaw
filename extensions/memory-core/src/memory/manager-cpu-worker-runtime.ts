@@ -39,13 +39,13 @@ export type MemoryIndexTaskResult =
 
 const retrieval = new WorkerTaskPool<MemorySearchWorkerInput, MemorySearchWorkerOutput>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.search),
-  maxWorkers: 1,
+  workerClass: "reader",
   sharedCompute: true,
 });
 // Background chunk preparation must not occupy the foreground retrieval worker.
 const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
   workerUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.index),
-  maxWorkers: 1,
+  workerClass: "compute",
   sharedCompute: true,
   maxPendingBytes: MEMORY_INDEX_WORKER_INPUT_LIMIT_BYTES,
 });
@@ -192,12 +192,7 @@ export async function runMemoryKeywordSearch(
     { ...target, kind: "keyword", query, includeIndexState },
     {
       signal,
-      inputBytes:
-        2 *
-        (query.body.query.length +
-          (query.body.rankingQuery?.length ?? 0) +
-          query.path.query.length +
-          (query.path.exactPathQuery?.length ?? 0)),
+      inputBytes: 2 * (query.body.query.length + query.path.query.length),
     },
     "keyword",
   );
@@ -212,7 +207,9 @@ export async function runMemoryVectorFallback(
     { ...target, kind: "vector", query },
     {
       signal,
-      inputBytes: query.queryVec.length * 8,
+      inputBytes:
+        query.queryVec.length * 8 +
+        (query.candidateIds?.reduce((bytes, id) => bytes + id.length * 2, 0) ?? 0),
     },
     "vector",
   );

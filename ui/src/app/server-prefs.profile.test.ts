@@ -7,7 +7,8 @@ import { GatewayRequestError } from "../api/gateway.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { changedServerUiPrefs, selectThemeSettings } from "./server-prefs-intent.ts";
+import { resetServerUiPref, selectThemeSettings } from "./server-prefs-controls.ts";
+import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import { extractServerUiPrefs, type SyncedPrefKey } from "./server-prefs-state.ts";
 import {
   configWithPrefs,
@@ -19,7 +20,6 @@ import {
   flushServerUiPrefs,
   pushServerUiPrefs,
   refreshProfileAppearancePrefs,
-  resetServerUiPref,
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
@@ -97,6 +97,7 @@ describe("profile-bound appearance preferences", () => {
         "ui.accent": "#AbC123",
         "ui.fontUi": "geist",
         "ui.fontChat": { family: "lora" },
+        "ui.tabIcon": { mode: "agent" },
       },
     }));
     const writer = createWriter(request);
@@ -105,7 +106,7 @@ describe("profile-bound appearance preferences", () => {
     await refreshProfileAppearancePrefs(readOptions(writer, config, profileId, onApplied));
 
     expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {
-      keys: ["ui.theme", "ui.themeMode", "ui.accent", "ui.fontUi", "ui.fontChat"],
+      keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
     });
     expect(onApplied).toHaveBeenCalledWith({
       theme: "knot",
@@ -114,6 +115,7 @@ describe("profile-bound appearance preferences", () => {
       fontUi: "geist",
     });
     expect(loadSettings().fontChat).toBeUndefined();
+    expect(loadSettings().tabIcon).toBeUndefined();
     expect(extractServerUiPrefs(config)).toEqual({
       theme: "claw",
       themeMode: "dark",
@@ -362,21 +364,39 @@ describe("profile-bound appearance preferences", () => {
     ).toMatchObject({ provenance: "device-local", value: "knot" });
   });
 
-  it("restores profile appearance after reloading during a pending identity switch", async () => {
-    const config = configWithPrefs({});
+  it("restores profile appearance across identity switches and a reload during a pending switch", async () => {
+    const tabIcon = "agent";
+    const config = configWithPrefs({ tabIcon: "default" });
     let activeProfile = "profile-b";
     const request = vi.fn(async () => ({
       status: "ok",
       entries:
         activeProfile === "profile-b"
           ? { "ui.theme": "knot" }
-          : { "ui.theme": "rose", "ui.accent": "#123456", "ui.fontUi": "geist" },
+          : {
+              "ui.theme": "rose",
+              "ui.accent": "#123456",
+              "ui.fontUi": "geist",
+              "ui.tabIcon": tabIcon,
+            },
     }));
     const writer = createWriter(request);
     const options = (selectedProfileId: string) => readOptions(writer, config, selectedProfileId);
     await refreshProfileAppearancePrefs(options(activeProfile));
-    activeProfile = "profile-a";
-    await refreshProfileAppearancePrefs(options(activeProfile));
+    for (activeProfile of ["profile-a", "profile-b", "profile-a"]) {
+      await refreshProfileAppearancePrefs(options(activeProfile));
+      const expectedIcon = activeProfile === "profile-a" ? tabIcon : undefined;
+      expect(loadSettings().tabIcon).toBe(expectedIcon);
+      expect(
+        resolveServerUiPrefState(config, "tabIcon", scope, loadSettings(), {
+          profileId: activeProfile,
+        }),
+      ).toMatchObject({
+        provenance: expectedIcon ? "profile" : "default",
+        value: expectedIcon,
+        resetValue: undefined,
+      });
+    }
     expect(loadSettings().theme).toBe("rose");
     activeProfile = "profile-b";
     applyServerUiPrefs(config, options(activeProfile));
@@ -385,7 +405,12 @@ describe("profile-bound appearance preferences", () => {
 
     await refreshProfileAppearancePrefs(options(activeProfile));
 
-    expect(loadSettings()).toMatchObject({ theme: "knot", accent: undefined, fontUi: undefined });
+    expect(loadSettings()).toMatchObject({
+      theme: "knot",
+      accent: undefined,
+      fontUi: undefined,
+      tabIcon: undefined,
+    });
   });
 });
 

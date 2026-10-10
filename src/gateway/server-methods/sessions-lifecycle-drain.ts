@@ -96,13 +96,7 @@ function hasAuthoritativeSessionWork(
     resolveReplyOperationsForSession(params).length > 0 ||
     Boolean(sessionId && isEmbeddedAgentRunInProgress(sessionId)) ||
     hasSessionLifecycleQueueWork(queueTarget) ||
-    hasGatewaySessionAbortOwner({
-      context: params.context,
-      sessionKeys: params.sessionKeys,
-      sessionId,
-      agentId: params.agentId,
-      defaultAgentId: params.defaultAgentId,
-    }) ||
+    hasGatewaySessionAbortOwner(params) ||
     Boolean(
       sessionId &&
       params.context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)?.turnClaim,
@@ -209,6 +203,8 @@ export async function prepareSessionLifecycleDrain(
           abortOrigin: "rpc",
           stopReason: params.action,
           requester: { isAdmin: true },
+          assertCurrent: () => params.authorize?.(),
+          stopEmbeddedRun: true,
           includeProtectedRuns: true,
           onControllerTargets: (targets) => {
             controllerDrain = waitForChatAbortControllerRemoval({
@@ -217,7 +213,7 @@ export async function prepareSessionLifecycleDrain(
               timeoutMs,
             });
           },
-          onAuthorizedAfterQueuedAbort: () => {
+          onAuthorizedBeforeEmbeddedAbort: () => {
             const cleared = clearSessionLifecycleQueues({
               ...queueTarget,
               assertCurrent: () => params.authorize?.(),
@@ -229,7 +225,8 @@ export async function prepareSessionLifecycleDrain(
                 aborted = operation.abortByUser() || aborted;
               }
             }
-            if (params.sessionId) {
+            // Destructive lifecycle drain also owns global work; session Stop does not.
+            if (params.sessionId && params.sessionKey === "global") {
               aborted = abortEmbeddedAgentRun(params.sessionId) || aborted;
             }
             return aborted;

@@ -85,6 +85,14 @@ or still-valid admitted input keeps recovery pending. Native parent rotation mus
 the current connection and requester identity checks. A later parent registration cannot
 supply missing historical ownership.
 
+An interrupted admitted completion keeps its complete recovery claim even when
+the saved run status is failed, timed out, or killed. The next visible message or queued
+follow-up resumes that recovery before taking foreground ownership or entering
+the active transcript. Session reuse must not attach the old completion to the
+new message. Recovery still checks the admitted input, requester lifecycle,
+delivery receipt, and replay safety; it does not infer delivery from a terminal
+run status.
+
 Before parent completion admission, native Codex pending assignments retain their
 run, child-thread, native-parent, and known native-turn identities in the existing
 parent binding metadata. Accepted follow-ups can also retain their submission
@@ -143,6 +151,10 @@ CLI shutdown drains process-wide work. Closing an individual Gateway drains its
 own active chat runs and queued turns, and waits on the process-wide pending-reply
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
+
+When Gateway connection shutdown begins, session observer event subscriptions
+stop before the observer closes. Accepted observer work still settles, while
+chat events and terminal session writes continue through their own drain.
 
 If database closure refuses a follow-up drain, the drain parks its queued input
 instead of retrying against the closing owner. A fresh drain request can resume
@@ -685,6 +697,12 @@ and worker pressure. Once execution starts, the normal main lane owns concurrenc
 a long recovered turn does not hold a separate startup slot. Deferred database
 admissions join the same startup scheduler. Shutdown stops new preparation and
 joins the current pass, leaving unstarted interruptions available for the next boot.
+
+Recovery follows retained transcript-window ownership when a session moves to a
+new key or rotates its session ID. Claim validation and cleanup read only those
+candidate sessions, so stale recovery claims do not load unrelated saved prompts
+while interactive session changes wait. Claim authority, retry budgets, stored
+data, and upgrade behavior are unchanged.
 
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking

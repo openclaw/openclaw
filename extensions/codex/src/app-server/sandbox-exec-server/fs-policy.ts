@@ -67,21 +67,17 @@ function resolveFsSandboxEntry(entry: JsonObject, cwd: string): ResolvedFsSandbo
   const access = readFsAccessMode(entry.access);
   const pathSpec = requireObject(entry.path, "fs sandbox entry path");
   const pathType = requireString(pathSpec.type, "fs sandbox entry path type");
-  if (pathType === "path") {
-    return {
-      kind: "path",
-      path: normalizeSandboxAbsolutePath(
-        resolveExecServerPath(requireString(pathSpec.path, "fs sandbox path"), "fs sandbox path"),
-        "fs sandbox path",
-      ),
-      access,
-    };
-  }
-  if (pathType === "special") {
-    const path = resolveFsSpecialPath(
-      requireObject(pathSpec.value, "fs sandbox special path"),
-      cwd,
-    );
+  if (pathType === "path" || pathType === "special") {
+    const path =
+      pathType === "path"
+        ? normalizeSandboxAbsolutePath(
+            resolveExecServerPath(
+              requireString(pathSpec.path, "fs sandbox path"),
+              "fs sandbox path",
+            ),
+            "fs sandbox path",
+          )
+        : resolveFsSpecialPath(requireObject(pathSpec.value, "fs sandbox special path"), cwd);
     return path === undefined ? undefined : { kind: "path", path, access };
   }
   if (pathType === "glob_pattern") {

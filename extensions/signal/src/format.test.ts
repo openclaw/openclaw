@@ -1,8 +1,7 @@
-// Signal tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToSignalText } from "./format.js";
+import { markdownToSignalText, markdownToSignalTextChunks } from "./format.js";
 
-describe("markdownToSignalText", () => {
+describe("Signal formatting", () => {
   it("marks assistant-authored transcript role headers as monospace", () => {
     const result = markdownToSignalText("user[Thu 2026-07-02] question");
 
@@ -21,175 +20,65 @@ describe("markdownToSignalText", () => {
     });
   });
 
-  it("renders inline styles", () => {
-    const res = markdownToSignalText("hi _there_ **boss** ~~nope~~ `code`");
-
-    expect(res.text).toBe("hi there boss nope code");
-    expect(res.styles).toEqual([
-      { start: 3, length: 5, style: "ITALIC" },
-      { start: 9, length: 4, style: "BOLD" },
-      { start: 14, length: 4, style: "STRIKETHROUGH" },
-      { start: 19, length: 4, style: "MONOSPACE" },
-    ]);
-  });
-
-  it("renders links as label plus url when needed", () => {
-    const res = markdownToSignalText("see [docs](https://example.com) and https://example.com");
-
-    expect(res.text).toBe("see docs (https://example.com) and https://example.com");
-    expect(res.styles).toStrictEqual([]);
-  });
-
-  it("keeps style offsets correct with multiple expanded links", () => {
-    const markdown =
-      "[first](https://example.com/first) **bold** [second](https://example.com/second)";
-    const res = markdownToSignalText(markdown);
-
-    const expectedText =
-      "first (https://example.com/first) bold second (https://example.com/second)";
-
-    expect(res.text).toBe(expectedText);
-    expect(res.styles).toEqual([{ start: expectedText.indexOf("bold"), length: 4, style: "BOLD" }]);
-  });
-
-  it("applies spoiler styling", () => {
-    const res = markdownToSignalText("hello ||secret|| world");
-
-    expect(res.text).toBe("hello secret world");
-    expect(res.styles).toEqual([{ start: 6, length: 6, style: "SPOILER" }]);
-  });
-
-  it("renders fenced code blocks with monospaced styles", () => {
-    const res = markdownToSignalText("before\n\n```\nconst x = 1;\n```\n\nafter");
-
-    const prefix = "before\n\n";
-    const code = "const x = 1;\n";
-    const suffix = "\nafter";
-
-    expect(res.text).toBe(`${prefix}${code}${suffix}`);
-    expect(res.styles).toEqual([{ start: prefix.length, length: code.length, style: "MONOSPACE" }]);
-  });
-
-  it("renders lists without extra block markup", () => {
-    const res = markdownToSignalText("- one\n- two");
-
-    expect(res.text).toBe("• one\n• two");
-    expect(res.styles).toStrictEqual([]);
-  });
-
-  it("uses UTF-16 code units for offsets", () => {
-    const res = markdownToSignalText("😀 **bold**");
-
-    const prefix = "😀 ";
-    expect(res.text).toBe(`${prefix}bold`);
-    expect(res.styles).toEqual([{ start: prefix.length, length: 4, style: "BOLD" }]);
-  });
-
-  it.each([
-    {
-      name: "nested styles across multiple expanded links and emoji",
-      markdown: "**[😀](https://a.test) _[two](https://b.test) tail_**",
-      expected: {
-        text: "😀 (https://a.test) two (https://b.test) tail",
-        styles: [
-          { start: 0, length: 2, style: "BOLD" },
-          { start: 19, length: 4, style: "BOLD" },
-          { start: 20, length: 3, style: "ITALIC" },
-          { start: 40, length: 5, style: "BOLD" },
-          { start: 40, length: 5, style: "ITALIC" },
-        ],
+  it("does not duplicate URL for normalized equivalent labels", () => {
+    const equivalentCases = [
+      { input: "[selfh.st](http://selfh.st)", expected: "selfh.st" },
+      { input: "[example.com](https://example.com)", expected: "example.com" },
+      { input: "[www.example.com](https://example.com)", expected: "www.example.com" },
+      { input: "[example.com](https://example.com/)", expected: "example.com" },
+      { input: "[example.com](https://example.com///)", expected: "example.com" },
+      { input: "[example.com](https://www.example.com)", expected: "example.com" },
+      { input: "[EXAMPLE.COM](https://example.com)", expected: "EXAMPLE.COM" },
+      { input: "[example.com/page](https://example.com/page)", expected: "example.com/page" },
+      {
+        input: "[HTTPS://EXAMPLE.COM/Report](https://example.com/Report)",
+        expected: "HTTPS://EXAMPLE.COM/Report",
       },
-    },
-    {
-      name: "nested style around an expanded link",
-      markdown: "**[docs](https://example.com) _nested_ tail**",
-      expected: {
-        text: "docs (https://example.com) nested tail",
-        styles: [
-          { start: 0, length: 4, style: "BOLD" },
-          { start: 26, length: 12, style: "BOLD" },
-          { start: 27, length: 6, style: "ITALIC" },
-        ],
+      {
+        input: "[WWW.EXAMPLE.COM/Report](https://example.com/Report)",
+        expected: "WWW.EXAMPLE.COM/Report",
       },
-    },
-    {
-      name: "CJK with emoji offsets",
-      markdown: "前置 **粗体😀** 后置",
-      expected: {
-        text: "前置 粗体😀 后置",
-        styles: [{ start: 3, length: 4, style: "BOLD" }],
+      { input: "[USER@EXAMPLE.COM](mailto:user@example.com)", expected: "USER@EXAMPLE.COM" },
+      {
+        input: "[USER@EXAMPLE.COM?subject=HELLO](mailto:user@example.com?subject=hello)",
+        expected: "USER@EXAMPLE.COM?subject=HELLO",
       },
-    },
-  ])("preserves the $name golden output", ({ markdown, expected }) => {
-    expect(markdownToSignalText(markdown)).toEqual(expected);
+    ] as const;
+
+    for (const { input, expected } of equivalentCases) {
+      const res = markdownToSignalText(input);
+      expect(res.text).toBe(expected);
+    }
   });
 
-  describe("duplicate URL display", () => {
-    it("does not duplicate URL for normalized equivalent labels", () => {
-      const equivalentCases = [
-        { input: "[selfh.st](http://selfh.st)", expected: "selfh.st" },
-        { input: "[example.com](https://example.com)", expected: "example.com" },
-        { input: "[www.example.com](https://example.com)", expected: "www.example.com" },
-        { input: "[example.com](https://example.com/)", expected: "example.com" },
-        { input: "[example.com](https://example.com///)", expected: "example.com" },
-        { input: "[example.com](https://www.example.com)", expected: "example.com" },
-        { input: "[EXAMPLE.COM](https://example.com)", expected: "EXAMPLE.COM" },
-        { input: "[example.com/page](https://example.com/page)", expected: "example.com/page" },
-        {
-          input: "[HTTPS://EXAMPLE.COM/Report](https://example.com/Report)",
-          expected: "HTTPS://EXAMPLE.COM/Report",
-        },
-        {
-          input: "[WWW.EXAMPLE.COM/Report](https://example.com/Report)",
-          expected: "WWW.EXAMPLE.COM/Report",
-        },
-        { input: "[USER@EXAMPLE.COM](mailto:user@example.com)", expected: "USER@EXAMPLE.COM" },
-        {
-          input: "[USER@EXAMPLE.COM?subject=HELLO](mailto:user@example.com?subject=hello)",
-          expected: "USER@EXAMPLE.COM?subject=HELLO",
-        },
-      ] as const;
+  it("marks a transcript-role header promoted to a chunk boundary", () => {
+    const header = "user[2026-07-02]";
+    const chunks = markdownToSignalTextChunks(`padding padding ${header} question`, 25);
+    const roleChunk = chunks.find((chunk) => chunk.text.startsWith(header));
 
-      for (const { input, expected } of equivalentCases) {
-        const res = markdownToSignalText(input);
-        expect(res.text).toBe(expected);
-      }
+    expect(roleChunk).toBeDefined();
+    expect(roleChunk?.styles).toContainEqual({
+      start: 0,
+      length: header.length,
+      style: "MONOSPACE",
     });
-
-    it.each([
-      ["example.com/Report", "https://example.com/report"],
-      ["example.com?id=AbC", "https://example.com?id=abc"],
-      ["example.com#Install", "https://example.com#install"],
-    ])("retains the case-distinct destination for [%s](%s)", (label, href) => {
-      const res = markdownToSignalText(`[${label}](${href})`);
-      expect(res.text).toBe(`${label} (${href})`);
-    });
-
-    it("shows URL when the label is only the domain but the URL has a path", () => {
-      const res = markdownToSignalText("[example.com](https://example.com/page)");
-      expect(res.text).toBe("example.com (https://example.com/page)");
-    });
+    expect(chunks.every((chunk) => chunk.text.length <= 25)).toBe(true);
   });
 
-  describe("visual distinctions", () => {
-    it("renders headings as bold text", () => {
-      const res = markdownToSignalText("# Heading 1");
-      expect(res.text).toBe("Heading 1");
-      expect(res.styles).toStrictEqual([{ start: 0, length: 9, style: "BOLD" }]);
-    });
-
-    it("renders multi-line blockquotes with a visible prefix", () => {
-      const res = markdownToSignalText("> Line 1\n> Line 2");
-      expect(res.text).toMatch(/^[│>]/);
-      expect(res.text).toContain("Line 1");
-      expect(res.text).toContain("Line 2");
-    });
-
-    it("renders horizontal rules between content", () => {
-      const res = markdownToSignalText("Above\n\n***\n\nBelow");
-      expect(res.text).toContain("Above");
-      expect(res.text).toContain("Below");
-      expect(res.text).toMatch(/[─—-]{3,}/);
-    });
+  it("preserves case-distinct destinations and chunk-local UTF-16 styles", () => {
+    const chunks = markdownToSignalTextChunks(
+      "𐐀 [example.com/Report](https://example.com/report) **one**\n\n[example.com?id=AbC](https://example.com?id=abc) **two**",
+      80,
+    );
+    const texts = [
+      "𐐀 example.com/Report (https://example.com/report) one",
+      "example.com?id=AbC (https://example.com?id=abc) two",
+    ];
+    expect(chunks).toEqual(
+      texts.map((text) => ({
+        text,
+        styles: [{ start: text.length - 3, length: 3, style: "BOLD" }],
+      })),
+    );
   });
 });

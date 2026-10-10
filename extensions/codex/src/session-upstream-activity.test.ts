@@ -66,7 +66,9 @@ function createActivityChecker(params: {
     runtime: {
       agent: {
         session: {
-          getSessionEntry: () => (params.sessionId ? { sessionId: params.sessionId } : undefined),
+          resolveStorePath: () => "/activity-store",
+          getSessionEntryAsync: async () =>
+            params.sessionId ? { sessionId: params.sessionId } : undefined,
         },
       },
     },

@@ -1,26 +1,32 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
-  loadMemorySessionMetadata,
+  loadMemorySessionMetadataBatch,
   matchesSessionEntryPrefixHash,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  formatMemoryDreamingDay,
+  resolveMemoryDreamingWorkspaces,
+} from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNullableRecord,
   normalizeTrimmedStringList,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   SESSION_INGESTION_MAX_TRACKED_MESSAGES_PER_SESSION,
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
+import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 
 export const SESSION_CORPUS_RELATIVE_DIR = path.join("memory", ".dreams", "session-corpus");
@@ -83,6 +89,22 @@ type SessionIngestionScan = {
 
 type DayDisposition = "include" | "skip" | "block";
 
+export function resolveSessionAgentsForWorkspace(params: {
+  cfg: OpenClawConfig;
+  workspaceDir: string;
+}): string[] {
+  const { cfg, workspaceDir } = params;
+  const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
+  const workspaces = resolveMemoryDreamingWorkspaces(cfg);
+  const match = workspaces.find(
+    (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
+  );
+  if (!match) {
+    return [];
+  }
+  return uniqueStrings(match.agentIds.filter((agentId) => agentId.trim().length > 0)).toSorted();
+}
+
 export function resolveSessionIngestionFileCap(sourceCount: number): number {
   return Math.min(
     SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
@@ -105,9 +127,16 @@ function sessionPathFromCorpus(entry: SessionTranscriptCorpusEntry): string {
 
 export function sessionIngestionSourceFromCorpus(
   entry: SessionTranscriptCorpusEntry,
+  purpose: "dreaming" | "backfill",
 ): SessionIngestionSource | null {
   const sessionPath = sessionPathFromCorpus(entry);
-  if (entry.sessionKind !== "interactive") {
+  if (
+    entry.sessionKind !== "interactive" ||
+    (purpose === "dreaming"
+      ? entry.artifactKind !== "active-session" ||
+        /\.checkpoint\..+\.jsonl$/i.test(path.basename(entry.sessionFile))
+      : entry.generatedByDreamingNarrative || entry.generatedByCronRun)
+  ) {
     return null;
   }
   const scope =
@@ -162,40 +191,74 @@ export function resolveAdmissionPolicy(
   return Object.values(policy).some((entries) => entries.length > 0) ? policy : undefined;
 }
 
-export function sessionExclusionReason(
-  source: SessionIngestionSource,
+export function sessionExclusionReasons(
+  sources: readonly SessionIngestionSource[],
   policy: SessionAdmissionPolicy | undefined,
   forgottenSessionIds: ReadonlySet<string>,
-): string | undefined {
-  if (!source.sessionOrigin) {
-    return undefined;
-  }
-  const { sessionId } = source.sessionOrigin;
-  if (forgottenSessionIds.has(sessionId)) {
-    return "forgotten";
+): ReadonlyMap<SessionIngestionSource, string> {
+  const reasons = new Map<SessionIngestionSource, string>();
+  const scopes = new Map<
+    string,
+    {
+      agentId: string;
+      storePath?: string;
+      sessions: Array<{ source: SessionIngestionSource; sessionId: string; sessionKey?: string }>;
+    }
+  >();
+  for (const source of sources) {
+    if (!source.sessionOrigin) {
+      continue;
+    }
+    const { agentId, sessionId, sessionKey } = source.sessionOrigin;
+    if (forgottenSessionIds.has(sessionId)) {
+      reasons.set(source, "forgotten");
+      continue;
+    }
+    if (!policy) {
+      continue;
+    }
+    const storePath = source.buildOptions.storePath;
+    const key = JSON.stringify([agentId, storePath]);
+    const scope = scopes.get(key);
+    const session = { source, sessionId, sessionKey };
+    if (scope) {
+      scope.sessions.push(session);
+    } else {
+      scopes.set(key, { agentId, storePath, sessions: [session] });
+    }
   }
   if (!policy) {
-    return undefined;
+    return reasons;
   }
-  const metadata = loadMemorySessionMetadata({
-    ...source.sessionOrigin,
-    storePath: source.buildOptions.storePath,
-  });
-  if (!metadata) {
-    return undefined;
+  // Keep the whole decision synchronous after corpus and tombstone preparation.
+  for (const scope of scopes.values()) {
+    const metadata = new Map(
+      loadMemorySessionMetadataBatch({
+        agentId: scope.agentId,
+        storePath: scope.storePath,
+        sessions: scope.sessions.map(({ sessionId, sessionKey }) => ({ sessionId, sessionKey })),
+      }).map((entry) => [entry.sessionId, entry]),
+    );
+    for (const { source, sessionId, sessionKey } of scope.sessions) {
+      const entry = metadata.get(sessionId);
+      if (!entry || (sessionKey !== undefined && entry.sessionKey !== sessionKey)) {
+        continue;
+      }
+      const reason =
+        entry.hookExternalContentSource &&
+        policy.hookExternalContentSources.includes(entry.hookExternalContentSource)
+          ? `hookExternalContentSource:${entry.hookExternalContentSource}`
+          : entry.channel && policy.channels.includes(entry.channel)
+            ? `channel:${entry.channel}`
+            : entry.chatType && policy.chatTypes.includes(entry.chatType)
+              ? `chatType:${entry.chatType}`
+              : undefined;
+      if (reason) {
+        reasons.set(source, reason);
+      }
+    }
   }
-  if (
-    metadata.hookExternalContentSource &&
-    policy.hookExternalContentSources.includes(metadata.hookExternalContentSource)
-  ) {
-    return `hookExternalContentSource:${metadata.hookExternalContentSource}`;
-  }
-  if (metadata.channel && policy.channels.includes(metadata.channel)) {
-    return `channel:${metadata.channel}`;
-  }
-  return metadata.chatType && policy.chatTypes.includes(metadata.chatType)
-    ? `chatType:${metadata.chatType}`
-    : undefined;
+  return reasons;
 }
 
 export function sessionIngestionStateKeyFromCorpus(entry: SessionTranscriptCorpusEntry): string {

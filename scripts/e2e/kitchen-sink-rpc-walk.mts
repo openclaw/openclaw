@@ -195,28 +195,15 @@ const commandParentSignals: NodeJS.Signals[] =
 let commandShutdownPromise: Promise<void[]> | undefined;
 let commandSignalHandlersInstalled = false;
 
-function installCommandSignalHandlers() {
-  if (commandSignalHandlersInstalled) {
+function setCommandSignalHandlersInstalled(installed: boolean) {
+  if (commandSignalHandlersInstalled === installed) {
     return;
   }
-  commandSignalHandlersInstalled = true;
+  commandSignalHandlersInstalled = installed;
   for (const signal of commandParentSignals) {
     const handler = commandSignalHandlers.get(signal);
     if (handler) {
-      process.on(signal, handler);
-    }
-  }
-}
-
-function removeCommandSignalHandlers() {
-  if (!commandSignalHandlersInstalled) {
-    return;
-  }
-  commandSignalHandlersInstalled = false;
-  for (const signal of commandParentSignals) {
-    const handler = commandSignalHandlers.get(signal);
-    if (handler) {
-      process.off(signal, handler);
+      process[installed ? "on" : "off"](signal, handler);
     }
   }
 }
@@ -309,53 +296,34 @@ export function readPositiveTimerMs(raw: string | undefined, fallback: number, l
 }
 
 export function resolveKitchenSinkRpcConfig(env: ProcessEnv = process.env) {
-  const commandTimeoutMs = readPositiveTimerMs(
-    env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
-    DEFAULT_COMMAND_TIMEOUT_MS,
+  const integer = (key: string, fallback: number) => readPositiveInt(env[key], fallback, key);
+  const timer = (key: string, fallback: number) => readPositiveTimerMs(env[key], fallback, key);
+  const commandTimeoutMs = timer(
     "OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS",
+    DEFAULT_COMMAND_TIMEOUT_MS,
   );
   return {
-    commandMaxRssMiB: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB,
-      DEFAULT_MAX_COMMAND_RSS_MIB,
+    commandMaxRssMiB: integer(
       "OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB",
+      DEFAULT_MAX_COMMAND_RSS_MIB,
     ),
     commandTimeoutMs,
-    fetchBodyMaxBytes: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
-      DEFAULT_FETCH_BODY_MAX_BYTES,
+    fetchBodyMaxBytes: integer(
       "OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES",
+      DEFAULT_FETCH_BODY_MAX_BYTES,
     ),
-    fetchTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS,
-      DEFAULT_FETCH_TIMEOUT_MS,
-      "OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS",
-    ),
-    installTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
-      Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
+    fetchTimeoutMs: timer("OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS", DEFAULT_FETCH_TIMEOUT_MS),
+    installTimeoutMs: timer(
       "OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS",
+      Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
     ),
-    maxRssMiB: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB,
-      DEFAULT_MAX_RSS_MIB,
-      "OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB",
-    ),
-    outputCaptureChars: readPositiveInt(
-      env.OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS,
-      DEFAULT_OUTPUT_CAPTURE_CHARS,
+    maxRssMiB: integer("OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB", DEFAULT_MAX_RSS_MIB),
+    outputCaptureChars: integer(
       "OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS",
+      DEFAULT_OUTPUT_CAPTURE_CHARS,
     ),
-    readyTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_READY_MS,
-      DEFAULT_READY_TIMEOUT_MS,
-      "OPENCLAW_KITCHEN_SINK_RPC_READY_MS",
-    ),
-    rpcTimeoutMs: readPositiveTimerMs(
-      env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS,
-      DEFAULT_RPC_TIMEOUT_MS,
-      "OPENCLAW_KITCHEN_SINK_RPC_CALL_MS",
-    ),
+    readyTimeoutMs: timer("OPENCLAW_KITCHEN_SINK_RPC_READY_MS", DEFAULT_READY_TIMEOUT_MS),
+    rpcTimeoutMs: timer("OPENCLAW_KITCHEN_SINK_RPC_CALL_MS", DEFAULT_RPC_TIMEOUT_MS),
   };
 }
 
@@ -529,7 +497,7 @@ export function runCommand(
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
     activeCommandChildren.add(child);
-    installCommandSignalHandlers();
+    setCommandSignalHandlersInstalled(true);
     const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
@@ -692,7 +660,7 @@ async function finishTimedOutCommandProcessTree(
 function releaseCommandChild(child: CommandChild) {
   activeCommandChildren.delete(child);
   if (activeCommandChildren.size === 0 && !commandShutdownPromise) {
-    removeCommandSignalHandlers();
+    setCommandSignalHandlersInstalled(false);
   }
 }
 
@@ -716,7 +684,7 @@ async function shutdownActiveCommands(signal: NodeJS.Signals) {
       }),
     ),
   ).finally(() => {
-    removeCommandSignalHandlers();
+    setCommandSignalHandlersInstalled(false);
     process.kill(process.pid, signal);
   });
   return commandShutdownPromise;
@@ -793,16 +761,11 @@ export function signalProcessGroup(
     useProcessGroup?: boolean;
   } = {},
 ) {
-  const {
-    platform = process.platform,
-    runTaskkill = childProcess.spawnSync,
-    useProcessGroup = platform !== "win32",
-  } = options;
   signalChildProcessTree(child, signal, {
-    killProcess: (pid, childSignal) => process.kill(pid, childSignal),
-    platform,
-    runTaskkill,
-    useProcessGroup,
+    platform: options.platform,
+    runTaskkill: options.runTaskkill,
+    useProcessGroup: options.useProcessGroup,
+    killProcess: defaultKillProcess,
   });
 }
 
@@ -1531,17 +1494,12 @@ export function signalGateway(
     useProcessGroup?: boolean;
   } = {},
 ) {
-  const {
-    platform = process.platform,
-    runTaskkill = childProcess.spawnSync,
-    useProcessGroup = platform !== "win32",
-  } = options;
   return signalChildProcessTree(child, signal, {
+    platform: options.platform,
+    runTaskkill: options.runTaskkill,
+    useProcessGroup: options.useProcessGroup,
     groupEsrchMeansExited: true,
     killProcess,
-    platform,
-    runTaskkill,
-    useProcessGroup,
   });
 }
 
@@ -1551,17 +1509,17 @@ function signalChildProcessTree(
   options: {
     groupEsrchMeansExited?: boolean;
     killProcess: KillProcess;
-    platform: NodeJS.Platform;
-    runTaskkill: TaskkillRunner;
-    useProcessGroup: boolean;
+    platform?: NodeJS.Platform;
+    runTaskkill?: TaskkillRunner;
+    useProcessGroup?: boolean;
   },
 ) {
   const {
     groupEsrchMeansExited = false,
     killProcess,
-    platform,
-    runTaskkill,
-    useProcessGroup,
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
   } = options;
   if (useProcessGroup && typeof child.pid === "number") {
     try {
@@ -1833,12 +1791,16 @@ export function assertTtsProviderCoverage(payload: unknown, surface: "providers"
   }
 }
 
-export function assertKitchenSinkSearchInvokeResult(payload: unknown) {
+function kitchenSinkToolOutput(payload: unknown, kind: "search" | "text" | "image job") {
   const candidate = asRecord(payload);
   if (candidate.ok !== true || candidate.source !== "plugin") {
-    throw new Error(`Kitchen Sink search tool invoke failed: ${boundedJsonPreview(payload)}`);
+    throw new Error(`Kitchen Sink ${kind} tool invoke failed: ${boundedJsonPreview(payload)}`);
   }
-  const output = assertObjectPayload(candidate.output, "Kitchen Sink search tool output");
+  return assertObjectPayload(candidate.output, `Kitchen Sink ${kind} tool output`);
+}
+
+export function assertKitchenSinkSearchInvokeResult(payload: unknown) {
+  const output = kitchenSinkToolOutput(payload, "search");
   const results = Array.isArray(output.results) ? output.results : [];
   const hasFixture = results.some(
     (entry) => asRecord(entry).title === "Kitchen Sink image fixture",
@@ -1851,11 +1813,7 @@ export function assertKitchenSinkSearchInvokeResult(payload: unknown) {
 }
 
 export function assertKitchenSinkTextInvokeResult(payload: unknown) {
-  const candidate = asRecord(payload);
-  if (candidate.ok !== true || candidate.source !== "plugin") {
-    throw new Error(`Kitchen Sink text tool invoke failed: ${boundedJsonPreview(payload)}`);
-  }
-  const output = assertObjectPayload(candidate.output, "Kitchen Sink text tool output");
+  const output = kitchenSinkToolOutput(payload, "text");
   if (
     output.route !== "tool:kitchen_sink_text" ||
     typeof output.text !== "string" ||
@@ -1868,11 +1826,7 @@ export function assertKitchenSinkTextInvokeResult(payload: unknown) {
 }
 
 export function assertKitchenSinkImageJobInvokeResult(payload: unknown) {
-  const candidate = asRecord(payload);
-  if (candidate.ok !== true || candidate.source !== "plugin") {
-    throw new Error(`Kitchen Sink image job tool invoke failed: ${boundedJsonPreview(payload)}`);
-  }
-  const output = assertObjectPayload(candidate.output, "Kitchen Sink image job tool output");
+  const output = kitchenSinkToolOutput(payload, "image job");
   const image = assertObjectPayload(output.image, "Kitchen Sink image job image");
   const imageMetadata = assertObjectPayload(
     image.metadata,

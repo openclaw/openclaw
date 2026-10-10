@@ -10,6 +10,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -528,19 +529,14 @@ it.each(["transaction", "commit"] as const)(
     await withQueuedRegistrationFixture(async (f) => {
       await f.register();
       const original = f.current();
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
       let rotated = false;
-      const admission = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === stage && !rotated) {
-              rotated = true;
-              rotateAgentEventLifecycleGeneration();
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+        if (request.stage === stage && !rotated) {
+          rotated = true;
+          rotateAgentEventLifecycleGeneration();
+        }
+        admit(request, grant);
+      });
       try {
         await expect(
           f.manager.startQueuedSubagentRun(original.runId, "accepted-run"),

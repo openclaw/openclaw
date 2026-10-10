@@ -57,17 +57,26 @@ export async function persistSessionUsageUpdate(params: {
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
-}): Promise<void> {
+}): Promise<
+  | {
+      storePath: string;
+      sessionKey: string;
+      entry: Pick<
+        InternalSessionEntry,
+        "sessionId" | "lifecycleRevision" | "liveModelSwitchPending"
+      >;
+    }
+  | undefined
+> {
   const { agentId, storePath, sessionKey, sessionStore, authorize } = params;
   if (!storePath || !sessionKey) {
-    return;
+    return undefined;
   }
   const expectedSession = params.expectedSession
     ? { ...params.expectedSession, lifecycleRevision: params.expectedSession.lifecycleRevision }
     : undefined;
 
   const cfg = params.cfg ?? getRuntimeConfig();
-  const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const modelSelection = params.runtimeModelSelection ?? {
     provider: params.providerUsed,
     model: params.modelUsed,
@@ -82,7 +91,6 @@ export async function persistSessionUsageUpdate(params: {
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
   const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
   const hasCurrentContextSnapshot = params.currentContextSnapshot !== undefined;
-  const currentContextTokens = resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens);
 
   // A monetary-only update must not invalidate the existing context observation.
   const hasContextUpdate =
@@ -91,20 +99,20 @@ export async function persistSessionUsageUpdate(params: {
     hasCurrentContextSnapshot ||
     Boolean(modelSelection.model || params.contextTokensUsed);
   if (!hasBilling && !hasContextUpdate) {
-    return;
+    return undefined;
   }
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const update: SessionEntryUsageUpdate = {
     usage: params.usage,
     lastCallUsage: params.lastCallUsage,
     modelSelection,
-    agentHarnessId,
+    agentHarnessId: normalizeOptionalString(params.agentHarnessId),
     contextTokensUsed: params.contextTokensUsed,
     contextTokensSource: params.contextTokensSource,
     contextBudgetStatus: params.contextBudgetStatus,
     systemPromptReport: params.systemPromptReport,
     promptTokens: params.promptTokens,
-    currentContextTokens,
+    currentContextTokens: resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens),
     hasUsage,
     hasBilling,
     hasContextUpdate,
@@ -129,16 +137,22 @@ export async function persistSessionUsageUpdate(params: {
             model: params.modelUsed ?? entry?.model,
           }),
         );
+  let committedEntry:
+    | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "liveModelSwitchPending">
+    | undefined;
   const options = {
     skipMaintenance: true,
-    ...(sessionStore
-      ? {
-          onCommitted: (entry: InternalSessionEntry) => {
-            // Publish this commit before a newer writer can replace the caller's cache.
-            sessionStore[sessionKey] = entry;
-          },
-        }
-      : {}),
+    onCommitted: (entry: InternalSessionEntry) => {
+      // Copy the commit's facts before publishing the mutable caller cache.
+      committedEntry = {
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        liveModelSwitchPending: entry.liveModelSwitchPending,
+      };
+      if (sessionStore) {
+        sessionStore[sessionKey] = entry;
+      }
+    },
     workerGuard: {
       assertCurrent: authorize
         ? () => {
@@ -187,7 +201,9 @@ export async function persistSessionUsageUpdate(params: {
         options,
       );
     }
+    return committedEntry ? { storePath, sessionKey, entry: committedEntry } : undefined;
   } catch (err) {
     logVerbose(`failed to persist usage update: ${String(err)}`);
+    return undefined;
   }
 }

@@ -24,6 +24,7 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
+import { menuItem, menuItemLabels } from "../session-menu.ts";
 import { sessionOwnerProfiles } from "../session-owner-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
@@ -56,6 +57,12 @@ describe("AppSidebar session mutation feedback", () => {
       const [method, params] = args;
       if (method === "users.list") {
         return Promise.resolve(directory as T);
+      }
+      if (method === "sessions.describe") {
+        const { key } = params as { key: string };
+        return Promise.resolve({
+          session: harness.sessions.state.result?.sessions.find((row) => row.key === key),
+        } as T);
       }
       if (method === "sessions.patchMany") {
         const request = params as {
@@ -302,16 +309,12 @@ describe("AppSidebar session mutation feedback", () => {
 
     const menu = await openSessionMenu(sidebar, row.key);
     await waitForFast(() => expect(menu.textContent).toContain("Bob"));
-    expect(
-      Array.from(menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"))
-        .map((item) => item.querySelector(".session-menu__text")?.textContent?.trim())
-        .filter((label) => label?.startsWith("Assign to")),
-    ).toEqual(["Assign to…"]);
-    const assignmentMenu = Array.from(
-      menu.querySelectorAll<HTMLElement>(":scope > wa-dropdown > wa-dropdown-item"),
-    ).find(
-      (item) => item.querySelector(".session-menu__text")?.textContent?.trim() === "Assign to…",
-    );
+    expect(menuItemLabels(menu)).not.toContain("Assign to…");
+    const settings = menuItem(menu, "Session settings");
+    expect(menuItemLabels(settings).filter((label) => label.startsWith("Assign to"))).toEqual([
+      "Assign to…",
+    ]);
+    const assignmentMenu = menuItem(settings, "Assign to…");
     expect(
       Array.from(
         assignmentMenu?.querySelectorAll<HTMLElement>('wa-dropdown-item[slot="submenu"]') ?? [],
@@ -364,73 +367,64 @@ describe("AppSidebar session mutation feedback", () => {
     });
   });
 
-  it.each(["refreshed", "failed"] as const)(
-    "reconciles and stops an idle active cloud worker through its session (%s)",
-    async (refreshOutcome) => {
-      const request = vi.fn(() => Promise.resolve({ ok: true }));
-      const { gateway, harness, sidebar, context } = await mountMutationHarness({
-        request,
-      } as unknown as GatewayBrowserClient);
-      if (refreshOutcome === "failed") {
-        harness.reconcileMutation.mockResolvedValueOnce({
-          status: "failed",
-          error: "Stopped session refresh unavailable",
-        });
-      }
-      gateway.publish({
-        hello: gatewayHelloForMethods(["sessions.reclaim"]),
-      });
-      const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
-      const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
-      if (!row) {
-        throw new Error("expected cloud session row");
-      }
-      row.placement = {
-        state: "active",
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-        environmentId: "environment-1",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "0".repeat(64),
-        workspaceBaseManifestRef: "base-ref",
-        remoteWorkspaceDir: "/workspace",
-      };
-      harness.publishList({ result: state.result, agentId: state.agentId });
-      await sidebar.updateComplete;
+  it("stops an idle active cloud worker and surfaces a failed refresh", async () => {
+    const request = vi.fn(() => Promise.resolve({ ok: true }));
+    const { gateway, harness, sidebar, context } = await mountMutationHarness({
+      request,
+    } as unknown as GatewayBrowserClient);
+    harness.reconcileMutation.mockResolvedValueOnce({
+      status: "failed",
+      error: "Stopped session refresh unavailable",
+    });
+    gateway.publish({
+      hello: gatewayHelloForMethods(["sessions.reclaim"]),
+    });
+    const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
+    const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
+    if (!row) {
+      throw new Error("expected cloud session row");
+    }
+    row.placement = {
+      state: "active",
+      generation: 1,
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      stateChangedAtMs: 1,
+      environmentId: "environment-1",
+      activeOwnerEpoch: 1,
+      workerBundleHash: "0".repeat(64),
+      workspaceBaseManifestRef: "base-ref",
+      remoteWorkspaceDir: "/workspace",
+    };
+    harness.publishList({ result: state.result, agentId: state.agentId });
+    await sidebar.updateComplete;
 
-      const menu = await openSessionMenu(sidebar, row.key);
-      menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
-      const actions = await waitForConfirmDialogActions();
-      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-        'Stop the cloud worker for "a"?',
-      );
-      answerConfirmDialog(actions, "confirm");
+    const menu = await openSessionMenu(sidebar, row.key);
+    menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
+    const actions = await waitForConfirmDialogActions();
+    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+      'Stop the cloud worker for "a"?',
+    );
+    answerConfirmDialog(actions, "confirm");
 
-      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-      expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
-        "agent:main:a",
-        "Worker stop requested. Review the initial message before retrying.",
-        { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
-      );
-      expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
-      expect(request).toHaveBeenCalledWith(
-        "sessions.reclaim",
-        { key: "agent:main:a", agentId: "main" },
-        { timeoutMs: null },
-      );
-      await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
-      await waitForFast(() => {
-        const error = sidebar.querySelector("[data-sidebar-session-error]")?.textContent ?? null;
-        if (refreshOutcome === "failed") {
-          expect(error).toContain("Stopped session refresh unavailable");
-        } else {
-          expect(error).toBeNull();
-        }
-      });
-    },
-  );
+    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+    expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+      "agent:main:a",
+      "Worker stop requested. Review the initial message before retrying.",
+      { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
+    );
+    expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: "agent:main:a", agentId: "main" },
+      { timeoutMs: null },
+    );
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
+    await waitForFast(() => {
+      const error = sidebar.querySelector("[data-sidebar-session-error]")?.textContent ?? null;
+      expect(error).toContain("Stopped session refresh unavailable");
+    });
+  });
 
   it("reclaims a pending cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));

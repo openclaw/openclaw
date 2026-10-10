@@ -35,7 +35,7 @@ export function resolveReplyContext(
     senderTag: sender.tag ?? undefined,
     memberRoleIds: (() => {
       const roles = (referenced as { member?: { roles?: string[] } }).member?.roles;
-      return Array.isArray(roles) ? roles.map((roleId) => roleId) : undefined;
+      return Array.isArray(roles) ? roles.slice() : undefined;
     })(),
     ...(referencedText ? { body: referencedText } : {}),
     timestamp: resolveTimestampMs(referenced.timestamp),

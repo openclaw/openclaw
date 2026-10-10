@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "../../agents/embedded-agent-runner/run/attempt-transcript-lifecycle.js";
 import { observeReplyDelivery } from "../../agents/reply-completion.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -50,6 +51,7 @@ it.each(["reply-observation", "commentary-media"] as const)(
       const controller = new AbortController();
       const warn = vi.fn();
       const dispatch = createChatSendReplyDispatch({
+        getRuntimeConfig,
         accountId: undefined,
         isAgentRunStarted: () => true,
         isRunCurrent: () => true,

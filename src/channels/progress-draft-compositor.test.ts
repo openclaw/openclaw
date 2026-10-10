@@ -8,6 +8,7 @@ import {
   PROGRESS_STATUS_PREAMBLE_FRESH_MS,
 } from "./progress-draft-compositor.js";
 import type { ChannelProgressDraftCompositorParams } from "./progress-draft-compositor.types.js";
+import { buildChannelProgressDraftLine } from "./streaming.js";
 
 function createProgress(
   config: ChannelStreamingProgressConfig = { label: "Shelling", toolProgress: true },
@@ -209,6 +210,41 @@ describe("channel progress draft compositor", () => {
       "Shelling\n\n💬 _Checking the workspace_\n• Exec\n💬 _Writing the patch next_",
     );
   });
+
+  it.each([
+    { toolIcons: true, exec: "🛠️ Exec: running" },
+    { toolIcons: undefined, exec: "• Exec: running" },
+  ])(
+    "prefixes generated tool rows with text glyphs when toolIcons is $toolIcons",
+    async ({ toolIcons, exec }) => {
+      const { progress, update } = createProgress(
+        { toolProgress: true, label: false, commentary: true },
+        {
+          toolIcons,
+          commentaryLinePrefix: "💬 ",
+          buildProgressEventLine: (input, options) => {
+            const line = buildChannelProgressDraftLine(input, options);
+            return line?.toolName === "read" ? { ...line, icon: "🧪" } : line;
+          },
+        },
+      );
+      await progress.pushCommentaryProgress("Checking");
+      await progress.pushItemEvent({
+        itemId: "exec-1",
+        kind: "tool",
+        name: "exec",
+        status: "running",
+      });
+      await progress.pushItemEvent({
+        itemId: "read-1",
+        kind: "tool",
+        name: "read",
+        status: "running",
+      });
+      await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+      expect(update.mock.lastCall?.[0]).toBe(`💬 _Checking_\n${exec}\n🧪 Read: running`);
+    },
+  );
 
   it("replaces and retracts only the addressed commentary item", async () => {
     const { progress, update } = createProgress({
@@ -461,6 +497,50 @@ describe("channel progress draft compositor", () => {
       expect.objectContaining({ id: "patch-1", toolName: "apply_patch" }),
     ]);
     expect(progress.getSnapshot().diffStat).toBeUndefined();
+  });
+
+  it.each([
+    { action: "react", status: "completed", hidden: true },
+    { action: "react", status: "failed", hidden: false },
+    { action: "react", status: "blocked", hidden: false },
+    { action: "react", status: "unknown", hidden: false },
+    { action: "send", status: "completed", hidden: false },
+  ] as const)("projects message $action/$status progress", async ({ action, status, hidden }) => {
+    const { progress } = createProgress({ toolProgress: true }, { preparedItems: true });
+    await progress.start();
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "start",
+        args: { action, channel: "slack", target: "C000000001" },
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual(
+      action === "react" ? [] : [expect.objectContaining({ toolName: "message" })],
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "message-1",
+        name: "message",
+        phase: "result",
+        args: { action, channel: "slack", target: "C000000001" },
+        status,
+      }),
+    );
+    await progress.pushItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "read-1",
+        name: "read",
+        phase: "result",
+        args: { path: "README.md" },
+        status: "completed",
+      }),
+    );
+    expect(progress.getSnapshot().lines).toEqual([
+      ...(hidden ? [] : [expect.objectContaining({ id: "tool:message-1", toolName: "message" })]),
+      expect.objectContaining({ id: "tool:read-1", toolName: "read", status: "completed" }),
+    ]);
   });
 
   it("retains completed edits when clearing a quiet plan", async () => {

@@ -22,6 +22,72 @@ const { getReplacementPublicationDelivery } =
   await import("./session-accessor.sqlite-replacement-publication.test-support.js");
 const delivery = getReplacementPublicationDelivery();
 
+it.for(["permissionMode", "toolOverrides"] as const)(
+  "fences retained %s until same-generation policy publication settles",
+  async (setting, { signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      const scope = {
+        agentId: "main",
+        storePath: database.path,
+        sessionKey: "agent:main:permission-readiness",
+      };
+      const original = {
+        sessionId: "e1234567-1234-1234-1234-123456789abc",
+        lifecycleRevision: "original-lifecycle",
+        permissionMode: "full" as const,
+        toolOverrides: { webSearch: true },
+        updatedAt: 1,
+      };
+      replaceSessionEntrySync(scope, original);
+      const generation = await prepareSessionGenerationFacts({ ...scope, ...original });
+      const settings = {
+        permissionMode:
+          setting === "permissionMode" ? ("read-only" as const) : original.permissionMode,
+        toolOverrides: setting === "toolOverrides" ? { webSearch: false } : original.toolOverrides,
+      };
+      const committed = createDeferred();
+      const release = createDeferred();
+      const onAbort = () => release.resolve();
+      signal.addEventListener("abort", onAbort, { once: true });
+      delivery.afterResult = async () => {
+        committed.resolve();
+        await release.promise;
+      };
+      const write = applySessionEntryExactReplacements({
+        ...scope,
+        sessionKeys: [scope.sessionKey],
+        requireWriteSuccess: true,
+        update: () => ({
+          result: undefined,
+          replacements: [{ sessionKey: scope.sessionKey, entry: { ...original, ...settings } }],
+        }),
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(committed.promise, write, "policy write did not commit"),
+          signal,
+        );
+        // Main's generation-only readers stay current; policy consumers cannot reuse old grants.
+        generation.assertCurrent();
+        expect(generation.readSessionSettings).toThrow(
+          expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_UNAVAILABLE" }),
+        );
+        release.resolve();
+        await withinTest(write, signal);
+        generation.assertCurrent();
+        expect(generation.readSessionSettings()).toEqual(settings);
+      } finally {
+        release.resolve();
+        delivery.afterResult = undefined;
+        await Promise.allSettled([write]);
+        signal.removeEventListener("abort", onAbort);
+        generation.release();
+      }
+    });
+  },
+);
+
 it.for(["metadata", "replacement"] as const)(
   "joins admitted %s publication before checking the retained session generation",
   async (kind, { signal }) => {

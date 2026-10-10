@@ -5,7 +5,7 @@ import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -128,10 +128,10 @@ test("sessions.delete rejects main and aborts active runs", async () => {
       [{ sessionKeys?: string[]; onWarn?: unknown }]
     >
   )[0]?.[0];
-  expect(closeTabsCall?.sessionKeys).toHaveLength(3);
-  expect(closeTabsCall?.sessionKeys).toContain("discord:group:dev");
-  expect(closeTabsCall?.sessionKeys).toContain("agent:main:discord:group:dev");
-  expect(closeTabsCall?.sessionKeys).toContain("sess-active");
+  expect(closeTabsCall?.sessionKeys).toEqual([
+    "agent:main:discord:group:dev",
+    "agent:main:sess-active",
+  ]);
   expect(typeof closeTabsCall?.onWarn).toBe("function");
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
   expect(subagentLifecycleHookMocks.runSubagentEnded).toHaveBeenCalledWith(
@@ -621,8 +621,8 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
   ).map((call) => call[0]?.sessionKey);
   expect(closedKeys).toContain("agent:main:acp-parent");
   expect(closedKeys).toContain("agent:main:acp-child");
-  expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-parent" })).toBeUndefined();
-  expect(readAcpSessionMeta({ sessionKey: "agent:main:acp-child" })).toBeUndefined();
+  expect(readAcpSessionEntry({ sessionKey: "agent:main:acp-parent" })?.acp).toBeUndefined();
+  expect(readAcpSessionEntry({ sessionKey: "agent:main:acp-child" })?.acp).toBeUndefined();
 });
 
 test("sessions.delete returns unavailable when active run does not stop", async () => {

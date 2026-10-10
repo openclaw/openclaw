@@ -17,6 +17,7 @@ import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
@@ -437,7 +438,7 @@ export function createManagerIndexFixture(deps: {
           },
           remote: params.batchEnabled ? { batch: { enabled: true } } : undefined,
           query: { minScore: params.minScore ?? 0 },
-          cache: params.cacheEnabled ? { enabled: true } : undefined,
+          cache: params.cacheEnabled !== undefined ? { enabled: params.cacheEnabled } : undefined,
           extraPaths: params.extraPaths,
           multimodal: params.multimodal,
           sources: params.sources,
@@ -467,7 +468,13 @@ export function createManagerIndexFixture(deps: {
   };
 
   const getPersistentManager = async (cfg: ManagerConfig): Promise<MemoryIndexManager> => {
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
     resetManager(manager);
     return manager;
@@ -479,7 +486,13 @@ export function createManagerIndexFixture(deps: {
     inspectSources?: boolean,
   ): Promise<MemoryIndexManager> => {
     const manager = requireManager(
-      await deps.getMemorySearchManager({ cfg, agentId: "main", purpose, inspectSources }),
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+        purpose,
+        inspectSources,
+      }),
     );
     trackManager(manager);
     return manager;
@@ -521,7 +534,13 @@ export function createManagerIndexFixture(deps: {
       sessionMemory: true,
       minScore: 0,
     });
-    const manager = requireManager(await deps.getMemorySearchManager({ cfg, agentId: "main" }));
+    const manager = requireManager(
+      await deps.getMemorySearchManager({
+        runInBackgroundContext: runInMemoryTestBackgroundContext,
+        cfg,
+        agentId: "main",
+      }),
+    );
     trackManager(manager);
     resetManager(manager);
     return manager.status().fts?.available ? manager : null;

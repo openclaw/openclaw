@@ -724,16 +724,18 @@ export async function httpOk(port, pathName, options = {}) {
   }
 }
 
-async function assertHttpOk(port, pathName) {
+async function assertHttpOk(port, pathName, { parseJson = false, acceptDegraded } = {}) {
   const started = Date.now();
   let lastError;
   while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
     try {
-      const res = await fetchHttpProbeStatus(port, pathName);
-      if (res.ok) {
+      const res = await fetchHttpProbeStatus(port, pathName, { parseJson });
+      if (res.ok || acceptDegraded?.(res)) {
         return;
       }
-      lastError = new Error(`${pathName} returned HTTP ${res.status}`);
+      lastError = new Error(
+        `${pathName} returned HTTP ${res.status}${parseJson ? `: ${formatHttpProbeBody(res)}` : ""}`,
+      );
     } catch (error) {
       lastError = error;
     }
@@ -783,32 +785,20 @@ function formatHttpProbeBody(res) {
 
 export async function assertReadyzProbe(options) {
   const allowedFailures = new Set(options.allowedDegradedReadyzFailures ?? []);
-  const started = Date.now();
-  let lastError;
-  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
-    try {
-      const res = await fetchHttpProbeStatus(options.port, "/readyz", { parseJson: true });
-      if (res.ok) {
-        return;
+  await assertHttpOk(options.port, "/readyz", {
+    parseJson: true,
+    acceptDegraded(res) {
+      if (!isAllowedDegradedReadyz(res, allowedFailures)) {
+        return false;
       }
-      if (isAllowedDegradedReadyz(res, allowedFailures)) {
-        console.log(
-          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz failing ${JSON.stringify(
-            listReadyzFailingComponents(res.body),
-          )}`,
-        );
-        return;
-      }
-      lastError = new Error(`/readyz returned HTTP ${res.status}: ${formatHttpProbeBody(res)}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(Math.min(500, Math.max(1, RPC_READY_TIMEOUT_MS - (Date.now() - started))));
-  }
-  throw toLintErrorObject(
-    lastError ?? new Error("/readyz did not return HTTP 200"),
-    "Non-Error thrown",
-  );
+      console.log(
+        `Runtime readyz smoke degraded for ${options.pluginId}: /readyz failing ${JSON.stringify(
+          listReadyzFailingComponents(res.body),
+        )}`,
+      );
+      return true;
+    },
+  });
 }
 
 export async function rpcCall(method, params, options) {
@@ -1006,7 +996,14 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, plu
   );
 }
 
-async function runGatewaySmoke(options, probe, successMessage) {
+async function runGatewaySmoke(initialOptions, probe, successMessage, isolatedState) {
+  let options = initialOptions;
+  if (isolatedState) {
+    const { label, config } = isolatedState;
+    const env = createIsolatedStateEnv(label);
+    writeConfig(ensureGatewayConfig(config, options.port), env);
+    options = { ...options, env };
+  }
   const child = startGateway(options);
   try {
     await waitForReady({ ...options, child });
@@ -1298,28 +1295,12 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
     return;
   }
   const port = resolveRuntimeSmokePort(pluginIndex, 1);
-  const env = createIsolatedStateEnv(`tts-disabled-${pluginId}`);
-  writeConfig(
-    ensureGatewayConfig(
-      {
-        plugins: {
-          enabled: false,
-        },
-        tts: {
-          provider: selectedProvider,
-        },
-      },
-      port,
-    ),
-    env,
-  );
   const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-${pluginId}-tts-disabled.log`;
   await runGatewaySmoke(
     {
       logPath,
       port,
       entrypoint,
-      env,
       skipChannels: true,
       pluginId: `${pluginId}:tts-disabled`,
     },
@@ -1329,6 +1310,17 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex,
       assertSpeechProviderVisible(providers, selectedProvider, "tts.providers global-disable");
     },
     `Global-disable TTS smoke passed for ${pluginId}/${selectedProvider}`,
+    {
+      label: `tts-disabled-${pluginId}`,
+      config: {
+        plugins: {
+          enabled: false,
+        },
+        tts: {
+          provider: selectedProvider,
+        },
+      },
+    },
   );
 }
 
@@ -1342,10 +1334,20 @@ async function smokeOpenAiTts(pluginIndex) {
     return;
   }
   const port = resolveRuntimeSmokePort(pluginIndex, 2);
-  const env = createIsolatedStateEnv("tts-openai-live");
-  writeConfig(
-    ensureGatewayConfig(
-      {
+  const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-openai-tts-live.log`;
+  await runGatewaySmoke(
+    { entrypoint, port, logPath, skipChannels: true, pluginId: "openai:tts-live" },
+    async (options) => {
+      await assertBaseGatewayProbes(options);
+      const result = await retryRpcCall("tts.convert", { text: "ok", provider: "openai" }, options);
+      if (!isNonEmptyString(result.audioPath) || !fs.existsSync(result.audioPath)) {
+        throw new Error(`tts.convert did not produce an audio file: ${JSON.stringify(result)}`);
+      }
+    },
+    "OpenAI key-backed TTS smoke passed",
+    {
+      label: "tts-openai-live",
+      config: {
         plugins: {
           enabled: true,
           allow: ["openai"],
@@ -1362,21 +1364,7 @@ async function smokeOpenAiTts(pluginIndex) {
           },
         },
       },
-      port,
-    ),
-    env,
-  );
-  const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-openai-tts-live.log`;
-  await runGatewaySmoke(
-    { entrypoint, port, logPath, env, skipChannels: true, pluginId: "openai:tts-live" },
-    async (options) => {
-      await assertBaseGatewayProbes(options);
-      const result = await retryRpcCall("tts.convert", { text: "ok", provider: "openai" }, options);
-      if (!isNonEmptyString(result.audioPath) || !fs.existsSync(result.audioPath)) {
-        throw new Error(`tts.convert did not produce an audio file: ${JSON.stringify(result)}`);
-      }
     },
-    "OpenAI key-backed TTS smoke passed",
   );
 }
 

@@ -10,6 +10,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { diagnosticProfileEntrypoints } from "../../logging/diagnostic-profile-runtime.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import type { GatewayRequestOptions } from "./types.js";
 
@@ -46,7 +47,6 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const hostBunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
 let stateDir: string;
 let clock = 0;
 const memory = process.memoryUsage();
@@ -85,14 +85,34 @@ function request(
   return { respond, pending };
 }
 
-beforeEach(() => {
-  if (hostBunVersion) {
-    Object.defineProperty(process.versions, "bun", { ...hostBunVersion, value: undefined });
+function runSnapshotScript(source: string, ownerUrl: URL, signal: AbortSignal, executable: string) {
+  const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
+  for (const key of ["PATH", "HOME", "TMPDIR", "TMP", "TEMP"]) {
+    if (process.env[key]) {
+      env[key] = process.env[key];
+    }
   }
+  return runNodeScript(
+    (workerArgv) => [...workerArgv(ownerUrl).slice(0, -1), "--input-type=module", "--eval", source],
+    env,
+    20_000,
+    {
+      cwd: fileURLToPath(new URL("../../../", import.meta.url)),
+      signal,
+      maxBuffer: 32768,
+      requireProcessTreeExit: true,
+      executable,
+    },
+  );
+}
+
+beforeEach(() => {
   stateDir = tempDirs.make("openclaw-heap-snapshot-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("NODE_OPTIONS", "");
   vi.stubEnv("NODE_V8_COVERAGE", "");
+  vi.stubEnv("BUN_INSPECT", "");
+  vi.stubEnv("BUN_INSPECT_CONNECT_TO", "");
   setActivePluginRegistry(createEmptyPluginRegistry());
   clock += 120_000;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
@@ -108,9 +128,6 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  if (hostBunVersion) {
-    Object.defineProperty(process.versions, "bun", hostBunVersion);
-  }
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
@@ -256,16 +273,53 @@ describe("diagnostics.heapSnapshot", () => {
     );
   });
 
-  it.skipIf(Boolean(process.versions.bun))(
-    "releases V8 object IDs after writing a native snapshot",
-    async ({ signal }) => {
-      vi.restoreAllMocks();
-      const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
-      const source = `
+  it("captures a native snapshot with the current runtime without opening a listener", async ({
+    signal,
+  }) => {
+    vi.restoreAllMocks();
+    const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
+    const source = `
+import assert from 'node:assert/strict';
+import { readFile, stat } from 'node:fs/promises';
+import { url } from 'node:inspector/promises';
+import path from 'node:path';
+import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
+assert.equal(process.versions.bun ?? null, ${JSON.stringify(process.versions.bun ?? null)});
+assert.equal(url(), undefined);
+globalThis.snapshotMarker = { label: 'synthetic retention marker' };
+const outcome = await captureDiagnosticHeapSnapshot({ signal: new AbortController().signal, hasAuthority: () => true });
+assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
+const result = outcome.result;
+const metadata = await stat(result.path);
+assert.ok(result.sizeBytes > 0);
+assert.equal(result.sizeBytes, metadata.size);
+// Windows stat mode bits do not encode owner-only ACL permissions.
+if (process.platform !== 'win32') assert.equal(metadata.mode & 0o777, 0o600);
+assert.equal(path.dirname(result.path), path.join(process.env.OPENCLAW_STATE_DIR, 'diagnostics'));
+for (const value of [result.heapUsedBefore, result.heapUsedAfter, result.elapsedMs]) {
+  assert.ok(Number.isFinite(value) && value >= 0);
+}
+const snapshot = JSON.parse(await readFile(result.path, 'utf8'));
+assert.ok(snapshot.snapshot.node_count > 0);
+assert.ok(snapshot.strings.includes(globalThis.snapshotMarker.label));
+assert.equal(url(), undefined);
+console.log(JSON.stringify({ node: process.version, bun: process.versions.bun ?? null, sizeBytes: result.sizeBytes, listener: false }));
+`;
+    const result = await runSnapshotScript(source, ownerUrl, signal, process.execPath);
+    expect(result.error).toBeUndefined();
+    expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
+    console.log("HEAP_SNAPSHOT_NATIVE", result.stdout.trim());
+  }, 30_000);
+
+  it("releases V8 object IDs after writing a native snapshot under Node", async ({ signal }) => {
+    vi.restoreAllMocks();
+    const ownerUrl = resolveRuntimeWorkerUrl(diagnosticProfileEntrypoints.snapshot);
+    const source = `
 import assert from 'node:assert/strict';
 import { readFile, stat } from 'node:fs/promises';
 import { Session } from 'node:inspector/promises';
 import { captureDiagnosticHeapSnapshot } from ${JSON.stringify(ownerUrl.href)};
+assert.equal(process.versions.bun, undefined, 'V8 tracking regression requires real Node');
 globalThis.snapshotMarker = { label: 'synthetic retention marker' };
 const observer = new Session();
 observer.connect();
@@ -285,31 +339,8 @@ try {
   observer.disconnect();
 }
 `;
-      const env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir };
-      for (const key of ["PATH", "TMPDIR", "TMP", "TEMP"]) {
-        if (process.env[key]) {
-          env[key] = process.env[key];
-        }
-      }
-      const result = await runNodeScript(
-        (workerArgv) => [
-          ...workerArgv(ownerUrl).slice(0, -1),
-          "--input-type=module",
-          "--eval",
-          source,
-        ],
-        env,
-        20_000,
-        {
-          cwd: fileURLToPath(new URL("../../../", import.meta.url)),
-          signal,
-          maxBuffer: 32768,
-          requireProcessTreeExit: true,
-        },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
-    },
-    30_000,
-  );
+    const result = await runSnapshotScript(source, ownerUrl, signal, resolveTestNodeExecPath());
+    expect(result.error).toBeUndefined();
+    expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
+  }, 30_000);
 });

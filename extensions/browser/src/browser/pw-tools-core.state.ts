@@ -110,16 +110,23 @@ export async function runPageEmulationTransition<T>(params: {
   );
 }
 
-export async function setOfflineViaPlaywright(
-  opts: InteractionTargetOptions & {
-    offline: boolean;
-  },
+async function changePageState(
+  opts: InteractionTargetOptions,
+  change: (page: Page) => Promise<void>,
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
-  await page.context().setOffline(opts.offline);
+  await change(page);
+}
+
+export async function setOfflineViaPlaywright(
+  opts: InteractionTargetOptions & {
+    offline: boolean;
+  },
+): Promise<void> {
+  await changePageState(opts, (page) => page.context().setOffline(opts.offline));
 }
 
 export async function setExtraHTTPHeadersViaPlaywright(
@@ -127,11 +134,7 @@ export async function setExtraHTTPHeadersViaPlaywright(
     headers: Record<string, string>;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  await page.context().setExtraHTTPHeaders(opts.headers);
+  await changePageState(opts, (page) => page.context().setExtraHTTPHeaders(opts.headers));
 }
 
 export async function setHttpCredentialsViaPlaywright(
@@ -141,20 +144,18 @@ export async function setHttpCredentialsViaPlaywright(
     clear?: boolean;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  if (opts.clear) {
-    await page.context().setHTTPCredentials(null);
-    return;
-  }
-  const username = opts.username ?? "";
-  const password = opts.password ?? "";
-  if (!username) {
-    throw new Error("username is required (or set clear=true)");
-  }
-  await page.context().setHTTPCredentials({ username, password });
+  await changePageState(opts, async (page) => {
+    if (opts.clear) {
+      await page.context().setHTTPCredentials(null);
+      return;
+    }
+    const username = opts.username ?? "";
+    const password = opts.password ?? "";
+    if (!username) {
+      throw new Error("username is required (or set clear=true)");
+    }
+    await page.context().setHTTPCredentials({ username, password });
+  });
 }
 
 export async function setGeolocationViaPlaywright(
@@ -207,64 +208,55 @@ export async function emulateMediaViaPlaywright(
     colorScheme: "dark" | "light" | "no-preference" | null;
   },
 ): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  await page.emulateMedia({ colorScheme: opts.colorScheme });
+  await changePageState(opts, (page) => page.emulateMedia({ colorScheme: opts.colorScheme }));
 }
 
-export async function setLocaleViaPlaywright(
-  opts: InteractionTargetOptions & {
-    locale: string;
-  },
+async function setPageEmulationOverride(
+  opts: InteractionTargetOptions & { locale?: string; timezoneId?: string },
+  field: "locale" | "timezoneId",
 ): Promise<void> {
   const page = await getPageForTargetId(opts);
   const pageState = ensurePageState(page);
-  const locale = normalizeOptionalString(opts.locale) ?? "";
-  if (!locale) {
-    throw new Error("locale is required");
+  const value = normalizeOptionalString(opts[field]) ?? "";
+  if (!value) {
+    throw new Error(`${field} is required`);
   }
   const session = await resolvePageEmulationSession(page, pageState);
   if (opts.assertCurrent) {
     await assertInteractionCurrent(opts);
   }
   try {
-    await session.send("Emulation.setLocaleOverride", { locale });
-  } catch (err) {
-    if (!String(err).includes("Another locale override is already in effect")) {
-      throw err;
+    if (field === "locale") {
+      await session.send("Emulation.setLocaleOverride", { locale: value });
+    } else {
+      await session.send("Emulation.setTimezoneOverride", { timezoneId: value });
     }
-  }
-}
-
-export async function setTimezoneViaPlaywright(
-  opts: InteractionTargetOptions & {
-    timezoneId: string;
-  },
-): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  const pageState = ensurePageState(page);
-  const timezoneId = normalizeOptionalString(opts.timezoneId) ?? "";
-  if (!timezoneId) {
-    throw new Error("timezoneId is required");
-  }
-  const session = await resolvePageEmulationSession(page, pageState);
-  if (opts.assertCurrent) {
-    await assertInteractionCurrent(opts);
-  }
-  try {
-    await session.send("Emulation.setTimezoneOverride", { timezoneId });
   } catch (err) {
     const msg = String(err);
-    if (msg.includes("Timezone override is already in effect")) {
+    const alreadyApplied =
+      field === "locale"
+        ? "Another locale override is already in effect"
+        : "Timezone override is already in effect";
+    if (msg.includes(alreadyApplied)) {
       return;
     }
-    if (msg.includes("Invalid timezone")) {
-      throw new Error(`Invalid timezone ID: ${timezoneId}`, { cause: err });
+    if (field === "timezoneId" && msg.includes("Invalid timezone")) {
+      throw new Error(`Invalid timezone ID: ${value}`, { cause: err });
     }
     throw err;
   }
+}
+
+export async function setLocaleViaPlaywright(
+  opts: InteractionTargetOptions & { locale: string },
+): Promise<void> {
+  await setPageEmulationOverride(opts, "locale");
+}
+
+export async function setTimezoneViaPlaywright(
+  opts: InteractionTargetOptions & { timezoneId: string },
+): Promise<void> {
+  await setPageEmulationOverride(opts, "timezoneId");
 }
 
 export async function setDeviceViaPlaywright(

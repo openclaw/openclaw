@@ -196,6 +196,13 @@ describe("scheduled cron session retirement through the Gateway", () => {
   }) => {
     // Runtime test setup resets plugin registrations after each test, so both flows share this test.
     const retainedRuns = new Map<string, CronRunLogEntry[]>();
+    const startedRuns: Array<{
+      id: "removed" | "one-shot";
+      job: CronJob;
+      sessionId: string;
+      baseKey: string;
+      runKey: string;
+    }> = [];
     for (const id of ["removed", "one-shot"] as const) {
       const oneShot = id === "one-shot";
       const job = await call<CronJob>("cron.add", {
@@ -216,14 +223,22 @@ describe("scheduled cron session retirement through the Gateway", () => {
         delivery: { mode: "none" },
       });
       const baseKey = `agent:main:cron:${job.id}`;
+      // Keep the first backend blocked so the second scheduled tick must observe its live receipt.
+      await withinTest(receipts.waitFor(control, `${id}.started`), signal);
+      expect(existsSync(path.join(control, `${id}.started`))).toBe(true);
+      const base = entry(baseKey);
+      expect(base).toBeDefined();
+      const sessionId = base!.sessionId;
+      const runKey = `${baseKey}:run:${sessionId}`;
+      startedRuns.push({ id, job, sessionId, baseKey, runKey });
+    }
+    for (const { id, job, sessionId, baseKey, runKey } of startedRuns) {
+      const oneShot = id === "one-shot";
       const release = () => fs.writeFile(path.join(control, `${id}.release`), "");
       try {
-        await withinTest(receipts.waitFor(control, `${id}.started`), signal);
-        expect(existsSync(path.join(control, `${id}.started`))).toBe(true);
-        const base = entry(baseKey);
-        expect(base).toBeDefined();
-        const sessionId = base!.sessionId;
-        const runKey = `${baseKey}:run:${sessionId}`;
+        expect(entry(baseKey)).toMatchObject({ sessionId });
+        expect((await history(job.id)).entries).toEqual([]);
+        expect(existsSync(path.join(control, `${id}.cancelled`))).toBe(false);
         expect(placement(sessionId)).toMatchObject({
           session_key: runKey,
           state: "local",

@@ -1,5 +1,13 @@
-import { bindMessageInjectionAdmission } from "../../auto-reply/reply/message-injection-authority.js";
-import type { ReplyToolAuthorityPreparation } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import {
+  bindMessageInjectionAdmission,
+  createLegacyMessageInjectionAuthority,
+} from "../../auto-reply/reply/message-injection-authority.js";
+import type {
+  ReplyBackendHandle,
+  ReplyBackendMessageInjection,
+  ReplyBackendMessageInjectionV2,
+  ReplyToolAuthorityPreparation,
+} from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   capturePreparedToolAuthorityReads,
@@ -34,6 +42,52 @@ export function createLegacyToolAuthorityQueuePreflight(
       }
       assertLegacyPreparedToolAuthority(preparation, reads);
     },
+  };
+}
+
+export function bindMessageInjectionV2(
+  guarded: ReplyBackendMessageInjectionV2,
+  assertCurrent: () => void,
+  authorityKind: "run" | "source-bound",
+  getPreparation?: () => ReplyToolAuthorityPreparation,
+  legacy?: ReturnType<typeof createLegacyToolAuthorityQueuePreflight>,
+): Pick<ReplyBackendMessageInjection, "queueMessage"> &
+  Pick<ReplyBackendHandle, "claimPendingUserInputAnswer" | "cancelPendingUserInput"> & {
+    prepareQueueMessage?: () => Promise<void>;
+  } {
+  const assertFinalCurrent = legacy
+    ? createLegacyMessageInjectionAuthority(assertCurrent, legacy.assertQueueCurrent)
+    : assertCurrent;
+  return {
+    prepareQueueMessage: legacy?.prepareQueueMessage,
+    queueMessage: (text, options) => {
+      if (getPreparation && guarded.queueMessageAsync) {
+        return guarded.queueMessageAsync(text, options, getPreparation(), authorityKind);
+      }
+      legacy?.assertQueueCurrent();
+      return guarded.queueMessage(text, options, assertFinalCurrent, authorityKind);
+    },
+    claimPendingUserInputAnswer:
+      getPreparation && guarded.claimPendingUserInputAnswerAsync
+        ? (text, options) =>
+            guarded.claimPendingUserInputAnswerAsync!(
+              text,
+              options,
+              getPreparation(),
+              authorityKind,
+            )
+        : guarded.claimPendingUserInputAnswer
+          ? (text, options) =>
+              guarded.claimPendingUserInputAnswer!(text, options, assertCurrent, authorityKind)
+          : undefined,
+    cancelPendingUserInput:
+      getPreparation && guarded.cancelPendingUserInputAsync
+        ? (resolvedBy) =>
+            guarded.cancelPendingUserInputAsync!(resolvedBy, getPreparation(), authorityKind)
+        : guarded.cancelPendingUserInput
+          ? (resolvedBy) =>
+              guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
+          : undefined,
   };
 }
 

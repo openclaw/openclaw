@@ -63,3 +63,22 @@ export function emitModelTransportDebug(log: SubsystemLogger, message: string): 
   }
   log.debug(message);
 }
+
+/** The requesting layer owns AbortError classification; deadlines remain failures here. */
+export function emitModelTransportError(
+  log: SubsystemLogger & { warn(message: string): void },
+  label: string,
+  detail: string,
+  signal?: AbortSignal,
+): void {
+  const aborted =
+    signal?.aborted === true &&
+    signal.reason instanceof Error &&
+    signal.reason.name === "AbortError";
+  const message = `[${label}] ${aborted ? "aborted" : "error"} ${detail}`;
+  if (aborted) {
+    emitModelTransportDebug(log, message);
+  } else {
+    log.warn(message);
+  }
+}

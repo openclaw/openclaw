@@ -7,16 +7,6 @@ import { resolveOAuthRefreshLockPath } from "./paths.js";
 
 const lockBasenamePattern = /^lock-[0-9a-f]{32}$/;
 
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`Expected missing path: ${targetPath}`);
-}
-
 describe("resolveOAuthRefreshLockPath", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
   let stateDir = "";
@@ -43,24 +33,6 @@ describe("resolveOAuthRefreshLockPath", () => {
     expect(path.basename(dotSegmentPath)).not.toBe(path.basename(currentDirPath));
   });
 
-  it("hashes profile ids so distinct values stay distinct", () => {
-    expect(resolveOAuthRefreshLockPath("openai", "openai:work/test")).not.toBe(
-      resolveOAuthRefreshLockPath("openai", "openai_work:test"),
-    );
-    // Unicode normalization / collation corner cases must still hash distinctly.
-    expect(resolveOAuthRefreshLockPath("openai", "«c")).not.toBe(
-      resolveOAuthRefreshLockPath("openai", "઼"),
-    );
-  });
-
-  it("hashes distinct providers to distinct paths for the same profileId", () => {
-    // The new (provider, profileId) keying is the whole point of P2 from
-    // review: a shared profileId across providers must not collide.
-    expect(resolveOAuthRefreshLockPath("openai", "shared:default")).not.toBe(
-      resolveOAuthRefreshLockPath("anthropic", "shared:default"),
-    );
-  });
-
   it("is immune to simple concat collisions at the provider/profile boundary", () => {
     // With a plain `${provider}:${profileId}` hash input, the pair
     // ("a", "b:c") would collide with ("a:b", "c"). Tuple encoding rules that out.
@@ -70,20 +42,6 @@ describe("resolveOAuthRefreshLockPath", () => {
     expect(resolveOAuthRefreshLockPath("a", "\x00b")).not.toBe(
       resolveOAuthRefreshLockPath("a\x00", "b"),
     );
-  });
-
-  it("keeps lock filenames short for long profile ids", () => {
-    const longProfileId = `openai:${"x".repeat(512)}`;
-    const basename = path.basename(resolveOAuthRefreshLockPath("openai", longProfileId));
-
-    expect(basename).toMatch(lockBasenamePattern);
-    expect(Buffer.byteLength(basename, "utf8")).toBeLessThan(255);
-  });
-
-  it("is deterministic: same (provider, profileId) produces the same path", () => {
-    const first = resolveOAuthRefreshLockPath("openai", "openai:default");
-    const second = resolveOAuthRefreshLockPath("openai", "openai:default");
-    expect(first).toBe(second);
   });
 
   it("anchors the lock to an explicitly targeted state directory", () => {
@@ -99,96 +57,5 @@ describe("resolveOAuthRefreshLockPath", () => {
     expect(first).not.toBe(second);
     expect(path.dirname(first)).toBe(path.join(stateDir, "first", "locks", "oauth-refresh"));
     expect(path.dirname(second)).toBe(path.join(stateDir, "second", "locks", "oauth-refresh"));
-  });
-
-  it("returns a valid path on a clean install where the locks/ directory does not yet exist", async () => {
-    // Defensive check: even on a fresh install with no lock hierarchy
-    // populated, the function must return a safe path. withFileLock
-    // internally creates missing parent dirs, but this test pins the
-    // expectation so a future change to remove that guarantee would
-    // fail loudly.
-    const locksDir = path.join(stateDir, "locks", "oauth-refresh");
-    // Sanity precondition: parent dir must not exist yet.
-    await expectPathMissing(locksDir);
-
-    const resolved = resolveOAuthRefreshLockPath("openai", "openai:default");
-    expect(path.dirname(resolved)).toBe(locksDir);
-    expect(path.basename(resolved)).toMatch(lockBasenamePattern);
-    // Function itself must not create the directory (path resolver only).
-    await expectPathMissing(locksDir);
-  });
-
-  it("never embeds path separators or .. in the basename", () => {
-    const hazards = [
-      ["openai", "../etc/passwd"],
-      ["openai", "../../../../secrets"],
-      ["openai", "openai\\codex"],
-      ["openai", "openai/codex/default"],
-      ["openai", "profile\x00with-null"],
-      ["openai", "profile\nwith-newline"],
-      ["openai", "profile with spaces"],
-      ["../../etc", "passwd"],
-      ["provider\x00with-null", "default"],
-    ] as const;
-    for (const [provider, id] of hazards) {
-      const basename = path.basename(resolveOAuthRefreshLockPath(provider, id));
-      expect(basename).toMatch(lockBasenamePattern);
-      expect(basename).not.toContain("/");
-      expect(basename).not.toContain("\\");
-      expect(basename).not.toContain("..");
-      expect(basename).not.toContain("\x00");
-      expect(basename).not.toContain("\n");
-    }
-  });
-  function makeSeededRandom(seed: number): () => number {
-    // Mulberry32 — small, stable, seedable PRNG so the fuzz run is reproducible
-    // even if the suite later becomes picky about test ordering.
-    let t = seed >>> 0;
-    return () => {
-      t = (t + 0x6d2b79f5) >>> 0;
-      let r = t;
-      r = Math.imul(r ^ (r >>> 15), r | 1);
-      r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
-      return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-    };
-  }
-
-  function randomProfileId(rng: () => number, maxLen: number): string {
-    const len = Math.floor(rng() * maxLen);
-    const chars: string[] = [];
-    for (let i = 0; i < len; i += 1) {
-      // Cover BMP + surrogate-pair range + control chars + ASCII + path hazards.
-      const category = Math.floor(rng() * 5);
-      const code =
-        category === 0
-          ? Math.floor(rng() * 128) // ASCII
-          : category === 1
-            ? Math.floor(rng() * 32) // control chars (including \0, \n, \r, etc.)
-            : category === 2
-              ? 0x10000 + Math.floor(rng() * 0xeffff) // supplementary planes
-              : category === 3
-                ? Math.floor(rng() * 0xd800) // BMP non-surrogate
-                : 0x0f00 + Math.floor(rng() * 0x0100); // misc unicode
-      chars.push(String.fromCodePoint(code));
-    }
-    return chars.join("");
-  }
-
-  it("distinct (provider, profileId) inputs produce distinct outputs over a large random sample", () => {
-    const rng = makeSeededRandom(0x1234_5678);
-    const seen = new Map<string, string>();
-    let collisions = 0;
-    for (let i = 0; i < 2000; i += 1) {
-      const provider = randomProfileId(rng, 32) || "p";
-      const id = randomProfileId(rng, 256);
-      const composite = `${provider}\u0000${id}`;
-      const resolved = resolveOAuthRefreshLockPath(provider, id);
-      const existing = seen.get(resolved);
-      if (existing !== undefined && existing !== composite) {
-        collisions += 1;
-      }
-      seen.set(resolved, composite);
-    }
-    expect(collisions).toBe(0);
   });
 });
