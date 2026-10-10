@@ -4,7 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import crabboxPlugin from "../../extensions/crabbox/index.js";
 import { ensureSessionEntrySync } from "../../src/config/sessions/session-accessor.js";
 import * as support from "../../src/gateway/worker-environments/service.test-support.js";
-import type { OpenAsyncKeyedStoreOptions } from "../../src/plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../../src/plugin-sdk/plugin-state-runtime.js";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -58,7 +61,7 @@ describe("Crabbox allocation through Gateway ownership", () => {
       let pauseLookup = false;
       const runtime = createPluginRuntimeMock({
         state: {
-          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
+          openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {
             const store = createPluginStateKeyedStoreForTests<T>("crabbox", {
               ...options,
               env: { OPENCLAW_STATE_DIR: support.testState.root },
