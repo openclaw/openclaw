@@ -118,10 +118,6 @@ import type {
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
-import {
-  readUserGitHubConnectionInDatabase,
-  listUserGitHubConnectionsInDatabase,
-} from "./user-github-connections.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
@@ -527,15 +523,6 @@ serveOwnedWorkerTasks(
                 type: command.type,
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
               };
-            }
-            if (command.type === "userGitHubConnections.read") {
-              return {
-                type: command.type,
-                connection: readUserGitHubConnectionInDatabase(db, command.owner),
-              };
-            }
-            if (command.type === "userGitHubConnections.list") {
-              return { type: command.type, connections: listUserGitHubConnectionsInDatabase(db) };
             }
             if (
               command.type === "userModelAccounts.links" ||

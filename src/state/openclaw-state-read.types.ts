@@ -247,8 +247,6 @@ export type OpenClawStateReadCommand =
       type: "userProfiles.catalogIdentity";
       input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
     }
-  | { type: "userGitHubConnections.read"; owner: string }
-  | { type: "userGitHubConnections.list" }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userModelAccounts.summary"; profileId: string; authProfileId: string }
   | { type: "userModelAccounts.selection"; profileId?: string; authProfileId: string }
@@ -489,14 +487,6 @@ export type OpenClawStateReadResult =
   | {
       type: "userPreferences.values";
       values: Map<string, unknown>;
-    }
-  | {
-      type: "userGitHubConnections.read";
-      connection: import("./user-github-connections.types.js").UserGitHubConnection | undefined;
-    }
-  | {
-      type: "userGitHubConnections.list";
-      connections: import("./user-github-connections.types.js").UserGitHubConnectionEntry[];
     }
   | {
       type: "userModelAccounts.links";

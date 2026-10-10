@@ -294,6 +294,9 @@ canonical profile ID, role, and verified GitHub login through the existing profi
 authority fence. One joined query on the shared-state worker resolves those facts
 without opening a separate reader or read transaction; display and alias consumers
 retain the full profile projection.
+Personal connection reads and maintenance listings use that same shared-state
+worker without creating absent databases; received credentials are registered
+with the host's secret redaction owner.
 These changes do not alter the schema, stored representation, or update behavior.
 
 Released coordinator methods with opaque requester assertions remain explicit
