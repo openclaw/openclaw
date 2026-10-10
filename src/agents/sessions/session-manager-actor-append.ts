@@ -57,15 +57,14 @@ export async function appendSessionManagerActor(input: {
     },
   };
   assertCurrent();
-  const snapshot = actor.snapshot(authority) ?? (await actor.read(authority));
-  assertCurrent();
+  const snapshot = actor.snapshot(authority);
   let captured: CommittedAppend | undefined;
   let outcome: SessionActorOutcome<AppendValue>;
   try {
     const command = {
       commandId: randomUUID(),
       phaseId: "session-manager.append",
-      expected: snapshot.version,
+      expected: snapshot?.version,
       append,
     };
     const observer = {
@@ -76,9 +75,17 @@ export async function appendSessionManagerActor(input: {
         }
       },
     };
-    outcome = input.toolResult
-      ? await actor.appendToolResult(command, authority, observer)
-      : await actor.appendTranscriptEvent(command, authority, observer);
+    const execute = () =>
+      input.toolResult
+        ? actor.appendToolResult(command, authority, observer)
+        : actor.appendTranscriptEvent(command, authority, observer);
+    outcome = await execute();
+    // The typed stale reply proves no mutation ran; a captured commit always wins.
+    if (outcome.kind === "stale-version" && !captured) {
+      assertCurrent();
+      command.expected = outcome.postimage.version;
+      outcome = await execute();
+    }
   } catch (cause) {
     if (!captured) {
       if (hasSqliteWorkerOutcomeUnknown(cause)) {
@@ -101,7 +108,7 @@ export async function appendSessionManagerActor(input: {
     recordModelFallbackStop(error);
     throw error;
   }
-  if (outcome.kind === "rolled-back") {
+  if (outcome.kind === "rolled-back" || outcome.kind === "stale-version") {
     if (outcome.error.name === "SessionTranscriptWriterClaimReboundError") {
       throw new SessionTranscriptWriterClaimReboundError();
     }

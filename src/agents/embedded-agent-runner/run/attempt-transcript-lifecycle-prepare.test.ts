@@ -199,32 +199,47 @@ describe("admitted lazy session writer", () => {
     { existing: true, incognito: false },
     { existing: true, incognito: true },
   ])(
-    "commits actor appends in order and refuses a replaced writer (existing=$existing, incognito=$incognito)",
+    "commits actor appends without pre-reads and refuses a replaced writer (existing=$existing, incognito=$incognito)",
     async ({ existing, incognito }) => {
       await withInitialWriter(
         async ({ manager, runParams, target, transcript }) => {
-          expect(transcript.ownedTranscriptWriteContext.sessionActor).toBeDefined();
-          const first = manager.appendMessageAsync(userMessage);
-          const second = manager.appendMessageAsync({
-            role: "toolResult",
-            toolCallId: "actor-result",
-            toolName: "lookup",
-            content: [{ type: "text", text: "Durable synthetic result" }],
-            isError: false,
-            timestamp: 2,
-          });
-          const [firstId, secondId] = await Promise.all([first, second]);
-          const persisted = loadTranscriptEventsSync(target);
-          expect(persisted.slice(-2)).toMatchObject([
-            { id: firstId, message: userMessage },
-            { id: secondId, parentId: firstId, message: { role: "toolResult" } },
-          ]);
-          expect(manager.getPersistedEntries()).toEqual(persisted);
-          await claimAgentSessionWriter({ ...runParams, runId: "replacement-actor-writer" });
-          await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow(
-            SessionTranscriptWriterClaimReboundError,
-          );
-          expect(loadTranscriptEventsSync(target)).toEqual(persisted);
+          const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+          const read = vi.spyOn(actor, "read");
+          try {
+            const first = manager.appendMessageAsync(userMessage);
+            const second = manager.appendMessageAsync({
+              role: "toolResult",
+              toolCallId: "actor-result",
+              toolName: "lookup",
+              content: [{ type: "text", text: "Durable synthetic result" }],
+              isError: false,
+              timestamp: 2,
+            });
+            const [firstId, secondId] = await Promise.all([first, second]);
+            const otherSessionId = `${target.sessionId}-other`;
+            runWithoutOwnedSessionTranscriptWrites(() =>
+              replaceSessionEntrySync(
+                { ...target, sessionKey: `${target.sessionKey}-other`, sessionId: otherSessionId },
+                { sessionId: otherSessionId, updatedAt: 2, ...(incognito && { incognito: true }) },
+              ),
+            );
+            const thirdId = await manager.appendCustomEntryAsync("after-unrelated-write");
+            const persisted = loadTranscriptEventsSync(target);
+            expect(persisted.slice(-3)).toMatchObject([
+              { id: firstId, message: userMessage },
+              { id: secondId, parentId: firstId, message: { role: "toolResult" } },
+              { id: thirdId, parentId: secondId, customType: "after-unrelated-write" },
+            ]);
+            expect(manager.getPersistedEntries()).toEqual(persisted);
+            await claimAgentSessionWriter({ ...runParams, runId: "replacement-actor-writer" });
+            await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow(
+              SessionTranscriptWriterClaimReboundError,
+            );
+            expect(loadTranscriptEventsSync(target)).toEqual(persisted);
+            expect(read).not.toHaveBeenCalled();
+          } finally {
+            read.mockRestore();
+          }
         },
         { existing, incognito },
       );
@@ -330,6 +345,44 @@ describe("admitted lazy session writer", () => {
       }
     });
   });
+
+  it.each([false, true])(
+    "uses a stale-version postimage once without replaying a durable append (incognito=%s)",
+    async (incognito) => {
+      await withInitialWriter(
+        async ({ manager, target, transcript }) => {
+          await manager.appendMessageAsync(userMessage);
+          const before = loadTranscriptEventsSync(target);
+          const actor = transcript.ownedTranscriptWriteContext.sessionActor!.actor;
+          const append = actor.appendTranscriptEvent.bind(actor);
+          const stale = vi
+            .spyOn(actor, "appendTranscriptEvent")
+            .mockImplementationOnce((command, authority, observer) =>
+              append(
+                { ...command, expected: { epoch: "superseded-test-epoch", sequence: 0 } },
+                authority,
+                observer,
+              ),
+            );
+          const read = vi.spyOn(actor, "read");
+          try {
+            const id = await manager.appendCustomEntryAsync("after-stale-version");
+            expect(stale).toHaveBeenCalledTimes(2);
+            expect(read).not.toHaveBeenCalled();
+            const persisted = loadTranscriptEventsSync(target);
+            expect(persisted.slice(0, before.length)).toEqual(before);
+            expect(persisted.slice(before.length)).toMatchObject([
+              { id, customType: "after-stale-version" },
+            ]);
+          } finally {
+            stale.mockRestore();
+            read.mockRestore();
+          }
+        },
+        { existing: true, incognito },
+      );
+    },
+  );
 
   it("refuses a prepared target whose owner closes during lifecycle preparation", async () => {
     await withInitialWriter(
