@@ -135,6 +135,20 @@ try {
         withConsoleLogsRoutedToStderrForJson(
           process.argv,
           async () => {
+            if (process.argv[2] === "config-unset-route") {
+              const { tryRouteCli } = await import("./route.js");
+              const routed = await tryRouteCli([
+                process.argv[0]!,
+                process.argv[1]!,
+                "config",
+                "unset",
+                ...process.argv.slice(3),
+              ]);
+              if (!routed) {
+                throw new Error("Config unset route was not selected");
+              }
+              return;
+            }
             if (process.argv[2] === "ownership-claim-direct") {
               const { claimOpenClawStateOwnership } =
                 await import("../state/openclaw-state-ownership-operations.js");
@@ -147,6 +161,29 @@ try {
             if (process.argv[2] === "sandbox") {
               const { registerSandboxCli } = await import("./sandbox-cli.js");
               registerSandboxCli(program);
+            } else if (process.argv[2] === "agents") {
+              const { registerAgentsCommands } = await import("./program/register.agent.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
+              registerAgentsCommands(program);
+            } else if (process.argv[2] === "setup") {
+              const { registerSetupCommand } = await import("./program/register.setup.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
+              registerSetupCommand(program);
+            } else if (process.argv[2] === "onboard") {
+              const { registerOnboardCommand } = await import("./program/register.onboard.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
+              registerOnboardCommand(program);
+            } else if (process.argv[2] === "config") {
+              const { registerConfigCli } = await import("./config-cli.js");
+              const { registerPreActionHooks } = await import("./program/preaction.js");
+              registerPreActionHooks(program, "test");
+              registerConfigCli(program);
+            } else if (process.argv[2] === "migrate") {
+              const { registerMigrateCommand } = await import("./program/register.migrate.js");
+              registerMigrateCommand(program);
             } else if (process.argv[2] === "mcp") {
               const { registerMcpCli } = await import("./mcp-cli.js");
               registerMcpCli(program);

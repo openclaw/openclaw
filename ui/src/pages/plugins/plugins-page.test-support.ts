@@ -44,7 +44,7 @@ type GatewayHarness = {
   ) => ApplicationGatewaySnapshot;
 };
 
-export type TestPluginsPage = HTMLElement & {
+type TestPluginsPage = HTMLElement & {
   surface: "discovery" | "settings";
   routeData?: PluginsRouteData;
   readonly updateComplete: Promise<boolean>;
@@ -403,7 +403,7 @@ export async function mountPage(
   surface: TestPluginsPage["surface"] = routeData?.location.pathname.includes("/settings/plugins")
     ? "settings"
     : "discovery",
-): Promise<{ page: TestPluginsPage; provider: HTMLElement }> {
+): Promise<{ page: TestPluginsPage }> {
   const [currentRoute, setCurrentRoute] = createSignal(routeData, { ownedWrite: true });
   const [currentSurface, setCurrentSurface] = createSignal(surface, { ownedWrite: true });
   const provider = createSolidApplicationContextProvider(context);
@@ -430,7 +430,7 @@ export async function mountPage(
     updateComplete: { get: settlePlugins },
   });
   page.remove = () => mounted.unmount();
-  return { page, provider: mounted.container };
+  return { page };
 }
 
 export async function clickPluginAction(page: HTMLElement, label: string): Promise<void> {
@@ -445,34 +445,6 @@ export async function clickPluginAction(page: HTMLElement, label: string): Promi
     return control;
   });
   button.click();
-  await settlePlugins();
-}
-
-export async function activatePluginControl(
-  page: TestPluginsPage,
-  pluginSelector: string,
-  label: string,
-) {
-  await settlePlugins();
-  const controls = [
-    ...page.querySelectorAll<HTMLElement>(
-      `${pluginSelector} button, ${pluginSelector} input[type="checkbox"], ${pluginSelector} wa-switch`,
-    ),
-  ];
-  const control =
-    controls.find((element) =>
-      (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-    ) ?? controls.find((element) => element.matches('input[type="checkbox"], wa-switch'));
-  if (!control) {
-    throw new Error(`No plugin control matching ${label} under ${pluginSelector}`);
-  }
-  if (control.tagName.toLowerCase() === "wa-switch") {
-    const toggle = control as HTMLElement & { checked: boolean };
-    toggle.checked = !toggle.checked;
-    toggle.dispatchEvent(new Event("change", { bubbles: true }));
-  } else {
-    control.click();
-  }
   await settlePlugins();
 }
 
