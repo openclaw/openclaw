@@ -366,7 +366,7 @@ export function createGatewayInstanceRuntime(
     if (closed) {
       return 0;
     }
-    const publication = Symbol();
+    const publication = Symbol("approval publication");
     const publications = pendingApprovalPublications.get(request.id) ?? new Set<symbol>();
     publications.add(publication);
     pendingApprovalPublications.set(request.id, publications);

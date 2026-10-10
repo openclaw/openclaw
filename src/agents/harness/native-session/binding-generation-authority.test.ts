@@ -77,8 +77,8 @@ describe("native session binding generation authority", () => {
 
   it("rechecks host generation after an awaited binding read", async () => {
     await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
-    const reading = createDeferred<void>();
-    const release = createDeferred<void>();
+    const reading = createDeferred();
+    const release = createDeferred();
     const pending = resolveNativeSessionBindingWithAuthorityV2({
       target,
       storePath,
