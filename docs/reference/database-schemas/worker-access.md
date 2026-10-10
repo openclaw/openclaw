@@ -147,6 +147,43 @@ current policy, pending canonical validation, and current-row reads remain
 with the reader. When physical admission is already known, the first canonical
 read enters its snapshot before policy reads, avoiding discarded probes.
 
+## SDK session writer migration
+
+Session entry SDK callers use `prepareSessionEntryPatch` for one host preparation
+followed by the existing exact-snapshot worker commit, or `applySessionEntryPatch`
+for a single data-only conditional mutation. Public upserts and ambient transcript
+watermarks reduce against authoritative rows inside that same writer. The
+plugin runtime binds session ownership and live plugin authority to preparation
+and commit. Released opaque transaction guards retain their explicit native
+adapter; no worker failure falls back to it.
+
+Bundled extension actions and provider replay use the existing awaited
+SessionManager methods and versioned types. A queued session-name write retains
+its original runtime and manager authority through admission and commit. The
+shared deprecation helper warns on actual legacy use once per plugin identity
+and capability family, including across plugin reloads. Unknown direct SDK
+consumers share a bounded family warning. Legacy synchronous calls commit and
+publish their facts before returning; async completion also includes fact
+installation.
+
+Correlated channel replies commit the replayable delivery first, then append the
+optional side audit event through the transcript worker. That transaction checks
+the captured session ID and lifecycle and reports whether the event was inserted
+before completing the waiter. A refused or failed audit does not undo a committed
+reply.
+
+Native incognito ownership remains until the separate actor activation. Cross-store
+conversation predicates retain the existing native entry adapter until their typed
+source-fence cutover. Those routes, released compatibility methods, worker kernels,
+and offline tools are explicitly retained; they are not evidence of worker-only
+runtime access. No schema, stored bytes, retention, or update behavior changes.
+
+The released synchronous `listSessionEntries` default still joins writable database
+admission. Bundled runtime readers use `readOnly: true` or the awaited
+`api.runtime.agent.session.createSessionEntryListReader`; the remaining bundled
+default calls belong to Doctor. Test-only full-transcript replacement and raw
+event append wrappers live in test support, outside the core accessor exports.
+
 ## Committed facts and completeness
 
 Synchronous compatibility writers and workers share the existing postcommit
@@ -393,6 +430,21 @@ completion contract.
 
 ### Conversation and plugin-state receipt coverage
 
+Bundled keyed-state mutations use the data-only V2 store and the existing
+shared-state worker. Preparation can await on the host; `compareAndApply` checks
+the destination and any same-plugin namespace conditions in one synchronous
+worker transaction. An explicit conflict requires fresh preparation. Neither an
+unknown outcome nor a failed worker request selects a native fallback.
+
+Released synchronous stores and opaque callbacks remain named
+compatibility paths until removed in the next Plugin SDK major. They preserve
+commit-before-return and use one shared migration-warning budget per plugin and
+capability family. Exact final-authority reads remain at ClickClack/peer delivery,
+native binding leases, channel route ownership, resource policy, MCP effects,
+placement activation, and model-selection commit boundaries. Their retirement
+requires complete owner publication and removal of raw synchronous writers.
+There is no new freshness probe, schema, stored-byte, retention, or update change.
+
 Plugin-state keyed mutations publish stored JSON postimages and exact deleted
 keys through the same postcommit phases. Expiry sweeps, capacity eviction,
 conditional deletion, atomic consume/register-if-absent, namespace clear,
@@ -421,6 +473,19 @@ ClickClack channel lookups verify that the persisted binding still matches the
 requested channel. Discussion tools validate the persisted target directly; no
 discussion reverse index remains. Replacing a primary key cannot reuse an obsolete
 channel or discussion route.
+
+ClickClack cleanup and metadata reconciliation condition binding mutations on
+the captured room and session attachment. The keyed-state worker compares the
+observed row inside the mutation transaction. A replacement wins: cleanup keeps
+its routing index, open stops instead of overwriting it, and late reconciliation
+discards the old result. Opening a new room publishes only while the binding is
+still absent; an unbound remote room remains quarantined for recovery. These
+checks preserve the existing SQLite schema and update behavior. Cleanup
+revocations carry their captured binding and are conditional on that owner in
+the same worker transaction. They remain effective after removal, but do not
+revoke a successor using the same channel. Existing unscoped tombstones and
+quarantine markers still revoke the entire channel and cannot be narrowed by
+cleanup.
 
 Coverage remains scoped to these managed kernels. Session-entry worker envelopes
 still need to compose conversation association facts and compound native-binding
@@ -996,6 +1061,52 @@ that capability retain their synchronous contract; a worker failure never select
 the native fallback. Final session authority still uses the synchronous guard.
 
 ## Keep one store owner
+
+Plugin-state compound operations use `store.createOperation` over host-owned
+asynchronous handles. One command invokes a captured plugin module inside the
+existing shared-state worker transaction. The synchronous transaction facade
+shares row reads, enforces declared write namespaces, and applies existing
+quotas and TTLs. Module loading happens before the transaction under the plugin
+instance's captured source generation. No independent writer or schema is added.
+See [plugin-state operations](/plugins/sdk-runtime/state-and-system#synchronous-keyed-store-migration).
+
+Online state belongs to the Gateway. This operation path uses admitted schema
+facts and in-process mutation receipts rather than foreign-commit probes.
+Canonical asynchronous and retained synchronous keyed-store mutations invalidate
+receipts before queueing or execution. Committed facts, expiry, source identity,
+and live plugin/action authority govern later effects. Refusal and unknown
+settlement do not authorize replay. Accepted writes retain their existing FIFO
+and settlement owner.
+
+Reef runs key loads, review decisions and capacity changes, trust edits, audit
+appends, cursor changes, and rejection reservation/completion as complete worker
+commands. Audit groups read the head once and commit their links, retention, and
+final head together. Outbound composition uses a preparation command before the
+external guard, then a finalization command for remaining audit events and the
+exact delivery binding. Neither guard classification nor relay HTTP keeps a
+SQLite transaction open. Expected denials return after the applicable audit
+records commit.
+
+Reef checks the final in-process receipt in the transport's effect-initiation
+callback, after host preparation and immediately before fetch. Inbound metadata,
+transaction/commit admission, agent dispatch, and owner notices use the same
+live receipt boundary. These assertions execute no main-thread SQLite. Recovery
+carries its original source receipt into combined operations; a mismatch refuses
+composition before dispatch.
+
+Reef retains synchronous `listCurrent` reads only for the released
+`ChannelPlugin` config, account-description, and security-policy adapters;
+asynchronous directory listings use the worker. Replacing those released
+synchronous policy surfaces belongs to the next approved SDK migration. Hosts
+without `createOperation` retain their existing native adapters, selected before
+awaiting. Worker failures never select a fallback.
+
+Older hosts without the additive direct-DM authority callback retain their
+historical host behavior and do not gain the current host's checks after their
+own awaits. See the
+[channel authority contract](/plugins/sdk-channel-plugins) for current-host
+checks. These changes preserve schemas, stored formats, retention, permissions,
+and update behavior.
 
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
 writer. The worker plans retained transcript rows before its synchronous write
@@ -1953,6 +2064,10 @@ compares the same complete pending entry through an owner-published fingerprint;
 ordinary policy guards compare only their named fields, so unrelated metadata
 changes do not revoke an admitted operation. Public metadata stays a caller-owned
 projection rather than an authorization cache.
+
+Ordinary host-owned session admission captures its initial identity synchronously
+before yielding, so the existing admission check rejects a replacement while work
+is queued. Explicitly bound incognito sessions retain their awaited actor read.
 
 Codex prepares session policy before asynchronous work and rechecks the captured
 session, lifecycle, execution host, and node at native and tool effects. A storage

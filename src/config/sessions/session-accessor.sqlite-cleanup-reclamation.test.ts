@@ -30,7 +30,7 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation-run.js";
-import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 const hook = vi.hoisted(() => ({ after: undefined as (() => void) | undefined }));

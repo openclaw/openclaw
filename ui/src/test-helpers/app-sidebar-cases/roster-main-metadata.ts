@@ -57,7 +57,8 @@ describe("AppSidebar main-chat metadata", () => {
     const header = sidebar.querySelector(
       '[data-agent-group="working"] .sidebar-agent-roster__header',
     )!;
-    expect(header.querySelector(".session-owner-chip")).not.toBeNull();
+    // #168575: the agent avatar is the header identity; Home's creator chip never renders here.
+    expect(header.querySelector(".session-owner-chip")).toBeNull();
     expect(header.querySelector(".session-row-draft-indicator")).not.toBeNull();
     expect(header.querySelector(".session-row-badge--draft")).not.toBeNull();
     expect(header.querySelector('[aria-label="2 messages need attention"]')).not.toBeNull();

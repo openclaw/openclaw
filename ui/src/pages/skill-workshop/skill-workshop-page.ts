@@ -127,7 +127,18 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
       ) {
         this.viewer = null;
       }
-      if (!this.viewer) {
+      // A chat notice links here with ?skill=<name>; open it in whichever list holds it.
+      const requested = this.viewer
+        ? null
+        : new URLSearchParams(this.context?.router.getState().location.search).get("skill");
+      const requestedLive = snapshot.list.skills.some((skill) => skill.name === requested);
+      if (
+        requested &&
+        (requestedLive || snapshot.list.archived.some((skill) => skill.name === requested))
+      ) {
+        this.filter = requestedLive ? "active" : "archived";
+        this.selectSkill(requested);
+      } else if (!this.viewer) {
         this.selectFirst();
       }
     } catch (error) {

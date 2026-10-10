@@ -26,11 +26,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
-} from "./session-accessor.js";
+import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
@@ -45,6 +41,7 @@ import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sq
 import { observeSessionMaintenancePlanningWorker } from "./session-accessor.sqlite-maintenance.test-support.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
 import * as reclamation from "./session-accessor.sqlite-reclamation.js";
+import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 

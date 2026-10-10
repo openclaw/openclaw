@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";

@@ -8,8 +8,8 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   OPENAI_API_BASE_URL,
-  OPENAI_CODEX_MODELS_ENDPOINT as OPENAI_CODEX_MODELS_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
+  resolveOpenAICodexModelsEndpoint,
 } from "./base-url.js";
 import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -613,7 +613,7 @@ describe("buildOpenAIProvider", () => {
         maxTokens: 64_000,
       });
       expect(fetchSpy).toHaveBeenCalledOnce();
-      expect(fetchSpy.mock.calls[0]?.[0]).toBe(OPENAI_CODEX_MODELS_URL);
+      expect(fetchSpy.mock.calls[0]?.[0]).toBe(await resolveOpenAICodexModelsEndpoint());
       const headers = fetchSpy.mock.calls[0]?.[1]?.headers;
       expect(headers).toBeInstanceOf(Headers);
       if (!(headers instanceof Headers)) {
@@ -777,7 +777,6 @@ describe("buildOpenAIProvider", () => {
   });
 
   registerOpenAIServiceTierCatalogTests({
-    modelsUrl: OPENAI_CODEX_MODELS_URL,
     runCatalogWithFetchGuard,
   });
 
@@ -791,9 +790,9 @@ describe("buildOpenAIProvider", () => {
         source: "profile",
       },
       accountId: "acct-openai-workspace",
-      fetchGuard: async () => ({
+      fetchGuard: async ({ url }) => ({
         response: new Response("forbidden", { status: 403 }),
-        finalUrl: OPENAI_CODEX_MODELS_URL,
+        finalUrl: url,
         release,
       }),
     });
