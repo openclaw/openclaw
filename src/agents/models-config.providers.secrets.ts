@@ -11,8 +11,10 @@ import { resolveNonEnvSecretRefApiKeyMarker } from "../secrets/provider-credenti
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
+import { evaluateStoredCredentialEligibility } from "./auth-profiles/credential-state.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
+import { isSetupCredentialAccessible } from "./auth-profiles/setup-access.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
@@ -20,6 +22,10 @@ import {
   isNonSecretApiKeyMarker,
   resolveOAuthApiKeyMarker,
 } from "./model-auth-markers.js";
+import {
+  resolveProviderConfigSecretInput,
+  resolveProviderEntryApiKeyProfileReference,
+} from "./model-auth-provider-config.js";
 import { resolveDirectProviderCredentialMode } from "./model-auth-runtime-shared.js";
 import {
   resolveApiKeyFromCredential,
@@ -45,9 +51,71 @@ export {
 
 type AuthProfileStoreInput = AuthProfileStore | (() => AuthProfileStore);
 type ProviderAuthLookupCaches = ReturnType<typeof resolveProviderEnvAuthLookupMaps>;
+type CatalogAuth = {
+  apiKey: string;
+  discoveryApiKey?: string;
+  mode: "api_key" | "oauth" | "token";
+  source?: "env" | "profile" | "none";
+  profileId?: string;
+};
 
 function resolveAuthProfileStoreInput(input: AuthProfileStoreInput) {
   return typeof input === "function" ? input() : input;
+}
+
+function resolveCatalogProviderEntryAuth(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  sourceConfigForSecrets?: OpenClawConfig;
+  authStoreInput: AuthProfileStoreInput;
+  env: NodeJS.ProcessEnv;
+}): CatalogAuth | undefined {
+  const input = resolveProviderConfigSecretInput(
+    params.config,
+    params.provider,
+    params.sourceConfigForSecrets,
+  );
+  if (input.ref || typeof input.providerConfig?.apiKey !== "string") {
+    return undefined;
+  }
+  const reference = resolveProviderEntryApiKeyProfileReference({
+    cfg: params.config,
+    sourceConfig: params.sourceConfigForSecrets,
+    provider: params.provider,
+    store: resolveAuthProfileStoreInput(params.authStoreInput),
+  });
+  if (reference.kind === "profile-incompatible") {
+    throw new Error(
+      `Per-entry apiKey "${reference.profileId}" for provider "${params.provider}" references an incompatible auth profile.`,
+    );
+  }
+  if (reference.kind !== "profile") {
+    return undefined;
+  }
+  if (
+    !isSetupCredentialAccessible({
+      profileId: reference.profileId,
+      credential: reference.credential,
+    }) ||
+    !evaluateStoredCredentialEligibility({ credential: reference.credential }).eligible
+  ) {
+    throw new Error(
+      `Per-entry apiKey "${reference.profileId}" for provider "${params.provider}" matched an unusable stored profile.`,
+    );
+  }
+  const resolved = resolveApiKeyFromCredential(reference.credential, params.env);
+  if (!resolved) {
+    throw new Error(
+      `Per-entry apiKey "${reference.profileId}" for provider "${params.provider}" matched a stored profile but failed to resolve.`,
+    );
+  }
+  return {
+    apiKey: resolved.apiKey,
+    discoveryApiKey: resolved.discoveryApiKey,
+    mode: reference.credential.type === "token" ? "token" : "api_key",
+    source: "profile",
+    profileId: reference.profileId,
+  };
 }
 
 function resolveCatalogAuthProfileOrder(params: {
@@ -171,12 +239,14 @@ export function createProviderApiKeyResolver(
       sourceConfigForSecrets,
       workspaceDir,
       syntheticAuthEnv,
+      authStoreInput,
     });
     if (direct?.apiKey) {
       return {
         apiKey: direct.apiKey,
         discoveryApiKey: direct.discoveryApiKey,
         mode: direct.mode,
+        ...(direct.profileId ? { profileId: direct.profileId } : {}),
       };
     }
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
@@ -216,6 +286,18 @@ export function createProviderAuthResolver(
     const lookupCaches = getLookupCaches();
     const authProvider = resolveProviderIdForAuthFromCaches(provider, lookupCaches);
     const authStore = resolveAuthProfileStoreInput(authStoreInput);
+    const binding = resolveCatalogProviderEntryAuth({
+      provider: authProvider,
+      config,
+      sourceConfigForSecrets,
+      authStoreInput: authStore,
+      env,
+    });
+    if (binding) {
+      return options?.excludeProfileIds?.includes(binding.profileId ?? "")
+        ? { apiKey: undefined, mode: "none", source: "none" }
+        : { ...binding, source: "profile" };
+    }
     const excludedProfileIds = new Set(options?.excludeProfileIds);
     const ids = resolveCatalogAuthProfileOrder({
       config,
@@ -266,6 +348,7 @@ export function createProviderAuthResolver(
         sourceConfigForSecrets,
         workspaceDir,
         syntheticAuthEnv,
+        authStoreInput: authStore,
       }) ?? { apiKey: undefined, discoveryApiKey: undefined, mode: "none", source: "none" }
     );
   };
@@ -276,14 +359,14 @@ function resolveDirectCatalogAuth(
     env: NodeJS.ProcessEnv;
     lookupCaches: ProviderAuthLookupCaches;
   },
-): (ReturnType<typeof resolveConfigBackedProviderAuth> & { source: "env" | "none" }) | undefined {
+) {
   const envVar = resolveEnvApiKeyVarName(params.provider, params.env, {
     aliasMap: params.lookupCaches.aliasMap,
     candidateMap: params.lookupCaches.envCandidateMap,
     authEvidenceMap: params.lookupCaches.authEvidenceMap,
   });
   // Public auth retains the env name; only discovery consumes its resolved value.
-  const auth = envVar
+  const auth: CatalogAuth | undefined = envVar
     ? {
         apiKey: envVar,
         discoveryApiKey: toDiscoveryApiKey(params.env[envVar]),
@@ -295,7 +378,8 @@ function resolveDirectCatalogAuth(
         apiKey: auth.apiKey,
         discoveryApiKey: auth.discoveryApiKey,
         mode: auth.mode,
-        source: envVar ? ("env" as const) : ("none" as const),
+        source: envVar ? ("env" as const) : (auth.source ?? "none"),
+        ...(auth.profileId ? { profileId: auth.profileId } : {}),
       }
     : undefined;
 }
@@ -307,13 +391,8 @@ function resolveConfigBackedProviderAuth(params: {
   sourceConfigForSecrets?: OpenClawConfig;
   workspaceDir?: string;
   syntheticAuthEnv?: NodeJS.ProcessEnv;
-}):
-  | {
-      apiKey: string;
-      discoveryApiKey?: string;
-      mode: ReturnType<typeof resolveCatalogDirectAuthMode>;
-    }
-  | undefined {
+  authStoreInput: AuthProfileStoreInput;
+}): CatalogAuth | undefined {
   const authProvider = params.provider;
   const mode = resolveCatalogDirectAuthMode(params.config, authProvider);
   const apiKeyPath = `${appendConfigPathSegment("models.providers", authProvider)}.apiKey`;
@@ -342,6 +421,13 @@ function resolveConfigBackedProviderAuth(params: {
       discoveryApiKey,
       mode,
     };
+  }
+  const binding = resolveCatalogProviderEntryAuth({
+    ...params,
+    env: params.env ?? process.env,
+  });
+  if (binding) {
+    return binding;
   }
   const synthetic = resolveProviderSyntheticAuthWithPlugin({
     provider: authProvider,
