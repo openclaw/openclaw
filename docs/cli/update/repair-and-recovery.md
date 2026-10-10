@@ -363,6 +363,20 @@ least 45 minutes have passed since the lease's last recorded activity. A
 recoverable larger recorded timeout extends that grace period. Gateway startup
 and borrowed update processes do not reclaim these leases.
 
+Repair also checks legacy update child-lineage leases left after a manual
+installation hop, even when the installation-root lease is absent. Dead PIDs
+and PIDs reused with different start identities can be reclaimed. An unbound
+lineage reservation names the same executor and helper; an unrelated process
+group with that numeric ID does not keep it alive. Bound child process groups
+still require proven extinction. Repair preserves the original lease evidence
+while claiming the installation and records the reclaimed keys in update history.
+When several child leases remain, repair checks each child's original run and
+rollback evidence before claiming the installation; one child's history cannot
+authorize reclaiming another child's lease.
+Live or uninspectable owners remain protected. On Linux with restricted `/proc`
+visibility, retry from the original OS account with process-inspection permissions;
+permission errors never prove that an owner died.
+
 The original run must be identifiable from its retained helper, update history,
 or generation-bound repair metadata, and readable in the selected state database.
 Repair needs that record to check rollback and recovery evidence. Use the same

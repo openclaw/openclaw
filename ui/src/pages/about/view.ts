@@ -10,13 +10,14 @@ import {
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import { currentThemeBranding } from "../../components/neutral-mark.ts";
-import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import "../../components/tooltip.ts";
+import { renderThemeBrandIcon } from "../../components/theme-brand-icon.ts";
 import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatDateMs, formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
@@ -131,8 +132,10 @@ function renderHero(props: AboutProps) {
   return html`
     <section class="about-hero">
       ${
-        currentThemeBranding().mascot === "none"
-          ? html`<span class="about-hero__mark--neutral" aria-hidden="true">${icons.mark}</span>`
+        currentThemeBranding().brandIcon !== "claw"
+          ? html`<span class="about-hero__mark--neutral" aria-hidden="true"
+              >${renderThemeBrandIcon()}</span
+            >`
           : html`<button
               type="button"
               class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
@@ -143,7 +146,7 @@ function renderHero(props: AboutProps) {
               ${renderLobsterSvg(look)}
             </button>`
       }
-      <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
+      <h2 class="about-hero__name">${currentThemeBranding().brandName}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
       ${
         props.buildInfo.version
@@ -151,7 +154,7 @@ function renderHero(props: AboutProps) {
           : nothing
       }
       <nav class="about-hero__links" aria-label=${t("aboutPage.linksLabel")}>
-        ${ABOUT_LINKS.map(
+        ${(currentThemeBranding().communityLinks ? ABOUT_LINKS : []).map(
           (link) => html`
             <a
               class="about-hero__link"

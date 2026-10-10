@@ -11,6 +11,8 @@ import {
 } from "../state/openclaw-state-worker-error.js";
 import { captureSqliteNativeRuntimeAdmission } from "./node-sqlite.js";
 import { withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
+import { SQLITE_WORKER_SOURCE_FENCE } from "./sqlite-source-fence-contract.js";
+import { runSqliteSourceFence } from "./sqlite-source-fence.js";
 import {
   SQLITE_WORKER_MAX_RESULT_BYTES,
   SQLITE_WORKER_PREPARE_COMMAND,
@@ -212,10 +214,21 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
                 await admitted;
               }
             }
-            value = runInActorContext(request.actor, () => ({
-              // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
-              result: backend.execute(typedCommand),
-            })).result;
+            const execute = () =>
+              runInActorContext(request.actor, () => ({
+                // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
+                result: backend.execute(typedCommand),
+              })).result;
+            const fence = runInActorContext(request.actor, () =>
+              backend[SQLITE_WORKER_SOURCE_FENCE]?.(typedCommand),
+            );
+            value = fence
+              ? await runSqliteSourceFence(
+                  fence,
+                  (operation) => runInActorContext(request.actor, operation),
+                  execute,
+                )
+              : execute();
           } catch (error) {
             // Cleanup can replace the refusal; only settled command failures retain its provenance.
             const admissionRefused =
@@ -352,6 +365,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         (SQLITE_WORKER_OPERATION_CLEANUP in backend &&
           backend[SQLITE_WORKER_OPERATION_CLEANUP] !== undefined &&
           (typeof backend[SQLITE_WORKER_OPERATION_CLEANUP] !== "function" ||
+            typeof backend.assertSettled !== "function")) ||
+        (SQLITE_WORKER_SOURCE_FENCE in backend &&
+          backend[SQLITE_WORKER_SOURCE_FENCE] !== undefined &&
+          (typeof backend[SQLITE_WORKER_SOURCE_FENCE] !== "function" ||
             typeof backend.assertSettled !== "function")) ||
         (SQLITE_WORKER_CLOSE_RECEIPT in backend &&
           backend[SQLITE_WORKER_CLOSE_RECEIPT] !== undefined &&
