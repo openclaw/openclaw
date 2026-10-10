@@ -33,8 +33,9 @@ describe("ClickClack discussion service", () => {
     const openStore = harness.runtime.state.openKeyedStoreV2;
     harness.runtime.state.openKeyedStoreV2 = <T>(
       options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+      authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
     ) => {
-      const store = openStore<T>(options);
+      const store = openStore<T>(options, authority);
       if (options.namespace !== "discussion-bindings") {
         return store;
       }
@@ -78,8 +79,9 @@ describe("ClickClack discussion service", () => {
       let holdEntries = false;
       harness.runtime.state.openKeyedStoreV2 = <T>(
         options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+        authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
       ) => {
-        const store = openStore<T>(options);
+        const store = openStore<T>(options, authority);
         if (options.namespace !== "discussion-bindings") {
           return store;
         }
@@ -130,7 +132,7 @@ describe("ClickClack discussion service", () => {
         } else if (change === "retargeted") {
           harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
         } else if (change === "revoked") {
-          await markClickClackDiscussionChannelRevoked(harness.runtime, legacyBinding);
+          await markClickClackDiscussionChannelRevoked(harness.runtime, sessionKey, legacyBinding);
         } else {
           // Bypass local routing indexes, as another native writer can, then reset the session.
           harness.store.register(sessionKey, replacement);
