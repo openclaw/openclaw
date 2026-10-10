@@ -200,19 +200,12 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
   const loopbackMode = config?.loopbackMode ?? "gateway-only";
   const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
   const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
-  const activeProxyUrl = getActiveManagedProxyUrl();
-  if (activeProxyUrl) {
-    // Nested starts share the existing process-wide proxy when URL, loopback
-    // mode, and TLS options match; each caller still receives its own handle.
-    const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
-      loopbackMode,
-      proxyTls,
-    });
-    return createProxyHandle(proxyUrl, registration);
-  }
+  const registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
+    loopbackMode,
+    proxyTls,
+  });
   baseProxyEnvSnapshot ??= captureProxyEnv();
   const lifecycleBaseEnvSnapshot = baseProxyEnvSnapshot;
-  let registration: ActiveManagedProxyRegistration;
 
   try {
     applyProxyEnv(proxyUrl, loopbackMode, proxyCaFile);
@@ -225,11 +218,8 @@ export async function startProxy(config: ProxyConfig | undefined): Promise<Proxy
       undici: MANAGED_PROXY_UNDICI_OPTIONS,
     });
     forceResetGlobalDispatcher({ preserveProxylineManaged: true });
-    registration = registerActiveManagedProxyUrl(new URL(proxyUrl), {
-      loopbackMode,
-      proxyTls,
-    });
   } catch (err) {
+    stopActiveManagedProxyRegistration(registration);
     restoreInactiveProxyRuntime(lifecycleBaseEnvSnapshot);
     baseProxyEnvSnapshot = null;
     throw new Error(`proxy: failed to activate external proxy routing: ${String(err)}`, {

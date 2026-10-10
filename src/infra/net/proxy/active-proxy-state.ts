@@ -8,7 +8,7 @@ export type ActiveManagedProxyUrl = Readonly<URL>;
 /** Managed proxy loopback behavior shared by gateway and child-process fetch paths. */
 type ActiveManagedProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 
-/** Ref-counted active proxy handle; callers must stop it when their proxy scope ends. */
+/** Active proxy handle; its owner must stop it when the proxy scope ends. */
 export type ActiveManagedProxyRegistration = {
   proxyUrl: ActiveManagedProxyUrl;
   stopped: boolean;
@@ -23,7 +23,6 @@ type RegisterActiveManagedProxyOptions = {
 let activeProxyUrl: ActiveManagedProxyUrl | undefined;
 let activeProxyLoopbackMode: ActiveManagedProxyLoopbackMode | undefined;
 let activeProxyTlsOptions: ManagedProxyTlsOptions | undefined;
-let activeProxyRegistrationCount = 0;
 
 function parseActiveManagedProxyLoopbackMode(
   value: string | undefined,
@@ -46,7 +45,7 @@ function readInheritedActiveManagedProxyLoopbackMode(): ActiveManagedProxyLoopba
   );
 }
 
-/** Registers the active managed proxy, sharing identical nested registrations. */
+/** Registers the process's single active managed proxy. */
 export function registerActiveManagedProxyUrl(
   proxyUrl: URL,
   options: ActiveManagedProxyLoopbackMode | RegisterActiveManagedProxyOptions = "gateway-only",
@@ -74,20 +73,19 @@ export function registerActiveManagedProxyUrl(
           "stop the current proxy before changing proxy.tls.",
       );
     }
-    // Identical registrations are nested scopes; keep proxy state alive until
-    // every owner stops its returned handle.
-    activeProxyRegistrationCount += 1;
-    return { proxyUrl: activeProxyUrl, stopped: false };
+    throw new Error(
+      "proxy: cannot activate a managed proxy while another proxy is active; " +
+        "stop the current proxy before changing proxy.proxyUrl.",
+    );
   }
 
   activeProxyUrl = normalizedProxyUrl;
   activeProxyLoopbackMode = loopbackMode;
   activeProxyTlsOptions = proxyTls;
-  activeProxyRegistrationCount = 1;
   return { proxyUrl: activeProxyUrl, stopped: false };
 }
 
-/** Stops one registration scope and clears active proxy state after the last owner. */
+/** Stops the active proxy registration and clears its process-wide state. */
 export function stopActiveManagedProxyRegistration(
   registration: ActiveManagedProxyRegistration,
 ): void {
@@ -98,12 +96,9 @@ export function stopActiveManagedProxyRegistration(
   if (activeProxyUrl?.href !== registration.proxyUrl.href) {
     return;
   }
-  activeProxyRegistrationCount = Math.max(0, activeProxyRegistrationCount - 1);
-  if (activeProxyRegistrationCount === 0) {
-    activeProxyUrl = undefined;
-    activeProxyLoopbackMode = undefined;
-    activeProxyTlsOptions = undefined;
-  }
+  activeProxyUrl = undefined;
+  activeProxyLoopbackMode = undefined;
+  activeProxyTlsOptions = undefined;
 }
 
 /** Returns local loopback policy from in-process state or inherited proxy env. */

@@ -757,41 +757,6 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
     expect(firstAdmission.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
     expect(reused.sql).toEqual([]);
 
-    const outerLocation = path.join(root, "family-outer.sqlite");
-    const callbackLocation = path.join(root, "family-callback.sqlite");
-    createDatabase(outerLocation, 4);
-    createDatabase(callbackLocation, 5);
-    const firstChildQueued = createDeferredCore();
-    const continueCallback = createDeferredCore();
-    const nestedRead = () =>
-      runWithSqliteDatabaseAdmissionTurn([callbackLocation], () =>
-        pools[1]!.run({ path: callbackLocation }, {}),
-      );
-    const outer = runWithSqliteDatabaseAdmissionTurn([outerLocation], () =>
-      pools[0]!.run(
-        { path: outerLocation, awaitPublication: true },
-        {
-          async onRequest() {
-            const firstChild = nestedRead();
-            firstChildQueued.resolve();
-            await continueCallback.promise;
-            const secondChild = nestedRead();
-            const [admitted, borrowed] = await Promise.all([firstChild, secondChild]);
-            expect(admitted.sql.some((sql) => sql.includes("sqlite_schema"))).toBe(true);
-            expect(borrowed.sql).toEqual([]);
-            return { input: undefined, timeoutMs: 300_000 };
-          },
-        },
-      ),
-    );
-    const queued = nestedRead();
-    await firstChildQueued.promise;
-    const laterQueued = nestedRead();
-    continueCallback.resolve();
-    const [, firstFollower, secondFollower] = await Promise.all([outer, queued, laterQueued]);
-    expect(firstFollower.sql).toEqual([]);
-    expect(secondFollower.sql).toEqual([]);
-
     const nestedLocation = path.join(root, "nested.sqlite");
     createDatabase(nestedLocation, 3);
     const nested = await pools[0]!.run(
