@@ -90,13 +90,13 @@ function createHistoryPool() {
   };
 }
 
-function createUsageCostPool(kind: "read" | "refresh") {
+function createUsageCostPool() {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
     maxWorkers: 1,
-    // Foreground reads must remain available while refresh awaits a host writer.
-    sharedCompute: kind === "refresh",
+    // Refresh host callbacks wait for the agent writer, whose holder may need a shared-compute
+    // reader; a refresh-held permit would deadlock both. maxWorkers bounds each lane instead.
     idleTimeoutMs: 0,
     prepareWorker: () => {
       ensureSqliteLibrarySelected();
@@ -165,13 +165,10 @@ export const historyLane = createDatabaseWorkerLane("Session history", createHis
 export const projectionLane = createDatabaseWorkerLane("Session projection", createHistoryPool());
 // Full-store validation cannot yield its snapshot to a foreground history read.
 export const maintenanceLane = createDatabaseWorkerLane("Session maintenance", createHistoryPool());
-export const costReadLane = createDatabaseWorkerLane(
-  "Session usage read",
-  createUsageCostPool("read"),
-);
+export const costReadLane = createDatabaseWorkerLane("Session usage read", createUsageCostPool());
 export const costRefreshLane = createDatabaseWorkerLane(
   "Session usage refresh",
-  createUsageCostPool("refresh"),
+  createUsageCostPool(),
 );
 
 const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
