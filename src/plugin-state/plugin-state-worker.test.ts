@@ -363,7 +363,7 @@ describe("worker plugin state", () => {
           });
         const execute = () =>
           operation === "observe"
-            ? store.observe("workspace")
+            ? store.observe("uncached-workspace")
             : store.compareAndApply("workspace", observation.comparison, {
                 operation: "delete",
                 action: "delete",
@@ -401,7 +401,7 @@ describe("worker plugin state", () => {
         const nextOwner = holdForeignWriter(captured);
         nextOwner.close();
         if (operation === "observe") {
-          await expect(execute()).resolves.toMatchObject({ value: "owner" });
+          await expect(execute()).resolves.toMatchObject({ value: undefined });
         } else {
           await expect(execute()).resolves.toEqual({ status: "applied" });
         }

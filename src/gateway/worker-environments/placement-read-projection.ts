@@ -15,10 +15,8 @@ import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { workerInferenceMetadata } from "./inference-placement.js";
-import {
-  workerPlacementMoveFromRow,
-  type WorkerPlacementMoveIntent,
-} from "./placement-move-intent.js";
+import { workerPlacementMoveFromRow } from "./placement-move-intent.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerEnvironmentPlacementFacts,
   WorkerPlacementConflictBinding,

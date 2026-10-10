@@ -430,7 +430,7 @@ extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	3
-extensions/matrix/src/approval-native.ts	6
+extensions/matrix/src/approval-native.ts	5
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel.ts	4
@@ -696,7 +696,7 @@ extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-sta
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
-extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	8
+extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	4
 extensions/qa-lab/src/live-transports/matrix/substrate/fault-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/request.ts	3
@@ -968,8 +968,6 @@ extensions/whatsapp/src/setup-finalize.ts	2
 extensions/whatsapp/src/targets-runtime.ts	1
 extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
-extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
-extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
 extensions/workboard/src/cli.ts	1
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
@@ -1308,7 +1306,7 @@ src/agents/embedded-agent-runner/thinking.ts	19
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	7
-src/agents/embedded-agent-runner/tool-result-truncation.ts	12
+src/agents/embedded-agent-runner/tool-result-truncation.ts	8
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
@@ -2099,7 +2097,7 @@ src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
-src/infra/approval-handler-runtime.ts	10
+src/infra/approval-handler-runtime.ts	9
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	5
 src/infra/backup-create-stream.ts	3
@@ -2123,7 +2121,7 @@ src/infra/diagnostic-semantic-run-progress.ts	1
 src/infra/diagnostic-trace-context.ts	2
 src/infra/diagnostic-trace-propagation.ts	3
 src/infra/directory-durability.ts	3
-src/infra/exec-approval-channel-runtime.ts	5
+src/infra/exec-approval-channel-runtime.ts	4
 src/infra/exec-approval-policy-snapshot.ts	2
 src/infra/exec-approval-reply.ts	1
 src/infra/exec-approvals-allowlist.ts	7
@@ -2695,7 +2693,6 @@ ui/src/components/config-form.node.shared.ts	2
 ui/src/components/config-form.render.ts	1
 ui/src/components/confirm-dialog.ts	1
 ui/src/components/connect-command.ts	2
-ui/src/components/copy-button.ts	1
 ui/src/components/desktop/desktop-client.ts	2
 ui/src/components/desktop/desktop-mobile-keyboard.ts	1
 ui/src/components/desktop/desktop-panel.ts	2
@@ -2721,7 +2718,7 @@ ui/src/components/session-data-controller.ts	1
 ui/src/components/session-group-defaults-dialog.ts	1
 ui/src/components/session-organizer-controller.ts	5
 ui/src/components/settings-sidebar.ts	3
-ui/src/components/settings-ui.ts	6
+ui/src/components/settings-ui.ts	1
 ui/src/components/terminal/terminal-connection.ts	2
 ui/src/components/terminal/terminal-controller-lifecycle.ts	1
 ui/src/components/terminal/terminal-panel-upload.ts	2

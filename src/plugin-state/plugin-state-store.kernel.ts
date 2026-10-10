@@ -11,13 +11,11 @@ import {
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 import { pluginStatePublication } from "./plugin-state-publication.js";
-import {
-  PluginStateStoreError,
-  type PluginStateEntry,
-  type PluginStateStoreErrorCode,
-  type PluginStateStoreOperation,
-} from "./plugin-state-store.types.js";
+import type { PluginStateEntry, PluginStateStoreOperation } from "./plugin-state-store.types.js";
+
+export { createPluginStateError, parseStoredJson } from "./plugin-state-error.js";
 
 export const MAX_PLUGIN_STATE_VALUE_BYTES = 1_048_576;
 // Outside the historical logical namespace alphabet: legacy stores cannot be reclassified.
@@ -37,21 +35,6 @@ export type PluginStateDatabase = {
   db: DatabaseSync;
   path: string;
 };
-
-export function createPluginStateError(params: {
-  code: PluginStateStoreErrorCode;
-  operation: PluginStateStoreOperation;
-  message: string;
-  path?: string;
-  cause?: unknown;
-}): PluginStateStoreError {
-  return new PluginStateStoreError(params.message, {
-    code: params.code,
-    operation: params.operation,
-    ...(params.path ? { path: params.path } : {}),
-    cause: params.cause,
-  });
-}
 
 export function resolvePluginStateExpiresAtMs(params: {
   ttlMs: number | undefined;
@@ -81,24 +64,6 @@ export function resolvePluginStateExpiresAtMs(params: {
     });
   }
   return expiresAt;
-}
-
-export function parseStoredJson(
-  raw: string,
-  operation: PluginStateStoreOperation,
-  databasePath: string,
-): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch (error) {
-    throw createPluginStateError({
-      code: "PLUGIN_STATE_CORRUPT",
-      operation,
-      message: "Plugin state entry contains corrupt JSON.",
-      path: databasePath,
-      cause: error,
-    });
-  }
 }
 
 export function rowToEntry(
