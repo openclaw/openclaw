@@ -566,11 +566,12 @@ describe("web inbound media saves with extension", () => {
 
   it.for([
     { urlHost: "a.whatsapp.net", fetchHost: "media-conn.example" },
-    { urlHost: "web.whatsapp.net", fetchHost: "media-conn.example" },
+    // Recorded WhatsApp Web stickers carry the bare host as url (WhiskeySockets/Baileys#1085, #1557).
+    { urlHost: "web.whatsapp.net", fetchHost: "media-conn.example", bareUrl: true },
     { urlHost: "mmg.whatsapp.net", fetchHost: "mmg.whatsapp.net" },
   ])(
     "downloads a sticker whose url is on $urlHost from $fetchHost",
-    async ({ urlHost, fetchHost }, { onTestFinished }) => {
+    async ({ urlHost, fetchHost, bareUrl }, { onTestFinished }) => {
       const { downloadMediaMessage, getMediaKeys } =
         await vi.importActual<typeof import("baileys")>("baileys");
       downloadMediaMessageMock.mockImplementationOnce(downloadMediaMessage);
@@ -605,7 +606,7 @@ describe("web inbound media saves with extension", () => {
             key: { id: `sticker-${urlHost}`, fromMe: false, remoteJid: "111@s.whatsapp.net" },
             message: {
               stickerMessage: {
-                url: `https://${urlHost}${directPath}`,
+                url: bareUrl ? `https://${urlHost}` : `https://${urlHost}${directPath}`,
                 directPath,
                 mediaKey,
                 mimetype: "image/webp",
