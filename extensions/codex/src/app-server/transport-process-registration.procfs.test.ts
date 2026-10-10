@@ -152,8 +152,8 @@ describe("Codex registration procfs boundary", () => {
       });
       const register = await prepareCodexAppServerProcessRegistration();
       if (mode.startsWith("slow-") || mode === "exhausted-inspection") {
-        let now = Date.now();
-        vi.spyOn(Date, "now").mockImplementation(() => now);
+        let now = performance.now();
+        vi.spyOn(performance, "now").mockImplementation(() => now);
         const delayMs = mode === "exhausted-inspection" ? 6_000 : 3_000;
         procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
           now += delayMs;
