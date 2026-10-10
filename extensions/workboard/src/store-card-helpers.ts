@@ -253,21 +253,16 @@ export function updateEvent(
     const existingAttempts = existing.metadata?.attempts ?? [];
     const nextAttempts = next.metadata?.attempts ?? [];
     const latestAttempt = nextAttempts.at(-1);
-    if (nextAttempts.length > existingAttempts.length) {
+    const attemptStarted = nextAttempts.length > existingAttempts.length;
+    const previousAttempt =
+      !attemptStarted && latestAttempt
+        ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
+        : undefined;
+    if (attemptStarted || (latestAttempt && previousAttempt?.status !== latestAttempt.status)) {
       return {
-        kind: "attempt_started",
+        kind: attemptStarted ? "attempt_started" : "attempt_updated",
         ...(latestAttempt?.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
         ...(latestAttempt?.runId ? { runId: latestAttempt.runId } : {}),
-      };
-    }
-    const previousAttempt = latestAttempt
-      ? existingAttempts.find((attempt) => attempt.id === latestAttempt.id)
-      : undefined;
-    if (latestAttempt && previousAttempt?.status !== latestAttempt.status) {
-      return {
-        kind: "attempt_updated",
-        ...(latestAttempt.sessionKey ? { sessionKey: latestAttempt.sessionKey } : {}),
-        ...(latestAttempt.runId ? { runId: latestAttempt.runId } : {}),
       };
     }
     return {

@@ -51,7 +51,10 @@ import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
-import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
+import {
+  isOpenClawStateDatabaseOpen,
+  runOpenClawStateWriteTransaction,
+} from "./openclaw-state-db.js";
 import type {
   OpenClawStateWorkerBackend,
   OpenClawStateWorkerRuntimeCommand,
@@ -116,6 +119,20 @@ export function executeSharedStateCommand(
   }
   if (command.type === "tui.lastSession.clear") {
     return clearRetiredTuiPointers(new Set(command.input.retiredSessionKeys), stateOptions(), open);
+  }
+  if (command.type === "backup.recordOutcome") {
+    // A best-effort ledger must not initialize or change a refused backup source.
+    // An already-admitted writer carries ownership; cold admission stays read-only.
+    if (!isOpenClawStateDatabaseOpen(context.databasePath)) {
+      const existing = withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+        assertOpenClawStateDatabaseOwner(db, { pathname: context.databasePath });
+        return true;
+      }, stateOptions());
+      if (!existing) {
+        return undefined;
+      }
+    }
+    return write(({ db }) => recordBackupRunInDatabase(db, command.input));
   }
   const database = open();
   if (command.type === "githubPublication.prepareSessionReceiptDeletion") {
@@ -261,12 +278,6 @@ export function executeSharedStateCommand(
   }
   if (command.type === "subagents.persistChanges") {
     return persistSubagentRunChangesInWorker(command.input, writeOptions);
-  }
-  if (command.type === "backup.recordOutcome") {
-    return runOpenClawStateWriteTransaction(
-      ({ db }) => recordBackupRunInDatabase(db, command.input),
-      writeOptions,
-    );
   }
   if (command.type === "config.health.patch") {
     const { configPath, patch, expected, updatedAtMs } = command.input;

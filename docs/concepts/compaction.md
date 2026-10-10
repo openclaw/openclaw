@@ -274,9 +274,9 @@ After a successful continuation, OpenClaw uses the provider's measured context u
 
 The native ChatGPT sign-in route uses streamed Codex V2 compaction at the next normal model-request boundary, including between settled tool rounds. It preserves the normal request surface and saves retained user messages plus an opaque checkpoint through the existing session owner. Failed or cancelled streams do not install a checkpoint. On this route, manual `/compact` (with or without focus instructions) and provider-confirmed overflow use client-side compaction, not V2. See [OpenAI advanced configuration](/providers/openai/advanced#server-side-compaction-responses-api) for controls and fallback behavior.
 
-For V2-eligible requests, the optional mid-turn precheck defers local recovery to this boundary so it cannot preempt provider compaction. Other requests keep the provider-bound precheck, including saved checkpoint pressure when no matching current-run usage is available.
+For V2-eligible requests, reply-level token maintenance and the optional mid-turn precheck defer local recovery to this boundary so they cannot preempt provider compaction. Memory flushing and transcript-byte maintenance still run. Other requests keep the provider-bound precheck, including saved checkpoint pressure when no matching current-run usage is available.
 
-Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI can use their compact endpoint by default; `params.responsesCompactEndpoint: false` disables that endpoint for a model. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
+Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI use their compact endpoint by default for budget compaction and for `/compact` without focus instructions. `params.responsesCompactEndpoint: false` disables that endpoint for a model. `/compact <focus>` keeps client-side summarization so the instructions apply. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 
 Once the foreground request budget is prepared, a returned endpoint window must
 also fit beside its fixed instructions, tools, pending input, and reserve before
@@ -284,11 +284,22 @@ OpenClaw saves it. If retained user messages still exceed that budget,
 client-side compaction selects a smaller recent tail instead of retrying the
 same oversized window.
 
+A returned window keeps recent user messages verbatim, and on xAI the system
+prompt too (the public OpenAI endpoint receives it as `instructions` instead).
+If [transcript redaction](/gateway/config-observability) would change any of that content,
+OpenClaw skips the endpoint before calling it and uses client-side compaction.
+The skip, a discarded endpoint result, and an endpoint failure are each logged
+as a warning with the reason.
+
 If the pending input alone fills the model's context window, recovery asks for a
 smaller message or a larger-context model without repeatedly compacting history.
 Later messages retain their normal recovery budget.
 
 If an older version or transcript redaction removes the complete window needed for replay, OpenClaw asks you to run `/compact`. That command rebuilds context from the saved conversation through client-side compaction. It does not guess the missing provider context or delete the transcript.
+
+Direct Anthropic API-key requests on models that Anthropic documents for threshold compaction ask the API to compact inside an ordinary request once input reaches the threshold, and OpenClaw replays the returned summary on later requests. `params.anthropicServerCompaction: false` disables it for a model. If Anthropic returns an empty summary, OpenClaw keeps sending the existing history and its client-side compaction remains the fallback. See [Anthropic server-side compaction](/providers/anthropic#advanced-configuration).
+
+Memory flush turns disable provider server-side compaction, including Anthropic threshold compaction and OpenAI inline compaction, so memory extraction sees the unsummarized history.
 
 ### Successor transcripts
 

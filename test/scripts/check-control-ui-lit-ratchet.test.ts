@@ -54,16 +54,17 @@ describe("Control UI Lit ratchet", () => {
     fs.writeFileSync(source, legacy);
     git(root, ["add", "."]);
     fs.writeFileSync(source, "export {};\n");
+    // The advisory ratchet lets lint continue into tools this temp repo lacks, so the
+    // exit status belongs to later steps; the ratchet report proves the scope.
     const staged = runLint(["--staged", "--only=extensions"]);
     expect(staged.error).toBeUndefined();
-    expect(staged.status, staged.stderr).toBe(1);
     expect(staged.stderr).toContain("litImports: 3 > 0");
+    expect(staged.stderr).toContain("Advisory only");
 
     git(root, ["commit", "-m", "existing Lit"]);
     fs.writeFileSync(source, legacy);
     const based = runLint(["--base", "baseline", "--only=extensions"]);
     expect(based.error).toBeUndefined();
-    expect(based.status, based.stderr).toBe(1);
     expect(based.stderr).toContain("litImports: 3 > 0");
   });
 
@@ -154,13 +155,13 @@ describe("Control UI Lit ratchet", () => {
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
     vi.spyOn(console, "log").mockImplementation(() => {});
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(0);
     fs.writeFileSync(commonjsPath, commonjs + "\nconst view = markup`<div />`;");
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(1);
     expect(errors.join("\n")).toContain("ui/src/legacy.cts [htmlTemplates]: 1 > 0");
     fs.writeFileSync(commonjsPath, commonjs);
     fs.writeFileSync(namespacePath, namespace + "\nconst view = Lit.html`<div />`;");
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(1);
     expect(errors.join("\n")).toContain("ui/src/namespace.ts [htmlTemplates]: 1 > 0");
     fs.writeFileSync(namespacePath, namespace);
     fs.writeFileSync(
@@ -168,11 +169,11 @@ describe("Control UI Lit ratchet", () => {
       scoped.replace("return template`<div />`", "return [template`<div />`, template`<span />`]") +
         "\nfunction icon() { const template = Lit.svg; return template`<circle />`; }",
     );
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(1);
     expect(errors.join("\n")).toContain("ui/src/scoped.ts [htmlTemplates]: 2 > 1");
     fs.writeFileSync(scopedPath, scoped);
     fs.writeFileSync(sourcePath, "export {};\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(0);
     for (const [addition, metric] of [
       ['import "lit/directive.js";', "litImports"],
       ["const extra = markup`<div />`;", "htmlTemplates"],
@@ -187,13 +188,13 @@ describe("Control UI Lit ratchet", () => {
     ]) {
       fs.writeFileSync(sourcePath, `${legacy}\n${addition}\n`);
       errors.length = 0;
-      expect(main(root, ["--base", "HEAD"]), metric).toBe(1);
+      expect(main(root, ["--base", "HEAD"], { enforce: true }), metric).toBe(1);
       expect(errors.join("\n")).toContain(`ui/src/view.ts [${metric}]`);
     }
-    expect(main(root, ["--staged"])).toBe(0);
+    expect(main(root, ["--staged"], { enforce: true })).toBe(0);
     git(root, ["add", "."]);
     fs.writeFileSync(sourcePath, legacy);
-    expect(main(root, ["--staged"])).toBe(1);
+    expect(main(root, ["--staged"], { enforce: true })).toBe(1);
     git(root, ["add", "."]);
     const newPath = path.join(root, "ui/src/new.test.tsx");
     for (const source of [
@@ -205,11 +206,11 @@ describe("Control UI Lit ratchet", () => {
     ]) {
       fs.writeFileSync(newPath, source);
       errors.length = 0;
-      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(1);
       expect(errors.join("\n")).toContain("ui/src/new.test.tsx [litImports]: 1 > 0");
     }
     fs.writeFileSync(newPath, "export const view = <div />;\n");
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(0);
   });
 
   it("allows splits and renames while rejecting net template and TODO growth", () => {
@@ -229,24 +230,24 @@ describe("Control UI Lit ratchet", () => {
 
     fs.writeFileSync(original, legacy);
     fs.writeFileSync(split, part);
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(0);
     git(root, ["add", "."]);
-    expect(main(root, ["--staged"])).toBe(0);
+    expect(main(root, ["--staged"], { enforce: true })).toBe(0);
 
     fs.renameSync(original, renamed);
-    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(0);
     git(root, ["add", "-A"]);
-    expect(main(root, ["--staged"])).toBe(0);
+    expect(main(root, ["--staged"], { enforce: true })).toBe(0);
 
     fs.appendFileSync(renamed, "\nconst extra = markup`<div />`;");
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(1);
     expect(errors.join("\n")).toContain("htmlTemplates: 3 > 2");
     expect(errors.join("\n")).toContain("ui/src/renamed.ts [htmlTemplates]: 2 > 0");
 
     fs.writeFileSync(renamed, legacy);
     fs.appendFileSync(split, "\n// TODO(solid2): finish migration");
     errors.length = 0;
-    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(main(root, ["--base", "HEAD"], { enforce: true })).toBe(1);
     expect(errors.join("\n")).toContain("todoSolid2: 2 > 1");
   });
 });

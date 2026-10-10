@@ -394,7 +394,7 @@ function convertResponsesMessagesWithStyle(
       messages.push(msg);
       continue;
     }
-    if (isRuntimeContextMessage(msg)) {
+    if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
       messages.push(
         buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
           {
