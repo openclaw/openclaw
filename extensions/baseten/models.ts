@@ -37,6 +37,7 @@ const CHAT_TEMPLATE_THINKING_MODEL_IDS = new Set([
 const BASE_COMPAT: ModelCompatConfig = {
   supportsStore: false,
   supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
   supportsUsageInStreaming: true,
   supportsStrictMode: true,
   supportsTools: true,
@@ -80,13 +81,11 @@ function applyLiveReasoningEffortCompat(
   fallbackCompat: ModelCompatConfig,
   supportsReasoningEffort: boolean,
 ): ModelCompatConfig {
-  if (supportsReasoningEffort) {
-    return { ...fallbackCompat, supportsReasoningEffort: true };
+  const compat = { ...fallbackCompat, supportsReasoningEffort };
+  if (!supportsReasoningEffort) {
+    delete compat.supportedReasoningEfforts;
+    delete compat.reasoningEffortMap;
   }
-  const compat = { ...fallbackCompat };
-  delete compat.supportsReasoningEffort;
-  delete compat.supportedReasoningEfforts;
-  delete compat.reasoningEffortMap;
   return compat;
 }
 

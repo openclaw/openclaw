@@ -400,11 +400,10 @@ export function normalizeOpenAICompatibleReasoningPayload(
   }
 }
 
-/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
 export function setQwenChatTemplateThinking(
   payload: Record<string, unknown>,
   enabled: boolean,
-): void {
+): Record<string, unknown> {
   const existing = payload.chat_template_kwargs;
   const next: Record<string, unknown> = {
     ...(existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {}),
@@ -414,6 +413,7 @@ export function setQwenChatTemplateThinking(
     next.preserve_thinking = true;
   }
   payload.chat_template_kwargs = next;
+  return next;
 }
 
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
