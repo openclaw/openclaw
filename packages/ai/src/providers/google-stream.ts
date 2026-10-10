@@ -1,3 +1,4 @@
+import type { FinishReason } from "@google/genai";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import { calculateCost } from "../model-utils.js";
 import {
@@ -83,7 +84,7 @@ const stopReasons = new Map<string, StopReason>(
     TOO_MANY_TOOL_CALLS: "error",
     UNEXPECTED_TOOL_CALL: "error",
     NO_IMAGE: "error",
-  } satisfies Record<string, StopReason>),
+  } satisfies Record<FinishReason, StopReason>),
 );
 
 function mapStopReason(reason: string): StopReason {
