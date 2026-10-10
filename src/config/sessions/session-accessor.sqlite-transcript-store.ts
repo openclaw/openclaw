@@ -10,9 +10,9 @@ import {
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
+import { normalizePersistedSteerTargetRunId } from "../../sessions/user-turn-transcript.metadata.js";
 import {
   deferOpenClawAgentPostCommitPublication,
-  openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
@@ -28,12 +28,7 @@ import {
   readTranscriptEventMessage,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
-import {
-  getSessionKysely,
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-  type ResolvedTranscriptScope,
-} from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import {
   advanceTranscriptMutationAtInTransaction,
   deleteTranscriptEventsInTransaction,
@@ -46,8 +41,6 @@ import {
   rotateTranscriptGenerationInTransaction,
   touchTranscriptMutationInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import type { SessionTranscriptRuntimeScope } from "./session-accessor.types.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   createTranscriptIndexAppenderInTransaction,
   deleteSessionTranscriptIndexInTransaction,
@@ -502,7 +495,11 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       );
     }
   }
-  rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  // Steering correlation changes no admitted input. Keep its running turn's fence,
+  // while every other payload rewrite still invalidates admissions and cursors.
+  if (!rewrites.every((row) => isSteerConfirmationRewrite(row.expectedEventJson, row.eventJson))) {
+    rotateTranscriptGenerationInTransaction(database, resolved.sessionId);
+  }
   if (!projectionUnchanged) {
     if (options.legacyTextStorage) {
       // Media Doctor rebuilds after the physical storage migration; schema-22 readers
@@ -513,6 +510,38 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
     }
   }
   touchTranscriptMutationInTransaction(database, resolved.sessionId);
+}
+
+function isSteerConfirmationRewrite(beforeJson: string, afterJson: string): boolean {
+  const before: unknown = JSON.parse(beforeJson);
+  const after: unknown = JSON.parse(afterJson);
+  for (const event of [before, after]) {
+    if (
+      !isRecord(event) ||
+      event.type !== "message" ||
+      !isRecord(event.message) ||
+      event.message.role !== "user"
+    ) {
+      return false;
+    }
+    const metadata = event.message["__openclaw"];
+    if (metadata !== undefined && !isRecord(metadata)) {
+      return false;
+    }
+    if (event === after) {
+      const target = normalizePersistedSteerTargetRunId(metadata?.steerTargetRunId);
+      if (!target || target !== metadata?.steerTargetRunId) {
+        return false;
+      }
+    }
+    if (metadata) {
+      delete metadata.steerTargetRunId;
+      if (Object.keys(metadata).length === 0) {
+        delete event.message["__openclaw"];
+      }
+    }
+  }
+  return isDeepStrictEqual(before, after);
 }
 
 function transcriptRewritePreservesProjection(beforeJson: string, afterJson: string): boolean {
@@ -611,17 +640,6 @@ export function readTranscriptMessageByScopedIdempotencyKey(
   return message
     ? { messageId: readTranscriptEventId(found.event) ?? idempotencyKey, message }
     : undefined;
-}
-
-export function readSessionTranscriptMessageByEventId(
-  scope: SessionTranscriptRuntimeScope,
-  eventId: string,
-): { messageId: string; message: unknown } | undefined {
-  const resolved = resolveSqliteTranscriptScope(scope);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readHotSessionTranscriptSnapshot(database, resolved.sessionId, "identity", () =>
-    readTranscriptMessageByEventId(database, resolved, eventId),
-  );
 }
 
 export function readTranscriptMessageByEventId(
