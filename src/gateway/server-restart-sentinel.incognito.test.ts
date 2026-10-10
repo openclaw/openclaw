@@ -239,7 +239,7 @@ it.each([false, true])(
           expect(await loadPendingSessionDeliveries(context.workerContext)).toEqual([]);
           expect(dispatch).toHaveBeenCalledOnce();
         }
-        expect(actor.sessions.readSharing(sessionKey)?.entry.lifecycleRevision).toBe(
+        expect(actor.sessions.readSharing(sessionKey)?.entry?.lifecycleRevision).toBe(
           replaced ? "successor" : entry.lifecycleRevision,
         );
         sql.assertNoSessionSql();
@@ -296,7 +296,12 @@ it.each([false, true])(
             changedPaths: [],
             previousConfig: {},
             nextConfig: {},
-            actor: { actor: "test" },
+            actor: {
+              actor: "test",
+              deviceId: "test-device",
+              clientIp: "127.0.0.1",
+              connId: "test-connection",
+            },
           }),
         );
         expect(result.restart).toBeUndefined();
