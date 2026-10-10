@@ -56,6 +56,8 @@ export type LeaseHeartbeatWorkerData = {
   shared: SharedArrayBuffer;
   /** Odd while native renewal is in flight; progress is never lease authority. */
   renewalProgress: SharedArrayBuffer;
+  /** Latest completed asynchronous request; completion is never lease authority. */
+  completedRequest: SharedArrayBuffer;
 };
 
 export type LeaseHeartbeatRequest = {

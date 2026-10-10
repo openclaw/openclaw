@@ -44,6 +44,14 @@ const enNewSessionSetup = {
     checkingGit: "Checking Git availability…",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
+    followUps: "Follow-up messages",
+    followUpCommandsUnavailable: "Commands are available after the session is created.",
+    followUpReloadBlocked:
+      "Finish starting the session or remove its follow-up messages and draft before reloading.",
+    followUpsPaused:
+      "The first message was not sent. Review it before retrying these follow-up messages.",
+    followUpsAdmissionFailed:
+      "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
     checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed:

@@ -18,6 +18,7 @@ import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { takeCreatedComposer } from "../new-session/creation-composer.ts";
 import * as chatAvatars from "./chat-avatar.ts";
 import { CHAT_ROUTE_READY_EVENT } from "./chat-history-events.ts";
 import { retireInitialChatSnapshot } from "./chat-history-state.ts";
@@ -65,7 +66,9 @@ import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
+import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
+import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
 import { admitInitialTurnHandoff, subscribeInitialTurnHandoff } from "./initial-turn-handoff.ts";
@@ -379,9 +382,24 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     chatState.addCleanup(
       this.context.agentIdentity.subscribe(() => void pageState.loadAssistantIdentity()),
     );
+    const creationComposer = takeCreatedComposer(
+      this.context,
+      pageState.sessionKey,
+      mountGatewayOwner,
+    );
+    if (creationComposer?.incognito) {
+      pageState.selectedChatSessionIncognito = true;
+      retainCreatedIncognitoComposerScope(pageState, creationComposer.isCurrent);
+    }
     chatState.composerPersistence.restore({ preserveCurrent: true });
     const sessionHandoff = this.takeSessionHandoff(pageState.sessionKey);
     restorePaneStagedAttachments(this.context, this.paneId, pageState, mountGatewayOwner);
+    if (creationComposer?.claimDraft()) {
+      pageState.chatMessage = creationComposer.draft;
+      pageState.chatMentions = creationComposer.mentions;
+      pageState.chatAttachments = creationComposer.attachments;
+      chatState.adoptAttachmentReads(creationComposer.reads, pageState);
+    }
     chatState.composerPersistence.start();
     if (sessionHandoff) {
       this.applySessionHandoff(pageState.sessionKey, sessionHandoff);
@@ -526,6 +544,9 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.composerPresentation = composerPresentation;
     pageState.captureComposerRecoveryOwner = () => composerPresentation.captureOwner();
     this.activateComposerPresentation();
+    if (creationComposer) {
+      chatState.addCleanup(connectCreatedComposerQueue(this.context, pageState, creationComposer));
+    }
   }
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {

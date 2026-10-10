@@ -305,7 +305,6 @@ it("keeps a cold required-worker draft on configured defaults across asynchronou
   place.resolve(catalog);
   await read;
   f.place.restorePreferenceSelections();
-  expect(f.place.requiredWorkerInference).toBe(true);
   modelsReady.resolve();
   await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
   f.place.restorePreferenceSelections();

@@ -195,10 +195,6 @@ export class DraftPlaceState {
     return DraftGatewayState.requiredPlacement(this.gateway, this.read().data);
   }
 
-  get requiredWorkerInference(): boolean {
-    return DraftGatewayState.requiredWorkerInference(this.gateway, this.read().data);
-  }
-
   get cloudProfileId(): string {
     return this.requiredPlacement ? this.gateway.requiredProfile! : this.selection.cloudProfileId;
   }
