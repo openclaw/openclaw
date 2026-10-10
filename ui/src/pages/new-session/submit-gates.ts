@@ -89,9 +89,13 @@ export function readNewSessionSubmissionAccess(options: {
       params: createParams,
       sessionScope: true,
     });
-    if (!createAccess.allowed || !target) {
+    // Creation assigns ownership before its required first-turn handoff has a row.
+    if (!createAccess.allowed || !target || (target.kind === "profile" && target.required)) {
       return createAccess;
     }
+  }
+  if (target.kind === "profile" && target.required) {
+    return readSessionMethodAccess(gateway, { method: "sessions.send", sessionScope: true });
   }
   return readSessionMethodAccess(gateway, {
     method: "sessions.dispatch",
@@ -111,6 +115,11 @@ export function requiresNewSessionModelSetup(options: {
   pendingPlacement: PendingSessionPlacementRecoveryState;
 }): boolean {
   const { snapshot, gateway, place, pendingPlacement } = options;
+  // Placement metadata decides where credentials live; do not flash Gateway
+  // setup before the required worker policy is known. Submission remains gated.
+  if (!gateway.placementPolicyReady) {
+    return false;
+  }
   const selectedAgent = place.selectedAgent();
   const agents = snapshot.context?.agents.state;
   return place.modelControl.requiresModelSetup({
@@ -163,6 +172,16 @@ export function resolveNewSessionSubmitBlock(
     !place.placementPreferenceReady
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
+  }
+  if (kind === "session" && !gateway.placementPolicyReady) {
+    return { gate: "cloud", reason: t("newSession.placementNotReady") };
+  }
+  if (
+    kind === "session" &&
+    gateway.requiredProfile &&
+    !gateway.cloudProfiles.some((profile) => profile.id === gateway.requiredProfile)
+  ) {
+    return { gate: "cloud", reason: t("newSession.requiredWorkerUnavailable") };
   }
   if (kind === "session" && draft.requiresModelSetup()) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };

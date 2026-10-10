@@ -268,12 +268,12 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
   protected override initialProgressCardTarget() {
     const state = this.state;
     if (
-      !state?.connected ||
+      !state ||
       !this.presented ||
       document.visibilityState === "hidden" ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey) ||
-      (!this.transcriptReady && !getAcceptedChatHistorySession(state))
+      (!this.transcriptReady && !state.currentSessionId && !getAcceptedChatHistorySession(state))
     ) {
       return undefined;
     }
@@ -291,7 +291,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       this.progressPresentationSessionKey = state.sessionKey;
       this.progressPresentationReady = false;
     }
-    if (this.progressPresentationReady) {
+    if (!this.progressCard.loading || this.progressPresentationReady) {
       return false;
     }
     const phase = this.context.gateway.snapshot.phase;

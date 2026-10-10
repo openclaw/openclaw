@@ -186,6 +186,62 @@ describe("update protocol schemas", () => {
     ).toBe(true);
   });
 
+  it("accepts immutable recovery and optional verification facts while rejecting private fields", () => {
+    const immutable = {
+      root: "/opt/example",
+      currentSha: "a".repeat(40),
+      currentPath: `/opt/example/releases/${"a".repeat(40)}`,
+      activation: {
+        operationId: "11111111-1111-4111-8111-111111111111",
+        phase: "verifying",
+        previousSha: "a".repeat(40),
+        candidateSha: "b".repeat(40),
+        failure: "candidate-verification-pending",
+        recoveryCommand: "/usr/bin/node /opt/example.control/recovery.mjs",
+      },
+      lastActivation: {
+        operationId: "22222222-2222-4222-8222-222222222222",
+        outcome: "succeeded",
+        selectedSha: "a".repeat(40),
+        verifiedAtMs: 1000,
+      },
+    };
+    const check = (value: unknown) =>
+      Value.Check(UpdateScheduleStateSchema, {
+        channel: "dev",
+        autoEnabled: false,
+        install: { kind: "immutable", immutable: value },
+      });
+    expect(check(immutable)).toBe(true);
+    const gateway = {
+      pid: 4242,
+      bootId: "fixture-boot",
+      version: "2026.10.1",
+      buildId: "fixture-build",
+    };
+    expect(check({ ...immutable, lastActivation: { ...immutable.lastActivation, gateway } })).toBe(
+      true,
+    );
+    expect(
+      check({
+        ...immutable,
+        lastActivation: { ...immutable.lastActivation, gateway: { ...gateway, pid: 0 } },
+      }),
+    ).toBe(false);
+    expect(check({ ...immutable, activation: { ...immutable.activation, authority: {} } })).toBe(
+      false,
+    );
+    expect(
+      check({
+        ...immutable,
+        lastActivation: {
+          ...immutable.lastActivation,
+          gateway: { ...gateway, token: "fixture-secret" },
+        },
+      }),
+    ).toBe(false);
+  });
+
   it("validates the additive update.status result", () => {
     expect(
       Value.Check(UpdateStatusResultSchema, {

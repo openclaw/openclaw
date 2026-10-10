@@ -102,6 +102,15 @@
   background: transparent;
 }
 
+/* Embedded transcripts size against their pane, not the desktop viewport.
+   Avatar-free threads need only a small reading inset at narrow widths. */
+@container chat-conversation (max-width: 560px) {
+  .chat-thread--direct {
+    --chat-thread-gutter: 12px;
+    --chat-thread-side-inset: 0px;
+  }
+}
+
 /* Keep short-pane insets with their defaults: shared CSS chunks can load the
    startup sheet after composer styles when navigating from New Session. */
 @container chat-conversation (max-height: 320px) {

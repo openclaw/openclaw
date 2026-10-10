@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -42,6 +43,8 @@ describe("pending input additive schema", () => {
     const filename = openOpenClawAgentDatabase(options).path;
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    fs.copyFileSync(filename, `${filename}.previous`);
+    fs.renameSync(`${filename}.previous`, filename);
     const previous = new DatabaseSync(filename);
     previous.exec("DROP TABLE session_pending_inputs");
     const version = previous.prepare("PRAGMA user_version").get();
@@ -134,6 +137,8 @@ describe("pending input additive schema", () => {
       const filename = openOpenClawAgentDatabase(options).path;
       await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      fs.copyFileSync(filename, `${filename}.previous`);
+      fs.renameSync(`${filename}.previous`, filename);
       const old = new DatabaseSync(filename);
       old.exec("ALTER TABLE session_pending_inputs DROP COLUMN consumed_event_id");
       const version = old.prepare("PRAGMA user_version").get();

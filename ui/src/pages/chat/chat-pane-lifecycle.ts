@@ -349,8 +349,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const snapshot = readChatSessionSnapshot(pageState.chatMessagesBySession, pageState, {
           sessionKey: initialSessionKey,
         });
-        if (snapshot) {
+        if (snapshot && this.ownsChatSnapshot({ sessionKey: initialSessionKey })) {
           applyChatCacheSnapshot(pageState, snapshot);
+          const target = this.resolveChatReadTarget();
+          if (target && snapshot.progressCard !== undefined) {
+            this.progressCard.hydrate(target, snapshot.progressCard);
+          }
         } else {
           this.hydrateStoredChatSnapshot(pageState, initialSessionKey);
         }
@@ -495,7 +499,12 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     this.applySessionsState(this.context.sessions.state);
     chatState.addCleanup(this.context.sessions.subscribe(this.applySessionsState.bind(this)));
     chatState.addCleanup(subscribeChatPaneStartup(this.context, () => this.state));
-    chatState.addCleanup(subscribeChatPaneSnapshotInvalidation(() => this.state));
+    chatState.addCleanup(
+      subscribeChatPaneSnapshotInvalidation(
+        () => this.state,
+        () => this.progressCard.invalidate(this.resolveChatReadTarget()),
+      ),
+    );
     this.applyGatewaySnapshot(this.context.gateway.snapshot);
     this.synchronizeForegroundTranscript();
     const composerPresentation = new ChatPaneComposerHandoff(this.context, {

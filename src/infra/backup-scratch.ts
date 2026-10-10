@@ -48,8 +48,8 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
       if (
         isSqliteLockError(error) ||
         error instanceof SqliteStagingRetiredError ||
-        isMissingPathError(error) ||
-        ((isSqliteNativeOpenFailure(error) ||
+        ((isMissingPathError(error) ||
+          isSqliteNativeOpenFailure(error) ||
           (error instanceof FsSafeError &&
             error.code === "path-mismatch" &&
             isMissingPathError(error.cause))) &&

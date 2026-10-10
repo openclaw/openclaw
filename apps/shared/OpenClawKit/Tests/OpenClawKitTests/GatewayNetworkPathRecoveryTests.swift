@@ -4,6 +4,16 @@ import Testing
 @testable import OpenClawKit
 
 #if DEBUG
+extension GatewayChannelActor {
+    fileprivate func _test_setReconnectBackoffMs(_ milliseconds: Double) {
+        self.backoffMs = milliseconds
+    }
+
+    fileprivate func _test_reconnectBackoffMs() -> Double {
+        self.backoffMs
+    }
+}
+
 private final class PathRecoveryEvents<Value: Sendable>: Sendable {
     private struct State {
         var values: [Value] = []
