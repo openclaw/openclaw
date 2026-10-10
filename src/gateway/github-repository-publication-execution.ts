@@ -71,7 +71,6 @@ export function createRepositoryGitHubPublicationExecution(params: {
     const { assertCustody, action } = context;
     assertCustody();
     const preparedOwner = await getSessionRepositoryWorkspaceStore().prepare(row.workspace_id);
-    assertCustody();
     const preparedRow = worker
       ? await readRepositoryGitHubPublicationAsync(initial.request_id)
       : requireRepositoryGitHubPublication(initial.request_id);
