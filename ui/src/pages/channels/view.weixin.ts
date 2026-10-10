@@ -69,6 +69,9 @@ export function renderWeixinLogin(props: ChannelsProps) {
             </button>`
           : nothing
       }
+      <button class="btn" type="button" @click=${() => props.onShowDetail("openclaw-weixin")}>
+        ${t("channels.hub.openDetails")}
+      </button>
     </div>
     ${!props.canAdmin ? html`<div class="callout info">${t("channels.hub.adminRequired")}</div>` : nothing}
     ${props.config.configFormDirty ? html`<div class="callout warn">${t("channels.hub.saveBeforeSetup")}</div>` : nothing}

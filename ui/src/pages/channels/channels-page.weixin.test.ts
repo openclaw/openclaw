@@ -69,6 +69,43 @@ describe("ChannelsPage Weixin lifecycle", () => {
     return { gateway, source, page, request };
   }
 
+  it.each([true, false])(
+    "opens unconfigured Weixin details for an administrator=%s",
+    async (admin) => {
+      const { source, page, gateway } = await mountWeixin();
+      source.channels.state.channelsSnapshot = {
+        ts: 0,
+        channelOrder: ["openclaw-weixin"],
+        channelLabels: {},
+        channels: { "openclaw-weixin": { configured: false, running: false } },
+        channelAccounts: {},
+        channelDefaultAccountId: {},
+      };
+      gateway.emit({
+        hello: {
+          auth: {
+            role: "operator",
+            scopes: admin ? ["operator.admin", "operator.read"] : ["operator.read"],
+          },
+        } as ApplicationGatewaySnapshot["hello"],
+      });
+      page.requestUpdate();
+      await page.updateComplete;
+      const start = vi.spyOn(source.channels, "startWeixin").mockResolvedValue();
+      const details = [...page.querySelectorAll<HTMLButtonElement>(".weixin-login button")].find(
+        (button) => button.textContent?.includes("Open details"),
+      );
+      expect(details).toBeDefined();
+      details!.click();
+      await page.updateComplete;
+      expect(page.querySelector(".channels-detail")).not.toBeNull();
+      expect(start).not.toHaveBeenCalled();
+      page.remove();
+      source.runtimeConfig.dispose();
+      source.channels.dispose();
+    },
+  );
+
   it.each([false, true])(
     "enables Weixin through the native receipt (restart required: %s)",
     async (restartRequired) => {

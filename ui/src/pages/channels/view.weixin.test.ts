@@ -123,7 +123,8 @@ describe("installed Weixin QR entry", () => {
     const f = fixture();
     f.props.canAdmin = false;
     f.draw();
-    expect(f.container.querySelector("button")).toBeNull();
+    expect(f.container.querySelector("button.primary")).toBeNull();
+    expect(f.container.textContent).toContain("Open details");
     f.props.canAdmin = true;
     f.props.config.configFormDirty = true;
     f.draw();
@@ -142,7 +143,7 @@ describe("installed Weixin QR entry", () => {
     f.props.onWeixinClose = vi.fn();
     f.draw();
     expect(f.container.querySelector(".channels-wizard__qr img")?.getAttribute("src")).toBe(png);
-    f.container.querySelector("button")!.click();
+    f.container.querySelector<HTMLButtonElement>(".weixin-login__actions button")!.click();
     expect(f.props.onWeixinClose).toHaveBeenCalledOnce();
     f.props.channels.weixinLogin.expiresAtMs = Date.now() - 1;
     f.draw();
