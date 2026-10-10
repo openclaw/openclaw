@@ -139,14 +139,24 @@ export function createAgentWorkAdmissionQueries<T extends AgentSessionWorkAdmiss
   }
 
   function assertSessionWorkAdmissionOpen(admission: T): void {
-    const closed = [...closures].find(
-      (owner) =>
-        (!owner.agent || matchesAgentWorkAdmission(owner.agent, admission.agent)) &&
-        ((owner.agent && owner.identities.length === 0) ||
-          owner.identities.some((identity) => admission.identities.has(identity))),
-    );
-    if (closed) {
-      throw closed.reason;
+    let stopReason: Error | undefined;
+    for (const owner of closures) {
+      if (owner.agent && !matchesAgentWorkAdmission(owner.agent, admission.agent)) {
+        continue;
+      }
+      // Agent retirement takes precedence over a session's transient Stop fence.
+      if (owner.agent && owner.identities.length === 0) {
+        throw owner.reason;
+      }
+      if (!stopReason && owner.identities.some((identity) => admission.identities.has(identity))) {
+        stopReason = owner.reason;
+      }
+    }
+    if (stopReason) {
+      if (!admission.interrupted) {
+        admission.interrupt?.(stopReason);
+      }
+      throw stopReason;
     }
   }
 

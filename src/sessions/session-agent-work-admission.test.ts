@@ -5,6 +5,7 @@ import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-
 import {
   beginSessionWorkAdmission,
   closeAgentWorkAdmissions,
+  closeSessionWorkAdmissions,
   collectActiveAgentSessionWorkAdmissions,
   startAgentWorkAdmissionInterruption,
   startSessionWorkAdmissionInterruption,
@@ -83,14 +84,17 @@ it("fences unseen agent sessions and joins exact admitted work without blocking 
   let other: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
   try {
     await pendingOutcome;
+    const onInterrupt = vi.fn();
     await expect(
       beginSessionWorkAdmission({
         ...target,
         scope: "previously-unseen-store",
         identities: ["new-session"],
         assertAllowed: () => {},
+        onInterrupt,
       }),
     ).rejects.toBe(reason);
+    expect(onInterrupt).not.toHaveBeenCalled();
     other = await beginSessionWorkAdmission({
       ...target,
       env: { OPENCLAW_STATE_DIR: "/agent-admission-state-b" },
@@ -141,6 +145,35 @@ it("rejects new agent work after a durable deletion survives restart", async () 
     admitted?.release();
   }
 });
+
+it.each(["session-first", "agent-first"] as const)(
+  "keeps agent deletion refusal ahead of an overlapping session Stop (%s)",
+  async (order) => {
+    const target = {
+      agentId: "worker",
+      env: { OPENCLAW_STATE_DIR: "/agent-admission-overlap" },
+      scope: "overlapping-stop.sqlite",
+      identities: ["stopped-session"],
+    };
+    const agentReason = new Error("agent deletion is pending");
+    const close = [
+      () => closeSessionWorkAdmissions({ ...target, reason: new Error("session stopped") }),
+      () => closeAgentWorkAdmissions({ ...target, reason: agentReason }),
+    ];
+    const reopen = (order === "session-first" ? close : close.toReversed()).map((stop) => stop());
+    const onInterrupt = vi.fn();
+    try {
+      await expect(
+        beginSessionWorkAdmission({ ...target, assertAllowed: () => {}, onInterrupt }),
+      ).rejects.toBe(agentReason);
+      expect(onInterrupt).not.toHaveBeenCalled();
+    } finally {
+      for (const release of reopen) {
+        release();
+      }
+    }
+  },
+);
 
 it("refuses deletion from the target agent's own admitted turn before closing ingress", async () => {
   const target = { agentId: "worker", env: { OPENCLAW_STATE_DIR: "/agent-admission-self-delete" } };

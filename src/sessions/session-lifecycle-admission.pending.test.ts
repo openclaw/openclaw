@@ -180,9 +180,10 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   const entered = createDeferred();
   const release = createDeferred();
   const reason = createAgentRunDirectAbortError();
+  const onInterrupt = vi.fn();
   let lateResult: unknown;
   const late = () =>
-    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} }).then(
+    beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {}, onInterrupt }).then(
       (lease) => {
         lease.release();
         return "incorrectly admitted";
@@ -207,6 +208,7 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
   try {
     const whileAwaiting = await late();
     expect(whileAwaiting).toBe(reason);
+    expect(onInterrupt).toHaveBeenCalledExactlyOnceWith(reason);
     const other = await beginSessionWorkAdmission({
       scope,
       identities: ["other-session"],
@@ -216,8 +218,15 @@ it("rejects arrivals during awaited cleanup and its final microtask, then reopen
     release.resolve();
     await stop;
     expect(lateResult).toBe(reason);
-    const fresh = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
+    const fresh = await beginSessionWorkAdmission({
+      scope,
+      identities,
+      assertAllowed: () => {},
+      onInterrupt,
+    });
     fresh.release();
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
   } finally {
     release.resolve();
     await stop;

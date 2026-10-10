@@ -2272,7 +2272,6 @@ src/infra/heartbeat-events.ts
 src/infra/json-utf8-bytes.ts
 src/infra/legacy-acp-migration-source.ts
 src/infra/retryable-network-errors.ts
-src/infra/session-cost-usage-worker.types.ts
 src/infra/system-event-ownership.ts
 src/logging/diagnostic-argument-churn-activity.ts
 src/logging/diagnostic-embedded-run-index.ts

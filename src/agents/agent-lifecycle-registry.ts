@@ -169,7 +169,7 @@ export function withAgentDeletion<T>(
           }
           lifetime.assertCurrent();
         };
-        const execute = <Result>(
+        const execute = async <Result>(
           apply: (
             scope: DomainScope,
             identity: typeof lifetime.identity,
