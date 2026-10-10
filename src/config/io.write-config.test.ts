@@ -571,6 +571,7 @@ describe("config io write", () => {
       io.loadConfig();
       expect(warn).toHaveBeenCalledTimes(1);
 
+      const rawBeforePreflight = await fs.readFile(io.configPath, "utf-8");
       await expect(
         io.writeConfigFile(
           {},
@@ -582,6 +583,7 @@ describe("config io write", () => {
           },
         ),
       ).rejects.toThrow("blocked");
+      await expect(fs.readFile(io.configPath, "utf-8")).resolves.toBe(rawBeforePreflight);
       io.loadConfig();
       expect(warn).toHaveBeenCalledTimes(1);
 
