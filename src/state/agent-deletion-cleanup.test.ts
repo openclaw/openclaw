@@ -24,6 +24,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { captureSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
@@ -35,6 +36,7 @@ import {
 } from "../test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
+import { closeDeletedAgentDatabases, reviveAgentDatabases } from "./openclaw-agent-db-readers.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -414,9 +416,25 @@ describe("agent deletion database cleanup authority", () => {
     const f = fixture();
     const reader = acquireAuthProfileReadDatabase(f.target.path);
     expect(reader.status).toBe("readable");
-    await f.withDeletion(async () => {
+    const retainedAdmission = captureSqliteDatabaseAdmissions().find(
+      (record) => record.location === f.target.path,
+    )!;
+    await f.withDeletion(async (deletion) => {
       await prepareAgentDeleteDatabases({}, "worker", f.entry.agentDir, { env: f.options.env });
       expect(reader.status === "readable" && reader.db.isOpen).toBe(false);
+      expect(
+        await purgeAgentSessionStoreEntries({}, "worker", {
+          env: f.options.env,
+          runDatabaseCleanup: deletion.runDatabaseCleanup,
+        }),
+      ).toBe(false);
+      expect(() => fs.fstatSync(retainedAdmission.descriptor)).not.toThrow();
+      try {
+        await closeDeletedAgentDatabases("worker", [f.target.path], deletion);
+        expect(() => fs.fstatSync(retainedAdmission.descriptor)).toThrow();
+      } finally {
+        await reviveAgentDatabases(["worker"]);
+      }
     });
   });
 

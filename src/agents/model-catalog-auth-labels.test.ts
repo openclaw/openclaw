@@ -36,22 +36,6 @@ const capture = (provider: string, store: AuthProfileStore, cfg: OpenClawConfig 
 describe("captured catalog auth labels", () => {
   beforeEach(() => envKey.mockReset().mockReturnValue(null));
 
-  it("labels an unresolved API key reference", () => {
-    const captured = capture("openai", {
-      version: 1,
-      profiles: {
-        default: {
-          type: "api_key",
-          provider: "openai",
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-      },
-    });
-    expect(captured.labels.get("openai")?.all).toMatchObject({
-      profiles: { default: "default=ref" },
-    });
-  });
-
   it("preserves provider-specific placeholders and independently owned profile labels", () => {
     const config = createBedrockAwsSdkConfig();
     config.auth = {

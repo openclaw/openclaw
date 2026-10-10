@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { runCiManifestFixture } from "./ci-workflow-manifest.test-support.ts";
 import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-support.ts";
@@ -20,7 +21,7 @@ describe("Control UI WebKit selection", () => {
     });
     expect(result.status, result.output).toBe(0);
     expect(result.outputs.run_ui_webkit).toBe(String(selected));
-    expect(JSON.parse(result.outputs.ui_test_matrix).include).toEqual([
+    expect(JSON.parse(expectDefined(result.outputs.ui_test_matrix, "UI matrix")).include).toEqual([
       { shard: 1 },
       { shard: 2 },
       { shard: 3 },

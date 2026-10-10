@@ -3,6 +3,7 @@ import { DatabaseSync, StatementSync, constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { probeSqliteIteratorBehavior } from "../infra/sqlite-native-observer.js";
 import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
@@ -144,14 +145,12 @@ it("keeps absent agent ownership separate from malformed metadata", () => {
 });
 
 it.each(["transaction", "pinned snapshot"] as const)(
-  "reuses admitted ownership within a %s and observes foreign ownership after release",
+  "keeps raw ownership reads within a %s and observes foreign ownership after release",
   (snapshot) => {
     const filename = path.join(tempDirs.make("openclaw-schema-metadata-"), "agent.sqlite");
     const writer = createMetadata("agent", filename);
     writer.exec("PRAGMA journal_mode=WAL");
     const reader = new DatabaseSync(filename, { readOnly: true });
-    trackSqliteSchema(reader, { DatabaseSync, StatementSync });
-    admitSqliteSchema(reader);
     const read = () =>
       runSqliteReadOperationSync(reader, () => readExistingAgentSchemaMeta(reader), "fresh");
     const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -163,7 +162,7 @@ it.each(["transaction", "pinned snapshot"] as const)(
         expect(read()?.agentId).toBe("main");
         writer.exec("UPDATE schema_meta SET agent_id = 'foreign'");
         expect(read()?.agentId).toBe("main");
-        expect(metadataReads()).toHaveLength(1);
+        expect(metadataReads()).toHaveLength(3);
       };
       if (snapshot === "transaction") {
         reader.exec("BEGIN");
@@ -177,7 +176,7 @@ it.each(["transaction", "pinned snapshot"] as const)(
       }
       expect(read()?.agentId).toBe("foreign");
       expect(read()?.agentId).toBe("foreign");
-      expect(metadataReads()).toHaveLength(2);
+      expect(metadataReads()).toHaveLength(5);
     } finally {
       observation.restore();
       reader.close();
@@ -193,7 +192,11 @@ it("keeps admitted ownership current through local writes, rollback, and authori
     CREATE TRIGGER replace_owner AFTER INSERT ON selected_owner
       BEGIN UPDATE schema_meta SET agent_id = new.agent_id; END;
   `);
-  trackSqliteSchema(database, { DatabaseSync, StatementSync });
+  trackSqliteSchema(database, {
+    DatabaseSync,
+    StatementSync,
+    iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")),
+  });
   admitSqliteSchema(database);
   const read = () =>
     runSqliteReadOperationSync(database, () => readExistingAgentSchemaMeta(database), "fresh");

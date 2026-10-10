@@ -5,7 +5,6 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -25,6 +24,7 @@ import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -58,6 +58,8 @@ import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
   parseAgentSessionKey,
+  isPinnableUiSessionRow,
+  isSubagentSessionKey,
   resolveUiConfiguredMainKey,
   scopedSessionArtifactKey,
 } from "../../lib/sessions/session-key.ts";
@@ -70,11 +72,12 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
-import { prepareArchiveOutcome } from "./archive-outcome.ts";
+import { SessionsPageArchive } from "./archive-actions.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { SessionsPageDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
+import type { SessionsPageRequestScope } from "./request-scope.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
   reconcileSelectedSessions,
@@ -85,16 +88,10 @@ import { SessionDetailsController } from "./session-details-controller.ts";
 import { renderSessionManagementMenu } from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
+registerSessionOrganizationEnglish();
+
 const SESSIONS_DOCS_URL = "https://docs.openclaw.ai/concepts/session";
 const SESSION_SEARCH_DEBOUNCE_MS = 200;
-
-type SessionsPageRequestScope = {
-  epoch: number;
-  context: ApplicationContext;
-  gateway: ApplicationContext["gateway"];
-  sessions: ApplicationContext["sessions"];
-  client: GatewayBrowserClient;
-};
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
 
@@ -281,6 +278,16 @@ class SessionsPage extends OpenClawLightDomElement {
     this.appliedListResult = undefined;
   }
 
+  private readonly archiveActions = new SessionsPageArchive({
+    captureScope: () => this.captureRequestScope(),
+    isCurrent: (scope) => this.isRequestScopeCurrent(scope),
+    publishError: (scope, error) => this.publishRequestError(scope, error),
+    refresh: (scope) => this.refreshSessionList(scope),
+    agentId: (key, context) => this.sessionAgentId(key, context),
+    patch: (key, patch, scope, expectedId, options) =>
+      this.patchSession(key, patch, scope, expectedId, options),
+  });
+
   private captureRequestScope(): SessionsPageRequestScope | null {
     const context = this.context;
     if (!this.isConnected || !context) {
@@ -293,6 +300,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     return {
       epoch: this.pageEpoch,
+      signal: this.pluginActionLifetime.signal,
       context,
       gateway,
       sessions: context.sessions,
@@ -691,7 +699,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 label: row.label || row.displayName || row.key,
                 agentId: requests[0]!.agentId,
               },
-              scope: { ...scope, signal: this.pluginActionLifetime.signal },
+              scope,
               isCurrent: () => this.isRequestScopeCurrent(scope),
               request,
             })
@@ -746,7 +754,6 @@ class SessionsPage extends OpenClawLightDomElement {
 
   private async deleteAllArchived() {
     const scope = this.captureRequestScope();
-    const signal = this.pluginActionLifetime.signal;
     if (!scope || this.loading || this.sessionMutationPending) {
       return;
     }
@@ -790,7 +797,7 @@ class SessionsPage extends OpenClawLightDomElement {
         t("sessionsView.deleteAllArchivedConfirm", {
           count: String(archivedRows.length),
         }),
-        { signal },
+        { signal: scope.signal },
       )) ||
       !this.isRequestScopeCurrent(scope)
     ) {
@@ -910,13 +917,19 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     // Dropping a row onto its own section is a no-op; skip the patch round-trip.
     const current = session.category?.trim() || null;
-    if (current === category) {
+    const promote = !isSubagentSessionKey(session.key) && !isPinnableUiSessionRow(session);
+    if (current === category && !promote) {
       return;
     }
     if (category) {
       void this.rememberCustomGroup(category);
     }
-    void this.patchSession(key, { category });
+    void this.patchSession(
+      key,
+      { category, ...(promote ? { sidebarRoot: true } : {}) },
+      undefined,
+      session.sessionId,
+    );
   }
 
   private async requestNewCategory(sessionKey?: string) {
@@ -961,7 +974,12 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const assigned = await this.patchSession(
       session.key,
-      { category: name },
+      {
+        category: name,
+        ...(!isSubagentSessionKey(session.key) && !isPinnableUiSessionRow(session)
+          ? { sidebarRoot: true }
+          : {}),
+      },
       scope,
       session.sessionId,
     );
@@ -978,9 +996,8 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     const initialValue = resolveSessionRenameValue(row);
-    const requestSignal = this.pluginActionLifetime.signal;
     const value = await this.inputDialog.open(() => ({
-      signal: requestSignal,
+      signal: scope.signal,
       title: t("sessionsView.renameSessionPrompt"),
       defaultValue: initialValue,
     }));
@@ -1042,7 +1059,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 label: row?.label || row?.displayName || key,
                 agentId,
               },
-              scope: { ...scope, signal: this.pluginActionLifetime.signal },
+              scope,
               isCurrent: () => this.isRequestScopeCurrent(scope),
               request,
             })
@@ -1067,33 +1084,6 @@ class SessionsPage extends OpenClawLightDomElement {
       return "completed";
     } catch (error) {
       return this.publishRequestError(scope, error);
-    }
-  }
-
-  private async archiveSessionWithUndo(row: GatewaySessionRow) {
-    const scope = this.captureRequestScope();
-    if (!scope) {
-      return;
-    }
-    const onConfirmed = prepareArchiveOutcome(
-      scope.sessions,
-      row,
-      this.sessionAgentId(row.key, scope.context),
-    );
-    if (!onConfirmed) {
-      return;
-    }
-    const finishArchive = scope.sessions.beginArchive(row.key, row.sessionId);
-    if (!finishArchive) {
-      return;
-    }
-    try {
-      await this.patchSession(row.key, { archived: true }, scope, row.sessionId, {
-        onConfirmed,
-        sessionScope: true,
-      });
-    } finally {
-      finishArchive();
     }
   }
 
@@ -1287,6 +1277,14 @@ class SessionsPage extends OpenClawLightDomElement {
           case "plugin":
             void this.runPluginAction(action.id, menu);
             break;
+          case "move-to-top-level":
+            void this.patchSession(row.key, { sidebarRoot: true }, undefined, row.sessionId, {
+              sessionScope: true,
+            });
+            break;
+          case "archive-tree":
+            void this.archiveActions.archiveTree(row);
+            break;
           case "move-to-group":
             this.assignCategory(row.key, action.category);
             break;
@@ -1299,7 +1297,7 @@ class SessionsPage extends OpenClawLightDomElement {
                 sessionScope: true,
               });
             } else {
-              void this.archiveSessionWithUndo(row);
+              void this.archiveActions.archive(row);
             }
             break;
           case "assign-owner": {

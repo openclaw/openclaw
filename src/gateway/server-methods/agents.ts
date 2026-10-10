@@ -613,9 +613,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
           await deletion.assertCurrentAsync();
           const { closeDeletedAgentDatabases } =
             await import("../../state/openclaw-agent-db-readers.js");
-          await deletion.assertCurrentAsync();
-          await closeDeletedAgentDatabases(agentId, databasePlan?.readerPaths ?? []);
-          await deletion.assertCurrentAsync();
+          const readerPaths = databasePlan?.readerPaths ?? [];
+          await closeDeletedAgentDatabases(agentId, readerPaths, deletion);
 
           const removed: AgentDeleteRemovedPath[] = [];
           const failed: AgentDeleteFailedPath[] = [];

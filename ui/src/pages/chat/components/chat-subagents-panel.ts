@@ -59,11 +59,9 @@ class ChatSubagentsPanel extends ChatSessionPanel<SubagentsPanelData> {
     }
     if (this.selected && this.data && !this.data.loading) {
       const denied = this.data.error && this.data.rows.length === 0;
-      // An incomplete page cannot establish that a previously selected child was removed.
       const removed =
         this.data.hasResult &&
         !this.data.error &&
-        !this.data.hasMore &&
         !this.data.rows.some((row) => row.session.key === this.selected?.key);
       if (denied || removed) {
         this.selected = null;
@@ -201,7 +199,7 @@ class ChatSubagentsPanel extends ChatSessionPanel<SubagentsPanelData> {
     const running = rows.filter(unfinished);
     const finished = rows.filter((row) => !unfinished(row));
     const loading = this.data?.loading ?? false;
-    const empty = this.data?.hasResult && !this.data.hasMore && !this.data.error;
+    const empty = this.data?.hasResult && !this.data.error;
     return html`<div class="chat-subagents__list" aria-busy=${loading}>
       ${
         this.data?.error
@@ -228,18 +226,6 @@ class ChatSubagentsPanel extends ChatSessionPanel<SubagentsPanelData> {
               (row) => this.renderRow(row),
               this.finishedId,
             )
-      }
-      ${
-        this.data?.hasMore
-          ? html`<button
-              class="chat-subagents__load-more btn btn--sm"
-              type="button"
-              ?disabled=${loading}
-              @click=${() => this.data?.loadMore()}
-            >
-              ${loading ? t("common.loading") : t("chat.subagentsPanel.loadMore")}
-            </button>`
-          : nothing
       }
     </div>`;
   }
