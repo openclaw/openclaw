@@ -223,11 +223,11 @@ export async function captureNativeIncognitoSessionActor(params: {
     }
   };
   const lifetime = {
-    assertCurrent() {
+    assertCurrent: () => {
       params.lifetime.assertCurrent();
       assertOwner();
     },
-    assertReadable() {
+    assertReadable: () => {
       params.lifetime.assertReadable();
       assertOwner();
     },
@@ -271,13 +271,13 @@ export async function captureNativeIncognitoSessionActor(params: {
               lifetime.assertCurrent();
               return operation({
                 captureGeneration: () => ({ assertCurrent: assertOwner }),
-                async execute(command) {
+                execute(command) {
                   const settled = Promise.withResolvers<
                     { kind: "completed" } | { kind: "unknown"; error: unknown }
                   >();
                   let settlement: SqliteWorkerNativeSettlement | undefined;
                   const selected: Request = {
-                    assertCurrent: () => lifetime.assertCurrent(),
+                    assertCurrent: lifetime.assertCurrent,
                     authorize,
                     native: {
                       admission: {
@@ -307,11 +307,15 @@ export async function captureNativeIncognitoSessionActor(params: {
                     } else {
                       settled.resolve({ kind: "completed" });
                     }
-                    return result;
+                    return Promise.resolve(result);
                   } catch (error) {
                     settlement = { kind: "unknown", committed: selected.committed };
                     settled.resolve({ kind: "unknown", error });
-                    throw error;
+                    return Promise.reject(
+                      error instanceof Error
+                        ? error
+                        : new Error("Native session actor command failed", { cause: error }),
+                    );
                   }
                 },
               });
