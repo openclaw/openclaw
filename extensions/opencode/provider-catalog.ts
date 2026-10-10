@@ -59,6 +59,19 @@ const opencodeZenCatalog = createUpstreamProviderCatalog({
   auditContext: "opencode-zen-model-discovery",
   starterModelAuditContext: "opencode-zen-onboarding-model-discovery",
   isStaticEntryActive: (entry) => entry?.status !== "deprecated",
+  // Zen accepts none/low/high/max, but its public K3 feed still lists only max.
+  // Preserve the verified seed contract so refresh cannot silently re-enable Off.
+  decorateModel: (model) =>
+    model.id === "kimi-k3"
+      ? {
+          ...model,
+          compat: {
+            ...model.compat,
+            supportedReasoningEfforts: OPENCODE_ZEN_SEED_CATALOG.get(model.id)?.model.compat
+              ?.supportedReasoningEfforts,
+          },
+        }
+      : model,
 });
 
 export async function prepareOpencodeZenModel(params: {

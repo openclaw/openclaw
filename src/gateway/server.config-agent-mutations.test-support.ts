@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { registerConfigWriteListener } from "../config/config.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 type ConfigState = { hash: string; path: string; config: Record<string, unknown> };
@@ -19,7 +21,10 @@ export function registerAgentConfigMutationTests({
   workspacePath: (name: string) => string;
   reloadBarrier: { wait: Promise<void> | undefined };
 }) {
-  it("uses fresh revisions after agent create, update, and delete before reload applies", async () => {
+  it("uses fresh revisions after agent create, update, and delete before reload applies", async ({
+    signal,
+  }) => {
+    const { path: configPath } = await getCurrentConfigObject();
     const operations = [
       {
         method: "agents.create",
@@ -31,13 +36,29 @@ export function registerAgentConfigMutationTests({
     for (const operation of operations) {
       const before = await getConfigHash();
       const gate = createDeferredCore();
+      const written = createDeferredCore();
+      const unsubscribe = registerConfigWriteListener((event) => {
+        if (event.configPath === configPath) {
+          written.resolve();
+        }
+      });
       reloadBarrier.wait = gate.promise;
+      const changed = rpc(operation.method, operation.params);
       try {
-        const changed = await rpc(operation.method, operation.params);
-        expect(changed.ok, `${operation.method}: ${changed.error?.message}`).toBe(true);
-
+        // Agent RPCs acknowledge runtime activation; inspect the committed draft
+        // while reload is held, then release activation before awaiting the reply.
+        await withinTest(
+          awaitGateBeforeSettlement(
+            written.promise,
+            changed,
+            `${operation.method} did not write config`,
+          ),
+          signal,
+        );
         const current = await getCurrentConfigObject();
         gate.resolve();
+        const result = await changed;
+        expect(result.ok, `${operation.method}: ${result.error?.message}`).toBe(true);
         const patched = await rpc("config.patch", {
           baseHash: current.hash,
           raw: JSON.stringify({ agents: { entries: { main: { name: operation.method } } } }),
@@ -47,6 +68,8 @@ export function registerAgentConfigMutationTests({
       } finally {
         gate.resolve();
         reloadBarrier.wait = undefined;
+        unsubscribe();
+        await changed.catch(() => {});
       }
     }
   });
@@ -108,8 +131,6 @@ export function registerAgentConfigMutationTests({
             },
           };
         });
-      const gate = createDeferredCore();
-      reloadBarrier.wait = gate.promise;
       try {
         const result = await rpc("agents.delete", {
           agentId: "doomed",
@@ -147,8 +168,6 @@ export function registerAgentConfigMutationTests({
           expect(await fs.readFile(original.path, "utf8")).toBe(raw);
         }
       } finally {
-        gate.resolve();
-        reloadBarrier.wait = undefined;
         observation.mockRestore();
       }
     },

@@ -143,6 +143,14 @@ activate after the next Gateway restart; the bundled snapshot remains available
 offline. Explicit model prices in your configuration or agent-local `models.json`
 keep precedence. These are advertised-price estimates, not verified invoice totals.
 
+#### Kimi K3 thinking
+
+For `opencode/kimi-k3`, choose **Off**, **Low**, **High**, or **Max**. Its provider
+default is **High**. **Off** explicitly
+sends `reasoning_effort: "none"`; omitting the effort does not disable reasoning
+on Zen. These choices apply to the Zen route, not other Kimi providers. The picker
+may also show [**Ultra**](/tools/thinking), a separate harness mode.
+
 ### Go
 
 | Property         | Value                                                                             |

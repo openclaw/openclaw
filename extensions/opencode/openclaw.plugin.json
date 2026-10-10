@@ -151,7 +151,7 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["max"],
+              "supportedReasoningEfforts": ["none", "low", "high", "max"],
               "maxTokensField": "max_tokens",
               "supportsDeveloperRole": false,
               "supportsStrictMode": false,
