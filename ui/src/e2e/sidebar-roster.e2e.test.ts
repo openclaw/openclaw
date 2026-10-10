@@ -602,9 +602,10 @@ suite.define(() => {
               boxes.signals.bottom <= boxes.actions.top ||
               boxes.actions.bottom <= boxes.signals.top,
           ).toBe(true);
+          // The agent avatar is the header identity; Home's creator never renders beside it.
+          expect(boxes.badges.map((badge) => badge.label)).not.toContain("Created by Riley");
           expect(boxes.badges.map((badge) => badge.label)).toEqual(
             expect.arrayContaining([
-              "Created by Riley",
               "#103 · Open",
               "2 messages need attention",
               touch ? "Incognito session" : "Unsent draft",
