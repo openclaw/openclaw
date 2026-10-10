@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommand, sanitizeChildEnvironment } from "./run-mock-sut-user-e2e.mjs";
@@ -46,7 +47,33 @@ async function ownTelegramFixture(
         if (evidence.cleanup.ok !== true)
           throw new Error(`Telegram ${kind} cleanup was not confirmed.`);
       } catch (error) {
-        evidence.cleanup = { status: "failed", error: error.message };
+        evidence.cleanup = { ...evidence.cleanup, status: "failed", error: error.message };
+        if (kind === "forum" && credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR) {
+          try {
+            const manifest = path.join(
+              credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
+              "owned-test-forum.json",
+            );
+            if (fs.existsSync(manifest)) {
+              const record = JSON.parse(fs.readFileSync(manifest, "utf8"));
+              if (record.status !== "deleted") {
+                Object.assign(evidence.cleanup, {
+                  status:
+                    record.status === "deletion-pending-verification"
+                      ? record.status
+                      : "uncertain-creation",
+                  title: record.title,
+                  createdAt: record.createdAt,
+                  testerUserId: record.testerUserId,
+                  groupId: record.groupId || record.basicGroupId,
+                  ...(record.deletion ? { deletion: record.deletion } : {}),
+                });
+              }
+            }
+          } catch {
+            // Interrupted manifest writes must not replace the original cleanup failure.
+          }
+        }
         throw error;
       }
       await releaseCredential();
