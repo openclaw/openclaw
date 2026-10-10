@@ -215,23 +215,23 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
               Object.assign(target, committed.initialEntry.fence);
               Object.assign(captured, committed.initialEntry.fence);
             }
-            const header = committed.header?.snapshot;
-            if (header?.ok && header.value.result?.appended) {
+            const committedHeader = committed.header?.snapshot;
+            if (committedHeader?.ok && committedHeader.value.result?.appended) {
               assertBinding();
               this.persistenceHeaderPending = false;
-              loadedVersion = header.value.after;
+              loadedVersion = committedHeader.value.after;
             }
             // Identity observers may cancel the run; retain its claim and header first.
-            const identity = committed.initialEntry?.identity;
-            if (identity) {
+            const committedIdentity = committed.initialEntry?.identity;
+            if (committedIdentity) {
               const databaseIdentity = actor.target.database;
               publishCommittedSessionIdentity(
                 captured.agentId,
                 databaseIdentity.kind === "file"
                   ? databaseIdentity.physicalIdentity
                   : databaseIdentity.incarnation,
-                identity.previous,
-                identity.current,
+                committedIdentity.previous,
+                committedIdentity.current,
               );
               assertCurrent();
             }

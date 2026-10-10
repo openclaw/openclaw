@@ -56,6 +56,7 @@ async function withSelectedTranscriptReader<T>(
       throw new Error("Expected admitted durable session reader");
     }
     const reader = databaseClaim.reader;
+    const assertCurrent = () => reader.assertCurrent();
     if (retainActor) {
       const identity = readDatabasePathIdentitySync(reader.database.path);
       if (!identity.key.startsWith("file:")) {
@@ -71,9 +72,9 @@ async function withSelectedTranscriptReader<T>(
             nativeLocation: reader.database.path,
           },
         },
-        { assertCurrent: reader.assertCurrent, assertReadable: reader.assertCurrent },
+        { assertCurrent, assertReadable: assertCurrent },
       );
-      await actor.read({ assertCurrent: reader.assertCurrent, authorize: reader.assertCurrent });
+      await actor.read({ assertCurrent, authorize: assertCurrent });
     }
     return await withOwnedSessionTranscriptWrites(
       {

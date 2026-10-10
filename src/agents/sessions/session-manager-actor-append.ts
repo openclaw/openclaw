@@ -27,7 +27,7 @@ export async function appendSessionManagerActor(input: {
   actor: SessionActor;
   append: SessionActorAppend;
   toolResult: boolean;
-  assertCurrent(): void;
+  assertCurrent(this: void): void;
   beforeFreshMessageCommit?: () => void;
   onCommitted?(committed: SessionActorAppendCommitted): void;
 }): Promise<{
@@ -116,8 +116,8 @@ export async function appendSessionManagerActor(input: {
       Object.assign(new Error(outcome.failure.message), { name: outcome.failure.name }),
   );
 
-  function finish(outcome: CommittedAppend, cause?: unknown) {
-    const committed = outcome.receipt.transcript.append;
+  function finish(committedOutcome: CommittedAppend, cause?: unknown) {
+    const committed = committedOutcome.receipt.transcript.append;
     if (!committed) {
       const error = new SqliteWorkerError(
         "Session actor omitted its committed append snapshot",

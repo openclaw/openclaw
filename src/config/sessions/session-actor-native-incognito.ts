@@ -271,13 +271,13 @@ export async function captureNativeIncognitoSessionActor(params: {
               lifetime.assertCurrent();
               return operation({
                 captureGeneration: () => ({ assertCurrent: assertOwner }),
-                execute(command) {
+                async execute(command) {
                   const settled = Promise.withResolvers<
                     { kind: "completed" } | { kind: "unknown"; error: unknown }
                   >();
                   let settlement: SqliteWorkerNativeSettlement | undefined;
                   const selected: Request = {
-                    assertCurrent: lifetime.assertCurrent,
+                    assertCurrent: () => lifetime.assertCurrent(),
                     authorize,
                     native: {
                       admission: {
@@ -307,11 +307,11 @@ export async function captureNativeIncognitoSessionActor(params: {
                     } else {
                       settled.resolve({ kind: "completed" });
                     }
-                    return Promise.resolve(result);
+                    return result;
                   } catch (error) {
                     settlement = { kind: "unknown", committed: selected.committed };
                     settled.resolve({ kind: "unknown", error });
-                    return Promise.reject(error);
+                    throw error;
                   }
                 },
               });
