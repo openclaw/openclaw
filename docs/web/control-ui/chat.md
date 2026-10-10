@@ -31,6 +31,15 @@ ends with their count, such as **3 subagents running**, and counts down as they
 finish. Selecting the count opens the **Subagents** panel on its list. Child
 sessions that are not subagents are not part of that count.
 
+Under the working or waiting line, each unfinished subagent has its own row
+showing its name and current activity headline. Rows stay in launch order as
+activity changes and disappear when the subagent finishes. Until a current-run
+headline is available, the row shows **Running**, **Queued**, or **Waiting on
+subagents** when that child has delegated work of its own. Select a row to open
+that subagent in the **Subagents** panel, or its session when the panel does not
+list it. The rows reuse the chat's loaded subagent list; they do not load each
+child's transcript.
+
 When a turn hands off with `sessions_yield` and its subagents are still active,
 the working indicator stays under that reply and reads **Waiting on 3
 subagents**, counting down as they finish. Selecting that count opens the
