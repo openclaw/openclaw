@@ -413,8 +413,9 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
     const approval = createExecReplayRequest("overlap");
-    if (await subscriber?.shouldHandle(approval)) {
-      subscriber.onRequested(approval);
+    const liveSubscriber = subscriber;
+    if (liveSubscriber && (await liveSubscriber.shouldHandle(approval))) {
+      liveSubscriber.onRequested(approval);
     }
     replay.resolve([approval]);
     await vi.waitFor(() => expect(deliverRequested).toHaveBeenCalledTimes(1));
