@@ -9,7 +9,10 @@ import {
   bindGitHubPublicationSource,
   prepareGitHubPublicationSource,
 } from "../gateway/github-publication-source.js";
-import { markGitHubPublicationReportedAsync } from "../gateway/github-publication-store-async.js";
+import {
+  claimRepositoryGitHubPublicationAsync,
+  markGitHubPublicationReportedAsync,
+} from "../gateway/github-publication-store-async.js";
 import {
   claimRepositoryGitHubPublicationInDatabase,
   insertRepositoryGitHubPublicationInDatabase,
@@ -404,15 +407,19 @@ it("does not use one session's source authority for another session's publicatio
   const scope = createScope();
   try {
     await insertRepositoryGitHubPublicationAsync(second.row, second.source);
-    const execution = { row: second.row, instanceId: "gateway", executionId: "session-b" };
-    await scope.mutate(
-      command({ operation: "claim", ...execution }),
-      context.admission.assertCurrent,
-      () => {},
-    );
     await expect(
       scope.mutate(
-        command({ operation: "recordEffect", effect: "push", ...execution }),
+        command({
+          operation: "checkpoint",
+          row: second.row,
+          checkpoint: {
+            checkpoint_ref: second.row.checkpoint_ref,
+            checkpoint_digest: second.row.checkpoint_digest,
+            source_head_commit: second.row.source_head_commit,
+            source_index_tree: second.row.source_index_tree,
+            workspace_tree: second.row.workspace_tree,
+          },
+        }),
         context.admission.assertCurrent,
         () => {},
         first.source,
@@ -471,8 +478,8 @@ it("publishes a committed receipt before a delayed ordinary worker reply", async
       result: {
         requestId: row.request_id,
         status: "failed",
-        code: "session_changed",
-        message: "Session changed before publication",
+        code: "no_changes",
+        message: "No changes to publish",
         nextAction: "Retry publication",
       },
     }),
@@ -602,36 +609,25 @@ it("revokes prepared sources when canonical deletion commits before its ordinary
   }
 });
 
-it("records observed effects under execution custody while refusing new effects without source authority", async () => {
-  const scope = createScope();
+it("settles execution bookkeeping without source authority while distinguishing observed effects", async () => {
   const row = seed("observed-effect");
-  const execution = { row, instanceId: "gateway", executionId: "observed-execution" };
-  await scope.mutate(
-    command({ operation: "claim", ...execution }),
-    context.admission.assertCurrent,
-    () => undefined,
-  );
-  const dispatch = scope.mutate(
-    command({ operation: "recordEffect", effect: "push", ...execution }),
-    context.admission.assertCurrent,
-    () => undefined,
-  );
-  await expect(dispatch).rejects.toThrow("source");
-  await scope.mutate(
-    command({
-      operation: "recordEffect",
-      effect: "push",
-      observed: { headCommit: "d".repeat(40) },
-      ...execution,
-    }),
-    context.admission.assertCurrent,
-    () => undefined,
-  );
-  await scope.mutate(
-    command({ operation: "interrupt", ...execution }),
-    context.admission.assertCurrent,
-    () => undefined,
-  );
+  const execution = await claimRepositoryGitHubPublicationAsync(row, "gateway", {
+    assertCustody: context.admission.assertCurrent,
+    assertAction() {
+      throw new Error("No action authority");
+    },
+    async prepareSource() {
+      throw new Error("No source authority");
+    },
+  });
+  await execution.updateHead("d".repeat(40));
+  await execution.recordEffect("push");
+  expect(await read(row)).toMatchObject({
+    ok: true,
+    rows: [{ effect_state: "dispatched", pushed_head_commit: null }],
+  });
+  await execution.recordEffect("push", { headCommit: "d".repeat(40) });
+  await execution.interrupt();
   expect(await read(row)).toMatchObject({
     ok: true,
     rows: [

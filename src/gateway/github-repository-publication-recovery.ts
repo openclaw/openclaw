@@ -368,6 +368,13 @@ export function createRepositoryGitHubPublicationRecovery(params: {
       deferOrphanedRequestsWithPendingResults(placements.listPendingWorkspaceResults());
     },
     async deferOrphanedRequestsAsync(): Promise<void> {
+      const pending = await listRepositoryGitHubPublicationsAsync({
+        ownerProfileId: null,
+        pending: true,
+      });
+      if (pending.length === 0) {
+        return;
+      }
       await deferRepositoryGitHubPublicationClaimsAsync({ kind: "orphaned" }, params.assertCurrent);
     },
   };
