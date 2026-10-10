@@ -22,7 +22,7 @@ import {
   resolveOfficialExternalPluginLookupIds,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { normalizePluginPolicyId } from "../../../plugins/plugin-policy-id.js";
-import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
+import { defaultSlotIdForKey, hasKind, type PluginSlotKey } from "../../../plugins/slots.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import {
   filterRepairableStalePluginHits,
@@ -41,6 +41,7 @@ type StalePluginConfigHit = {
 type StalePluginRegistryState = {
   plugins: PluginManifestRecord[];
   knownIds: Set<string>;
+  knownContextEngineIds: Set<string>;
   officialLookupIds: Set<string>;
   knownChannelIds: Set<string>;
   missingInstalledIds: Set<string>;
@@ -61,6 +62,11 @@ function collectPluginRegistryState(
     env: environment,
   }).manifestRegistry;
   const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+  const knownContextEngineIds = new Set(
+    registry.plugins
+      .filter((plugin) => hasKind(plugin.kind, "context-engine"))
+      .flatMap((plugin) => plugin.contextEngineIds ?? []),
+  );
   const findBlockedPluginDiagnostic = createBlockedPluginDiagnosticLookup({
     diagnostics: registry.diagnostics,
     config: cfg,
@@ -97,6 +103,7 @@ function collectPluginRegistryState(
   return {
     plugins: registry.plugins,
     knownIds,
+    knownContextEngineIds,
     officialLookupIds,
     knownChannelIds,
     missingInstalledIds: new Set(
@@ -190,6 +197,8 @@ function scanStalePluginConfigWithState(
       rawPluginId.trim().toLowerCase() === "none" ||
       pluginId === normalizePluginId(defaultSlotId) ||
       knownIds.has(pluginId) ||
+      (slotKey === "contextEngine" &&
+        registryState.knownContextEngineIds.has(rawPluginId.trim())) ||
       registryState.findBlockedPluginDiagnostic(pluginId)
     ) {
       continue;

@@ -229,6 +229,25 @@ describe("installed plugin index persistence", () => {
     },
   );
 
+  it("retains declared engine ownership across metadata and install-record reads", async () => {
+    const stateDir = makeTempDir();
+    const ownership = { demo: ["canonical-engine"] };
+    const index = createIndex({
+      installRecords: { demo: { source: "npm", contextEngineIdsByPlugin: ownership } },
+    });
+    for (const plugin of index.plugins) {
+      plugin.contextEngineIds = ["canonical-engine"];
+    }
+
+    await writePersistedInstalledPluginIndex(index, { stateDir });
+
+    const persisted = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+    expect(persisted.plugins[0]?.contextEngineIds).toEqual(["canonical-engine"]);
+    expect(
+      readPersistedInstalledPluginIndexInstallRecords({ stateDir })?.demo?.contextEngineIdsByPlugin,
+    ).toEqual(ownership);
+  });
+
   it("conditionally restores matching prior index absence", async () => {
     const stateDir = makeTempDir();
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };

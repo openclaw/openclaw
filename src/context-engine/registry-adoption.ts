@@ -1,5 +1,6 @@
 import type { ContextEngineRegistration } from "../plugins/registry-contribution-types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { getSelectedContextEngineOwner } from "../plugins/runtime/load-context-state.js";
 
 /**
  * Scoped production handles stay in discovery mode so full-only plugins cannot
@@ -13,6 +14,10 @@ export function adoptRuntimeContextEngineRegistrations(
   let adopted: Map<string, ContextEngineRegistration> | undefined;
   for (const [id, runtime] of runtimeRegistry.contextEngines) {
     if (runtime.lifecycle !== "runtime") {
+      continue;
+    }
+    const selectedOwner = getSelectedContextEngineOwner(targetRegistry, id);
+    if (selectedOwner !== undefined && selectedOwner !== runtime.owner) {
       continue;
     }
     const target = targetRegistry.contextEngines.get(id);

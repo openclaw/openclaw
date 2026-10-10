@@ -43,7 +43,11 @@ function resolveExplicitPluginSelectionShared(params: {
   if (params.config.slots.memory === params.id) {
     return "selected memory slot";
   }
-  if (params.config.slots.contextEngine === params.id) {
+  if (
+    (params.config.contextEngineOwnerId !== undefined
+      ? params.config.contextEngineOwnerId
+      : params.config.slots.contextEngine) === params.id
+  ) {
     return "selected context engine slot";
   }
   if (params.origin !== "bundled" && params.config.allow.includes(policyId)) {
@@ -123,7 +127,11 @@ export function resolvePluginActivationStateShared(params: {
   if (params.config.slots.memory === params.id) {
     return decision("explicit", { explicitlyEnabled: true, reason: "selected memory slot" });
   }
-  if (params.config.slots.contextEngine === params.id) {
+  if (
+    (params.config.contextEngineOwnerId !== undefined
+      ? params.config.contextEngineOwnerId
+      : params.config.slots.contextEngine) === params.id
+  ) {
     return decision("explicit", {
       explicitlyEnabled: true,
       reason: "selected context engine slot",

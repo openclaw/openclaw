@@ -88,8 +88,9 @@ function requireCompactRuntimeParams(callIndex: number): Record<string, unknown>
   return params;
 }
 
-function configWithSlot(engineId: string): OpenClawConfig {
-  return { plugins: { slots: { contextEngine: engineId } } };
+/** Builds an engine selector with optional independent plugin-owner approval. */
+function configWithSlot(engineId: string, owner?: string): OpenClawConfig {
+  return { plugins: { slots: { contextEngine: engineId }, allow: owner ? [owner] : [] } };
 }
 
 function makeMockMessage(text = "hello"): AgentMessage {
@@ -394,6 +395,21 @@ describe("Registry tests", () => {
     ).toEqual({ ok: false, existingOwner: "core" });
     expect(building.contextEngines.size).toBe(0);
   });
+  it("exposes the trusted plugin owner for a resolved registered engine", async () => {
+    const engineId = `owner-policy-${Date.now().toString(36)}`;
+    await registerContextEngineForOwner(
+      engineId,
+      () => new MockContextEngine(),
+      "plugin:lossless-claw",
+      {
+        allowSameOwnerRefresh: true,
+      },
+    );
+
+    const engine = await resolveContextEngine(configWithSlot(engineId, "lossless-claw"));
+
+    expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
+  });
 });
 
 describe("Default engine selection", () => {
@@ -662,7 +678,9 @@ describe("Read-only plugin discovery registrations", () => {
         lifecycle: "readOnlyDiscovery",
       });
     await registerDiscovery();
-    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("legacy");
+    expect((await resolveContextEngine(configWithSlot(engineId, "lossless-claw"))).info.id).toBe(
+      "legacy",
+    );
     expect(readOnly).not.toHaveBeenCalled();
     expect(await listContextEngineQuarantines()).toEqual([]);
     expect(console.warn).toHaveBeenCalledOnce();
@@ -671,12 +689,16 @@ describe("Read-only plugin discovery registrations", () => {
       allowSameOwnerRefresh: true,
       lifecycle: "runtime",
     });
-    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
+    expect((await resolveContextEngine(configWithSlot(engineId, "lossless-claw"))).info.id).toBe(
+      "lossless-claw",
+    );
     expect(runtime).toHaveBeenCalledOnce();
     expect(await listContextEngineQuarantines()).toEqual([]);
 
     await registerDiscovery();
-    expect((await resolveContextEngine(configWithSlot(engineId))).info.id).toBe("lossless-claw");
+    expect((await resolveContextEngine(configWithSlot(engineId, "lossless-claw"))).info.id).toBe(
+      "lossless-claw",
+    );
     expect(readOnly).not.toHaveBeenCalled();
     expect(runtime).toHaveBeenCalledTimes(2);
   });
@@ -778,7 +800,7 @@ describe("Invalid engine fallback", () => {
     });
     const factory = await registerOwnedEngine(engineId, { ingest, assemble });
 
-    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const engine = await resolveContextEngine(configWithSlot(engineId, "lossless-claw"));
     expect(engine.info.id).toBe("lcm");
     expect(engine.info.ownsCompaction).toBe(true);
     expect(resolveContextEngineOwnerPluginId(engine)).toBe("lossless-claw");
@@ -816,7 +838,7 @@ describe("Invalid engine fallback", () => {
     });
     await registerOwnedEngine(engineId, { compact });
 
-    const engine = await resolveContextEngine(configWithSlot(engineId));
+    const engine = await resolveContextEngine(configWithSlot(engineId, "lossless-claw"));
 
     await expect(engine.compact({ sessionId: "s1", sessionKey: "agent:main:s1" })).rejects.toThrow(
       "plugin compaction failed",

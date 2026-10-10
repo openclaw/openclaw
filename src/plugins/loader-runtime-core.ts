@@ -4,7 +4,11 @@ import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-resul
 import { createUnavailableRuntime } from "./api-builder.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
-import { resolveEffectivePluginActivationState } from "./config-state.js";
+import {
+  resolveEffectivePluginActivationState,
+  resolveEligibleContextEngineDeclaredOwners,
+  resolveEligibleContextEngineOwnerIds,
+} from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
@@ -293,6 +297,43 @@ export function loadOpenClawPluginsCore(
         installRecords:
           Object.keys(context.installRecords).length > 0 ? context.installRecords : undefined,
       });
+    const contextEngineOwners =
+      context.metadataSnapshot?.registryIndex.plugins.map((plugin) => ({
+        id: plugin.pluginId,
+        contextEngineIds: plugin.contextEngineIds,
+      })) ?? manifestRegistry.plugins;
+    const engineId = context.normalized.slots.contextEngine;
+    const eligibleOwners = resolveEligibleContextEngineOwnerIds(
+      context.normalized,
+      engineId,
+      contextEngineOwners,
+    );
+    if (eligibleOwners.length > 1) {
+      const declaredOwners = resolveEligibleContextEngineDeclaredOwners(
+        context.normalized,
+        engineId,
+        contextEngineOwners,
+      ).pluginIds;
+      const ownerKind = declaredOwners.length === eligibleOwners.length ? "declared" : "approved";
+      throw new Error(
+        `Context engine "${engineId}" has ambiguous ${ownerKind} owners: ${eligibleOwners.toSorted().join(", ")}. Select an engine with a unique plugin owner.`,
+      );
+    }
+    context.applyContextEngineOwnership(contextEngineOwners);
+    // Preserve an unresolved declaration without hiding ordinary missing-engine diagnostics.
+    const selectedContextEngine =
+      engineId &&
+      (context.normalized.contextEngineOwnerId ||
+        (context.metadataSnapshot?.registryIndex.plugins ?? manifestRegistry.plugins).some(
+          (plugin) => plugin.contextEngineIds?.includes(engineId),
+        ))
+        ? Object.freeze({
+            engineId,
+            owner: context.normalized.contextEngineOwnerId
+              ? `plugin:${context.normalized.contextEngineOwnerId}`
+              : null,
+          })
+        : undefined;
     registry.diagnostics.push(...manifestRegistry.diagnostics);
     warnWhenAllowlistIsOpen({
       emitWarning: context.shouldActivate,
@@ -339,6 +380,7 @@ export function loadOpenClawPluginsCore(
         env: context.env,
         logger,
         manifestRegistry,
+        selectedContextEngine,
         installRecords: context.installRecords,
         preferBuiltPluginArtifacts: options.preferBuiltPluginArtifacts,
       },
@@ -398,6 +440,8 @@ export function loadOpenClawPluginsCore(
         [installOwner, installOwner ? context.installRecords[installOwner] : undefined],
         { ...runtimeManifest, controlUi: controlUi !== undefined },
         activation,
+        // Undeclared plugins can register engines too; selection changes invalidate all closures.
+        selectedContextEngine,
         entryPolicy,
         degradedPlugin && degradedPluginMatchesRoot(degradedPlugin, candidate.rootDir)
           ? degradedPlugin

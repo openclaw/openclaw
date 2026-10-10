@@ -10,6 +10,8 @@ import {
   applyTestPluginDefaults,
   createPluginActivationSource,
   normalizePluginsConfig,
+  withContextEngineOwner,
+  type ContextEngineOwnerMetadata,
   type NormalizedPluginsConfig,
   type PluginActivationConfigSource,
 } from "./config-state.js";
@@ -75,6 +77,7 @@ function buildActivationMetadataHash(params: {
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
+        contextEngineSlot: params.activationSource.plugins.slots.contextEngine,
         entries: pluginEntryInputs,
         channelEnablement: sourceChannelEnablement,
         autoEnabledReasons: autoEnableReasonEntries,
@@ -342,6 +345,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
         JSON.stringify(
           registry?.plugins.map((plugin) => [
             plugin.id,
+            plugin.contextEngineIds,
             plugin.origin,
             plugin.rootDir,
             plugin.source,
@@ -406,6 +410,14 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     },
     get activationSource() {
       return capture().activationSource;
+    },
+    applyContextEngineOwnership(records: readonly ContextEngineOwnerMetadata[]) {
+      const current = capture();
+      current.normalized = withContextEngineOwner(current.normalized, records);
+      current.activationSource = {
+        ...current.activationSource,
+        plugins: withContextEngineOwner(current.activationSource.plugins, records),
+      };
     },
     autoEnabledReasons: options.autoEnabledReasons ?? {},
     onlyPluginIds,

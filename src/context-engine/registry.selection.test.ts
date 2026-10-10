@@ -29,17 +29,17 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-function fixture(owner = engineId, registered = true) {
+function fixture(owner = engineId, registered = true, selectedId = engineId) {
   const registry = createEmptyPluginRegistry();
   const factory = vi.fn(() => ({
-    info: { id: engineId, name: "Synthetic" },
+    info: { id: selectedId, name: "Synthetic" },
     ingest: async () => ({ ingested: false }),
     assemble: async () => ({ messages: [], estimatedTokens: 0 }),
     compact: async () => ({ ok: true, compacted: false, reason: "fixture" }),
   }));
   registerContextEngineInRegistry(registry, "legacy", () => new LegacyContextEngine(), "core");
   if (registered) {
-    registerContextEngineInRegistry(registry, engineId, factory, `plugin:${owner}`);
+    registerContextEngineInRegistry(registry, selectedId, factory, `plugin:${owner}`);
   }
   return { registry, factory };
 }
@@ -114,12 +114,17 @@ it.each([
   });
 });
 
-it.each(["standalone", "logical-turn"] as const)(
-  "%s disables then re-enables the owner without clearing its engine slot or registering again",
-  async (path) => {
-    const { registry, factory } = fixture(ownerId);
+it.each([
+  ["standalone", ownerId],
+  ["standalone", engineId],
+  ["logical-turn", ownerId],
+  ["logical-turn", engineId],
+] as const)(
+  "%s disables then re-enables owner %s without clearing its engine slot or registering again",
+  async (path, owner) => {
+    const { registry, factory } = fixture(owner);
     const initial = { plugins: { slots: { contextEngine: engineId } } };
-    const disabled = setPluginEnabledInConfig(initial, ownerId, false);
+    const disabled = setPluginEnabledInConfig(initial, owner, false);
     await withPluginRuntimeRegistryScope(registry, async () => {
       expect(await resolve(path, disabled)).toEqual({
         id: "legacy",
@@ -127,14 +132,73 @@ it.each(["standalone", "logical-turn"] as const)(
         failure: undefined,
       });
       expect(factory).not.toHaveBeenCalled();
-      expect(await resolve(path, setPluginEnabledInConfig(disabled, ownerId, true))).toEqual({
+      expect(await resolve(path, setPluginEnabledInConfig(disabled, owner, true))).toEqual({
         id: engineId,
-        owner: ownerId,
+        owner,
         failure: undefined,
       });
       expect(await listContextEngineQuarantines()).toEqual([]);
     });
     expect(disabled.plugins?.slots?.contextEngine).toBe(engineId);
+    expect(factory).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["standalone", "logical-turn"] as const)(
+  "%s enforces owner approval independently of the engine ID",
+  async (path) => {
+    for (const policy of [
+      {},
+      { allow: [engineId] },
+      { allow: [engineId], entries: { [ownerId]: { enabled: true } } },
+    ]) {
+      const { registry, factory } = fixture(ownerId);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      await withPluginRuntimeRegistryScope(registry, async () => {
+        expect(
+          await resolve(path, { plugins: { ...policy, slots: { contextEngine: engineId } } }),
+        ).toEqual({ id: "legacy", owner: undefined, failure: undefined });
+        expect(await listContextEngineQuarantines()).toEqual([]);
+      });
+      expect(factory).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  },
+);
+
+it.each(["standalone", "logical-turn"] as const)(
+  "%s selects an exact engine ID through its independently allowlisted owner",
+  async (path) => {
+    const selectedId = "Synthetic-Engine";
+    const { registry, factory } = fixture(ownerId, true, selectedId);
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      expect(
+        await resolve(path, {
+          plugins: { allow: [ownerId], slots: { contextEngine: selectedId } },
+        }),
+      ).toEqual({ id: selectedId, owner: ownerId, failure: undefined });
+      expect(await listContextEngineQuarantines()).toEqual([]);
+    });
+    expect(factory).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["standalone", "logical-turn"] as const)(
+  "%s keeps equal-ID selection outside an unrelated allowlist",
+  async (path) => {
+    const { registry, factory } = fixture();
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      expect(
+        await resolve(path, {
+          plugins: { allow: ["unrelated"], slots: { contextEngine: engineId } },
+        }),
+      ).toEqual({ id: engineId, owner: engineId, failure: undefined });
+      expect(await listContextEngineQuarantines()).toEqual([]);
+    });
     expect(factory).toHaveBeenCalledOnce();
   },
 );
