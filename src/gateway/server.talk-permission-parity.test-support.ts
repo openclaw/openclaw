@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -10,8 +11,10 @@ import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mo
 import { getRuntimeConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-tool.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
+import { talkClientHandlers } from "./talk/handlers/client.js";
 import {
   createGatewaySuiteHarness,
   prepareGatewayReplyRuntimeForTest,
@@ -484,4 +487,66 @@ export async function runTalkNodePermissionParity({
     await node.close();
     reviewer.close();
   }
+}
+
+export async function runTalkOperatorSourceParity({
+  context,
+  client,
+  sessionKey,
+  voiceSessionId,
+  runEmbeddedAgent,
+  waitForDispatchEnd,
+}: {
+  context: GatewayRequestContext;
+  client: GatewayClient;
+  sessionKey: string;
+  voiceSessionId: string | undefined;
+  runEmbeddedAgent: MockInstance<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
+  waitForDispatchEnd: () => Promise<void>;
+}) {
+  let originalSource: object | undefined;
+  let admittedSource: object | undefined;
+  runEmbeddedAgent.mockImplementationOnce(async (params) => {
+    admittedSource = params.preparedRunAdmission?.readOperatorAuthority?.()?.source;
+    return { payloads: [{ text: "Done." }], meta: { durationMs: 1 } };
+  });
+  const handler = expectDefined(talkClientHandlers["talk.client.toolCall"], "Talk RPC handler");
+  const respond = vi.fn<RespondFn>();
+  await handleGatewayRequest({
+    req: {
+      type: "req",
+      id: randomUUID(),
+      method: "talk.client.toolCall",
+      params: {
+        sessionKey,
+        voiceSessionId,
+        callId: "source-identity-call",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "Check the requested status" },
+      },
+    },
+    context,
+    client,
+    respond,
+    isWebchatConnect: () => true,
+    extraHandlers: {
+      "talk.client.toolCall": async (options) => {
+        const original = await captureGatewayOperatorRunAuthority({
+          client: options.client ?? null,
+          context: options.context,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
+        });
+        originalSource = original?.authority.source;
+        try {
+          await handler(options);
+        } finally {
+          original?.release();
+        }
+      },
+    },
+  });
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  await waitForDispatchEnd();
+  expect(originalSource).toBeDefined();
+  expect(admittedSource).toBe(originalSource);
 }

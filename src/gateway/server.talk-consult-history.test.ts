@@ -50,7 +50,6 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-to
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -66,7 +65,6 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
 import { resolveTalkAgentConsultAuthority } from "./talk/client-gateway-control.js";
 import { retainTalkClientRunAuthority } from "./talk/client-run-authority.js";
-import { talkClientHandlers } from "./talk/handlers/client.js";
 import {
   createGatewaySuiteHarness,
   dispatchInboundMessageMock,
@@ -955,51 +953,16 @@ it("dispatches permitted native actions once per logical request across text and
 });
 
 it("preserves the original operator source through chat-backed capability adaptation", async () => {
-  let originalSource: object | undefined;
-  let admittedSource: object | undefined;
-  runEmbeddedAgent.mockImplementationOnce(async (params) => {
-    admittedSource = params.preparedRunAdmission?.readOperatorAuthority?.()?.source;
-    return { payloads: [{ text: "Done." }], meta: { durationMs: 1 } };
-  });
-  const handler = expectDefined(talkClientHandlers["talk.client.toolCall"], "Talk RPC handler");
-  const respond = vi.fn<RespondFn>();
-  await handleGatewayRequest({
-    req: {
-      type: "req",
-      id: randomUUID(),
-      method: "talk.client.toolCall",
-      params: {
-        sessionKey,
-        voiceSessionId,
-        callId: "source-identity-call",
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args: { question: "Check the requested status" },
-      },
-    },
+  const { runTalkOperatorSourceParity } =
+    await import("./server.talk-permission-parity.test-support.js");
+  await runTalkOperatorSourceParity({
     context,
     client,
-    respond,
-    isWebchatConnect: () => true,
-    extraHandlers: {
-      "talk.client.toolCall": async (options) => {
-        const original = await captureGatewayOperatorRunAuthority({
-          client: options.client ?? null,
-          context: options.context,
-          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
-        });
-        originalSource = original?.authority.source;
-        try {
-          await handler(options);
-        } finally {
-          original?.release();
-        }
-      },
-    },
+    sessionKey,
+    voiceSessionId,
+    runEmbeddedAgent,
+    waitForDispatchEnd,
   });
-  expect(respond.mock.calls[0]?.[0]).toBe(true);
-  await waitForDispatchEnd();
-  expect(originalSource).toBeDefined();
-  expect(admittedSource).toBe(originalSource);
 });
 
 // The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
