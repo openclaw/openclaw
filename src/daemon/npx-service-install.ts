@@ -62,7 +62,13 @@ export async function resolveDurableNodeEntrypoint(
       packageRoot,
       runCommand: runCommandWithTimeout,
       runStep: (step) =>
-        runStep({ ...step, runCommand: runCommandWithTimeout, stepIndex: 0, totalSteps: 0 }),
+        runStep({
+          ...step,
+          cwd: step.cwd ?? process.cwd(),
+          runCommand: runCommandWithTimeout,
+          stepIndex: 0,
+          totalSteps: 0,
+        }),
       timeoutMs: 30_000,
       workTimeoutMs: null,
       env: installEnv,
