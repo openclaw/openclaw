@@ -7,6 +7,7 @@ import type {
 } from "../../config/sessions.js";
 import {
   hasMainSessionRecoveryClaim,
+  hasRestartRecoveryTerminalRun,
   isMainRestartRecoveryCandidate,
   isRetryableUnadoptedChatClaim,
   normalizeMainSessionRecoveryRunFences,
@@ -416,8 +417,16 @@ async function markOrphanedMainSessionStore(
       // Reuse the normal mark transition, preserving budgets on existing cycles.
       const hasClaim = hasMainSessionRecoveryClaim(entry);
       const completed = hasCompletedMainSessionRecoveryOutcome(entry);
-      // Explicit cancellation also sets abortedLastRun; its terminal outcome wins.
-      if (!hasClaim && completed) {
+      // A receipt for this continuation wins even when its saved outcome is interrupted.
+      if (
+        !hasClaim &&
+        (completed ||
+          [
+            entry.lifecycleRunId,
+            entry.activeWriterRunId,
+            entry.restartRecoveryDeliverySourceRunId,
+          ].some((runId) => runId !== undefined && hasRestartRecoveryTerminalRun(entry, runId)))
+      ) {
         return undefined;
       }
       if (
