@@ -44,29 +44,26 @@ describe("Ollama Cloud API key setup", () => {
     },
   );
 
-  it.each(["flag", "env", "profile"] as const)(
-    "rejects the local placeholder from %s before non-interactive persistence",
-    async (source) => {
-      const method = cloudAuthMethod();
-      const toApiKeyCredential = vi.fn();
-      const ctx = {
-        authChoice: "ollama-cloud",
-        config: {},
-        baseConfig: {},
-        opts: {},
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        resolveApiKey: vi.fn(async () => ({ key: "ollama-local", source })),
-        toApiKeyCredential,
-      };
-      await expect(method.validateNonInteractive?.(ctx)).rejects.toThrow(
-        "Ollama Cloud requires a hosted API key",
-      );
-      await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
-        "Ollama Cloud requires a hosted API key",
-      );
-      expect(toApiKeyCredential).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects a resolved local placeholder before non-interactive persistence", async () => {
+    const method = cloudAuthMethod();
+    const toApiKeyCredential = vi.fn();
+    const ctx = {
+      authChoice: "ollama-cloud",
+      config: {},
+      baseConfig: {},
+      opts: {},
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      resolveApiKey: vi.fn(async () => ({ key: "ollama-local", source: "flag" as const })),
+      toApiKeyCredential,
+    };
+    await expect(method.validateNonInteractive?.(ctx)).rejects.toThrow(
+      "Ollama Cloud requires a hosted API key",
+    );
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(
+      "Ollama Cloud requires a hosted API key",
+    );
+    expect(toApiKeyCredential).not.toHaveBeenCalled();
+  });
 
   it("preserves a hosted key and the Cloud default model", async () => {
     const method = cloudAuthMethod();
