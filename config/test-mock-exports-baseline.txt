@@ -2646,8 +2646,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../../tts/tts-settings.js","e0015ebcc2266b1ddd1206956ca46e1faa440b70ac5e19d3e51410f8f048278b",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../agent-bundle-lsp-runtime.js","2ef5afe40efe2ffc22a696c509e87bb243b6f946c944a039244c73dd35f40ca1",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../agent-bundle-mcp-tools.js","ac78396044549862318dca91c28f294e66aeed3b219309cacb2af5c8c5195bab",1]
-["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../agent-project-settings.js","2dda1408578faa0236ace0c7dc3b4eaf3b2a392c0db7c20e2bd813635eeca215",1]
-["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../agent-settings.js","2b9632f325dd510aa7d9c8ec2e3e4437c482ea513149399d6d95fa336aeee3d1",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../anthropic-payload-log.js","2efa3030b67ca9ae0ca31536ff62353c83f00f6ce92d54fac10d9f4b25bc7b56",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../anthropic-vertex-stream.js","6a569e2e8c26ecbb2e95e292258d34ca0dd60a59e87909198970e5e656af1ec3",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts","../../cache-trace.js","48c9abcdf9b108c233349b9d28924f00147a3eb5f9115e4e6f4d79c9a28b6e27",1]
