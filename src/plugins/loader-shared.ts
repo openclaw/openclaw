@@ -268,39 +268,23 @@ function createManifestPluginRecord(params: {
 }): PluginRecord {
   const { candidate, manifestRecord } = params;
   const record = createPluginRecord({
-    id: manifestRecord.id,
+    ...manifestRecord,
     nativeSessionCatalog:
       manifestRecord.setup?.nativeSessionCatalog ??
       shippedNativeSessionCatalogs.find(({ pluginId }) => pluginId === manifestRecord.id),
-    name: manifestRecord.name ?? manifestRecord.id,
-    description: manifestRecord.description,
-    packageVersion: manifestRecord.packageVersion,
-    version: manifestRecord.version,
     builtWithOpenClawVersion: normalizeOptionalString(
       candidate.packageManifest?.build?.openclawVersion,
     ),
-    packageName: manifestRecord.packageName,
-    format: manifestRecord.format,
-    bundleFormat: manifestRecord.bundleFormat,
-    bundleCapabilities: manifestRecord.bundleCapabilities,
     source: candidate.source,
     rootDir: candidate.rootDir,
     origin: candidate.origin,
     workspaceDir: candidate.workspaceDir,
-    trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
-    trust: manifestRecord.trust,
     enabled: params.enabled,
     compat: collectPluginManifestCompatCodes(manifestRecord),
     activationState: params.activationState,
-    syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
     channelIds: manifestRecord.channels,
     providerIds: manifestRecord.providers,
     configSchema: Boolean(manifestRecord.configSchema),
-    contracts: manifestRecord.contracts,
-    dashboard: manifestRecord.dashboard,
-    controlUi: manifestRecord.controlUi,
-    uiCapabilities: manifestRecord.uiCapabilities,
-    mcpServers: manifestRecord.mcpServers,
   });
   if (!params.shouldLoadModules) {
     record.cliBackendIds = [
