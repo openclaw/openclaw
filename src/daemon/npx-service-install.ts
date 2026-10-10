@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { readPackageVersion } from "../infra/package-json.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
 import {
@@ -38,7 +39,13 @@ export async function resolveDurableNodeEntrypoint(
     packageRoot,
     expectedVersion: version,
   });
-  if (errors.length) {
+  const reusable =
+    errors.length === 0 &&
+    (await collectPackageDistContentInventoryErrors(packageRoot).then(
+      (contentErrors) => contentErrors.length === 0,
+      () => false,
+    ));
+  if (!reusable) {
     const installEnv = await createGlobalInstallEnv(env, { manager: "npm" });
     const target = await resolveGlobalInstallTarget({
       manager: "npm",
