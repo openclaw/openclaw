@@ -359,7 +359,10 @@ export async function createCodexInferenceProxy(params: {
       const { promise: setupSettled, resolve: finishSetup } = createDeferred();
       let resident: ReturnType<typeof reserveResident> = null;
       const controller = new AbortController();
+      // Wall-clock deadline feeds permit-pool admission; the monotonic counterpart
+      // feeds setTimeout/handshakeTimeout so a wall-clock jump cannot skew the budget.
       const deadlineAtMs = Date.now() + HANDSHAKE_TIMEOUT_MS;
+      const deadlineAtMonotonicMs = performance.now() + HANDSHAKE_TIMEOUT_MS;
       let releasePermit: (() => void) | null = null;
       let framePending = false;
       let idleTimer: ReturnType<typeof setTimeout> | undefined;
@@ -445,7 +448,10 @@ export async function createCodexInferenceProxy(params: {
           return;
         }
         // Queueing, DNS and the remote handshake share one native-compatible deadline.
-        handshakeTimer = setTimeout(() => finish(504), Math.max(1, deadlineAtMs - Date.now()));
+        handshakeTimer = setTimeout(
+          () => finish(504),
+          Math.max(1, deadlineAtMonotonicMs - performance.now()),
+        );
         handshakeTimer.unref();
         const assertHandshakeCurrent = () => {
           assertCurrent();
@@ -473,7 +479,7 @@ export async function createCodexInferenceProxy(params: {
           followRedirects: false,
           perMessageDeflate: false,
           maxPayload: MAX_BODY_BYTES,
-          handshakeTimeout: Math.max(1, deadlineAtMs - Date.now()),
+          handshakeTimeout: Math.max(1, deadlineAtMonotonicMs - performance.now()),
           finishRequest(request) {
             let socketClosed = Promise.resolve();
             request.once("socket", (upstreamSocket) => {
