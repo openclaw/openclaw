@@ -30,6 +30,7 @@ export function assertControlUiE2eOwnership(
       "extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts",
+      "extensions/qa-lab/src/gateway-draining-consult.real-gateway.e2e.test.ts",
     ],
     { encoding: "utf8" },
   )

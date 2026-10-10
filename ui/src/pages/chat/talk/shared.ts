@@ -16,6 +16,13 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gatew
 import { formatUiError } from "../../../lib/format-error.ts";
 import type { RealtimeTalkInputController } from "./input.ts";
 
+/** Local projection of GatewayAgentWaitResult with optional status/timeoutPhase and added aborted. */
+type AgentWaitResult = Omit<Partial<GatewayAgentWaitResult>, "status" | "timeoutPhase"> & {
+  status?: string;
+  timeoutPhase?: string | undefined;
+  aborted?: boolean;
+};
+
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
 
@@ -181,12 +188,6 @@ type ChatPayload = {
   message?: unknown;
 };
 
-type AgentWaitResult = Omit<Partial<GatewayAgentWaitResult>, "status" | "timeoutPhase"> & {
-  status?: string;
-  timeoutPhase?: string;
-  aborted?: boolean;
-};
-
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;
 
 function extractTextFromMessage(message: unknown): string {
@@ -221,9 +222,13 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
   const stopReason = result.stopReason?.trim();
   const timeoutPhase = result.timeoutPhase?.trim();
   const livenessState = result.livenessState?.trim();
+  // Error-message presence indicates a terminal timeout: the wait owner resolved
+  // with an error but without a canonical terminal status, so treat it as an
+  // interruption rather than letting the consultation wait for the outer deadline.
+  const hasErrorMessage = message !== undefined && message.length > 0;
   const hasTerminalTimeoutMetadata =
+    hasErrorMessage ||
     result.endedAt !== undefined ||
-    message !== undefined ||
     result.aborted === true ||
     (livenessState !== undefined && livenessState.length > 0) ||
     result.yielded === true ||
@@ -231,6 +236,7 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     timeoutPhase === "preflight" ||
     timeoutPhase === "provider" ||
     timeoutPhase === "post_turn" ||
+    timeoutPhase === "gateway_draining" ||
     result.providerStarted === true;
   return hasTerminalTimeoutMetadata
     ? new Error(message || "OpenClaw tool call timed out")
@@ -283,7 +289,7 @@ function waitForChatResult(params: {
       }
       emptyFinalWaitStarted = true;
       void params.client
-        .request<AgentWaitResult>("agent.wait", {
+        .request<GatewayAgentWaitResult>("agent.wait", {
           runId: params.runId,
           timeoutMs: params.timeoutMs,
         })
