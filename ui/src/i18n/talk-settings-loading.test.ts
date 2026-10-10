@@ -10,7 +10,7 @@ it("loads Talk settings fallback copy before the cold view renders", async () =>
   expect(manager.t("talkPage.voice.title")).toBe("talkPage.voice.title");
 
   await manager.setLocale("de");
-  await import("../pages/config/talk.ts");
+  await import("../pages/config/talk.tsx");
 
   expect(en.talkPage).toBe(talkPage);
   expect(manager.t("talkPage.voice.title")).toBe("Speaker voice");

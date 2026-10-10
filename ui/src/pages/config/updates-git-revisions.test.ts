@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import {
+  cleanupUpdates,
+  mountUpdates,
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
-import { renderUpdates } from "./updates.ts";
 
 let container: HTMLDivElement;
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
@@ -16,6 +16,8 @@ beforeEach(async () => {
   await i18n.setLocale("en");
   ({ container, row } = createUpdatesViewDom());
 });
+
+afterEach(cleanupUpdates);
 
 it("renders bounded dev commit details only when supplied", () => {
   const props = createProps({
@@ -54,7 +56,7 @@ it("renders bounded dev commit details only when supplied", () => {
       },
     },
   });
-  render(renderUpdates(props), container);
+  mountUpdates(props, container);
 
   expect(row("Commits").querySelectorAll("[role='listitem']")).toHaveLength(2);
   expect(row("Commits").textContent).toContain("b123456");
@@ -74,19 +76,17 @@ it("renders bounded dev commit details only when supplied", () => {
     upstreamSha: "c".repeat(40),
     commitsBehind: 2,
   };
-  render(
-    renderUpdates(
-      createProps({
-        update: {
-          ...props.update,
-          updateSchedule: {
-            channel: "dev",
-            autoEnabled: false,
-            install: { kind: "git", git: refreshedGit },
-          },
+  mountUpdates(
+    createProps({
+      update: {
+        ...props.update,
+        updateSchedule: {
+          channel: "dev",
+          autoEnabled: false,
+          install: { kind: "git", git: refreshedGit },
         },
-      }),
-    ),
+      },
+    }),
     container,
   );
   expect(container.querySelector(".updates-commit-list")).toBeNull();
@@ -96,6 +96,6 @@ it("renders bounded dev commit details only when supplied", () => {
     ),
   ).toEqual(["aaaaaaaa", "cccccccc"]);
 
-  render(renderUpdates(createProps()), container);
+  mountUpdates(createProps(), container);
   expect(container.querySelector(".updates-commit-list")).toBeNull();
 });

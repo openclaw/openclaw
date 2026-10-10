@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setPluginEnabled } from "../../lib/plugins/index.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
+  mountMemoryPage,
+  settleMemoryPage,
   activeEngine,
   addonSwitch,
   createMemoryPage,
@@ -13,8 +15,8 @@ import {
   createMemoryTestMutationResult as committed,
   selectEngine,
   toggleAddon,
-} from "./memory-page.test-support.ts";
-import "./memory-page.ts";
+} from "./memory-page.test-support.tsx";
+import "./memory-page.tsx";
 
 vi.mock("../../lib/plugins/index.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../lib/plugins/index.ts")>();
@@ -33,7 +35,7 @@ describe("Memory plugin mutation ownership", () => {
       ],
       refresh: () => Promise.reject(new Error("authoritative snapshot unavailable")),
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
       selectEngine(element, "other");
@@ -66,7 +68,7 @@ describe("Memory plugin mutation ownership", () => {
       ],
       setEnabled,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
@@ -110,7 +112,7 @@ describe("Memory plugin mutation ownership", () => {
         waitForPendingWrites: () => pendingWrites.promise,
         setEnabled,
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       try {
         await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         toggleAddon(element, "Active memory", false);
@@ -155,7 +157,7 @@ describe("Memory plugin mutation ownership", () => {
         waitForPendingWrites: () => pendingWrites.promise,
         setEnabled,
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       try {
         await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         toggleAddon(element, "Active memory", false);
@@ -202,7 +204,7 @@ describe("Memory plugin mutation ownership", () => {
           ? firstMutation.promise
           : Promise.resolve(committed(pluginId, enabled, ["Review memory-wiki settings."])),
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
@@ -235,7 +237,7 @@ describe("Memory plugin mutation ownership", () => {
           warnings: ["Review the addon settings."],
         }),
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
@@ -260,7 +262,7 @@ describe("Memory plugin mutation ownership", () => {
       catalog: [createMemoryTestAddon("active-memory", true)],
       setEnabled,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
       toggleAddon(element, "Active memory", false);
@@ -272,7 +274,7 @@ describe("Memory plugin mutation ownership", () => {
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
       );
       await waitForFast(async () => {
-        await element.updateComplete;
+        await settleMemoryPage();
         expect(addonSwitch(element, "Active memory")).not.toBeNull();
       });
       toggleAddon(element, "Active memory", false);
@@ -283,7 +285,7 @@ describe("Memory plugin mutation ownership", () => {
       await waitForFast(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
-      await element.updateComplete;
+      await settleMemoryPage();
       expect(addonSwitch(element, "Active memory")?.hasAttribute("disabled")).toBe(true);
 
       secondMutation.resolve(committed("active-memory", false));
@@ -313,7 +315,7 @@ describe("Memory plugin mutation ownership", () => {
       ],
       setEnabled,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
       selectEngine(element, "other");
@@ -325,7 +327,7 @@ describe("Memory plugin mutation ownership", () => {
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(2),
       );
       await waitForFast(async () => {
-        await element.updateComplete;
+        await settleMemoryPage();
         expect(activeEngine(element)).toBe("memory-core");
       });
       selectEngine(element, "other");
@@ -336,19 +338,17 @@ describe("Memory plugin mutation ownership", () => {
       await waitForFast(() =>
         expect(request.mock.calls.filter(([method]) => method === "plugins.list")).toHaveLength(3),
       );
-      await element.updateComplete;
+      await settleMemoryPage();
       expect(
-        element.querySelector<HTMLElement & { disabled?: boolean }>(
-          "wa-radio-group.settings-segmented",
-        )?.disabled,
+        element.querySelector<HTMLElement & { disabled?: boolean }>("fieldset.settings-segmented")
+          ?.disabled,
       ).toBe(true);
 
       secondMutation.resolve(committed("other", true));
       await waitForFast(() =>
         expect(
-          element.querySelector<HTMLElement & { disabled?: boolean }>(
-            "wa-radio-group.settings-segmented",
-          )?.disabled,
+          element.querySelector<HTMLElement & { disabled?: boolean }>("fieldset.settings-segmented")
+            ?.disabled,
         ).toBe(false),
       );
     } finally {
@@ -373,7 +373,7 @@ describe("Memory plugin mutation ownership", () => {
         );
       },
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
@@ -403,7 +403,7 @@ describe("Memory plugin mutation ownership", () => {
         catalog: [createMemoryTestAddon("active-memory", true)],
         setEnabled,
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       try {
         await waitForFast(() => expect(addonSwitch(element, "Active memory")).not.toBeNull());
         toggleAddon(element, "Active memory", false);
@@ -419,7 +419,7 @@ describe("Memory plugin mutation ownership", () => {
             3,
           ),
         );
-        await element.updateComplete;
+        await settleMemoryPage();
         expect(element.textContent).not.toContain("Old boot runtime warning.");
         expect(element.textContent).not.toContain("Could not update Active memory");
       } finally {
@@ -448,7 +448,7 @@ describe("Memory plugin mutation ownership", () => {
         );
       },
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(addonSwitch(element, "Active memory")?.checked).toBe(true));
       toggleAddon(element, "Active memory", false);
@@ -497,7 +497,7 @@ describe("Memory plugin mutation ownership", () => {
               : committed(pluginId, enabled),
           ),
       });
-      document.body.append(element);
+      mountMemoryPage(element);
       const mutate = (owner: typeof first | typeof second) => {
         if (owner === "engine") {
           selectEngine(element, "other");
@@ -551,7 +551,7 @@ describe("Memory plugin mutation ownership", () => {
         }),
       setEnabled: () => pendingMutation.promise,
     });
-    document.body.append(element);
+    mountMemoryPage(element);
     try {
       await waitForFast(() => expect(activeEngine(element)).toBe("memory-core"));
       selectEngine(element, "other");

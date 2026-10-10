@@ -1,13 +1,13 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
+  cleanupUpdates,
+  mountUpdates,
   createUpdatesViewDom,
   createUpdatesViewProps as createProps,
 } from "./updates.test-support.ts";
-import { renderUpdates } from "./updates.ts";
 
 let container: HTMLDivElement;
 let row: ReturnType<typeof createUpdatesViewDom>["row"];
@@ -17,34 +17,34 @@ beforeEach(async () => {
   ({ container, row } = createUpdatesViewDom());
 });
 
+afterEach(cleanupUpdates);
+
 describe("update status read recovery", () => {
   it.each([true, false])(
     "keeps read-only recovery after a refused update with canCheckStatus=%s",
     (canCheckStatus) => {
       const onCheckStatus = vi.fn(async () => true);
       const onUpdateNow = vi.fn();
-      render(
-        renderUpdates(
-          createProps({
-            update: {
-              updateRun: createUpdateRunFixture({
-                status: "skipped",
-                phase: "finished",
-                reason: "external-supervisor-update-required",
-                steps: [],
-              }),
-              updateStatusBanner: {
-                source: "read",
-                tone: "danger",
-                text: "update.runs.get timed out",
-              },
-              updateStatusCheckBanner: null,
+      mountUpdates(
+        createProps({
+          update: {
+            updateRun: createUpdateRunFixture({
+              status: "skipped",
+              phase: "finished",
+              reason: "external-supervisor-update-required",
+              steps: [],
+            }),
+            updateStatusBanner: {
+              source: "read",
+              tone: "danger",
+              text: "update.runs.get timed out",
             },
-            canCheckStatus,
-            onCheckStatus,
-            onUpdateNow,
-          }),
-        ),
+            updateStatusCheckBanner: null,
+          },
+          canCheckStatus,
+          onCheckStatus,
+          onUpdateNow,
+        }),
         container,
       );
 

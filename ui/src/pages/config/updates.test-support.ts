@@ -1,8 +1,8 @@
+import { render as mountSolid } from "@solidjs/web";
+import { createComponent, createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { ApplicationUpdateOverlaySnapshot } from "../../app/overlays-types.ts";
-import type { renderUpdates } from "./updates.ts";
-
-type UpdatesViewProps = Parameters<typeof renderUpdates>[0];
+import { Updates, type UpdatesViewProps } from "./updates.tsx";
 
 export type UpdatesViewOverrides = Partial<Omit<UpdatesViewProps, "update">> & {
   update?: Partial<ApplicationUpdateOverlaySnapshot>;
@@ -80,10 +80,10 @@ export function createUpdatesViewDom() {
 
   function automaticUpdatesControl(): {
     row: HTMLElement;
-    toggle: HTMLElement & { checked: boolean };
+    toggle: HTMLInputElement;
   } {
     const automaticRow = row("Automatic updates");
-    const toggle = automaticRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    const toggle = automaticRow.querySelector<HTMLInputElement>('input[type="checkbox"]');
     if (!toggle) {
       throw new Error("Missing automatic updates control");
     }
@@ -91,4 +91,31 @@ export function createUpdatesViewDom() {
   }
 
   return { container, row, automaticUpdatesControl };
+}
+
+const mounts = new Map<
+  HTMLElement,
+  { update: (props: UpdatesViewProps) => void; dispose: () => void }
+>();
+
+export function mountUpdates(props: UpdatesViewProps, container: HTMLElement) {
+  const mounted = mounts.get(container);
+  if (mounted) {
+    mounted.update(props);
+  } else {
+    const [current, update] = createSignal(props, { equals: false });
+    const reactiveProps = new Proxy(props, {
+      get: (_, key) => Reflect.get(current(), key),
+    });
+    const dispose = mountSolid(() => createComponent(Updates, reactiveProps), container);
+    mounts.set(container, { update, dispose });
+  }
+  flush();
+}
+
+export function cleanupUpdates() {
+  for (const { dispose } of mounts.values()) {
+    dispose();
+  }
+  mounts.clear();
 }

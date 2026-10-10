@@ -1,6 +1,9 @@
+import { render as mountSolid } from "@solidjs/web";
 import { html, LitElement, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { shellLayoutTraitsRef } from "./shell-layout-traits-solid.ts";
 import {
   ShellLayoutController,
   shellLayoutTraits,
@@ -100,6 +103,34 @@ afterEach(() => {
 });
 
 describe("shell layout publication", () => {
+  it("combines Solid page traits with retained Lit siblings and retires only its own facts", async () => {
+    const { shell, content } = await mountShell();
+    const retained = createPage({ workbench: true });
+    content.append(retained);
+    await retained.updateComplete;
+    const target = document.createElement("div");
+    content.append(target);
+    const dispose = mountSolid(() => {
+      const report = shellLayoutTraitsRef({ settingsPage: true, settingsWorkspace: true });
+      const section = document.createElement("section");
+      report(section);
+      return section;
+    }, target);
+    try {
+      flush();
+      await shell.updateComplete;
+      expect(content.classList.contains("content--settings-page")).toBe(true);
+      expect(content.classList.contains("content--settings-workspace")).toBe(true);
+      expect(activeLayout(content)).toEqual(["workbench"]);
+    } finally {
+      dispose();
+    }
+    await shell.updateComplete;
+    expect(content.classList.contains("content--settings-page")).toBe(false);
+    expect(content.classList.contains("content--settings-workspace")).toBe(false);
+    expect(activeLayout(content)).toEqual(["workbench"]);
+  });
+
   it("aggregates retained pages and removes only the departing marker's facts", async () => {
     const { shell, content } = await mountShell();
     const page = createPage({ pluginEmbed: true, toolbarHeader: true });

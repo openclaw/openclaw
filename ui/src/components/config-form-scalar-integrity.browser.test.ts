@@ -1,5 +1,4 @@
 // Control UI tests cover scalar identity and nullable enum behavior.
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderNumberInputFixture,
@@ -7,7 +6,6 @@ import {
   renderSelectFixture,
   renderAnalyzedFormFixture,
 } from "../test-helpers/config-form-fixtures.ts";
-import { renderNumberInput, renderTextInput } from "./config-form.node.scalar.ts";
 import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
@@ -458,16 +456,15 @@ describe("config form scalar integrity", () => {
         disabled: false,
         onPatch,
       };
-      render(
-        kind === "mixed"
-          ? renderTextInput({
-              ...params,
-              schema: { anyOf: [{ type: "string" }, { type: "number" }] },
-              inputType: "text",
-            })
-          : renderNumberInput({ ...params, schema: { type: "integer" } }),
-        container,
-      );
+      if (kind === "mixed") {
+        renderTextInputFixture(container, {
+          ...params,
+          schema: { anyOf: [{ type: "string" }, { type: "number" }] },
+          inputType: "text",
+        });
+      } else {
+        renderNumberInputFixture(container, { ...params, schema: { type: "integer" } });
+      }
       const input = expectElement(
         container.querySelector<HTMLInputElement>(
           `input[type='${kind === "mixed" ? "text" : "number"}']`,

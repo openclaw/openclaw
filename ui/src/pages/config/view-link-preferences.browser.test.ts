@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { renderConfigView } from "./config-view.test-support.ts";
+import { renderConfigView } from "./config-view.test-support.tsx";
 
 it("renders the external-link preference off by default and applies a personal change", () => {
   const onAppearanceChange = vi.fn();
@@ -13,7 +13,7 @@ it("renders the external-link preference off by default and applies a personal c
       candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
       "Open links outside OpenClaw",
   );
-  const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  const toggle = row?.querySelector<HTMLInputElement>('input[role="switch"]');
   expect(toggle?.checked).toBe(false);
   expect(row?.textContent).toContain("Saved in this browser only.");
   row?.click();

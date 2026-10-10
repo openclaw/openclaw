@@ -1,8 +1,11 @@
-import { render, type ReactiveElement } from "lit";
+import type { ReactiveElement } from "lit";
 import { describe, expect, it } from "vitest";
 import { updateConfigFormValue } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.ts";
+import {
+  renderAnalyzedFormFixture,
+  disposeConfigFormFixture,
+} from "../test-helpers/config-form-fixtures.ts";
 import { analyzeConfigSchema, type JsonSchema } from "./config-form.ts";
 import baseStyles from "../styles/base.css?inline";
 
@@ -42,7 +45,7 @@ function mountForm(
     state,
     container,
     close: () => {
-      render(null, container);
+      disposeConfigFormFixture(container);
       container.remove();
     },
   };

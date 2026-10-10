@@ -20,11 +20,32 @@ export type ShellLayoutTraits = Partial<Record<(typeof TRAITS)[number][0], boole
 
 const contentControllers = new WeakMap<Element, ShellLayoutController>();
 
+/** Both renderers report to the same shell-owned layout controller. */
+export function createShellLayoutTraitsReporter() {
+  const token = {};
+  let controller: ShellLayoutController | undefined;
+  return {
+    publish(host: Element, traits: ShellLayoutTraits) {
+      const content = host.isConnected ? host.closest("main.content") : null;
+      const next = content ? contentControllers.get(content) : undefined;
+      if (next !== controller) {
+        controller?.clear(token);
+        controller = next;
+      }
+      controller?.record(token, host, traits);
+    },
+    clear() {
+      controller?.clear(token);
+      controller = undefined;
+    },
+  };
+}
+
 /** Render owners publish layout facts before their descendants can measure layout. */
 class ShellLayoutTraitsDirective extends AsyncDirective {
   private host?: Element;
   private traits: ShellLayoutTraits = {};
-  private controller?: ShellLayoutController;
+  private readonly reporter = createShellLayoutTraitsReporter();
 
   render(_traits: ShellLayoutTraits) {
     return nothing;
@@ -38,23 +59,15 @@ class ShellLayoutTraitsDirective extends AsyncDirective {
   }
 
   private publish() {
-    // The new element is still detached. Its connected rendering host already
-    // identifies the content scope, including templates rendered by the outlet.
-    const content =
-      this.isConnected && this.host?.isConnected ? this.host.closest("main.content") : null;
-    const controller = content ? contentControllers.get(content) : undefined;
-    if (controller !== this.controller) {
-      this.controller?.clear(this);
-      this.controller = controller;
-    }
-    if (this.host) {
-      this.controller?.record(this, this.host, this.traits);
+    if (this.isConnected && this.host) {
+      this.reporter.publish(this.host, this.traits);
+    } else {
+      this.reporter.clear();
     }
   }
 
   protected override disconnected() {
-    this.controller?.clear(this);
-    this.controller = undefined;
+    this.reporter.clear();
   }
 
   protected override reconnected() {

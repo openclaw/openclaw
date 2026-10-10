@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { render as mountSolid } from "@solidjs/web";
+import { createComponent, flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { isTalkGptLiveModel, resolveTalkRealtimeSelection } from "./talk-schema.ts";
-import { renderTalk, type TalkRealtimeProviderOption } from "./talk.ts";
+import { Talk, type TalkRealtimeProviderOption } from "./talk.tsx";
 
-type TalkProps = Parameters<typeof renderTalk>[0];
+type TalkProps = Parameters<typeof Talk>[0];
 
 function renderFixture(
   overrides: Partial<Omit<TalkProps, "selection" | "catalog">> & {
@@ -19,46 +20,57 @@ function renderFixture(
   const { selection, provider, ...props } = overrides;
   const model = selection?.model ?? "gpt-live";
   const container = document.createElement("div");
-  render(
-    renderTalk({
-      selection: {
-        provider: "openai",
-        model,
-        speakerVoice: null,
-        transport: "webrtc",
-        consultRouting: null,
-        providerEntries: {},
-        ...selection,
-      },
-      catalog: {
-        kind: "ready",
-        ready: true,
-        activeProvider: "openai",
-        providers: [
-          {
-            id: "openai",
-            label: "OpenAI",
-            configured: true,
-            aliases: [],
-            models: [model],
-            voices: [],
-            transports: ["webrtc", "gateway-relay"],
-            defaultModel: model,
-            ...provider,
-          },
-        ],
-      },
-      configBusy: false,
-      onProviderChange: vi.fn(),
-      onModelChange: vi.fn(),
-      onVoiceChange: vi.fn(),
-      editor: html``,
-      ...props,
-    }),
+  const stop = mountSolid(
+    () =>
+      createComponent(Talk, {
+        selection: {
+          provider: "openai",
+          model,
+          speakerVoice: null,
+          transport: "webrtc",
+          consultRouting: null,
+          providerEntries: {},
+          ...selection,
+        },
+        catalog: {
+          kind: "ready",
+          ready: true,
+          activeProvider: "openai",
+          providers: [
+            {
+              id: "openai",
+              label: "OpenAI",
+              configured: true,
+              aliases: [],
+              models: [model],
+              voices: [],
+              transports: ["webrtc", "gateway-relay"],
+              defaultModel: model,
+              ...provider,
+            },
+          ],
+        },
+        configBusy: false,
+        onProviderChange: vi.fn(),
+        onModelChange: vi.fn(),
+        onVoiceChange: vi.fn(),
+        editor: null,
+        ...props,
+      }),
     container,
   );
+  mounted.add(stop);
+  flush();
   return container;
 }
+
+const mounted = new Set<() => void>();
+afterEach(() => {
+  for (const stop of mounted) {
+    stop();
+  }
+  mounted.clear();
+});
 
 describe("isTalkGptLiveModel", () => {
   it.each(["gpt-live", " Gpt-Live-1-Codex "])("accepts the GPT-Live family: %s", (model) => {
@@ -93,7 +105,7 @@ describe("renderTalk", () => {
     await updatePickers(container);
 
     const provider = container.querySelector<HTMLElement & { disabled?: boolean }>(
-      "wa-radio-group",
+      'input[type="radio"]',
     );
     expect(provider?.disabled).toBe(true);
     const voice = [...container.querySelectorAll<HTMLSelectElement>("select")];

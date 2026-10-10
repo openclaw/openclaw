@@ -1,17 +1,21 @@
 /* @vitest-environment jsdom */
 
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import { render as mountSolid } from "@solidjs/web";
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import type { SelectPicker } from "../../components/select-picker.ts";
 import { t } from "../../i18n/index.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
-import "./talk-page.ts";
+import { TalkSettingsPage } from "./talk-page.tsx";
 
 const ACTIVE_VOICES = ["", "cove", "spruce", "custom-voice"];
 const DEFAULT_VOICES = ["", "marin", "custom-voice"];
@@ -19,7 +23,7 @@ const DEFAULT_VOICES = ["", "marin", "custom-voice"];
 type TalkPageElement = HTMLElement & {
   context: ApplicationContext;
   configObject: Record<string, unknown>;
-  updateComplete: Promise<boolean>;
+  updateComplete: Promise<void>;
   changeModel: (model: string | null) => void;
   changeProvider: (providerId: string | null) => void;
 };
@@ -162,10 +166,7 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
     },
     runtimeConfig,
   } as unknown as ApplicationContext;
-  const page = document.createElement("openclaw-talk-settings") as TalkPageElement;
-  page.context = context;
-  page.configObject = configForm;
-  document.body.append(page);
+  const page = mountTalkPage(context, configForm);
   return {
     page,
     request,
@@ -181,6 +182,68 @@ function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {
       gatewayListeners.forEach((notify) => notify());
     },
   };
+}
+
+const mounted = new Set<() => void>();
+
+async function settleTalk() {
+  flush();
+  await Promise.resolve();
+  flush();
+  await Promise.resolve();
+  flush();
+}
+
+function mountTalkPage(context: ApplicationContext, initialConfig: Record<string, unknown>) {
+  const page = document.createElement("div") as TalkPageElement;
+  const [config, setConfig] = createSignal(initialConfig);
+  document.body.append(page);
+  const stop = mountSolid(
+    () =>
+      createComponent(ApplicationProvider, {
+        value: context,
+        get children() {
+          return createComponent(TalkSettingsPage, {
+            get configObject() {
+              return config();
+            },
+          });
+        },
+      }),
+    page,
+  );
+  const remove = page.remove.bind(page);
+  const dispose = () => {
+    mounted.delete(dispose);
+    stop();
+    remove();
+  };
+  mounted.add(dispose);
+  Object.defineProperties(page, {
+    context: { value: context },
+    configObject: { get: config, set: setConfig },
+    updateComplete: { get: settleTalk },
+  });
+  page.changeModel = (value) => {
+    flush();
+    const picker = page.querySelector<SelectPicker>("openclaw-select-picker");
+    if (!picker) {
+      throw new Error("Talk model picker is unavailable");
+    }
+    picker.params.onChange(value ?? "");
+  };
+  page.changeProvider = (value) => {
+    const input = [...page.querySelectorAll<HTMLInputElement>('input[type="radio"]')].find(
+      (entry) => entry.value === (value ?? ""),
+    );
+    if (!input) {
+      throw new Error("Talk provider choice is unavailable");
+    }
+    input.click();
+  };
+  page.remove = dispose;
+  flush();
+  return page;
 }
 
 function readVoiceOptions(page: HTMLElement): string[] {
@@ -223,6 +286,9 @@ async function selectProvider(providerId: string, options: TalkMutationHarnessOp
 }
 
 afterEach(() => {
+  for (const dispose of mounted) {
+    dispose();
+  }
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.useRealTimers();
@@ -275,7 +341,9 @@ describe("Talk device and voice wake settings", () => {
         if (!row) {
           throw new Error(`Missing device voice control: ${key}`);
         }
-        const toggle = row.querySelector<HTMLElement & { checked: boolean }>("wa-switch")!;
+        const toggle = row.querySelector<HTMLElement & { checked: boolean }>(
+          'input[type="checkbox"]',
+        )!;
         const next = !toggle.checked;
         row.click();
         expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(key, next);
@@ -503,10 +571,7 @@ describe("Talk device and voice wake settings", () => {
       page.remove();
       gatewayWords = ["other gateway phrase"];
       setGatewayConnection(true, switchGateway ? "wss://other-gateway.example.test" : undefined);
-      const reopened = document.createElement("openclaw-talk-settings") as TalkPageElement;
-      reopened.context = page.context;
-      reopened.configObject = page.configObject;
-      document.body.append(reopened);
+      const reopened = mountTalkPage(page.context, page.configObject);
       await vi.advanceTimersByTimeAsync(0);
       await reopened.updateComplete;
       expect(reopened.querySelector("textarea")?.value).toBe(
@@ -566,7 +631,9 @@ describe("Talk device and voice wake settings", () => {
         (element) => element.querySelector(".settings-row__title")?.textContent?.trim() === title,
       )!;
     expect(page.textContent).toContain("This Mac");
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(
+      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
+    ).toBe(true);
     expect(row("Voice Wake").textContent).toContain("macOS 26");
     row("Hold Right Option to talk").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.pushToTalkEnabled", false);
@@ -586,15 +653,21 @@ describe("Talk device and voice wake settings", () => {
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
     await publishSnapshot();
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(false);
+    expect(
+      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
+    ).toBe(false);
     row("Voice Wake").click();
     expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.wakeEnabled", false);
     snapshot.voice.wakeEnabled = false;
     await publishSnapshot();
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(
+      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
+    ).toBe(true);
     snapshot.voice.supported = true;
     await publishSnapshot();
-    expect(row("Voice Wake").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(false);
+    expect(
+      row("Voice Wake").querySelector('input[type="checkbox"]')?.hasAttribute("disabled"),
+    ).toBe(false);
   });
 
   it("preserves pending language additions across an older native acknowledgment and the next edit", async () => {
@@ -886,8 +959,13 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(removeFormValue).toHaveBeenCalledWith(["talk", "realtime", "transport"]);
   });
 
-  it("preserves transport when the catalog is unavailable", async () => {
-    expect(await selectModel("gpt-live-test-canary", { unavailable: true })).not.toHaveBeenCalled();
+  it("keeps the configured model visible without offering edits when the catalog is unavailable", async () => {
+    const { page, request, runtimeConfig } = createTalkMutationHarness({ unavailable: true });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("talk.catalog", {}));
+    await page.updateComplete;
+    expect(page.textContent).toContain("gpt-realtime-2.1");
+    expect(page.querySelector("openclaw-select-picker")).toBeNull();
+    expect(runtimeConfig.removeFormValue).not.toHaveBeenCalled();
   });
 
   it("preserves transport when the provider advertises no transport capabilities", async () => {
