@@ -29,6 +29,8 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   trace?: DiagnosticTraceContext;
   agentId?: string;
   sessionKey?: string;
+  /** Heartbeat owner's resolved system-event queue key; supplied to before_agent_reply only. */
+  heartbeatEventQueueSessionKey?: string;
   sessionId?: string;
   /** Host-resolved memory partition for this turn. */
   memoryAudience?: MemoryAudience;

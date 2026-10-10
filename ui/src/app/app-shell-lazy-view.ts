@@ -1,11 +1,7 @@
 import { html, nothing } from "lit";
 import type { RouteId } from "../app-routes.ts";
 import { renderLazyElementModal } from "../components/lazy-view-error.ts";
-import {
-  debugOverlayTemplate,
-  renderPendingDebugOverlay,
-  type DebugOverlayFrameHost,
-} from "../pages/debug/debug-overlay-frame.ts";
+import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
 import {
   renderCommandPaletteLoading,
   type CommandPaletteLoadingState,
@@ -19,11 +15,15 @@ import {
   DEBUG_OVERLAY_ELEMENT,
   KEYBOARD_SHORTCUTS_ELEMENT,
 } from "./lazy-custom-element.ts";
+import type { LazyRenderer } from "./lazy-renderer.ts";
 import { normalizeChatSendShortcut } from "./settings.ts";
 
 export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSessionHost {
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteLoading: CommandPaletteLoadingState;
+  readonly debugOverlayFrame: LazyRenderer<
+    typeof import("../pages/debug/debug-overlay-frame.ts").renderPendingDebugOverlay
+  >;
   closePendingPalette(): void;
   readonly lazyCustomElements: LazyCustomElementRequestController;
   handleCommandPaletteSlashCommand(command: string): void;
@@ -40,6 +40,13 @@ export function renderShellLazyOverlays(
 ) {
   const lazyElementState = host.lazyCustomElements.visibleState;
   const uiSettings = host.context?.theme.settings;
+  if (
+    lazyElementState?.element === DEBUG_OVERLAY_ELEMENT &&
+    !host.debugOverlayFrame.renderer &&
+    !host.debugOverlayFrame.failed
+  ) {
+    host.debugOverlayFrame.load();
+  }
   return html`
     ${
       host.commandPaletteLoading.active &&
@@ -48,7 +55,10 @@ export function renderShellLazyOverlays(
           lazyElementState.element === host.commandPaletteElement))
         ? renderCommandPaletteLoading(host.commandPaletteLoading, () => host.closePendingPalette())
         : lazyElementState?.element === DEBUG_OVERLAY_ELEMENT
-          ? renderPendingDebugOverlay(host, lazyElementState)
+          ? (host.debugOverlayFrame.renderer?.(host, lazyElementState) ??
+            (host.debugOverlayFrame.failed
+              ? renderLazyElementModal(host.lazyCustomElements)
+              : nothing))
           : renderLazyElementModal(host.lazyCustomElements)
     }
     ${
@@ -63,7 +73,7 @@ export function renderShellLazyOverlays(
           ></openclaw-command-palette>`
         : nothing
     }
-    ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT) ? debugOverlayTemplate : nothing}
+    ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT) ? html`<openclaw-debug-overlay></openclaw-debug-overlay>` : nothing}
     ${
       !nativeEmbed && isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
         ? html`<openclaw-keyboard-shortcuts-dialog

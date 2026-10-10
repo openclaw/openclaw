@@ -18,12 +18,8 @@ import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import {
-  renderDebugOverlayFrame,
-  renderDebugOverlayLoading,
-  shouldCloseDebugOverlay,
-  type DebugOverlayMode,
-} from "./debug-overlay-frame.ts";
+import { renderDebugOverlayFrame, renderDebugOverlayLoading } from "./debug-overlay-frame.ts";
+import { shouldCloseDebugOverlay, type DebugOverlayMode } from "./debug-overlay-state.ts";
 
 const DEBUG_OVERLAY_CONTENT = {
   tagName: "openclaw-debug-overlay-content",
