@@ -75,6 +75,13 @@ function assertPodmanVersionAtLeast(
   );
 }
 
+function probePodman(args: string[]) {
+  return execContainer(PODMAN_SANDBOX_ENGINE, args, {
+    allowFailure: true,
+    signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
+  });
+}
+
 async function isPodmanMachineConnection(params: {
   selectedName: string;
   uri: string;
@@ -93,14 +100,7 @@ async function isPodmanMachineConnection(params: {
   if (uri.protocol !== "ssh:" || !loopback || !uri.port || !uri.username) {
     return false;
   }
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    ["machine", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await probePodman(["machine", "list", "--format", "json"]);
   if (result.code !== 0) {
     return false;
   }
@@ -148,14 +148,7 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
   machine: boolean;
   target: SandboxContainerEngineTarget;
 }> {
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    ["system", "connection", "list", "--format", "json"],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await probePodman(["system", "connection", "list", "--format", "json"]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
     throw new Error(`Failed to inspect the active Podman connection: ${detail}`);
@@ -171,11 +164,26 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
         (entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null,
       )
     : [];
-  const configuredUri = process.env.CONTAINER_HOST?.trim();
-  const configuredName = process.env.CONTAINER_CONNECTION?.trim();
+  const configuredUri = process.env.CONTAINER_HOST;
+  const configuredName = process.env.CONTAINER_CONNECTION;
+  let useConfiguredHost = Boolean(configuredUri);
+  if (configuredUri !== undefined && configuredName) {
+    // Podman 4.8 switched to connection-first; older clients use HOST presence.
+    // `info` reports the server version, which cannot decide client-side selection.
+    const client = await probePodman(["--version"]);
+    const version = /^podman(?:-remote)?(?:\.exe)? version (\d+)\.(\d+)\.\d+(?:[-+]\S+)?$/u.exec(
+      client.stdout.trim(),
+    );
+    if (client.code !== 0 || !version) {
+      throw invalidPodmanConfig(
+        "Cannot determine Podman client connection precedence. Unset either CONTAINER_HOST or CONTAINER_CONNECTION, or repair `podman --version`, before using Podman sandboxing.",
+      );
+    }
+    const major = Number(version[1]);
+    useConfiguredHost = major < 4 || (major === 4 && Number(version[2]) < 8);
+  }
   let selected: Record<string, unknown> | undefined;
-  // Podman resolves the explicit URL/CONTAINER_HOST before named or saved destinations.
-  if (configuredUri) {
+  if (useConfiguredHost) {
     selected = connections.find((entry) => entry.URI === configuredUri);
   } else if (configuredName) {
     selected = connections.find((entry) => entry.Name === configuredName);
@@ -185,23 +193,25 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
     selected = connections.find((entry) => entry.Default === true);
   }
   const selectedUri =
-    configuredUri ||
-    (typeof selected?.URI === "string" ? selected.URI : "") ||
+    (useConfiguredHost ? configuredUri : typeof selected?.URI === "string" ? selected.URI : "") ||
     (remoteSocketPath ? `unix://${remoteSocketPath}` : "");
   const unsupportedRemoteError = () =>
     invalidPodmanConfig(
       "Podman sandboxing supports a local Podman engine or Podman Machine, but the active Podman connection is remote or could not be identified. Use the SSH sandbox backend for a remote host.",
     );
-  if (!configuredUri && configuredName && !selected) {
+  if (!useConfiguredHost && configuredName && !selected) {
     throw unsupportedRemoteError();
   }
   if (!selectedUri) {
     throw unsupportedRemoteError();
   }
   if (selectedUri && !selectedUri.startsWith("unix://")) {
-    const identity =
-      process.env.CONTAINER_SSHKEY?.trim() ||
-      (typeof selected?.Identity === "string" ? selected.Identity : "");
+    // Named/default connections carry their own identity; SSHKEY belongs to HOST.
+    const identity = useConfiguredHost
+      ? process.env.CONTAINER_SSHKEY || ""
+      : typeof selected?.Identity === "string"
+        ? selected.Identity
+        : "";
     if (
       await isPodmanMachineConnection({
         selectedName: typeof selected?.Name === "string" ? selected.Name : "",
@@ -229,18 +239,11 @@ async function assertSupportedPodmanConnection(remoteSocketPath: string): Promis
 }
 
 export async function resolvePodmanSandboxRuntimeInfo(): Promise<PodmanSandboxRuntimeInfo> {
-  const result = await execContainer(
-    PODMAN_SANDBOX_ENGINE,
-    [
-      "info",
-      "--format",
-      "{{.Host.Security.Rootless}}\t{{.Host.ServiceIsRemote}}\t{{.Host.RemoteSocket.Path}}\t{{.Version.Version}}",
-    ],
-    {
-      allowFailure: true,
-      signal: AbortSignal.timeout(SANDBOX_ENGINE_PROBE_TIMEOUT_MS),
-    },
-  );
+  const result = await probePodman([
+    "info",
+    "--format",
+    "{{.Host.Security.Rootless}}\t{{.Host.ServiceIsRemote}}\t{{.Host.RemoteSocket.Path}}\t{{.Version.Version}}",
+  ]);
   if (result.code !== 0) {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
     throw new Error(`Failed to inspect Podman user namespace mode: ${detail}`);
@@ -294,7 +297,7 @@ export function bindPodmanSandboxEngine(
 }
 
 function mountTargetCoversPodmanInit(target: string): boolean {
-  const normalizedTarget = path.posix.normalize(target.trim());
+  const normalizedTarget = path.posix.normalize(target);
   return (
     normalizedTarget === "/" ||
     normalizedTarget === PODMAN_INIT_PATH ||
@@ -319,7 +322,7 @@ function assertPodmanMachineBindSourcesSupported(params: {
     sources.add(mount.hostPath);
   }
   for (const bind of params.cfg.binds ?? []) {
-    const source = splitSandboxBindSpec(bind)?.host.trim();
+    const source = splitSandboxBindSpec(bind)?.host;
     if (source) {
       sources.add(source);
     }
@@ -354,15 +357,15 @@ export function resolvePodmanSandboxCreatePolicy(params: {
           ...params.cfg,
           // The shared default includes bare /run, but Podman mounts its init there.
           // Read-only roots get Podman's native /run tmpfs below; writable roots use /run directly.
-          tmpfs: params.cfg.tmpfs.filter((entry) => entry.trim() !== "/run"),
+          tmpfs: params.cfg.tmpfs.filter((entry) => entry !== "/run"),
         }
       : params.cfg;
   const hasInitMountConflict =
     // workdir is also the managed workspace bind target, not only the process cwd.
     mountTargetCoversPodmanInit(params.cfg.workdir) ||
-    cfg.tmpfs.some((entry) => mountTargetCoversPodmanInit(entry.split(":", 1)[0]?.trim() || "")) ||
+    cfg.tmpfs.some((entry) => mountTargetCoversPodmanInit(entry.split(":", 1)[0] || "")) ||
     params.cfg.binds?.some((bind) => {
-      const target = splitSandboxBindSpec(bind)?.container.trim();
+      const target = splitSandboxBindSpec(bind)?.container;
       return target ? mountTargetCoversPodmanInit(target) : false;
     }) === true;
   if (hasInitMountConflict) {

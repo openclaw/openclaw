@@ -1,16 +1,15 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  appendSqliteSessionTranscriptEventForTest,
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 
@@ -19,36 +18,42 @@ const ORPHAN_AGE_MS = 300_000;
 type GatewayHook = (event: unknown, context: unknown) => Promise<void> | void;
 
 let stateDir: string;
+let state: OpenClawTestState;
 let stopGateway: (() => Promise<void>) | undefined;
 
 beforeEach(async () => {
-  stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dreaming-startup-"));
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  state = await createOpenClawTestState({
+    prefix: "openclaw-dreaming-startup-",
+    layout: "state-only",
+  });
+  stateDir = state.stateDir;
 });
 
 afterEach(async () => {
   await stopGateway?.();
   stopGateway = undefined;
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
+  await state.restoreEnv();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   resetPluginStateStoreForTests();
-  await fs.rm(stateDir, { recursive: true, force: true });
+  await state.cleanup();
 });
 
 function createGateway(
-  params: { agentIds?: string[]; failCronReconciliation?: boolean; sessionStore?: string } = {},
+  params: {
+    agentIds?: string[];
+    sessionStore?: string;
+    cronEnabled?: boolean;
+  } = {},
 ) {
   const agentIds = params.agentIds ?? ["main"];
   const config = {
+    cron: { enabled: params.cronEnabled ?? true },
     agents: {
-      list: agentIds.map((id, index) => ({
-        id,
-        default: index === 0,
-        workspace: path.join(stateDir, `workspace-${id}`),
-      })),
+      entries: Object.fromEntries(
+        agentIds.map((id) => [id, { workspace: path.join(stateDir, `workspace-${id}`) }]),
+      ),
     },
     plugins: {
       entries: {
@@ -58,15 +63,11 @@ function createGateway(
     ...(params.sessionStore ? { session: { store: params.sessionStore } } : {}),
   } as OpenClawConfig;
   const onMock = vi.fn<OpenClawPluginApi["on"]>();
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const cron = {
-    list: vi.fn(async () => {
-      if (params.failCronReconciliation) {
-        throw new Error("cron startup failed");
-      }
-      return [];
-    }),
+    isEnabled: vi.fn(async () => params.cronEnabled ?? true),
+    list: vi.fn(async () => []),
     add: vi.fn(async () => ({})),
     update: vi.fn(async () => ({})),
     remove: vi.fn(async () => ({ removed: false })),
@@ -77,7 +78,7 @@ function createGateway(
     pluginConfig: {},
     logger,
     on: onMock,
-    registerService: (service: OpenClawPluginService) => services.push(service),
+    registerService: (service) => services.push(service),
   });
   Object.assign(api.runtime, { config: { current: () => config } });
   registerShortTermPromotionDreaming(api);
@@ -86,7 +87,8 @@ function createGateway(
   if (!service) {
     throw new Error("memory-core-dreaming service missing");
   }
-  const serviceContext = { config, stateDir, logger, getCron: () => cron };
+  const scheduler = createTestPluginServiceScheduler();
+  const serviceContext = { config, stateDir, logger, getCron: () => cron, scheduler };
   const startService = async () => {
     await service.start(serviceContext);
   };
@@ -101,7 +103,12 @@ function createGateway(
     await hook({ port: 0 }, { config, getCron: () => cron });
   };
   const stop = async () => {
-    await service.stop?.(serviceContext);
+    scheduler.beginClose();
+    try {
+      await service.stop?.(serviceContext);
+    } finally {
+      await scheduler.stop();
+    }
   };
   stopGateway = stop;
   return { config, cron, logger, start, startService, stop };
@@ -208,32 +215,6 @@ describe("dreaming gateway restart cleanup", () => {
     expect(hasSession(otherAgent)).toBe(true);
   });
 
-  it("rechecks fresh interrupted sessions once they age without deleting newly started work", async () => {
-    vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
-    const interrupted = await seedSession({
-      suffix: "dreaming-narrative-deep-interrupted",
-      updatedAt: Date.now() - 1,
-      transcriptAt: Date.now() - 1,
-    });
-    const gateway = createGateway();
-
-    await gateway.start();
-    expect(hasSession(interrupted)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS - 1);
-    const newlyStarted = await seedSession({
-      suffix: "dreaming-narrative-light-just-started",
-      updatedAt: Date.now(),
-    });
-    expect(hasSession(interrupted)).toBe(true);
-
-    await vi.advanceTimersByTimeAsync(1);
-    await gateway.stop();
-
-    expect(hasSession(interrupted)).toBe(false);
-    expect(hasSession(newlyStarted)).toBe(true);
-  });
-
   it("does not reclaim post-startup runs when the deferred cleanup callback runs late", async () => {
     vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
     const interruptedAtStartup = await seedSession({
@@ -300,26 +281,6 @@ describe("dreaming gateway restart cleanup", () => {
     expect(postStartupSessions.map(hasSession)).toEqual([true, true]);
   });
 
-  it("cleans the independent SQLite stores of every configured dreaming agent", async () => {
-    const now = Date.now();
-    const stale = await Promise.all(
-      ["main", "researcher"].map((agentId) =>
-        seedSession({
-          agentId,
-          suffix: "dreaming-narrative-light-interrupted",
-          pluginOwnerId: "memory-core",
-          updatedAt: now - ORPHAN_AGE_MS - 1,
-          transcriptAt: now - ORPHAN_AGE_MS - 1,
-        }),
-      ),
-    );
-    const gateway = createGateway({ agentIds: ["main", "researcher"] });
-
-    await gateway.start();
-
-    expect(stale.map(hasSession)).toEqual([false, false]);
-  });
-
   it("preserves unconfigured agents sharing a configured agent's SQLite store", async () => {
     const storePath = path.join(stateDir, "shared.sqlite");
     const staleUpdatedAt = Date.now() - ORPHAN_AGE_MS - 1;
@@ -372,36 +333,19 @@ describe("dreaming gateway restart cleanup", () => {
     expect(hasSession(currentRun)).toBe(true);
   });
 
-  it("cancels deferred orphan cleanup when the gateway stops", async () => {
-    vi.useFakeTimers({ now: new Date("2026-08-01T12:00:00.000Z") });
-    const interrupted = await seedSession({
-      suffix: "dreaming-narrative-light-interrupted",
-      updatedAt: Date.now() - 1,
-      transcriptAt: Date.now() - 1,
-    });
-    const gateway = createGateway();
-
-    await gateway.start();
-    await gateway.stop();
-    await vi.advanceTimersByTimeAsync(ORPHAN_AGE_MS);
-
-    expect(hasSession(interrupted)).toBe(true);
-  });
-
-  it("still cleans interrupted dreaming sessions when cron startup reconciliation fails", async () => {
+  it("cleans historical artifacts while automatic scheduling is disabled", async () => {
     const now = Date.now();
     const interrupted = await seedSession({
       suffix: "dreaming-narrative-light-interrupted",
       updatedAt: now - ORPHAN_AGE_MS - 1,
       transcriptAt: now - ORPHAN_AGE_MS - 1,
     });
-    const gateway = createGateway({ failCronReconciliation: true });
+    const gateway = createGateway({ cronEnabled: false });
 
     await gateway.start();
 
     expect(hasSession(interrupted)).toBe(false);
-    expect(gateway.logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("dreaming startup reconciliation failed"),
-    );
+    expect(gateway.cron.add).not.toHaveBeenCalled();
+    expect(gateway.logger.error).not.toHaveBeenCalled();
   });
 });

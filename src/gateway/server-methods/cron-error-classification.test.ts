@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../../cron/agent-id.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 
 describe("isCronInvalidRequestError", () => {
+  it("classifies unresolved agent ownership as an actionable invalid request", () => {
+    expect(isCronInvalidRequestError(new Error(CRON_AGENT_SELECTION_REQUIRED_MESSAGE))).toBe(true);
+  });
+
   it.each([
     "cron script payload has a syntax error: Unexpected token (line 1, column 10)",
     "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",

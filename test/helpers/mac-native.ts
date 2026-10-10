@@ -72,16 +72,6 @@ export async function nativeObjectFixture(
   return readFile(filename);
 }
 
-export async function writeFat64Fixture(filename: string, mac: MacScriptFixture): Promise<Buffer> {
-  await runMacFixtureTool(
-    "/usr/bin/lipo",
-    ["-create", "-fat64", "/usr/bin/true", "-output", filename],
-    path.dirname(filename),
-    mac,
-  );
-  return readFile(filename);
-}
-
 export async function universalArchiveFixture(
   root: string,
   fat64: boolean,

@@ -1,57 +1,44 @@
-// Run-history rendering for the Automations screen: the compact filter row
-// plus run entries, shared by the list view's Run history tab and the job
-// detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type {
-  CronRunLogEntry,
-  CronDeliveryStatus,
-  CronRunsStatusValue,
-  CronSortDir,
-} from "../../api/types.ts";
+import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
+import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
-  formatDurationCompact,
-  formatDurationHuman,
   formatRelativeTimestamp,
-  formatMs,
+  createMsFormatter,
   formatCompactTokenCount,
 } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
+import type { CronProps } from "./view-types.ts";
 
-// Leaf contract: the slice of the cron view props this module needs. Keeping
-// it local (instead of importing CronProps from view.ts) avoids a module
-// cycle between view.ts and view-runs.ts.
-type CronRunsSectionProps = {
-  basePath: string;
-  agentId: string;
-  runs: CronRunLogEntry[];
-  highlightedRunId?: string | null;
-  runsHasMore: boolean;
-  runsLoadingMore: boolean;
-  runsStatuses: CronRunsStatusValue[];
-  runsDeliveryStatuses: CronDeliveryStatus[];
-  runsQuery: string;
-  runsSortDir: CronSortDir;
+registerCronEnglish();
+
+type CronRunsSectionProps = Pick<
+  CronProps,
+  | "runs"
+  | "runsState"
+  | "highlightedRunId"
+  | "runsHasMore"
+  | "runsLoadingMore"
+  | "runsStatuses"
+  | "runsDeliveryStatuses"
+  | "runsQuery"
+  | "runsSortDir"
+  | "onLoadMoreRuns"
+  | "onRefresh"
+  | "onRunsFiltersChange"
+  | "onViewRunTranscript"
+> & {
   conditionActivity?: {
     checkCount: number;
     lastCheckedAtMs?: number;
     lastFiredAtMs?: number;
   };
-  onLoadMoreRuns: () => void;
-  onRunsFiltersChange: (patch: {
-    cronRunsStatuses?: CronRunsStatusValue[];
-    cronRunsDeliveryStatuses?: CronDeliveryStatus[];
-    cronRunsQuery?: string;
-    cronRunsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
-  onNavigateToChat?: (sessionKey: string) => void;
 };
 
 function renderConditionMetric(label: string, value: string) {
@@ -97,22 +84,18 @@ function conditionEmptyHint(activity: NonNullable<CronRunsSectionProps["conditio
   return t(key, { count: String(activity.checkCount) });
 }
 
-function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: string }> {
-  return [
-    { value: "ok", label: t("cron.runs.runStatusOk") },
-    { value: "error", label: t("cron.runs.runStatusError") },
-    { value: "skipped", label: t("cron.runs.runStatusSkipped") },
-  ];
-}
+const RUN_STATUS_LABELS = new Map<string, string>([
+  ["ok", "cron.runs.runStatusOk"],
+  ["error", "cron.runs.runStatusError"],
+  ["skipped", "cron.runs.runStatusSkipped"],
+]);
 
-function getRunDeliveryOptions(): Array<{ value: CronDeliveryStatus; label: string }> {
-  return [
-    { value: "delivered", label: t("cron.runs.deliveryDelivered") },
-    { value: "not-delivered", label: t("cron.runs.deliveryNotDelivered") },
-    { value: "unknown", label: t("cron.runs.deliveryUnknown") },
-    { value: "not-requested", label: t("cron.runs.deliveryNotRequested") },
-  ];
-}
+const RUN_DELIVERY_LABELS = new Map<string, string>([
+  ["delivered", "cron.runs.deliveryDelivered"],
+  ["not-delivered", "cron.runs.deliveryNotDelivered"],
+  ["unknown", "cron.runs.deliveryUnknown"],
+  ["not-requested", "cron.runs.deliveryNotRequested"],
+]);
 
 function toggleSelection<T extends string>(selected: T[], value: T, checked: boolean): T[] {
   const set = new Set(selected);
@@ -124,23 +107,13 @@ function toggleSelection<T extends string>(selected: T[], value: T, checked: boo
   return Array.from(set);
 }
 
-function summarizeSelection(selectedLabels: string[], allLabel: string) {
-  if (selectedLabels.length === 0) {
-    return allLabel;
-  }
-  if (selectedLabels.length <= 2) {
-    return selectedLabels.join(", ");
-  }
-  return `${selectedLabels[0]} +${selectedLabels.length - 1}`;
-}
-
 const FILTER_OPTION_PREFIX = "option:";
 const FILTER_COMMAND_PREFIX = "command:";
 
 function renderFilterDropdown(params: {
   id: string;
   title: string;
-  summary: string;
+  allLabel: string;
   options: Array<{ value: string; label: string }>;
   selected: string[];
   onToggle: (value: string, checked: boolean) => void;
@@ -149,13 +122,19 @@ function renderFilterDropdown(params: {
   const selectedLabels = params.options
     .filter((option) => params.selected.includes(option.value))
     .map((option) => option.label);
+  const summary =
+    selectedLabels.length === 0
+      ? params.allLabel
+      : selectedLabels.length <= 2
+        ? selectedLabels.join(", ")
+        : `${selectedLabels[0]} +${selectedLabels.length - 1}`;
   const accessibleSummary =
     selectedLabels.length > 2
-      ? `${params.summary} (${new Intl.ListFormat(i18n.getLocale(), {
+      ? `${summary} (${new Intl.ListFormat(i18n.getLocale(), {
           style: "long",
           type: "conjunction",
         }).format(selectedLabels)})`
-      : params.summary;
+      : summary;
   return html`
     <div class="cron-filter-dropdown" data-filter=${params.id}>
       <wa-dropdown
@@ -183,7 +162,7 @@ function renderFilterDropdown(params: {
           title=${params.title}
           aria-label=${`${params.title} ${accessibleSummary}`}
         >
-          <span>${params.summary}</span>
+          <span>${summary}</span>
           ${icon("chevronDown")}
         </button>
         ${params.options.map(
@@ -208,6 +187,7 @@ function renderFilterDropdown(params: {
 }
 
 export function renderRunsSection(props: CronRunsSectionProps) {
+  const formatTimestamp = createMsFormatter();
   const runs = props.runs.toSorted((a, b) =>
     props.runsSortDir === "asc" ? a.ts - b.ts : b.ts - a.ts,
   );
@@ -215,20 +195,10 @@ export function renderRunsSection(props: CronRunsSectionProps) {
     props.runsQuery.trim().length > 0 ||
     props.runsStatuses.length > 0 ||
     props.runsDeliveryStatuses.length > 0;
-  const runStatusOptions = getRunStatusOptions();
-  const runDeliveryOptions = getRunDeliveryOptions();
-  const selectedStatusLabels = runStatusOptions
-    .filter((option) => props.runsStatuses.includes(option.value))
-    .map((option) => option.label);
-  const selectedDeliveryLabels = runDeliveryOptions
-    .filter((option) => props.runsDeliveryStatuses.includes(option.value))
-    .map((option) => option.label);
-  const statusSummary = summarizeSelection(selectedStatusLabels, t("cron.runs.allStatuses"));
-  const deliverySummary = summarizeSelection(selectedDeliveryLabels, t("cron.runs.allDelivery"));
   const sortLabel =
     props.runsSortDir === "asc" ? t("cron.runs.oldestFirst") : t("cron.runs.newestFirst");
   return html`
-    <div class="cron-runs">
+    <div class="cron-runs" aria-busy=${String(props.runsState === "pending")}>
       ${props.conditionActivity ? renderConditionActivity(props.conditionActivity) : nothing}
       <div class="cron-run-filters">
         <div class="cron-search-box cron-run-filter-search">
@@ -246,8 +216,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
         ${renderFilterDropdown({
           id: "status",
           title: t("cron.runs.status"),
-          summary: statusSummary,
-          options: runStatusOptions,
+          allLabel: t("cron.runs.allStatuses"),
+          options: Array.from(RUN_STATUS_LABELS, ([value, key]) => ({ value, label: t(key) })),
           selected: props.runsStatuses,
           onToggle: (value, checked) => {
             const next = toggleSelection(props.runsStatuses, value as CronRunsStatusValue, checked);
@@ -260,8 +230,8 @@ export function renderRunsSection(props: CronRunsSectionProps) {
         ${renderFilterDropdown({
           id: "delivery",
           title: t("cron.runs.delivery"),
-          summary: deliverySummary,
-          options: runDeliveryOptions,
+          allLabel: t("cron.runs.allDelivery"),
+          options: Array.from(RUN_DELIVERY_LABELS, ([value, key]) => ({ value, label: t(key) })),
           selected: props.runsDeliveryStatuses,
           onToggle: (value, checked) => {
             const next = toggleSelection(
@@ -310,37 +280,48 @@ export function renderRunsSection(props: CronRunsSectionProps) {
           </wa-dropdown>
         </div>
       </div>
+      ${props.runsState === "failed" ? html`<button class="btn btn--sm" @click=${props.onRefresh}>${t("common.retry")}</button>` : nothing}
       ${
         runs.length === 0
-          ? hasRunFilters
-            ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
-            : html`
-                <div class="cron-empty-state">
-                  <div class="cron-empty-state__title">
-                    ${
-                      props.conditionActivity
-                        ? t("cron.runs.emptyConditionTitle")
-                        : t("cron.runs.emptyTitle")
-                    }
-                  </div>
-                  <div class="cron-empty-state__copy">
-                    ${
-                      props.conditionActivity
-                        ? conditionEmptyHint(props.conditionActivity)
-                        : t("cron.runs.emptyHint")
-                    }
-                  </div>
-                </div>
-              `
+          ? props.runsState === "pending"
+            ? html`<div
+                class="cron-empty-state"
+                role="status"
+                aria-live="polite"
+                data-test-id="cron-runs-loading"
+              >
+                ${t("cron.list.loading")}
+              </div>`
+            : props.runsState !== "ready"
+              ? nothing
+              : hasRunFilters
+                ? html`<div class="muted cron-runs__empty">${t("cron.runs.noMatching")}</div>`
+                : html`
+                    <div class="cron-empty-state">
+                      <div class="cron-empty-state__title">
+                        ${
+                          props.conditionActivity
+                            ? t("cron.runs.emptyConditionTitle")
+                            : t("cron.runs.emptyTitle")
+                        }
+                      </div>
+                      <div class="cron-empty-state__copy">
+                        ${
+                          props.conditionActivity
+                            ? conditionEmptyHint(props.conditionActivity)
+                            : t("cron.runs.emptyHint")
+                        }
+                      </div>
+                    </div>
+                  `
           : html`
               <div class="cron-runs__list">
                 ${runs.map((entry) =>
                   renderRun(
                     entry,
-                    props.agentId,
-                    props.basePath,
+                    formatTimestamp,
                     props.highlightedRunId,
-                    props.onNavigateToChat,
+                    props.onViewRunTranscript,
                   ),
                 )}
               </div>
@@ -368,50 +349,33 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
   return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
 }
 
-export function runStatusLabel(value: string): string {
-  switch (value) {
-    case "ok":
-      return t("cron.runs.runStatusOk");
-    case "error":
-      return t("cron.runs.runStatusError");
-    case "skipped":
-      return t("cron.runs.runStatusSkipped");
-    default:
-      return t("cron.runs.runStatusUnknown");
+export function runStatusLabel(
+  value: string,
+  completion?: CronRunLogEntry["completionStatus"],
+): string {
+  if (value === "ok" && (completion === "failed" || completion === "unknown")) {
+    const completionLabel = t(
+      completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",
+    );
+    return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
   }
+  return t(RUN_STATUS_LABELS.get(value) ?? "cron.runs.runStatusUnknown");
 }
 
-function runDeliveryLabel(value: string): string {
-  switch (value) {
-    case "delivered":
-      return t("cron.runs.deliveryDelivered");
-    case "not-delivered":
-      return t("cron.runs.deliveryNotDelivered");
-    case "not-requested":
-      return t("cron.runs.deliveryNotRequested");
-    default:
-      return t("cron.runs.deliveryUnknown");
-  }
+function renderRunError(error: CronRunLogEntry["error"]) {
+  return html`<div class="muted">${formatUiExternalText(error)}</div>`;
 }
 
 function renderRun(
   entry: CronRunLogEntry,
-  fallbackAgentId: string,
-  basePath: string,
+  formatTimestamp: ReturnType<typeof createMsFormatter>,
   highlightedRunId?: string | null,
-  onNavigateToChat?: (sessionKey: string) => void,
+  onViewRunTranscript?: CronProps["onViewRunTranscript"],
 ) {
-  const chatUrl =
-    typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? sessionNavigationTarget({
-          face: "chat",
-          sessionKey: entry.sessionKey,
-          fallbackAgentId,
-          basePath,
-        }).href
-      : null;
-  const status = runStatusLabel(entry.status ?? "unknown");
-  const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
+  const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
+  const delivery = t(
+    RUN_DELIVERY_LABELS.get(entry.deliveryStatus ?? "not-requested") ?? "cron.runs.deliveryUnknown",
+  );
   const usage = entry.usage;
   const usageSummary =
     usage && typeof usage.total_tokens === "number"
@@ -444,11 +408,11 @@ function renderRun(
           <div class="cron-run-entry__facts muted">${facts.join(" · ")}</div>
         </div>
         <div class="cron-run-entry__meta">
-          <div>${formatMs(entry.ts)}</div>
+          <div>${formatTimestamp(entry.ts)}</div>
           ${
             typeof entry.runAtMs === "number"
               ? html`<div class="muted">
-                  ${t("cron.runEntry.runAt")} ${formatMs(entry.runAtMs)}
+                  ${t("cron.runEntry.runAt")} ${formatTimestamp(entry.runAtMs)}
                 </div>`
               : nothing
           }
@@ -466,35 +430,23 @@ function renderRun(
               : nothing
           }
           ${
-            chatUrl
+            entry.runId || entry.runAtMs !== undefined || entry.sessionKey
               ? html`<div>
-                  <a
-                    class="session-link"
-                    href=${chatUrl}
-                    @click=${(e: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(e)) {
-                        return;
-                      }
-                      if (onNavigateToChat && entry.sessionKey) {
-                        e.preventDefault();
-                        onNavigateToChat(entry.sessionKey);
+                  <button
+                    class="btn btn--sm"
+                    @click=${(event: MouseEvent) => {
+                      if (event.currentTarget instanceof HTMLButtonElement) {
+                        onViewRunTranscript?.(entry, event.currentTarget);
                       }
                     }}
-                    >${t("cron.runEntry.openRunChat")}</a
                   >
+                    ${t("cron.runEntry.viewTranscript")}
+                  </button>
                 </div>`
               : nothing
           }
-          ${
-            showErrorInMeta
-              ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
-              : nothing
-          }
-          ${
-            entry.deliveryError
-              ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
-              : nothing
-          }
+          ${showErrorInMeta ? renderRunError(entry.error) : nothing}
+          ${entry.deliveryError ? renderRunError(entry.deliveryError) : nothing}
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">

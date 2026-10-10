@@ -1,4 +1,3 @@
-// Irc helper module supports config schema behavior.
 import {
   ChannelGroupEntrySchema,
   DmPolicySchema,
@@ -69,6 +68,8 @@ const IrcAccountSchemaBase = z
     ...ReplyRuntimeConfigSchemaShape,
   })
   .strict();
+
+export type IrcAccountConfigInput = z.input<typeof IrcAccountSchemaBase>;
 
 const IrcConfigSchema = buildMultiAccountChannelSchema(IrcAccountSchemaBase, {
   optionalAccount: true,

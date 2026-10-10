@@ -13,10 +13,10 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-import { buildWorkspaceSkillStatus } from "./status.js";
+import { buildWorkspaceSkillReadiness, buildWorkspaceSkillStatus } from "./status.js";
 
 it("warns once when the bundled skills directory cannot be resolved", () => {
-  buildWorkspaceSkillStatus("/tmp/missing-bundled-status", { entries: [] });
+  buildWorkspaceSkillReadiness("/tmp/missing-bundled-status", { entries: [] });
   buildWorkspaceSkillStatus("/tmp/missing-bundled-status", { entries: [] });
   expect(warn).toHaveBeenCalledExactlyOnceWith(
     "Bundled skills directory could not be resolved; built-in skills may be missing.",

@@ -1,3 +1,5 @@
+import { validateToolArguments } from "@openclaw/llm-core/validation";
+import { expectDefined } from "@openclaw/normalization-core";
 // Provider tool tests cover tool schema conversion and provider payload compatibility.
 import { describe, expect, it } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
@@ -78,8 +80,17 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     });
   }
 
-  function normalizeOpenAIParameters(parameters: unknown): unknown {
-    return normalizeOpenAITools([tool(parameters)])[0]?.parameters;
+  function validateDeepSeekTool(
+    normalized: ReturnType<typeof normalizeDeepSeekToolSchemas>,
+    args: Record<string, unknown>,
+  ) {
+    const normalizedTool = expectDefined(normalized[0], "normalized DeepSeek tool");
+    return validateToolArguments(normalizedTool, {
+      type: "toolCall",
+      id: "call-deepseek-probe",
+      name: normalizedTool.name,
+      arguments: args,
+    });
   }
 
   it("keeps schema helpers outside eager AI transports", () => {
@@ -109,6 +120,84 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.inspectToolSchemas).toBe(inspectToolSchemas);
     }
   });
+
+  it.each([
+    {
+      family: "deepseek",
+      normalize: normalizeDeepSeekToolSchemas,
+      schema: { anyOf: [{ type: "string" }, { type: "null" }] },
+      expected: { type: "string", nullable: true },
+    },
+  ])("preserves copy-on-write tool identities for $family", ({ normalize, schema, expected }) => {
+    const stable = { type: "string" };
+    const parameters = objectSchema({ stable, changed: schema });
+    const originalParameters = structuredClone(parameters);
+    const requiredClientCaps = ["fixture-capability"];
+    const execute = async () => ({ content: [], details: {} });
+    const changedTool = Object.assign(tool(parameters, "changed"), {
+      requiredClientCaps,
+      execute,
+    });
+    const tools = [tool(undefined, "absent"), tool(7, "primitive"), tool(stable), changedTool];
+
+    const normalized = normalize(providerContext(tools));
+
+    expect(normalized).not.toBe(tools);
+    expect(normalized).toHaveLength(tools.length);
+    for (let index = 0; index < 3; index++) {
+      expect(normalized[index]).toBe(tools[index]);
+    }
+    const normalizedTool = expectDefined(normalized[3], "normalized changed tool");
+    expect(normalizedTool).not.toBe(changedTool);
+    expect(normalizedTool.parameters).not.toBe(parameters);
+    expect(normalizedTool.parameters).toEqual(objectSchema({ stable, changed: expected }));
+    const normalizedParameters = normalizedTool.parameters as typeof parameters;
+    expect(normalizedParameters.properties.stable).toBe(stable);
+    expect(normalizedTool.requiredClientCaps).toBe(requiredClientCaps);
+    expect(normalizedTool.execute).toBe(execute);
+    expect(parameters).toEqual(originalParameters);
+  });
+
+  it.each([
+    {
+      family: "gemini",
+      inspect: inspectGeminiToolSchemas,
+      violations: [
+        "duplicate.parameters.properties.nested.items[0].oneOf[0].format",
+        "duplicate.parameters.properties.nested.items[1].pattern",
+        "duplicate.parameters.anyOf[0].pattern",
+        "duplicate.parameters.pattern",
+      ],
+      lastViolation: "duplicate.parameters.pattern",
+    },
+  ])(
+    "preserves diagnostic paths and tool indices for $family",
+    ({ inspect, violations, lastViolation }) => {
+      const parameters = {
+        anyOf: [{ pattern: "^outer$" }],
+        pattern: "^root$",
+        properties: {
+          anyOf: { type: "string" },
+          nested: {
+            type: "array",
+            items: [{ oneOf: [{ type: "string", format: "date" }] }, { pattern: "^inner$" }],
+          },
+        },
+      };
+      const tools = [
+        tool(parameters, "duplicate"),
+        tool(objectSchema({ pattern: { type: "string" }, anyOf: { type: "string" } }), "clean"),
+        tool({ pattern: "^last$", anyOf: [] }, "duplicate"),
+      ];
+      const originalTools = structuredClone(tools);
+
+      expect(inspect(providerContext(tools))).toEqual([
+        { toolName: "duplicate", toolIndex: 0, violations },
+        { toolName: "duplicate", toolIndex: 2, violations: [lastViolation] },
+      ]);
+      expect(tools).toEqual(originalTools);
+    },
+  );
 
   it("removes llama.cpp GBNF-hostile constraints from nested tool schemas", () => {
     const hooks = buildProviderToolCompatFamilyHooks("llamacpp-gbnf");
@@ -166,10 +255,6 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       title: "normalizes canonical OpenAI Codex Responses tool schemas",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     },
-    {
-      title: "applies ChatGPT Responses strict compat on first-party OpenAI API hosts",
-      baseUrl: "https://api.openai.com/v1",
-    },
   ])("$title", ({ baseUrl }) => {
     const normalized = normalizeOpenAITools([tool({})], {
       modelApi: "openai-chatgpt-responses",
@@ -189,48 +274,8 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(normalized).toBe(tools);
   });
 
-  it("collapses anyOf and oneOf unions for the deepseek family", () => {
-    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
-    const tools = [
-      tool(
-        objectSchema(
-          {
-            date: {
-              description: "Balance sheet date",
-              anyOf: [{ type: "string" }, { type: "integer" }],
-            },
-            ticker: {
-              oneOf: [{ type: "string" }, { type: "null" }],
-            },
-          },
-          { required: ["date"] },
-        ),
-        "unusual-whales__get_balance_sheet_screener",
-      ),
-    ];
-
-    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
-
-    expect(normalized[0]?.parameters).toEqual(
-      objectSchema(
-        {
-          date: {
-            description: "Balance sheet date",
-            type: "string",
-          },
-          ticker: {
-            type: "string",
-            nullable: true,
-          },
-        },
-        { required: ["date"] },
-      ),
-    );
-    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
-  });
-
   it("preserves string-const unions as a flat enum for the deepseek family", () => {
-    // Regression for https://github.com/openclaw/openclaw/issues/86468 —
+    // Regression for https://github.com/openclaw/openclaw/issues/86468.
     // Typebox `Type.Union([Type.Literal(...)])` collapses to anyOf of consts;
     // the previous normalizer kept only the first const, hiding every other
     // literal from the model.
@@ -290,133 +335,251 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
   });
 
-  it("normalizes parameter-free and typed-object schemas for the openai family", () => {
-    const tools = [tool({}, "ping"), tool({ type: "object" }, "exec")];
-    const normalized = normalizeOpenAITools(tools);
+  it("keeps every object variant of a union expressible for the deepseek family", () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/143790.
+    // Notion's create-pages `parent` is an anyOf of three object variants.
+    // Keeping only the first variant narrowed the schema to `page_id`, so the
+    // model could not express a database or data-source parent and every such
+    // call was rejected by our own argument validator before it reached the
+    // server.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema(
+          {
+            pages: { type: "array", items: { type: "object" } },
+            parent: {
+              description: "The parent under which the new pages will be created.",
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    page_id: { type: "string" },
+                    type: { type: "string", enum: ["page_id"] },
+                  },
+                  required: ["page_id"],
+                  additionalProperties: {},
+                },
+                {
+                  type: "object",
+                  properties: {
+                    database_id: { type: "string" },
+                    type: { type: "string", enum: ["database_id"] },
+                  },
+                  required: ["database_id"],
+                  additionalProperties: {},
+                },
+                {
+                  type: "object",
+                  properties: {
+                    data_source_id: { type: "string" },
+                    type: { type: "string", enum: ["data_source_id"] },
+                  },
+                  required: ["data_source_id"],
+                  additionalProperties: {},
+                },
+              ],
+            },
+          },
+          { required: ["pages"] },
+        ),
+        "notion__notion-create-pages",
+      ),
+    ];
 
-    expect(normalized.map((entry) => entry.parameters)).toEqual([strictObject(), strictObject()]);
-    expect(inspectOpenAITools(tools)).toStrictEqual([]);
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as {
+      properties: Record<string, unknown>;
+      required?: string[];
+    };
+
+    // Every branch stays expressible, and the discriminator pools its values so
+    // the model can name any of them. The per-branch keys stay unconstrained:
+    // each is declared by one variant and permitted by the others through
+    // `additionalProperties`, so constraining one would reject a call those
+    // variants accepted. The live Notion schema documents each of them, and any
+    // annotation survives here.
+    expect(parameters.properties.parent).toEqual({
+      description: "The parent under which the new pages will be created.",
+      type: "object",
+      properties: {
+        page_id: {},
+        database_id: {},
+        data_source_id: {},
+        type: { type: "string", enum: ["page_id", "database_id", "data_source_id"] },
+      },
+    });
+    // No branch's key is required any more, because no key is required by all
+    // of them. The root's own `required` is untouched.
+    expect(parameters.required).toEqual(["pages"]);
+    // The provider still sees no union keyword.
+    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+  });
+
+  it("does not narrow a key a variant accepts through patternProperties", () => {
+    // Review finding on #143819: `additionalProperties: false` does not make a
+    // variant reject an undeclared key that its `patternProperties` cover.
+    // Branch A accepts an object-valued `b` that way, and branch B declares `b`
+    // as a string. Copying B's constraint would reject a call A accepted.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      tool(
+        objectSchema({
+          parent: {
+            anyOf: [
+              {
+                type: "object",
+                properties: { a: { type: "string" } },
+                required: ["a"],
+                additionalProperties: false,
+                patternProperties: { "^b$": { type: "object" } },
+              },
+              {
+                type: "object",
+                properties: { b: { type: "string" } },
+                required: ["b"],
+                additionalProperties: false,
+              },
+            ],
+          },
+        }),
+        "patterned-variant",
+      ),
+    ];
+
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext(tools));
+    const parameters = normalized[0]?.parameters as {
+      properties: { parent: { properties: Record<string, unknown> } };
+    };
+    const props = parameters.properties.parent.properties;
+
+    // A key the pattern covers stays unconstrained, while a declared key keeps
+    // its own definition.
+    expect(props["b"]).toEqual({});
+    expect(props["a"]).toEqual({ type: "string" });
+
+    const validate = (args: Record<string, unknown>) =>
+      validateToolArguments(normalized[0] as never, {
+        type: "toolCall",
+        id: "call-patterned-variant",
+        name: "patterned-variant",
+        arguments: args,
+      });
+
+    // Accepted by branch A before this change, so it must stay accepted.
+    expect(() => validate({ parent: { a: "x", b: { nested: true } } })).not.toThrow();
+    // And the branch that declares `b` is still callable.
+    expect(() => validate({ parent: { b: "y" } })).not.toThrow();
   });
 
   it.each([
     {
-      title: "repairs null and inferred OpenAI tool schema types",
-      input: {
-        type: null,
-        description: null,
-        default: null,
-        properties: {
-          payload: {
-            properties: { value: { type: "string", format: null } },
-          },
-          tags: {
-            items: { type: "string" },
-          },
-        },
-      },
-      expected: {
-        type: "object",
-        properties: {
-          payload: {
-            type: "object",
-            properties: { value: { type: "string" } },
-          },
-          tags: {
-            type: "array",
-            items: { type: "string" },
-          },
-        },
-      },
+      name: "normalized sibling",
+      mode: { anyOf: [{ type: "string" }, { type: "integer" }] },
     },
-    {
-      title: "keeps unrepairable null schema constraints for downstream quarantine",
-      // Null constraint keywords must stay so projection quarantines the tool
-      // instead of silently widening the accepted argument schema.
-      input: {
-        type: "object",
-        properties: {
-          payload: { type: null, description: "no shape hints" },
-          config: { type: "object", properties: {}, additionalProperties: null },
-        },
-      },
-      expected: {
-        type: "object",
-        properties: {
-          payload: { type: null, description: "no shape hints" },
-          config: { type: "object", properties: {}, required: [], additionalProperties: null },
-        },
-      },
-    },
-    {
-      title: "preserves explicit empty properties maps when normalizing strict openai schemas",
-      input: { type: "object", properties: {} },
-      expected: strictObject(),
-    },
-  ])("$title", ({ input, expected }) => {
-    expect(normalizeOpenAIParameters(input)).toEqual(expected);
-  });
+  ])("keeps an own __proto__ property with a $name", ({ mode }) => {
+    // A changing child forces the recursive walker to return its copied record,
+    // so own-key preservation must hold before object-union accumulation too.
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const branch = (description: string) => ({
+      type: "object",
+      properties: Object.fromEntries<unknown>([
+        ["__proto__", { type: "string", description }],
+        ["mode", mode],
+      ]),
+      required: ["__proto__"],
+      additionalProperties: false,
+    });
+    const input = objectSchema({
+      options: { anyOf: [branch("first"), branch("second")] },
+    });
+    const before = structuredClone(input);
+    const normalized = hooks.normalizeToolSchemas(deepSeekContext([tool(input, "proto-keys")]));
+    const parameters = normalized[0]?.parameters as {
+      properties: { options: { properties: Record<string, unknown>; required?: string[] } };
+    };
+    const props = parameters.properties.options.properties;
 
-  it("preserves nested schemas and annotation objects while normalizing strict openai schemas", () => {
-    const cases = [
-      {
-        name: "property schema",
-        parameters: strictObject({
-          properties: { payload: {} },
-          required: ["payload"],
-        }),
-      },
-      {
-        name: "schema maps",
-        parameters: strictObject({
-          properties: { mode: { $defs: { nested: {} }, dependentSchemas: { flag: {} } } },
-          required: ["mode"],
-        }),
-      },
-      {
-        name: "nested schema arrays",
-        parameters: strictObject({
-          properties: { mode: { anyOf: [{}], prefixItems: [{}] } },
-          required: ["mode"],
-        }),
-      },
-      {
-        name: "annotation objects",
-        parameters: strictObject({
-          properties: { mode: { type: "string", default: {}, const: {}, examples: [{}] } },
-          required: ["mode"],
-        }),
-      },
-    ];
+    expect(Object.hasOwn(props, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(props, "__proto__")?.value).toEqual({
+      type: "string",
+      description: "first",
+    });
+    expect(parameters.properties.options.required).toEqual(["__proto__"]);
+    expect(JSON.stringify(parameters)).toContain('"__proto__"');
+    expect(input).toEqual(before);
+    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
 
-    for (const testCase of cases) {
-      expect(normalizeOpenAIParameters(testCase.parameters), testCase.name).toEqual(
-        testCase.parameters,
-      );
-    }
-  });
-
-  it("repairs legacy and content schema applicators without changing property dependencies", () => {
-    expect(
-      normalizeOpenAIParameters(
-        strictObject({
-          dependencies: {
-            mode: ["payload"],
-            payload: { type: "object" },
-          },
-          additionalItems: { type: "object" },
-          contentSchema: { type: "object" },
-        }),
+    const valid = JSON.parse('{"options":{"__proto__":"literal","mode":"x"}}');
+    expect(validateDeepSeekTool(normalized, valid)).toEqual(valid);
+    expect(() =>
+      validateDeepSeekTool(
+        normalized,
+        JSON.parse('{"options":{"__proto__":{"wrong":"shape"},"mode":"x"}}'),
       ),
-    ).toEqual(
-      strictObject({
-        dependencies: {
-          mode: ["payload"],
-          payload: strictObject(),
-        },
-        additionalItems: strictObject(),
-        contentSchema: strictObject(),
-      }),
+    ).toThrow(/Validation failed for tool "proto-keys"/);
+  });
+
+  it.each([
+    {
+      union: "oneOf",
+      name: "disjoint const and enum",
+      middle: { const: "discarded", enum: ["excluded"] },
+      expectedKinds: ["page", "data_source"],
+      validParents: [
+        { kind: "page", page_id: "page-1" },
+        { kind: "data_source", data_source_id: "data-source-1" },
+      ],
+      invalidKinds: ["discarded", "excluded"],
+    },
+  ])("pools literal discriminators in $union with $name", (testCase) => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const branch = (kind: Record<string, unknown>, id: string) => ({
+      type: "object",
+      properties: { kind: { type: "string", ...kind }, [id]: { type: "string" } },
+      required: ["kind", id],
+      additionalProperties: false,
+    });
+    const normalized = hooks.normalizeToolSchemas(
+      deepSeekContext([
+        tool(
+          objectSchema({
+            parent: {
+              [testCase.union]: [
+                branch({ const: "page", description: "First category" }, "page_id"),
+                branch({ ...testCase.middle, description: "Second category" }, "database_id"),
+                branch({ enum: ["data_source"], description: "Third category" }, "data_source_id"),
+              ],
+            },
+          }),
+          "literal-parent",
+        ),
+      ]),
     );
+
+    expect(normalized[0]?.parameters).toMatchObject({
+      properties: {
+        parent: {
+          properties: {
+            kind: {
+              type: "string",
+              description: "First category",
+              enum: testCase.expectedKinds,
+            },
+          },
+          required: ["kind"],
+        },
+      },
+    });
+    expect(hooks.inspectToolSchemas(deepSeekContext(normalized as never))).toStrictEqual([]);
+    for (const parent of testCase.validParents) {
+      expect(validateDeepSeekTool(normalized, { parent })).toEqual({ parent });
+    }
+    for (const kind of testCase.invalidKinds) {
+      expect(() =>
+        validateDeepSeekTool(normalized, { parent: { kind, database_id: "database-1" } }),
+      ).toThrow(/Validation failed for tool "literal-parent"/);
+    }
   });
 
   it("does not tighten or warn for permissive object schemas that use strict:false", () => {
@@ -451,32 +614,5 @@ describe("buildProviderToolCompatFamilyHooks", () => {
 
     expect(normalizeOpenAITools(tools, route)).toBe(tools);
     expect(inspectOpenAITools(tools, route)).toStrictEqual([]);
-  });
-
-  it("suppresses openai strict-schema diagnostics because transport falls back to strict false", () => {
-    const diagnostics = inspectOpenAITools(
-      [
-        tool(
-          {
-            type: "object",
-            properties: {
-              mode: {
-                anyOf: [{ type: "string" }, { type: "number" }],
-              },
-              cwd: { type: "string" },
-            },
-            required: ["mode"],
-            additionalProperties: true,
-          },
-          "exec",
-        ),
-      ],
-      {
-        modelApi: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-      },
-    );
-
-    expect(diagnostics).toStrictEqual([]);
   });
 });

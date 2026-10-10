@@ -9,778 +9,306 @@ read_when:
 title: "Database schemas"
 ---
 
-OpenClaw stores control-plane state in a global SQLite database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
-
-## Database layout
-
-| Scope                | Default path                                               | Contents                                                                                              |
-| -------------------- | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Global control plane | `~/.openclaw/state/openclaw.sqlite`                        | Shared configuration state, registries, approvals, plugin state, and shared runtime state             |
-| Per-agent data plane | `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` | Sessions, transcripts, memory indexes, auth state, conversation state, and agent-scoped runtime state |
-
-The task registry uses the global control-plane database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
-
-### Mentions Inbox
-
-The [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) uses existing
-`config_machine_state` rows in `state/openclaw.sqlite`.
-`notifications.mentions.source.*` records retain typed source identities,
-recipients, mention identifiers, expiry times, and dismissal bookkeeping;
-`notifications.mentions.head` records the revision and sequence. Writes use the
-existing table and primary key, with no new tables, columns, indexes, or schema
-version change.
-
-Retention remains seven days from creation, capped at 100 entries per profile,
-10,000 entries globally, and 10,000 source identities for duplicate suppression.
-Restarts preserve retained entries, dismissals, and their original expiry times.
-Loading stored state does not replay browser notifications or scan transcripts
-to reconstruct old mentions.
-
-### ACP replay accounting
-
-The shared `acp_replay_sessions` and `acp_replay_events` tables retain bridge
-replay history. Their `estimated_bytes` columns count the UTF-8 bytes of each
-persisted text field, plus 32 bytes per row. Session totals include their events.
-This is a retained-content estimate, not a limit on SQLite file, page, or WAL size.
-
-Older releases counted characters inconsistently, undercounting Unicode and
-allowing unchanged metadata writes to drift. The existing app-version upgrade
-repair and explicit shared-state schema repair rebuild all derived totals
-atomically, preserving event JSON text, identifiers, timestamps, and sequence.
-Repair does not prune history. The next ordinary session write applies the
-existing caps and eviction order, so corrected Unicode history may trim sooner
-and use transcript fallback when loaded.
-
-A current-app-version reopen skips this repair. Replacing code without changing
-the app version does not repair an already-open or current-version database;
-explicit schema repair remains the repair owner for that case. Accounting repair
-cannot recover history already evicted by an older writer. See [ACP CLI](/cli/acp).
-
-### Meeting transcript tables
-
-Meeting captures use three `STRICT` tables in the shared
-`state/openclaw.sqlite` database, separate from per-agent conversation transcripts.
-The transcript store (`src/transcripts/store.ts`) owns their reads and writes;
-`src/transcripts/sqlite-schema.ts` ensures the tables on first use. Markdown and
-JSON files under the transcripts directory are explicit exports, not runtime
-storage. See [Transcripts CLI](/cli/transcripts).
-
-#### `meeting_transcript_sessions`
-
-One row per capture identity. The primary key is `(session_id, started_at)`;
-`selector` is unique. Indexes support start-time, session-ID, slug, and export-key
-lookups.
-
-| Columns                                  | Type                                        | Purpose                                                                 |
-| ---------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
-| `session_id`, `started_at`               | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
-| `selector`, `export_key`, `session_slug` | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
-| `provider_id`, `source_json`             | `TEXT NOT NULL`                             | Source provider and locator.                                            |
-| `title`, `stopped_at`, `metadata_json`   | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
-| `export_manifest_json`                   | `TEXT NOT NULL`, default `{}`               | Export artifact ownership manifest.                                     |
-| `export_pending_json`                    | `TEXT NOT NULL`, default `[]`               | Pending export artifacts.                                               |
-| `next_utterance_seq`                     | Nonnegative `INTEGER NOT NULL`, default `0` | Next append sequence.                                                   |
-| `created_at_ms`, `updated_at_ms`         | Nonnegative `INTEGER NOT NULL`              | Store timestamps.                                                       |
-
-Reopening an occupancy-driven capture clears `stopped_at` without changing the
-primary key, so the same meeting retains its utterances.
-New transcript admissions record `sessionIdOrigin` (`generated` or `supplied`)
-in `metadata_json`. The store preserves that value, including its absence or
-invalidity in legacy rows, on later writes to the same primary key. Occupancy
-reopening requires an explicitly generated origin; an unknown origin starts a
-fresh capture and leaves the old record intact. The existing newest-candidate
-query and ten-minute window are unchanged.
-
-This adds no schema, index, version, or backfill. Doctor metadata restoration
-preserves an explicitly recorded origin and leaves unknown origins unknown.
-Older runtimes do not enforce this rule, so downgrading also removes the fixed-ID
-history protection. See the [accepted ID-origin decision](https://github.com/openclaw/openclaw/pull/130860).
-
-#### `meeting_transcript_utterances`
-
-Append-ordered speech records. The primary key is
-`(session_id, session_started_at, sequence)`; the session pair references
-`meeting_transcript_sessions(session_id, started_at)` with `ON DELETE CASCADE`.
-
-| Columns                                  | Type                           | Purpose                                          |
-| ---------------------------------------- | ------------------------------ | ------------------------------------------------ |
-| `session_id`, `session_started_at`       | `TEXT NOT NULL`                | Owning capture identity.                         |
-| `sequence`                               | Nonnegative `INTEGER NOT NULL` | Stable append order within the capture.          |
-| `utterance_id`, `started_at`, `ended_at` | Nullable `TEXT`                | Provider utterance identity and timing.          |
-| `speaker_id`, `speaker_label`            | Nullable `TEXT`                | Provider speaker identity and display label.     |
-| `text`                                   | `TEXT NOT NULL`                | Captured transcript text.                        |
-| `final`                                  | Nullable `INTEGER`, `0` or `1` | Whether the provider marked the utterance final. |
-| `metadata_json`                          | Nullable `TEXT`                | Provider utterance metadata.                     |
-
-#### `meeting_transcript_summaries`
-
-One current summary per capture. The primary key is
-`(session_id, session_started_at)` and references the session primary key with
-`ON DELETE CASCADE`. At least one of `summary_json` or `markdown` must be non-null.
-
-| Columns                            | Type                           | Purpose                                                                                                     |
-| ---------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `session_id`, `session_started_at` | `TEXT NOT NULL`                | Owning capture identity.                                                                                    |
-| `generated_at`                     | Nullable `TEXT`                | Summary generation time.                                                                                    |
-| `summary_json`                     | Nullable `TEXT`                | Free-form summary, including participants, `source` (`model` or `heuristic`), and optional model reference. |
-| `markdown`                         | Nullable `TEXT`                | Rendered meeting notes.                                                                                     |
-| `utterance_count`                  | Nonnegative `INTEGER NOT NULL` | Number of utterances covered by the stored summary.                                                         |
-
-These are existing feature-local tables. Occupancy episodes and model-backed
-notes do not change their schema or database version.
-
-### Update run ledger
-
-`update_runs` stores one durable record per update in the shared
-`state/openclaw.sqlite` database. `src/infra/update-run-ledger.ts` owns writes
-from the admitting Gateway, orchestrator CLI, and restarted Gateway. The table
-is additive at shared schema version 15: the canonical schema declares it and
-first use ensures it inside the same write transaction. Existing tables and the
-schema version stay unchanged; older readers ignore the new table.
-
-`run_id` is the UUID primary key. Rows retain creation/update timestamps,
-trigger, phase, status, reason, origin, target, before/after versions, steps,
-verification facts, repair attempts, confirmation/finish timestamps, and known
-downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
-and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
-credentials. There is no automatic history deletion.
-
-The CLI and Gateway share WAL-backed transactions, including while the Gateway
-is stopped. The first terminal outcome wins; subsequent verification can enrich
-its observed facts without rewriting success, failure, skip, or rollback status.
-The restart sentinel carries `stats.runId` and remains the continuation owner;
-consuming it does not delete the run row. Chat, CLI, and status reports read that
-row. See [Run history and reports](/cli/update#run-history-and-reports).
-
-### Cloud repository workspaces
-
-Repository-only [cloud sessions](/gateway/cloud-workers#dispatching-a-session) use the first-use `session_repository_workspaces` table in the shared state database. The existing session entry carries only `repositoryWorkspaceId`; the shared row owns the canonical agent/session key, repository URL, requested ref, session branch, setup intent, pinned base commit and manifest, accepted checkpoint pointer, and revision. Session reset preserves this owner; a fork receives a distinct owner.
-
-`github_repository_publication_requests` records shared and personal publication against an immutable accepted checkpoint and the session's admitted lifecycle revision. Reset preserves the session ID and repository checkpoint but invalidates publication authorized before that reset. Personal requests also retain the selected profile and connection generation and require same-owner confirmation after an interrupted publication. Pending publication keeps its original source even after an explicit move materializes a Gateway worktree.
-
-Both tables are additive, lazily ensured on first use, and leave the numeric database schema version unchanged. That is not a compatibility promise for older cloud-session implementations: run a build that understands repository-only sessions when using this state. Existing local managed-worktree sessions keep their existing representation.
-
-Checkpoint Git artifacts live under `state/repository-workspaces/<workspace-id>.git`, next to the shared database. These are bare repositories containing complete file manifests, cumulative changed-file blobs, and publication snapshots; they are not working checkouts or a backup of upstream Git history. Restoring an entire checkout still requires access to the pinned upstream commit. Back up these artifacts together with the shared and per-agent databases.
-
-Accepted checkpoint history and publication source artifacts remain until explicit session deletion, including after Stop, archive, reset, or Gateway restart. There is no timed checkpoint expiry. Deletion retires publication requests and source ownership before removing their artifact repository; failed cleanup is reported. The managed-worktree idle cleanup and snapshot retention rules do not apply to these checkpoints.
-
-## Versioning contract
-
-Each database records its published schema in two places:
-
-- `PRAGMA user_version` is the SQLite schema version.
-- The primary `schema_meta` row records `role`, `agent_id`, `schema_version`, and `app_version`. `app_version` is the OpenClaw build that last wrote the schema metadata.
-
-OpenClaw applies forward-only migrations when it opens an older supported database. It refuses a database whose `user_version` is newer than the running build and reports a `newer schema version` error. The Gateway checks all registered databases before startup. `openclaw update` also refuses a package or source target whose declared schema support is older than an on-disk database. Target packages published before schema metadata was added cannot be preflighted. Updates driven by the 2026.9.2 release line can temporarily defer publication of a shared-state schema version while the old updater finishes; see [Schema bumps and older updaters](#schema-bumps-and-older-updaters).
-
-When Gateway startup encounters a newer database schema, it exits with status 78 so the generated systemd service does not restart it repeatedly. On macOS, it also parks its managed LaunchAgent to stop `KeepAlive` retries. This applies to failures during CLI bootstrap as well as server startup and does not depend on the database-backed crash counter. Start the Gateway with a build that supports the existing schemas. The older install cannot repair them with `doctor --fix`; run Doctor from the compatible install if further migration is required, then restart through the service or deployment owner.
-
-Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
-
-Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
-
-Agent schema 19 records collected input consumption in the nullable
-`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
-first-use ensure add it when needed; the schema version stays 19. The supported
-beta upgrade runs Doctor from the upcoming release. Intermediate builds that
-already validate the optional pending-input table may reject the added column
-despite sharing version 19. Consumed source receipts remain until their session
-window is deleted, so rewriting a transcript cannot make an old input runnable again.
-
-The placement-move table uses this same-version rule for its nullable bare
-`abandon_source INTEGER` column. The feature lazily ensures the column on first
-move use. `NULL` means ordinary reconcile-first movement; `1` records the
-operator's explicit offline-device abandonment decision so restart recovery
-cannot accidentally resume remote reconciliation. Older readers ignore the
-column and can reopen the same database safely.
-
-Conversation associations use the same rule for the nullable bare
-`route_context_json TEXT` column. The database-open repair ensures the column
-for updated binaries. Older readers ignore it and can reopen and update the
-same database safely; their association update invalidates context captured by
-a newer writer so it cannot be replayed after re-upgrade.
-
-Transcript context eligibility uses a bare nullable
-`session_transcript_active_events.context_eligible INTEGER` column without
-changing agent schema 18. Database open installs the column and a non-unique
-partial index of unclassified rows. `1` includes an entry in bounded context
-acquisition, `0` excludes display-only activity, and `NULL` means the projection
-still needs reconciliation. Bootstrap control markers remain eligible; history
-counts, positions, and cursors do not change. Raw transcript JSON stays canonical.
-
-Older same-version writers can append or rebuild without supplying eligibility.
-The existing transcript reconciler detects their `NULL` rows even when its
-sequence watermark is current, then rebuilds from raw events before publishing
-readiness. Readers return a retryable projection-unavailable result while this
-work is pending; they do not parse every payload or guess eligibility. Initial
-index creation scans projection metadata once, and startup awaits reconciliation
-with off-thread parsing and bounded write chunks. Total rebuild cost remains
-proportional to history. Rewrites invalidate or rebuild the projection in their
-own transaction, and transcript deletion removes its eligibility rows. Downgrade
-leaves the additive column and index intact; re-upgrade reconciles unknown rows.
-
-User profiles use the same rule for the nullable bare `user_profiles.role TEXT`
-column in state schema 9. Operator-role assignment lazily ensures the column on
-first use. Older readers ignore the column and can reopen the same database
-safely.
-
-Web Push subscription ownership uses the same rule for nullable bare
-`web_push_subscriptions.device_id TEXT`, `user_profile_id TEXT`, and
-`preferences_json TEXT` columns. Web Push lazily ensures all three columns on
-first use. Existing rows remain unbound and test-only until the browser
-reconnects; older readers ignore the columns and continue reading or updating
-the endpoint and key fields safely.
-
-Approval-notification cleanup uses the same-version additive
-`web_push_approval_deliveries` table. It records the approval/subscription
-identifiers plus the request-time device/profile binding for notifications that
-may have reached a browser. A terminal or restarted Gateway sends only when the
-current subscription still has that binding. The table is lazily created on
-first use, rows cascade away with their approval or subscription, and older
-readers ignore it safely.
-
-Installing OpenClaw manually through npm bypasses the updater guard. Database open checks still refuse an incompatible build.
-
-Structured [Goal controls](/tools/goal#gateway-requests-and-retries) use a lazy
-per-agent `session_goal_operations` table without changing the schema version.
-Goal start/resume commits the Goal transition, input turn, run lifecycle, and
-operation receipt in one transaction. Management operations commit the Goal
-transition and receipt together. Older readers ignore the added table.
-Receipts survive Goal clear and session reset/deletion until their 24-hour
-validity expires; later Goal writes prune expired rows. They retain the
-original result and a keyed request fingerprint, not a second raw request.
-There is no backfill or configuration switch. Downgrading preserves the table
-but disables the new structured controls; upgrading can read retained receipts.
-
-### Schema bumps and older updaters
-
-OpenClaw 2026.9.2 introduced the update ledger but reopens it with old code after
-running the target's Doctor, including a final read after recording its terminal
-outcome. The shared-state database runner lets this updater finish by applying
-migration content first and publishing the new schema version later. This rule
-applies to every writable open, including Doctor, the restarted Gateway, and
-other CLI processes.
-
-The runner records the applied content version in the existing
-`config_machine_state` key `state.schema.contentVersion`. While publication is
-deferred, new code uses that content version, and both `PRAGMA user_version` and
-`schema_meta.schema_version` retain the previous published version. Content and
-its marker commit together. Reopening skips migration steps already covered by
-the marker, including the schema-16 Skill Workshop rebuild; it does not infer
-completion from table shape or repeat the rebuild. This requires no new table,
-configuration option, or environment override.
-
-Current content is ready for readers even while its version is unpublished.
-Ordinary CLI commands can run alongside the Gateway throughout this window;
-publication alone does not trigger schema repair or require stopping the Gateway.
-
-A subsequent update can run during this window. Its migration verification and
-rollback checks compare applied content versions from private database snapshots.
-Publishing already-applied content is not another migration; applying new content
-still blocks rollback even when the published number has not changed. Managed
-service stop, activation, and Doctor maintenance keep their normal ownership rules.
-
-Publication waits until **every** update row whose `before.version` identifies
-the 2026.9.2 release line meets its applicable condition:
-
-- A terminal row's `finished_at_ms` is at least five minutes old.
-- A running row's `updated_at_ms` is more than 30 minutes old. The runner treats
-  that driver as abandoned for publication purposes; it does not rewrite the
-  run's outcome.
-
-A missing ledger or no affected rows permits immediate publication. Deadlines
-come from the rows' timestamps, never the observing process's start time. The
-new Gateway's ledger watcher schedules publication at the applicable deadline
-without jitter. Publication holds the Gateway lifecycle fence: the owning Gateway
-can publish, and a later writable open can publish when no Gateway owns the state
-directory. Other processes silently leave publication to that owner.
-Publication rereads the content marker and all affected rows inside one
-synchronous write transaction before advancing both published schema markers.
-A new or refreshed running row blocks publication again. Restarting the Gateway
-does not shorten or restart the grace period.
-
-The five-minute grace accommodates 2026.9.2's trailing ledger reads; that release
-records no driver process identity that would prove those reads have finished.
-An old CLI blocked for more than five minutes after committing its terminal row,
-for example on a stalled stdout pipe, can still fail its final render after
-publication. By then the package swap, any requested service restart, and terminal ledger
-outcome are complete. Downgrade protection for the 2026.9.2 line is delayed by the
-same grace, or by the 30-minute abandoned-driver bound. The retained version is
-not permission to run older code against migrated feature tables. Do not
-manually lower either version marker or delete the content marker.
-
-Update-time Doctor checks shared and registered agent databases before other
-repairs. A state-only migration proceeds with deferred publication and reports
-`schema content applied; version publication deferred until update run <id> finishes`.
-Publication still observes the five-minute grace after that run finishes.
-Doctor keeps the typed `update-schema-bump-unfenced` refusal when deferral cannot
-cover a pending agent-database migration, the required `config_machine_state`
-table is missing, or the state-content migration fails. A failed content
-transaction rolls back. The refusal includes the database versions, driving
-updater version, and [manual update commands](/install/updating#updating-from-2026.9.2-across-a-schema-bump).
-Package rollback cannot reverse a migration that already happened.
-
-The driver check requires a valid semantic version and includes 2026.9.2
-rebuilds. Earlier updaters, including 2026.9.1, have no ledger and keep normal
-publication behavior. Builds from 2026.9.3 onward, including prereleases, use
-transactional updates that fence old-process ledger access and let candidate
-code finish after migration; they also keep normal publication behavior.
-Same-schema repairs and ordinary Doctor runs remain available.
-
-### Profile-owned skill library
-
-[Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.
-
-Complete skill bundles are product artifacts under `<state-dir>/skill-library/<skill-id>/revisions/<revision-hash>/`. Publication writes and verifies an immutable bundle before committing its current pointer and event in one synchronous database transaction. Concurrent edits require the expected revision. A crash before that commit can leave an unreferenced complete bundle, but not a pointer to partially written content. Sharing and transfer change metadata without moving revision files.
-
-Removing a skill excludes it from future selections; existing sessions retain their selected revisions. Published history and complete orphan revisions are retained conservatively. Expired upload records are pruned when another upload begins; clearly abandoned staging directories are cleaned during later publication. Back up both the state databases and the skill-library directory, not just the current revision pointers.
-
-Older same-schema readers ignore the new tables but cannot provide managed-library selection or authoring. Keep the tables and bundle directory intact when changing builds; do not lower schema markers or delete revisions to disable the feature. The accepted storage and ownership decision is recorded in [the profile-owned skills design issue](https://github.com/openclaw/openclaw/issues/133602).
-
-## Personal GitHub connections and publication
-
-Personal GitHub connection state uses the existing `secret_store_entries` identity scope, with the canonical authenticated profile as `scope_id` and the fixed private name `github-connection`. It is not a generic identity-secret API or a profile preference. One bounded record owns selection, pending device authorization, and refresh recovery. Personal managed CLI credentials use a separate `credentials/github/personal/<opaque-profile-id>` directory, outside older system/agent cleanup roots.
-
-Personal publication uses the lazy, same-version `github_personal_publication_requests` table. It records the requesting profile, selected connection generation and account, immutable target/workspace snapshot, idempotency, and outcome; it contains no tokens. Reading status does not create the table. Existing system and agent requests remain in their original table.
-
-Local shared and personal publication records use the first-use `github_publication_session_lifecycles` companion table to bind each request to its admitted session lifecycle revision. The key is the publication kind and request ID; the binding commits in the same transaction as the request. An explicit `NULL` records that the session had no revision at admission. A missing binding cannot authorize unfinished publication and is never filled from the current session. Terminal receipt history remains readable.
-
-The companion table leaves the numeric shared schema version, both existing local request-table definitions, and their receipt digests unchanged. Older schema validators treat those request tables as optional and reject additional columns even when nullable, so the lifecycle binding uses a separate table that older readers ignore.
-
-Older builds ignore both the personal request table and identity-scoped credential rows instead of executing a personal request as System. Re-upgrade still enforces original authorization expiry. Unfinished personal publication requires fresh confirmation by the same authenticated owner after a Gateway restart; remote-result reconciliation reuses the original request markers.
-
-Disconnect removes usable local credentials and retains a secret-free disconnected selection to fence stale work. Profile merges preserve target state, including an explicit disconnection; a source connection transfers only when the target has no state, with new selection authority. Credentials stranded by a profile merge performed on an older build require reconnect, not runtime adoption through aliases.
-
-Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. An already-dispatched GitHub operation can still record its observed result, without gaining authority for another operation. Permanent session deletion fences execution and removes its personal receipts and lifecycle bindings. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
-
-See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
-
-## Personal model accounts
-
-Personal model accounts use the existing `secret_store_entries` identity scope, keyed by the canonical Gateway profile. A versioned `model-accounts` record owns provider selections, while each `model-account:<profile-id>` record owns one inline OAuth or token credential and its usage state. Each record retains the existing 64 KiB secret-store limit; connecting more accounts or merging profiles does not combine credentials under one size limit. This adds no table, column, index, or schema version. Generic secret-list/read methods and profile preferences do not expose these records.
-
-The credential and its selected link commit in one synchronous transaction after the Gateway revalidates the initiating authorization. Runtime loads only an explicitly selected credential and routes refresh and usage updates to that same owner. Shared and agent-local auth saves exclude the reserved personal-profile namespace, including runtime snapshots and CLI mirrors.
-
-Unlink records an explicit disconnected selection and retains credentials used by existing session pins. A verified identity merge transfers only the live source's records, preserving the target's selections and disconnections while retaining old credential IDs for pinned sessions. Credentials stranded on an alias by an older build are not adopted at runtime. A compatible downgrade leaves private records outside the older shared-account pool; re-upgrade can use retained records, while accounts stranded by older identity merges need reconnecting.
-
-See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.
-
-## Apple companion delivery journals
-
-Companion Watch chat has separate app-local storage. It does not change the
-Gateway control-plane or per-agent database schema, and `openclaw doctor`
-does not migrate it. Open the updated iPhone and Watch apps to use the new
-delivery protocol. See [Watch voice and chat](/platforms/ios#apple-watch-voice-and-chat)
-for delivery statuses and recovery.
-
-The iPhone's existing `client-state.sqlite` owns `watch_message_journal`.
-The named GRDB migration `client-state-watch-message-journal-v9` adds that table
-and a nullable `watch_route_generation TEXT` column to
-`gateway_routing_identity`. The generation changes after Forget and re-pairing;
-a late callback or queued command from the old pairing cannot become new work.
-Admission, accepted run identity and terminal receipt state share one journal
-owner, separate from the general chat outbox.
-The journal's nullable `command_fingerprint BLOB` stores SHA-256 of each
-admitted command's canonical bytes. Dismiss preserves this hash, so reusing an
-ID with changed content or submission time cannot return the original result
-after its command text is cleared. The hash expires with the row or is removed
-by Forget; legacy imports have no command fingerprint.
-The migration is registered by shared Apple client storage, so the Mac client
-also sees the additive schema; it does not process companion Watch delivery.
-
-The additive `client-state-watch-message-legacy-receipts-v1` migration creates
-`watch_message_legacy_imports`. It stores SHA-256 hashes of exact legacy command
-IDs and imported content, never the text or Gateway ID. A nullable content hash
-records the older app's ID-only recent-message suppression policy; it is not
-proof of a matching body or successful execution.
-
-Old Watch UserDefaults are decoded and reconciled in one SQLite transaction
-whenever the phone prepares its journal. Imported rows and their hash receipts
-commit together before cleanup checks that both source blobs are unchanged.
-This also recovers messages written by an older app after downgrade. Unprovable
-queued text becomes **Needs review**, never an automatic send. Conflicting IDs
-or unseen messages associated with a previously forgotten Gateway preserve the
-source and surface a recovery error instead of discarding or retargeting text.
-
-Imported text remains until explicit discard or Gateway Forget. Its hash-only
-receipt has no timed expiry and survives both actions, so an identical old
-snapshot cannot resurrect deleted text. This storage grows per legacy ID and is
-removed only by a full onboarding reset, which clears the old UserDefaults
-before deleting client state. New commands and their reply replay instead have
-an immutable 48-hour deadline. Dismiss hides a completed card without changing
-its receipt, acknowledgment state or deadline; active deliveries cannot be
-discarded or dismissed.
-Expired copies are pruned when delivery state is next used, including opening
-the phone's delivery list. An idle or suspended app does not promise immediate
-wall-clock erasure.
-
-The Watch owns its outbound commands and received results in its own SQLite
-journal. A 90-second speech timeout does not remove this delivery state or
-cancel the remote run. Both apps commit before issuing their application-level
-admission or terminal receipt. A permanent rejection is explicitly not an
-admission and creates no phone journal row. If dispatch became ambiguous before an accepted run was recorded,
-recovery reports uncertainty rather than automatically executing the message
-again. The phone retains its current WAL policy: this is app-termination
-recovery, not a claim of power-loss durability.
-
-Forget removes phone journal rows in the existing irreversible removal
-transaction, including rows imported without a routing parent. The phone first
-accounts for retained legacy source and refuses removal if that cannot be done
-safely. The additive
-schema leaves the old reader's explicit routing updates intact, and a deletion
-trigger keeps its Forget path effective after downgrade. An older app cannot
-offer the new receipt protocol. Do not remove migration markers or reset
-`client-state.sqlite` to downgrade: that file also contains other user-owned
-client state.
-
-The [accepted design](https://github.com/openclaw/openclaw/issues/136617) records
-the schema, migration, ownership, retention and validation boundaries.
-
-## Preparing for another database backend
-
-SQLite remains the supported runtime store. Preparation for PostgreSQL should
-improve the existing store owners and their tests before adding a driver or
-configuration option. The initial target is remote persistence for one Gateway;
-multiple active Gateways would require a separate ownership and coordination
-design. A shared database alone does not make process-local writer queues,
-session lifecycles, or host-owned leases safe across Gateway instances.
-
-### Keep operations at the owning store
-
-Callers should request domain operations, such as claiming a cron run or
-appending a transcript report, from the store that owns the invariant. That
-owner selects and decodes rows, validates current authority, commits changes,
-and publishes the result. Avoid exposing a generic SQL callback to application
-code or adding an asynchronous wrapper around an existing asynchronous facade.
-The plugin KV API already has asynchronous methods over its SQLite owner.
-
-Use Kysely for ordinary queries and mutations. The current
-`getNodeSqliteKysely` facade compiles queries; `executeSqliteQuerySync` runs them
-on the supplied `node:sqlite` connection. Calling Kysely's asynchronous
-`execute` method on that facade is an error. Query compilation with another
-dialect can identify syntax coupling, but does not prove driver behavior,
-isolation, or database compatibility.
-
-Acquire a connection once for an operation and pass that exact connection
-through its transactional helpers. SQLite write callbacks remain synchronous:
-finish asynchronous planning first, then reread authoritative rows after write
-admission. Publish live session changes and other dependent effects only after
-the durable write succeeds. A future network-backed owner must preserve that
-ordering while awaiting its driver.
-
-Session reclamation keeps its deletion transaction on a worker connection.
-The worker opens its database under the session writer, then releases that writer
-while full integrity and foreign-key checks run on the same connection. Unrelated
-session writes can continue during those checks. It reacquires the writer and
-revalidates current authority before index repair, schema work, or deletion.
-The connection and lease remain owned throughout admission; refusal unwinds that
-owner, and final writer admission remains held until the worker exits.
-Archive publication and cascading deletion remain atomic. Before COMMIT, the
-worker publishes its authorization request in shared memory and waits for the
-parent's current owner check. Synchronous writers service that request at the shared
-SQLite transaction boundary between short lock-admission attempts, in the reclamation
-owner's captured async context. This includes session entries, delivery records, and
-first-use board and Goal schema transactions. Registration uses the open connection's
-native database location, so other connections and reopened handles share admission.
-Only admission is retried; transaction callbacks and mutations are never replayed.
-The original lock-admission deadline is retained. After granting approval,
-the parent synchronously joins transaction settlement before allowing owner retirement;
-that mandatory join cannot be abandoned at the append deadline.
-
-Periodic incremental vacuum uses the same write-admission boundary, so it can
-service reclamation approval before taking the writer lock. Its 512-page limit
-is unchanged; passive checkpoints remain outside the write transaction.
-
-Reclamation page maintenance uses a PASSIVE checkpoint and at most 512 pages of
-incremental vacuum per pass. PASSIVE does not wait for readers, but does not cap
-the number of WAL frames copied. Before pruning retained archives, disk-budget
-enforcement drains the initially observed free pages in units of at most 512,
-yields between units, and reacquires the database owner after each yield. It
-preserves physical checkpointing before measuring pressure, so unreclaimed pages
-do not cause unnecessary archive deletion. Full logical deletion with resumable
-physical cleanup remains a separate design; existing deletion visibility and rollback
-semantics are unchanged.
-
-### Preserve the data and concurrency contracts
-
-An adapter must make these contracts explicit and verify them against a real
-database:
-
-| Contract           | Required behavior                                                                                                                                                                                                                   |
-| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Store identity     | Keep global and per-agent ownership, incognito lifetime, quarantine, and disposal explicit. Filesystem paths currently participate in admission and registry identity; replacing a path with a connection string is not sufficient. |
-| Read consistency   | Define whether each operation needs one snapshot or a fresh authoritative reread. Keep ordered, bounded queries and batch enrichment inside that consistency boundary.                                                              |
-| Conditional writes | Preserve exact revision, session generation, writer claim, and lease-owner predicates. A stale or refused mutation must not publish a success result or alter live state.                                                           |
-| Canonical payloads | Preserve serialized transcript and record text where byte identity, replay, or exact JSON comparison is part of the contract. Keep derived query projections separate.                                                              |
-| Scalar decoding    | Decode driver values at the store boundary, including counts, integer ranges, nullable booleans, timestamps, JSON, and binary bytes. Match TypeScript declarations to observed driver values.                                       |
-| Failure and retry  | Define which failures permit retry of the whole operation. Keep external effects outside a retried transaction, and revalidate authority after awaited work.                                                                        |
-
-Kysely's TypeScript types do not convert driver results; the driver determines
-runtime values. See [Kysely data types](https://kysely.dev/docs/recipes/data-types).
-PostgreSQL transactions must use one acquired client, and its default Read
-Committed isolation can give successive statements different snapshots. An
-adapter therefore needs operation-specific isolation and retry decisions, not
-a mechanical replacement of `BEGIN IMMEDIATE`. See
-[node-postgres transactions](https://node-postgres.com/features/transactions)
-and [PostgreSQL isolation](https://www.postgresql.org/docs/current/transaction-iso.html).
-
-Do not automatically convert canonical JSON text to `jsonb`: PostgreSQL's
-`jsonb` representation changes whitespace, object-key order, and duplicate-key
-handling. A searchable `jsonb` projection would need an explicit design and
-migration decision. See [PostgreSQL JSON types](https://www.postgresql.org/docs/current/datatype-json.html).
-
-### Keep engine-specific capabilities owned
-
-SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
-databases, WAL maintenance, integrity checks, and backup operations remain
-SQLite capabilities. Keep their implementation behind the memory or database
-lifecycle owner. A future backend must supply equivalent product behavior or
-an explicit capability boundary; a second SQL dialect alone cannot replace
-these features. Schema, retention, migration, and multi-host changes still use
-the review checkpoint below.
-
-## Review checkpoint for material changes
-
-Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.
-
-Treat a change as material when it introduces or materially changes any of these:
-
-- a table, dedicated database, durable projection, cache, index, or other persisted representation
-- which data is canonical, derived, reconstructible, retained, deleted, exported, or visible after restart
-- user-visible persistence semantics, including a second interpretation of existing durable data
-- migration, backfill, repair, downgrade, rollback, retention, compaction, or corruption recovery
-- transaction boundaries, writer ownership, concurrency, locking, publication fencing, or reader consistency
-- read, write, disk, startup, or maintenance cost enough to affect the store's operating model
-
-The discussion should identify the owning store and lifecycle, the problem being solved, alternatives that avoid new persistence, canonical versus derived data, schema and upgrade/downgrade behavior, retention and deletion behavior, concurrency and recovery invariants, performance/storage impact, rollback plan, and validation limits. The implementing PR must link the accepted decision.
-
-The checkpoint normally does not apply to a read-only query that preserves existing semantics, a bounded query-plan improvement with no material write/disk tradeoff, routine maintenance of an existing approved schema, or tests, generated baselines, and documentation that only follow an already accepted design. A mechanical migration or repair still links the decision that approved its persistent contract.
-
-For an urgent data-loss, security, or recovery fix, a maintainer may authorize a narrowly scoped exception before implementation. The appropriate public or private review record must capture the reason, temporary scope, rollback and validation plan, and any follow-up needed for the full design decision. The exception accelerates the design record; it does not waive review before merge.
-
-## Preflight a target release
-
-Before activating or rolling back a release, run that target release's CLI against one explicit copied state database:
-
-```bash
-openclaw database preflight <copied-state.sqlite> --json
-```
-
-The command does not read the default state directory or mutate the supplied file. It opens the supplied consolidated file as immutable/read-only, compares the target release's own schema contract, and reports one status:
-
-- `exact`: the copied database matches the target release's runtime schema. Feature-local tables that are intentionally absent until first use do not require repair.
-- `startup-repairable`: the numeric version matches and a runtime-owned additive difference remains; startup needs a write to converge the shape.
-- `migration-required`: the database is older than the target release.
-- `incompatible`: the database is newer, or its same-version shape has blocking drift such as an unexpected column.
-- `indeterminate`: the file, integrity metadata, or ownership metadata could not be verified.
-
-JSON output is identified by `schema: "openclaw.state-schema-preflight.v1"`.
-
-Use a SQLite online backup or another WAL-aware snapshot produced while the source is safely coordinated. The resulting preflight input must be one consolidated file with no sibling `-wal`, `-shm`, or `-journal`; sidecars make the result `indeterminate`. Do not copy only the main `.sqlite` file from an active WAL database. Preflight the exact runtime that will be activated; a package version or numeric schema version alone does not prove same-version shape compatibility.
-
-## Agent schema history
-
-| Version | Change                                                                                                                                                                                                                                                 | First release                                   |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------- |
-| 1       | Initial per-agent store ([#88349](https://github.com/openclaw/openclaw/pull/88349))                                                                                                                                                                    | `v2026.5.30-beta.1`, stable through `v2026.7.1` |
-| 2       | Memory index identity ([#104449](https://github.com/openclaw/openclaw/pull/104449))                                                                                                                                                                    | `v2026.7.2-beta.1`                              |
-| 4       | Sessions and transcripts moved into SQLite ([#98236](https://github.com/openclaw/openclaw/pull/98236))                                                                                                                                                 | `v2026.7.2-beta.1`                              |
-| 5-6     | Terminal freshness and state lifecycle ([#104859](https://github.com/openclaw/openclaw/pull/104859))                                                                                                                                                   | `v2026.7.2-beta.1`                              |
-| 7       | Per-entry lifecycle status projection ([#106151](https://github.com/openclaw/openclaw/pull/106151))                                                                                                                                                    | `v2026.7.2-beta.1`                              |
-| 8       | Per-transcript session provenance ([#106766](https://github.com/openclaw/openclaw/pull/106766))                                                                                                                                                        | `v2026.7.2-beta.2`                              |
-| 9       | `STRICT` tables ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                          | `v2026.7.2-beta.2`                              |
-| 10      | Materialized active transcript paths ([#108851](https://github.com/openclaw/openclaw/pull/108851))                                                                                                                                                     | Unreleased                                      |
-| 11      | Durable delivery, conversation addresses, and heartbeat outcomes ([#109636](https://github.com/openclaw/openclaw/pull/109636), [#95838](https://github.com/openclaw/openclaw/pull/95838), [#109999](https://github.com/openclaw/openclaw/pull/109999)) | Unreleased                                      |
-| 12      | Session-owned ACP parent-stream events                                                                                                                                                                                                                 | Unreleased                                      |
-| 13      | Durable transcript rewrite watermarks                                                                                                                                                                                                                  | Unreleased                                      |
-| 14      | Logical session nodes, generation windows, and node-owned artifact foreign keys                                                                                                                                                                        | Unreleased                                      |
-| 15      | Board and session-sharing tables                                                                                                                                                                                                                       | Unreleased                                      |
-| 16      | Legacy top-level transcript media fields retired                                                                                                                                                                                                       | Unreleased                                      |
-| 17      | Tenant-free per-agent lease table retired after the last writer and routing arm were removed ([#121113](https://github.com/openclaw/openclaw/pull/121113), [#121615](https://github.com/openclaw/openclaw/pull/121615))                                | Unreleased                                      |
-| 18      | Canonical participant identity namespaces and explicit unknown historical input times in the existing session-owned aggregate ([#130661](https://github.com/openclaw/openclaw/issues/130661))                                                          | Unreleased                                      |
-| 19      | Source-qualified immutable session creators; historical ambiguity remains unknown                                                                                                                                                                      | Unreleased                                      |
-
-Version 3 was an unshipped development step folded into version 4.
-
-### Creator namespace migration
-
-Agent schema **19** and shared-state schema **14** add a source discriminator to human creator actors in the existing session and cron JSON records. No table, sidecar, or separate identity ledger is added. The session node remains the immutable creator owner; mutable owner assignments and explicit sharing grants are unchanged.
-
-Historical human creators stamped directly by `operator` or `run` creation become `profile`; channel creation becomes `channel`. Origin-losing cron, inherited spawn or Talk, legacy `createdBy`, and missing-source history remain `unknown`. The migration preserves IDs, attribution, creation times, content, and existing sandbox restrictions. A UUID, profile lookup, participant, current route, or required sandbox never supplies missing creator authority. Recovery from incomplete physical projections also produces unknown human attribution.
-
-Before upgrading, stop the Gateway and all other writers, then [create and verify a WAL-aware backup](/cli/backup). Run `openclaw doctor --fix` with the new build. The agent migration retains the stopped-writer maintenance gate and runs after the schema-18 participant migration, without rebuilding already migrated participant rows. Canonical data and both schema markers commit in the owning database transaction. Shared-state and agent databases are separate transactions; if one fails, keep writers stopped and rerun Doctor before starting the Gateway.
-
-Older builds refuse the new versions. For rollback, stop all writers and restore the verified pre-upgrade backups with their matching older build. Do not decrement either schema marker: an older writer cannot maintain the creator-source contract. Unknown historical provenance is irrecoverable from the stored ID alone. Administrators retain sharing management access; assigning responsibility does not restore an implicit creator grant.
-
-Required sandbox resources keep their existing keys for proven profile creators. Channel and unknown creators instead use canonical-session isolation, with no new persisted principal field. Their old ambiguous resources are left untouched by migration, not automatically adopted or copied; operators must recover needed files explicitly before ordinary retention or cleanup. See [sandbox scope and recovery](/gateway/sandboxing#modes-scope-and-backend).
-
-### Participant identity migration
-
-Agent schema 18 rebuilds `session_participants` with the unique key `(session_key, identity_namespace, actor_id)`. The raw actor ID remains separate from its namespace. This replaces the old `(session_key, actor_type, actor_id)` key; it is not a same-version additive change. Both schema markers advance together. No companion table or per-input ledger is added.
-
-Before upgrading existing data, take a verified, WAL-aware backup and stop the Gateway and other agent-database writers. Run `openclaw doctor --fix` with the new build. The migration uses the existing maintenance lease to reject active writers and fence new claims. Ordinary runtime opens refuse the old participant schema rather than migrating it behind active readers. Earlier structural and media migrations run in their historical order before participant convergence. Explicit Doctor repair exits nonzero if an existing configured, default-layout, or registered database still fails runtime schema readiness, including when a live writer or an unknown table dependency blocks this migration. Readiness uses the same target discovery as migration without registering, pruning, or creating stores. Archive migration warnings remain advisory when required database schemas are ready.
-
-Membership and recorded contribution aggregates survive. Historical profile timestamps are unknown because earlier source promotion could contaminate them even when a contribution count was present. Supported agent and channel-only observation times remain; an unresolved historical channel domain stays unresolved. Migration does not invent missing channel rows or inspect transcripts to reconstruct identities. New observations do not turn an unknown first input time into a claimed first-ever time.
-
-The rebuild, data copy, version markers, and foreign-key validation commit atomically. Unknown table shapes or database-local dependents are refused. A failed migration rolls back rather than leaving a partial replacement table. Older builds refuse schema 18; do not decrement either version marker or restore the old unique key. Downgrade recovery requires the verified pre-migration backup.
-
-Normal admission remains bounded at 32 identities. Same-store alias repair sums aggregates; retryable cross-store copies retain the larger recorded aggregate. Repairs preserve already-retained histories above the admission bound. Reset retains logical-session participation, while deletion removes it with the session node.
-
-## State schema history
-
-| Version | Change                                                                                                                                                                                                                                                                                                                          | First release       |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
-| 1       | Initial shared state database                                                                                                                                                                                                                                                                                                   | `v2026.5.30-beta.1` |
-| 2       | Metadata-only message audit events ([#103903](https://github.com/openclaw/openclaw/pull/103903))                                                                                                                                                                                                                                | `v2026.7.2-beta.1`  |
-| 3       | `STRICT` tables and schema-drift hardening ([#108663](https://github.com/openclaw/openclaw/pull/108663))                                                                                                                                                                                                                        | `v2026.7.2-beta.2`  |
-| 4       | Session watch provenance replaces encoded sentinel rows                                                                                                                                                                                                                                                                         | Unreleased          |
-| 5       | Durable cloud-worker result references on pending workspace fences ([`7a7d6bb`](https://github.com/openclaw/openclaw/commit/7a7d6bb51f42bd896de2b8a4df2ee66f3dce0a21), [#110952](https://github.com/openclaw/openclaw/pull/110952))                                                                                             | `v2026.7.2-beta.4`  |
-| 6       | Every committed shared-state table becomes part of the canonical runtime schema ([`509a5f0`](https://github.com/openclaw/openclaw/commit/509a5f03737642fec4a940e6d605887f7957ddc8), [#113473](https://github.com/openclaw/openclaw/pull/113473))                                                                                | `v2026.7.2-beta.5`  |
-| 7       | Retired inferred-commitment storage removed                                                                                                                                                                                                                                                                                     | Unreleased          |
-| 8       | Cloud-worker placement execution modes and mode-aware turn claims                                                                                                                                                                                                                                                               | Unreleased          |
-| 9       | In-root agent database registry paths stored relative to the state directory                                                                                                                                                                                                                                                    | Unreleased          |
-| 10      | Six dead tables retired (agent_model_catalogs, android_notification_recent_packages, command_log_entries, diagnostic_stability_bundles, media_blobs, model_capability_cache)                                                                                                                                                    | Unreleased          |
-| 11      | Legacy skill curator lifecycle table and never-read proposal origin-run projection retired                                                                                                                                                                                                                                      | Unreleased          |
-| 12      | Thirteen singleton/cache tables retired; durable state folded into config_machine_state                                                                                                                                                                                                                                         | Unreleased          |
-| 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
-| 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
-| 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
-| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
-
-### State schema 16
-
-Schema 16 removes `workspace_dir` and `claim_released_time` from
-`skill_workshop_proposals`. It also removes `workspace_dir` and
-`idx_skill_workshop_collection_reviews_workspace_time` from collection review
-history and adds `owner_agent_id` plus its owner/time index. Proposal rows remain intact. A proposal whose claim a
-collection review had released becomes `stale` with a status reason, so the
-skill path it once created stays user-owned and Doctor never relocates it.
-
-Skill Workshop ownership is now the physical
-`<state-dir>/agents/<agentId>/agent/workshop-skills` directory. Startup and `openclaw doctor --fix`
-drop the retired columns and index in the shared schema transaction. Both then
-run the same migration to relocate applied legacy Workshop creates to the
-inferred owner agent and retarget eligible pending creates. Conflicts and ambiguous ownership become
-stale proposals and leave the legacy directories unchanged. Review history rows
-map to a unique owner agent when possible; otherwise the schema migration discards them as
-cache-class state.
-
-Skill-only workspace relocation uses the existing `migration_runs` and
-`migration_sources` tables to save pre-move directory identity, file hashes,
-and the workspace attestation timestamp. After relocation, only matching
-attestation-only state is retired; setup state, path aliases, and newer
-attestations remain intact. Interrupted migrations reuse the saved pre-move
-facts rather than inferring them from an empty directory. Workspace reset
-removes pending workspace-scoped receipts. No additional schema version or
-table is required.
-
-### State schema 15
-
-Schema 15 removes `target_agent_id` and `target_session_id` from `current_conversation_bindings`. The target index uses the complete `target_session_key` and remains non-unique: several conversations may point at the same destination. This lets plugin-owned targets persist without inventing an OpenClaw agent owner. Channel/account isolation, plugin approvals, binding identifiers, target keys, JSON metadata, expiry, and detach behavior are unchanged.
-
-Startup and `openclaw doctor --fix` run the migration in the existing exclusive write transaction. They remove only the two projections and replace the target index, preserving all other row values. A dependent trigger, index, or failed schema check rolls the transaction back; migration does not discard an unknown dependency to force the upgrade. Column removal rewrites the binding table, so upgrade cost scales with its size.
-
-Stop older writers and create a verified, WAL-aware backup before upgrading. Builds supporting shared-state schema 14 or earlier refuse the migrated database. To return to an older build, restore that pre-upgrade backup into a separate state directory; do not lower the version markers or reconstruct an agent projection. See [Downgrade](/install/updating#downgrade) for the general recovery contract.
-
-### State schema 13
-
-Schema 13 makes `cron_jobs.job_json`, `cron_jobs.state_json`, and `subagent_runs.payload_json` the canonical records. Physical columns remain only where production queries, ordering, or runtime-only updates require them. Cron jobs shrink from 75 columns to 15, and subagent runs shrink from 59 columns to six. Migration preserves failure-destination fields explicitly configured as undefined by encoding them as JSON `null`; it also normalizes legacy run-status aliases into `state_json` before removing the redundant projections.
-
-The shared-state `auth_profile_stores` and `auth_profile_state` singletons move into `config_machine_state` under `authProfiles.store` and `authProfiles.state`; per-agent auth tables remain unchanged. Because these rows contain credentials, secret-redacted Git backups omit the `authProfiles.` machine-state prefix.
-
-### State schema 11
-
-Schema 11 removes the `skill_lifecycle` and `skill_workshop_proposal_origin_runs` tables. Archived-skill lifecycle state is discarded during the upgrade: previously archived Workshop skills return to the active collection, where weekly collection review judges them by content. The origin-run rows were a never-read projection; canonical proposal provenance stays in `skill_workshop_proposals.record_json`. Recorded skill usage and collection-review state are preserved.
-
-### State schema 9
-
-Schema 9 stores an `agent_databases.path` value relative to the state directory when the registered agent database is inside that directory. During migration, a foreign default-layout row is re-anchored to the in-root counterpart when that file exists. It is deleted only when the same agent already holds its in-root registration, because dual default-layout registrations cannot produce a valid combined session list. Otherwise, the absolute row is preserved, so genuine external registrations are never deleted. This keeps a copied state directory self-contained without dropping supported external database paths.
-
-## Integrity checks
-
-| When                                        | Check                                                               |
-| ------------------------------------------- | ------------------------------------------------------------------- |
-| Every open                                  | Validate the `schema_meta` table and primary metadata row           |
-| Every physical writable agent-database open | Run full integrity, foreign-key, schema, and canonical-index checks |
-| Before a pending migration                  | Run a full integrity, foreign-key, role, schema, and index scan     |
-| Gateway background verifier                 | Run the full scan about once daily and log results                  |
-| Doctor, backup verification, and compaction | Run the full scan before accepting or rewriting the database        |
-
-The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier also scans already-open databases about once daily.
-
-Memory search and maintenance managers borrow the verified per-agent connection. Acquisition does not reopen or rescan a healthy shared handle. Native and transformed plugin modules share the same process-owned connection lifecycle, query cache, and commit observers. Nested synchronous writes use SQLite savepoints on that connection. A manager retains that exact connection against cache eviction until its work drains, then releases its borrow without closing the database. Explicit quarantine and disposal still revoke it. Full memory rebuilds use separate temporary shadow databases and publish their derived tables in one synchronous transaction. Read-only memory status keeps its separate diagnostic connection and does not create or migrate a missing database.
-
-If nested rollback or savepoint cleanup fails, the transaction owner preserves the original failure, discards staged state and post-commit observers, and closes the connection. Catching that failure cannot resume writes on the abandoned handle. A later operation must acquire a fresh connection through its database owner. Doctor plugin-state imports retain earlier committed batches; an aborted batch cannot commit its prefix. Ordinary row refusals that successfully roll back their savepoint still commit the successful prefix for resumable imports.
-
-The shared cache targets 64 handles, but live borrows, synchronous transactions, and incognito state are not evicted. After owners release them, the next new connection trims idle handles back to that target.
-
-Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
-
-Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
-
-Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
-
-Background verification errors retain the original name and message and append bounded Node `code` and SQLite `errcode` values from up to eight cause-chain nodes. These diagnostics do not change the verdict: I/O failures remain inconclusive, while proven corruption is reconfirmed by the database owner before quarantine. A generic `disk I/O error` (`errcode=10`) does not establish disk exhaustion.
-
-Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
-
-Maintenance schema admission runs its initial full-file integrity check in a read-only child process when that check is outside a write transaction. The scan has a 30-second execution limit; the connection and maintenance lease remain held until the child process closes, including on cancellation or timeout. Schema changes, index repairs, and compaction retain their synchronous phases.
-
-Startup errors containing `state lease heartbeat did not become ready` include `phase=startup`, the settlement trigger (`timeout` or `message`), and the status observed before the parent marks failure. `status=starting` distinguishes readiness still pending from `status=lost`, where loss was already recorded. `elapsedMs` measures monotonic time since heartbeat startup began; `timeoutMs` is the startup wait budget, capped at five seconds or the remaining initial lease lifetime. These fields do not establish why startup stalled or ownership was lost.
-
-The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
-
-## Troubleshooting
-
-`SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
-
-### Why you cannot go back after updating to 2026.7.2
-
-Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.
-
-Downgrading the binary never downgrades the data. Use the managed recovery path
-or restore the verified pre-update backup with its matching release. Retain
-migration recovery originals until you have verified the upgrade; they do not
-replace a complete backup. See [Downgrade](/install/updating#downgrade).
-
-### The Gateway refuses to start with a newer schema version error
-
-A newer OpenClaw build wrote your databases, and the running build is older. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found.
-
-Act on the install root, not the version. One release version string spans many `main` commits, schema levels, and same-version schema shapes, so two installs can both call themselves `2026.7.2` and still disagree about a database. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
-
-When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
-
-Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
-
-Config reads also save health fingerprints to this database. If that write fails,
-`Config health-state write failed` reports the first failure for that database
-in the current process. Repeated identical failures are suppressed while writes
-continue to be attempted. A different error, or a failure after a successful
-health-state write, is reported again. Suppressing duplicates does not resolve
-the underlying database error.
-
-### A database is quarantined after integrity verification failed
-
-The background verifier proved the file is corrupt, and every open now fails fast instead of rescanning. Restore the database from a backup or repair it, then run `openclaw doctor --fix` to clear the quarantine record. Doctor reports an explicit error if the quarantine record itself cannot be cleared; rerun it until it reports clean.
-
-<a id="downgrades-are-unsupported" />
-
-<a id="example-state-schema-13-to-12" />
-<a id="example-state-schema-12-to-11" />
-<a id="example-state-schema-11-to-10" />
-<a id="example-state-schema-10-to-9" />
-<a id="example-state-schema-9-to-8" />
-<a id="example-state-schema-7-to-6" />
-<a id="example-agent-schema-17-to-16" />
-
-## Downgrade recovery
-
-Do not reverse migrations with SQL or lower `PRAGMA user_version`,
-`schema_meta.schema_version`, or the config writer stamp. Those markers describe
-persistent formats; editing them does not restore the older data contract.
-
-Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
-retained-originals limits, and restoring a verified pre-update backup. A complete
-recovery point includes the matching package, config, shared state, and every
-agent database. Keep writers stopped while activating restored state.
+OpenClaw stores control-plane state in the shared state database and agent data in one SQLite database per agent. Schema migrations run forward when a database opens. Older OpenClaw builds refuse databases written by a newer schema.
+
+The Gateway process is the single owner of every OpenClaw database and its state.
+Its workers and native handles share that ownership. Committed write receipts
+invalidate in-process row caches before their next use; a cache without complete
+writer coverage must use a direct read instead. Runtime reads do not probe foreign
+commits with `PRAGMA data_version`, version observations, or foreign-observation
+scopes. SQLite statements outside an open read transaction already see committed
+data. A single-statement read needs no explicit transaction; multi-statement reads
+keep a transaction when their results require one consistent snapshot.
+CLI, Doctor, cron, and plugin child processes must route mutations through the
+Gateway or acquire exclusive ownership while it is stopped. First admission,
+migration, repair, and final live-authority checks retain their existing owners.
+
+Native SQLite initialization reads the loaded library's version and extension
+capability in one query before admitting real state databases. Auth-profile
+readers install their lock-wait timeout at connection open.
+Quarantine decision readers and writers set their existing lock-wait timeout at connection
+open. The quarantine store's format is admitted once per physical database per
+process, while existing guards retain the indexed durable quarantine-row lookup
+in one SQLite snapshot and validate any recorded file generation.
+A separate inspection process can admit a target before the Gateway's verifier
+confirms corruption; its next guard must observe that recorded refusal even when
+the target's physical identity is unchanged. Quarantine rows retain their pathname
+scope, and aliases still share physical format, schema, and integrity facts.
+The persisted schema, WAL safety, and recovery behavior are unchanged.
+
+Managed writes publish committed facts before their public observers. Private
+receipts distinguish explicit absence from incomplete coverage and preserve known
+commits independently of reply delivery. See
+[committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness)
+for ordering, rollback, and the writer families that still retain native guards.
+
+SQLite format, schema-version, integrity, canonical-index, and
+table-existence validation runs once per physical database per process load,
+on its first admission. The admitted facts are shared with all workers and
+handles, including later opens and reopens after idle close. File identity uses
+volume, inode, and stable birthtime checked with `fstat`, not SQL. A replaced or
+restored file needs its own first validation. Migration and repair owners validate
+their changes and publish the new facts after successful DDL settlement; later
+runtime consumers do not recheck them. Doctor and explicit verification retain
+their checks, and observed corruption still revokes admission.
+
+Shared-state and agent read-only connections reuse bounded prepared statements
+under their native connection lifecycle. Prepared-statement reuse alone does not
+retain query results. Schema-fact lookups use the process's admitted facts without
+SQL. Writer receipts invalidate cached row results across connections without
+querying `data_version`, `schema_version`, `user_version`, or the catalog again.
+Current-row authority checks remain at their effect boundaries. Cached rows inside
+an active SQLite snapshot use that snapshot's identity and the connection's local
+mutation revision. They never carry a current committed-write revision or become
+reusable after the snapshot ends. Autocommit caches use the owning writer's receipts.
+Closing a connection clears its prepared statements
+and row caches, while physical-database admission survives for the process lifetime.
+
+Worker dispatch carries snapshots prepared by the admission owner when it publishes
+facts or writer custody. Unchanged requests reuse the registry revision without
+scanning every database or rebuilding fact maps. Shared revocation cells still
+invalidate transferred facts immediately; retirement removes the published snapshot.
+This changes no schema, stored bytes, or update behavior.
+
+Shared-state content-version checks reuse the physical database's admitted version
+facts across handles and workers. Ordinary commits, transactions, and connection
+closure do not force another marker read. The migration owner publishes replacement
+facts with its committed schema. Observed DDL without replacement facts expires
+the content-version admission: an unchanged catalog shape does not prove that the
+`config_machine_state` marker survived. The next owner lookup validates it once,
+and later opens reuse the result. A historical snapshot keeps its own marker facts;
+publication requires a positive match with the current committed admission. Each
+caller still applies its published-version floor. Schema versions, stored bytes,
+and upgrade or downgrade behavior are unchanged.
+
+New agent readers reuse the process's schema admission. Shared-state worker reads
+consume writer-invalidated cache facts or current rows without a freshness probe.
+Point transcript statistics, mutation clocks, pending-archive checks, and
+hot/cold watermarks use a single statement's snapshot; composite reads retain
+their read transaction, and hot transcript reads reuse an existing transaction
+without a nested savepoint. Yielding write admission restores its temporary busy
+timeout once, immediately after acquiring the write transaction, and carries an
+inherited lock deadline without rereading the connection's timeout. FIFO,
+lock-wait budgets, schemas, stored data, and update behavior are unchanged.
+
+The admitted catalog includes index names and trigger definitions alongside tables.
+Canonical session validation consumes these definitions without another catalog scan.
+First canonical index admission shares the schema contract reader's batched metadata snapshot
+instead of querying each table and index separately. Shadowed PRAGMA names retain
+native inspection during that validation. Authorization, initial drift detection,
+transactional repair, and integrity checks remain with their existing owners.
+First-use schema owners skip additive DDL only when all their tables and indexes
+are present in the published facts. Missing objects use the existing installation
+transaction, which publishes the new schema facts on commit; rollback cannot
+publish a schema that did not commit. Ordinary connection replacement and data
+commits do not repeat schema validation. Schemas, stored bytes, and update behavior
+are unchanged.
+
+Admitted schema facts survive data-only transaction settlement. Committed write
+receipts invalidate cached row facts. Transaction-local views of
+schema facts end with their SQLite snapshot; the next transaction consumes the
+process's published facts without repeating validation.
+
+Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
+
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths stop warm retention and drain affected executors after their last borrower settles. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+
+Creating an agent database at an admitted absent path revokes the previous file's
+retained validation before worker preparation. A recreated file cannot borrow that
+proof even if Linux reuses its inode. Ordinary reopen still reuses live proof,
+and fresh stores keep their canonical certification. Receipt identifiers survive
+worker transfers so alias publication revokes superseded proof while preserving
+acknowledged copies. Later revocation still refuses publication. Schemas, stored
+bytes, and update behavior are unchanged.
+
+Retaining an already-open agent handle holds its lifetime without querying SQLite. Writer receipts invalidate its cached row facts; schema facts come from process-wide admission. Canonical readiness invalidates its clean-store decision when the owning writer changes the store.
+
+The agent ID and role in `schema_meta` describe the physical store's fixed schema
+owner. Creation and migration validate and publish these facts for every handle
+and worker; ordinary commits do not require another ownership-metadata read.
+Observed DDL without owner-published replacement metadata expires that admission,
+even when the recreated table has the same definition: its primary row must be
+validated once by the next owner lookup. Historical metadata stays with its
+snapshot until positively matched to current committed admission. External row
+edits do not reassign an admitted store. Live session permissions, lease ownership,
+and caller authority retain their current-row checks. Dynamic authorizers retain
+native metadata reads. This changes no schema, stored bytes, or update behavior.
+
+Registry discovery reuses successful migration checks for the admitted schema
+generation. The minute retention sweep reads deletion history in a worker and
+shares one matcher across its agent stores; live deletion status and lifecycle
+commit guards still apply. Cron registry retention validates the complete listing
+in its reader worker and returns only cron-run entries to the Gateway; ordinary
+session metadata stays in the worker. Legacy watch-marker discovery uses an indexed prefix
+range. Retention continues as rows age, even without writes; schema, upgrade, and
+retention policies are unchanged.
+
+Session row-facts reads reuse a canonical continuation's existing transaction
+instead of nesting a savepoint. Reads without an active transaction still open
+one so entry metadata, board presence, and transcript watermarks share a snapshot.
+Board presence travels in the exact-entry query, including its single-key error
+fallback, instead of a separate Board read.
+
+Placement projections read placement, move, pending-result, journal, and environment
+facts in one statement per bounded batch. Batches share the existing read
+transaction; journal and result-claim checks consume those same snapshot facts.
+Optional columns come from admitted schema facts and refresh with that owner.
+
+Shared-state read operations retain their admission revision through their
+synchronous domain read. ACP metadata reuses at most 128 rows per connection
+under that revision; writer receipts, schema changes, and close
+invalidate reuse. Transactions and pinned or authorizer-controlled reads still
+query SQLite. Supplied shared-state writers reuse their selected handle and check
+ownership after `BEGIN`, without a duplicate pre-transaction row read or schema
+validation.
+Stored bytes, schemas, permissions, and update behavior are unchanged.
+
+Exact entry and participant readers retain their last result at the admitted
+connection revision. Repeated reads reuse those facts until an owning writer's
+receipt, rollback, schema change, or connection retirement invalidates them.
+Session revision guards and maintenance snapshots retain their mutation and
+snapshot predicates; transaction entry, rollback, and settlement retain their
+existing invalidation without foreign-commit probing.
+No schema, stored bytes, permissions, or update behavior change.
+Returned entries and participant identities remain caller-owned. Transcript
+watermark reads select the hot generation and the retained cold or hot sequence
+in one statement; hot-only readers keep their existing meaning. These query
+changes preserve schemas, stored bytes, live authority, and update behavior.
+
+Display-history readers resolve selected activity anchors by session and event ID,
+retaining the sequence fence inside the same read snapshot. These point lookups
+use the existing primary key and require no schema or data migration.
+
+Session entry writes batch their saved snapshot fields in one upsert, preserving
+per-field revision triggers and rollback.
+
+Canonical main-key policy, external-supervision ownership, and the machine-owned
+TTS preference path are loaded once for the physical database and shared across
+handles and workers. Their owning writers publish committed replacements;
+unrelated writes do not invalidate these facts. The Gateway owns runtime writes.
+Other processes must use that owner or run while it is stopped, except established
+updater handoff, restart-sentinel, and update-finalization writers, which retain their
+own lifecycle fences. Ownership claims require exclusive offline custody. Explicit
+ownership inspection and Doctor still read the database, and live lifecycle and lease checks
+remain at effect boundaries. Cached policy facts do not grant canonical admission
+or continuation authority. Main-key writer publications carry a host revision, so
+workers can retain an absent publication without polling after unrelated writes.
+Nested workers forward only the host completeness they actually received. The shared
+generation layout keeps write receipts in slot 5 and host-publication completeness
+in slot 6; these independent witnesses never share a counter.
+Present main-key values are data facts: unrelated DDL cannot retire a committed
+config postimage. A missing policy row stays with the connection's read revision
+until the schema owner's seed or canonical writer makes the policy available.
+Uncertain rollback can discard a data fact and require one repair read before reuse.
+
+The Mentions Inbox retains its committed head through the same physical owner.
+An unchanged head skips snapshot worker dispatch. A changed or uncertain mutation
+reads the head and retained sources in one atomic query before resuming its FIFO;
+an unknown write outcome never authorizes replay. Session-entry mutation generations
+live in JavaScript beside their connection. TEMP triggers observe exact session
+and participant writes, and rollback invalidates generations without selecting a
+TEMP counter row. Auth-profile readers use admitted catalog facts for tables,
+views, and absence instead of querying the catalog for each read. These changes
+preserve schemas, stored bytes, durability, retention, permissions, and update behavior.
+
+The device-pair notifier retains an empty subscriber and delivery-receipt state
+for its service lifetime, so idle scheduled scans do not reread both stores.
+Its own writes across Gateway and agent registries invalidate that fact, including
+uncertain outcomes, and service restart reloads it. Active notifications retain
+their current subscription checks and delivery receipts; persisted subscriptions
+and receipt retention are unchanged.
+
+The Gateway does not schedule daily full-database scans. Admission-requested
+background checks stay limited to the requested agent database: `quick_check`
+for clean restart proof, or a full check after proven same-boot process death or
+native WAL admission without a verification receipt while the verifier is running.
+See [integrity admission and Doctor maintenance](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+for the provenance requirements and operator-requested verification.
+
+Two mechanisms back that contract. CI runs
+`scripts/check-native-state-schema-version.mjs`, which fails the build when the
+Swift and TypeScript state-database contracts declare different schema versions.
+[`openclaw doctor --fix`](/cli/doctor) owns file-to-SQLite migrations and records a
+receipt for each one in the shared `migration_runs` and `migration_sources` tables.
+
+Execution step receipts are separate from these persisted import receipts.
+A step blocked by an earlier refusal includes optional `originatingRefusal`
+fields `stepId`, `code`, and `message` naming the first failure. See
+[legacy state migration](/cli/doctor/state-migrations) for how to resolve it.
+
+This page is an index. The reference is documented on focused pages, one per
+reader job. Open the page that matches your task and stay there.
+
+| Page                                                                                           | Read it when                                                                                             |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [Database layout](/reference/database-schemas/layout)                                          | The two database roles, their on-disk paths, and the tables behind individual features.                  |
+| [Versioning contract](/reference/database-schemas/versioning)                                  | How schema versions are recorded, when a bump is required, and how updaters cross one.                   |
+| [Per-person and companion storage](/reference/database-schemas/personal-data)                  | Personal GitHub connections, personal model accounts, and Apple companion delivery journals.             |
+| [Storage changes and release preflight](/reference/database-schemas/storage-changes)           | Preparing for another backend, the material-change review checkpoint, and `openclaw database preflight`. |
+| [Database access in workers](/reference/database-schemas/worker-access)                        | Moving runtime reads and writes off the Gateway main thread while preserving their owners.               |
+| [Worker migration inventory](/reference/database-schemas/worker-access-inventory)              | Reproducing the synchronous-access inventory and choosing the next migration.                            |
+| [Agent schema history](/reference/database-schemas/agent-schema-history)                       | Per-agent database schema versions, their changes, and their first releases.                             |
+| [State schema history](/reference/database-schemas/state-schema-history)                       | Shared state database schema versions, their changes, and their first releases.                          |
+| [Integrity, troubleshooting, and recovery](/reference/database-schemas/integrity-and-recovery) | Integrity checks, common database errors, and the supported downgrade recovery path.                     |
+
+## Related
+
+- [Backups](/install/backups) — archives, per-database snapshots, scheduling, and offsite copies for the databases described here
+- [Updating](/install/updating) — updating safely, including the verified backup to take before a schema bump, and the rollback strategy
+- [Doctor](/gateway/doctor) — the repair and migration tool that fixes stale config/state and reports health problems
+- [`openclaw doctor`](/cli/doctor) — CLI reference for the command that runs those migrations
+- [`openclaw update`](/cli/update) — CLI reference for the updater that preflights schema support
+
+## Where each section moved
+
+Every section heading from the previous single-page version keeps its anchor
+here, so an existing link such as
+`/reference/database-schemas#schema-bumps-and-older-updaters` still resolves. Each entry points at the
+page that now holds the content.
+
+- <a id="database-layout" />[Database layout](/reference/database-schemas/layout#database-layout)
+- <a id="plugin-state-listing-index" />[Plugin state listing index](/reference/database-schemas/layout#plugin-state-listing-index)
+- <a id="mentions-inbox" />[Mentions Inbox](/reference/database-schemas/layout#mentions-inbox)
+- <a id="acp-replay-accounting" />[ACP replay accounting](/reference/database-schemas/layout#acp-replay-accounting)
+- <a id="meeting-transcript-tables" />[Meeting transcript tables](/reference/database-schemas/layout#meeting-transcript-tables)
+- <a id="meeting_transcript_sessions" />[`meeting_transcript_sessions`](/reference/database-schemas/layout#meeting_transcript_sessions)
+- <a id="meeting_transcript_utterances" />[`meeting_transcript_utterances`](/reference/database-schemas/layout#meeting_transcript_utterances)
+- <a id="meeting_transcript_summaries" />[`meeting_transcript_summaries`](/reference/database-schemas/layout#meeting_transcript_summaries)
+- <a id="update-run-ledger" />[Update run ledger](/reference/database-schemas/layout#update-run-ledger)
+- <a id="cloud-repository-workspaces" />[Cloud repository workspaces](/reference/database-schemas/layout#cloud-repository-workspaces)
+- <a id="versioning-contract" />[Versioning contract](/reference/database-schemas/versioning#versioning-contract)
+- <a id="schema-bumps-and-older-updaters" />[Schema bumps and older updaters](/reference/database-schemas/versioning#schema-bumps-and-older-updaters)
+- <a id="profile-owned-skill-library" />[Profile-owned skill library](/reference/database-schemas/versioning#profile-owned-skill-library)
+- <a id="personal-github-connections-and-publication" />[Personal GitHub connections and publication](/reference/database-schemas/personal-data#personal-github-connections-and-publication)
+- <a id="personal-model-accounts" />[Personal model accounts](/reference/database-schemas/personal-data#personal-model-accounts)
+- <a id="apple-companion-delivery-journals" />[Apple companion delivery journals](/reference/database-schemas/personal-data#apple-companion-delivery-journals)
+- <a id="preparing-for-another-database-backend" />[Preparing for another database backend](/reference/database-schemas/storage-changes#preparing-for-another-database-backend)
+- <a id="keep-operations-at-the-owning-store" />[Keep operations at the owning store](/reference/database-schemas/storage-changes#keep-operations-at-the-owning-store)
+- <a id="preserve-the-data-and-concurrency-contracts" />[Preserve the data and concurrency contracts](/reference/database-schemas/storage-changes#preserve-the-data-and-concurrency-contracts)
+- <a id="keep-engine-specific-capabilities-owned" />[Keep engine-specific capabilities owned](/reference/database-schemas/storage-changes#keep-engine-specific-capabilities-owned)
+- <a id="review-checkpoint-for-material-changes" />[Review checkpoint for material changes](/reference/database-schemas/storage-changes#review-checkpoint-for-material-changes)
+- <a id="preflight-a-target-release" />[Preflight a target release](/reference/database-schemas/storage-changes#preflight-a-target-release)
+  - <a id="preflight-an-explicit-agent-copy" />[Preflight an explicit agent copy](/reference/database-schemas/storage-changes#preflight-an-explicit-agent-copy)
+- <a id="agent-schema-history" />[Agent schema history](/reference/database-schemas/agent-schema-history#agent-schema-history)
+- <a id="creator-namespace-migration" />[Creator namespace migration](/reference/database-schemas/agent-schema-history#creator-namespace-migration)
+- <a id="participant-identity-migration" />[Participant identity migration](/reference/database-schemas/agent-schema-history#participant-identity-migration)
+- <a id="state-schema-history" />[State schema history](/reference/database-schemas/state-schema-history#state-schema-history)
+- <a id="state-schema-16" />[State schema 16](/reference/database-schemas/state-schema-history#state-schema-16)
+- <a id="state-schema-15" />[State schema 15](/reference/database-schemas/state-schema-history#state-schema-15)
+- <a id="state-schema-13" />[State schema 13](/reference/database-schemas/state-schema-history#state-schema-13)
+- <a id="state-schema-11" />[State schema 11](/reference/database-schemas/state-schema-history#state-schema-11)
+- <a id="state-schema-9" />[State schema 9](/reference/database-schemas/state-schema-history#state-schema-9)
+- <a id="integrity-checks" />[Integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)
+- <a id="troubleshooting" />[Troubleshooting](/reference/database-schemas/integrity-and-recovery#troubleshooting)
+- <a id="why-you-cannot-go-back-after-updating-to-2026.7.2" /><a id="why-you-cannot-go-back-after-updating-to-2026-7-2" />[Why you cannot go back after updating to 2026.7.2](/reference/database-schemas/integrity-and-recovery#why-you-cannot-go-back-after-updating-to-2026-7-2)
+- <a id="the-gateway-refuses-to-start-with-a-newer-schema-version-error" />[The Gateway refuses to start with a newer schema version error](/reference/database-schemas/integrity-and-recovery#the-gateway-refuses-to-start-with-a-newer-schema-version-error)
+- <a id="a-database-is-quarantined-after-integrity-verification-failed" />[A database is quarantined after integrity verification failed](/reference/database-schemas/integrity-and-recovery#a-database-is-quarantined-after-integrity-verification-failed)
+- <a id="downgrades-are-unsupported" />[Downgrades are unsupported](/reference/database-schemas/integrity-and-recovery#downgrades-are-unsupported)
+- <a id="example-state-schema-13-to-12" />[Example: state schema 13 to 12](/reference/database-schemas/integrity-and-recovery#example-state-schema-13-to-12)
+- <a id="example-state-schema-12-to-11" />[Example: state schema 12 to 11](/reference/database-schemas/integrity-and-recovery#example-state-schema-12-to-11)
+- <a id="example-state-schema-11-to-10" />[Example: state schema 11 to 10](/reference/database-schemas/integrity-and-recovery#example-state-schema-11-to-10)
+- <a id="example-state-schema-10-to-9" />[Example: state schema 10 to 9](/reference/database-schemas/integrity-and-recovery#example-state-schema-10-to-9)
+- <a id="example-state-schema-9-to-8" />[Example: state schema 9 to 8](/reference/database-schemas/integrity-and-recovery#example-state-schema-9-to-8)
+- <a id="example-state-schema-7-to-6" />[Example: state schema 7 to 6](/reference/database-schemas/integrity-and-recovery#example-state-schema-7-to-6)
+- <a id="example-agent-schema-17-to-16" />[Example: agent schema 17 to 16](/reference/database-schemas/integrity-and-recovery#example-agent-schema-17-to-16)
+- <a id="downgrade-recovery" />[Downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)

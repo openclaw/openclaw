@@ -1,4 +1,3 @@
-// Zalo plugin module implements actions behavior.
 import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -10,8 +9,8 @@ import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { inspectZaloAccount, listZaloAccountIds } from "./accounts.js";
 
 const loadZaloActionsRuntime = createLazyRuntimeNamedExport(
-  () => import("./actions.runtime.js"),
-  "zaloActionsRuntime",
+  () => import("./send.js"),
+  "sendMessageZalo",
 );
 
 const providerId = "zalo";
@@ -37,7 +36,7 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
   },
   supportsAction: ({ action }) => ZALO_ACTIONS.has(action),
   extractToolSend: ({ args }) => extractToolSend(args, "sendMessage"),
-  handleAction: async ({ action, params, cfg, accountId }) => {
+  handleAction: async ({ action, params, cfg, accountId, assertDirectAdapterHandoff }) => {
     if (action === "send") {
       const to = readStringParam(params, "to", { required: true });
       const content = readStringParam(params, "message", {
@@ -46,11 +45,12 @@ export const zaloMessageActions: ChannelMessageActionAdapter = {
       });
       const mediaUrl = readStringParam(params, "media", { trim: false });
 
-      const { sendMessageZalo } = await loadZaloActionsRuntime();
+      const sendMessageZalo = await loadZaloActionsRuntime();
       const result = await sendMessageZalo(to ?? "", content ?? "", {
         accountId: accountId ?? undefined,
         mediaUrl: mediaUrl ?? undefined,
         cfg,
+        assertDirectAdapterHandoff,
       });
 
       if (!result.ok) {

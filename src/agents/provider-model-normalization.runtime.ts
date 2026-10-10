@@ -1,54 +1,91 @@
-/**
- * Runtime bridge for provider-owned model id normalization hooks. Source and
- * built artifacts can resolve different extensions, so this module probes both
- * once and caches the result.
- */
-import { createRequire } from "node:module";
-import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
+/** Reads prepared provider hooks without activating plugins during model-reference parsing. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { findProviderRuntimeRegistrationInRegistry } from "../plugins/provider-registry-selection.js";
+import type { ProviderNormalizeModelIdContext } from "../plugins/provider-runtime.types.js";
+import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 
-type ProviderRuntimeModule = Pick<
-  typeof import("../plugins/provider-runtime.js"),
-  "normalizeProviderModelIdWithPlugin"
->;
-
-const require = createRequire(import.meta.url);
-// Built code loads .js while source/test paths may still resolve .ts. Try both
-// once, then cache the absence to avoid repeated require work on hot paths.
-const PROVIDER_RUNTIME_CANDIDATES = [
-  "../plugins/provider-runtime.js",
-  "../plugins/provider-runtime.ts",
-] as const;
-
-let providerRuntimeModule: ProviderRuntimeModule | undefined;
-let providerRuntimeLoadAttempted = false;
-
-function loadProviderRuntime(): ProviderRuntimeModule | null {
-  if (providerRuntimeModule) {
-    return providerRuntimeModule;
-  }
-  if (providerRuntimeLoadAttempted) {
-    return null;
-  }
-  providerRuntimeLoadAttempted = true;
-  for (const candidate of PROVIDER_RUNTIME_CANDIDATES) {
-    try {
-      providerRuntimeModule = require(candidate) as ProviderRuntimeModule;
-      return providerRuntimeModule;
-    } catch {
-      // Try source/runtime candidates in order.
-    }
-  }
-  return null;
-}
-
-/** Normalizes provider model ids through plugin runtime hooks when available. */
+/** Refines an already statically normalized model id through its provider hook. */
 export function normalizeProviderModelIdWithRuntime(params: {
   provider: string;
-  plugins?: ManifestModelIdNormalizationSource;
-  context: {
-    provider: string;
-    modelId: string;
-  };
+  context: ProviderNormalizeModelIdContext;
 }): string | undefined {
-  return loadProviderRuntime()?.normalizeProviderModelIdWithPlugin(params);
+  // An exact generation, including an empty one, cannot borrow ambient hooks.
+  const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
+  if (!registry) {
+    return undefined;
+  }
+  const registration = findProviderRuntimeRegistrationInRegistry({
+    registry,
+    provider: params.provider,
+    ownerRefs: [],
+  });
+  if (
+    !registration ||
+    !Object.getOwnPropertyDescriptor(registration.provider, "normalizeModelId")?.enumerable
+  ) {
+    return undefined;
+  }
+  const normalizeModelId = registration.provider.normalizeModelId;
+  if (!normalizeModelId) {
+    return undefined;
+  }
+  // Managed hooks retain their bound receiver. Plain hooks get provider fields
+  // on demand, with original getter receivers and invocation-local writes.
+  const fields = { pluginId: registration.pluginId, normalizeModelId };
+  let deleted: Set<string | symbol> | undefined;
+  const materialize = (key: string | symbol) => {
+    if (Object.hasOwn(fields, key) || deleted?.has(key) || !Object.isExtensible(fields)) {
+      return;
+    }
+    if (Object.getOwnPropertyDescriptor(registration.provider, key)?.enumerable) {
+      Object.defineProperty(fields, key, {
+        value: Reflect.get(registration.provider, key),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      });
+    }
+  };
+  const ownKeys = () => {
+    const providerKeys = Reflect.ownKeys(registration.provider).filter(
+      (key) =>
+        !deleted?.has(key) &&
+        Object.getOwnPropertyDescriptor(registration.provider, key)?.enumerable,
+    );
+    for (const key of providerKeys) {
+      materialize(key);
+    }
+    return [
+      ...providerKeys,
+      ...Reflect.ownKeys(fields).filter((key) => !providerKeys.includes(key)),
+    ];
+  };
+  const normalizer = new Proxy(fields, {
+    get(target, key, receiver) {
+      materialize(key);
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key) {
+      materialize(key);
+      return Reflect.has(target, key);
+    },
+    getOwnPropertyDescriptor(target, key) {
+      materialize(key);
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    ownKeys,
+    deleteProperty(target, key) {
+      if (!Reflect.deleteProperty(target, key)) {
+        return false;
+      }
+      (deleted ??= new Set()).add(key);
+      return true;
+    },
+    preventExtensions(target) {
+      ownKeys();
+      return Reflect.preventExtensions(target);
+    },
+  });
+  return normalizeOptionalString(normalizer.normalizeModelId(params.context));
 }

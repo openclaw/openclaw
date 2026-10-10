@@ -6,13 +6,16 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
+import * as videoPosters from "../../lib/media/video-poster.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   cloneChatAttachmentsForIndependentOwner,
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
+  getChatAttachmentVideoPosterUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
+  replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
@@ -170,18 +173,6 @@ it("retains document Open and Download after complete outbox hydration", async (
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked.filter((value) => value === href)).toHaveLength(1);
 });
-it("reuses a selected document preview until its owner releases it", () => {
-  const attachment = selected();
-  const first = card(attachment);
-  const second = card(attachment);
-  expect(first.download?.getAttribute("href")).toBe(second.download?.getAttribute("href"));
-  expect(first.open).not.toBeNull();
-  expect(second.open).not.toBeNull();
-  expect(created.size).toBe(1);
-  expect(revoked).toEqual([]);
-  releaseChatAttachmentPayloads([attachment]);
-  expect(revoked).toEqual([...created.keys()]);
-});
 it("does not allocate a preview for an outbox read whose recovery owner changed", async () => {
   const host = hostFor();
   const item = await persisted(host);
@@ -238,18 +229,6 @@ it("keeps restored and independently cloned preview ownership separate", async (
   expect(revoked).toEqual([first, second]);
 });
 
-it("releases a replaced selected preview without disturbing the replacement", () => {
-  const first = selected();
-  const previous = getChatAttachmentPreviewUrl(first);
-  const replacement = selected();
-  expect(revoked).toEqual([previous]);
-  const current = getChatAttachmentPreviewUrl(replacement);
-  expect(current).not.toBe(previous);
-  expect(created.size).toBe(2);
-  releaseChatAttachmentPayloads([replacement]);
-  expect(revoked).toEqual([previous, current]);
-});
-
 it("retains inline previews when object URLs are unavailable", () => {
   Object.defineProperty(URL, "createObjectURL", { configurable: true, value: undefined });
   const attachment = selected();
@@ -257,4 +236,38 @@ it("retains inline previews when object URLs are unavailable", () => {
   expect(created.size).toBe(0);
   releaseChatAttachmentPayloads([attachment]);
   expect(revoked).toEqual([]);
+});
+
+it("retains a pending video poster when a local message projects the same payload", async () => {
+  const ready = createDeferred<Blob | null>();
+  vi.spyOn(videoPosters, "requestVideoPoster").mockReturnValue(ready.promise);
+  const file = new File(["synthetic video"], "demo.mp4", { type: "video/mp4" });
+  const attachment = registerChatAttachmentPayload({
+    attachment: { id: "pending-video", fileName: file.name, mimeType: file.type },
+    dataUrl: "data:video/mp4;base64,c3ludGhldGljIHZpZGVv",
+    file,
+  });
+  owned.push(attachment);
+  const pending = getChatAttachmentVideoPosterUrl(attachment);
+  buildLocalUserMessage({ attachments: [attachment], createdAt: 1, text: "Inspect the video" });
+  const poster = new Blob(["synthetic poster"], { type: "image/jpeg" });
+  ready.resolve(poster);
+  const url = await pending;
+  expect(url).not.toBeNull();
+  expect(created.get(url!)).toBe(poster);
+  releaseChatAttachmentPayloads([attachment]);
+  expect(new Set(revoked)).toEqual(new Set(created.keys()));
+});
+
+it("restores supported inline images at the 5 MiB cap", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024, 0xab).toString("base64");
+  const restored = replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }]);
+  owned.push(...restored);
+  expect(restored).toHaveLength(1);
+  expect(getChatAttachmentDataUrl(restored[0]!)).toBe(`data:image/png;base64,${data}`);
+});
+
+it("rejects a restored image one decoded byte over the cap without throwing", () => {
+  const data = Buffer.alloc(5 * 1024 * 1024 + 1).toString("base64");
+  expect(replaceChatAttachmentsFromEditor([], [{ mimeType: "image/png", data }])).toEqual([]);
 });

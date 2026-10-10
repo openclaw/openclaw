@@ -10,12 +10,15 @@ import {
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
-import { withOwnedManagedUpdateEnv } from "./update-command-managed-context.js";
+import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
@@ -54,18 +57,14 @@ export function registerGenerationRecoveryTests(
     expect(
       await maybeRestartService({
         shouldRestart: true,
-        result: {
-          status: "ok",
-          mode: "npm",
-          root,
+        result: serviceUpdateResult(root, {
           before: { version: VERSION },
           after: { version: "9999.1.1" },
-          steps: [],
-          durationMs: 0,
-        },
+        }),
         opts: { json: true, run },
         refreshServiceEnv: false,
         serviceUpdateVerdict: before.serviceUpdateVerdict,
+        serviceManagerUid: before.serviceManagerUid,
         serviceEnv: before.serviceEnv,
         gatewayPort: 19305,
         requireRunningServiceAfterRestart: true,
@@ -89,6 +88,7 @@ export function registerGenerationRecoveryTests(
         runId: createUpdateRun({ trigger: "cli", before: { version: VERSION } }, { env }).runId,
         env,
       };
+      const { recordPhase } = createUpdateCommandExecutionGuards({ run }, root);
       const configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
       const schemas = await readUpdateStateSchemaVersions({
         stateDir: env.OPENCLAW_STATE_DIR,
@@ -114,6 +114,7 @@ export function registerGenerationRecoveryTests(
         shouldRestart: true,
         jsonMode: true,
         updateRun: run,
+        recordPhase,
       });
       const previousBytes = await fs.readFile(path.join(root, "dist/index.js"));
       await fs.writeFile(
@@ -153,32 +154,28 @@ export function registerGenerationRecoveryTests(
           typeof options === "object" ? options.env : undefined,
           () => runDaemonRestart({ json: true, preserveDefinition: true }),
         );
-        return {
+        return commandResult({
           code: healthy ? 0 : 1,
           stdout: JSON.stringify(mocks.writeJson.mock.lastCall?.[0]),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
       mocks.health.mockImplementation(async ({ port, expectedVersion }) => ({
+        outcome: mocks.running ? "ready" : "failed",
         healthy: mocks.running,
         staleGatewayPids: [],
-        runtime: { status: mocks.running ? "running" : "stopped" },
+        runtime: {
+          status: mocks.running ? "running" : "stopped",
+          pid: mocks.running ? 4242 : undefined,
+        },
+        gatewayBootId: "service-boot",
         gatewayVersion: mocks.running ? VERSION : undefined,
         expectedVersion: expectedVersion ?? undefined,
         portUsage: { port, status: mocks.running ? "busy" : "free", listeners: [], hints: [] },
       }));
-      const result = {
-        status: "ok" as const,
-        mode: "npm" as const,
-        root,
+      const result = serviceUpdateResult(root, {
         before: { version: VERSION },
         after: { version: "9999.1.1" },
-        steps: [],
-        durationMs: 0,
-      };
+      });
       let completedStatus: string | undefined;
       const error = await finishUpdate({
         mutationStarted: true,
@@ -238,7 +235,8 @@ export function registerGenerationRecoveryTests(
           after: { version: VERSION },
           verification: { serviceRunning: true, runningVersion: VERSION },
         });
-        expect(completedStatus).toBe("rolled-back");
+        // Cleanup is pre-terminal; rollback is recorded only after completion settles.
+        expect(completedStatus).toBe("running");
         expect(record.downtimeMs).toBeGreaterThanOrEqual(0);
         expect(record.confirmedAtMs).toBeGreaterThanOrEqual(before.stoppedAtMs!);
         expect(renderUpdateRunReport(record).headline).toBe(

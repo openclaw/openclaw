@@ -1,4 +1,3 @@
-// Resolves shell inline-command flags across shell families.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command
@@ -98,10 +97,6 @@ const POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES = new Set([
   "+o",
 ]);
 
-function isCombinedCommandFlag(token: string): boolean {
-  return parseCombinedCommandFlag(token) !== null;
-}
-
 function countSeparateValueOptionChars(token: string): number {
   let count = 0;
   for (let index = 1; index < token.length; index += 1) {
@@ -146,29 +141,8 @@ function combinedSeparateValueOptionCount(token: string): number {
   return countSeparateValueOptionChars(token);
 }
 
-function consumesSeparateValue(token: string): boolean {
-  return POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token);
-}
-
-function isPosixInteractiveModeOption(token: string): boolean {
-  return token === "--interactive" || isPosixShortOption(token, "i");
-}
-
 function isPosixShortOption(token: string, option: string): boolean {
-  if (token.length < 2 || token[0] !== "-" || token[1] === "-") {
-    return false;
-  }
-  let hasOption = false;
-  for (let index = 1; index < token.length; index += 1) {
-    const char = token[index];
-    if (char === "-") {
-      return false;
-    }
-    if (char === option) {
-      hasOption = true;
-    }
-  }
-  return hasOption;
+  return token.startsWith("-") && !token.includes("-", 1) && token.includes(option, 1);
 }
 
 /** Return how many argv tokens a POSIX shell option consumes while scanning. */
@@ -177,7 +151,7 @@ export function advancePosixInlineOptionScan(token: string): number {
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;
   }
-  if (consumesSeparateValue(token)) {
+  if (POSIX_SHELL_OPTIONS_WITH_SEPARATE_VALUES.has(token)) {
     return 2;
   }
   return 1;
@@ -210,26 +184,22 @@ export function resolveInlineCommandMatch(
       break;
     }
     const comparableToken = options.allowCombinedC ? token : lower;
-    if (flags.has(comparableToken)) {
-      const valueTokenIndex = i + 1 < argv.length ? i + 1 : null;
-      if (options.restValueFlags?.has(comparableToken)) {
-        const command = argv
-          .slice(i + 1)
-          .map((arg) => arg.trim())
-          .join(" ")
-          .trim();
-        return { command: command ? command : null, valueTokenIndex };
-      }
-      const command = argv[i + 1]?.trim();
-      return { command: command ? command : null, valueTokenIndex };
-    }
-    if (options.allowCombinedC && isCombinedCommandFlag(token)) {
-      const combined = parseCombinedCommandFlag(token);
-      if (combined?.attachedCommand != null) {
+    const exact = flags.has(comparableToken);
+    const combined = !exact && options.allowCombinedC ? parseCombinedCommandFlag(token) : null;
+    if (exact || combined) {
+      if (combined && combined.attachedCommand !== null) {
         return { command: combined.attachedCommand.trim() || null, valueTokenIndex: i };
       }
-      const valueTokenIndex = i + 1 + (combined?.separateValueCount ?? 0);
-      const command = argv[valueTokenIndex]?.trim();
+      const commandIndex = i + 1 + (combined?.separateValueCount ?? 0);
+      const valueTokenIndex = !combined && commandIndex >= argv.length ? null : commandIndex;
+      const command =
+        exact && options.restValueFlags?.has(comparableToken)
+          ? argv
+              .slice(i + 1)
+              .map((arg) => arg.trim())
+              .join(" ")
+              .trim()
+          : argv[commandIndex]?.trim();
       return { command: command ? command : null, valueTokenIndex };
     }
     if (options.valueOptions?.has(lower)) {
@@ -252,10 +222,6 @@ export function resolveInlineCommandMatch(
 /** Return true when an inline shell payload directly dispatches positional args. */
 export function isDirectShellPositionalCarrierCommand(command: string): boolean {
   const trimmed = command.trim();
-  if (trimmed.length === 0) {
-    return false;
-  }
-
   const shellWhitespace = String.raw`[^\S\r\n]+`;
   const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
   const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
@@ -332,28 +298,7 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
-  let sawInteractiveMode = false;
-  for (let i = 1; i < argv.length;) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      i += 1;
-      continue;
-    }
-    if (token === "--") {
-      return false;
-    }
-    if (isPosixInteractiveModeOption(token)) {
-      sawInteractiveMode = true;
-    }
-    if (flags.has(token) || isCombinedCommandFlag(token)) {
-      return sawInteractiveMode;
-    }
-    if (!token.startsWith("-") && !token.startsWith("+")) {
-      return false;
-    }
-    i += advancePosixInlineOptionScan(token);
-  }
-  return false;
+  return hasPosixStartupModeBeforeInlineCommand(argv, flags, "--interactive", "i");
 }
 
 /** Detect POSIX login startup before an inline command flag. */
@@ -361,7 +306,16 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
-  let sawLoginMode = false;
+  return hasPosixStartupModeBeforeInlineCommand(argv, flags, "--login", "l");
+}
+
+function hasPosixStartupModeBeforeInlineCommand(
+  argv: readonly string[],
+  flags: ReadonlySet<string>,
+  longOption: string,
+  shortOption: string,
+): boolean {
+  let sawStartupMode = false;
   for (let i = 1; i < argv.length;) {
     const token = argv[i]?.trim();
     if (!token) {
@@ -371,11 +325,11 @@ export function hasPosixLoginStartupBeforeInlineCommand(
     if (token === "--") {
       return false;
     }
-    if (token === "--login" || isPosixShortOption(token, "l")) {
-      sawLoginMode = true;
+    if (token === longOption || isPosixShortOption(token, shortOption)) {
+      sawStartupMode = true;
     }
-    if (flags.has(token) || isCombinedCommandFlag(token)) {
-      return sawLoginMode;
+    if (flags.has(token) || parseCombinedCommandFlag(token) !== null) {
+      return sawStartupMode;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {
       return false;
@@ -385,8 +339,7 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   return false;
 }
 
-/** Detect fish init-command options that run before the inline command. */
-export function hasFishInitCommandOption(argv: string[]): boolean {
+function hasFishOption(argv: string[], matches: (token: string) => boolean): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
     if (!token) {
@@ -395,12 +348,7 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
     if (token === "--") {
       return false;
     }
-    if (
-      token === "-C" ||
-      token === "--init-command" ||
-      (token.startsWith("-C") && token !== "-C") ||
-      token.startsWith("--init-command=")
-    ) {
+    if (matches(token)) {
       return true;
     }
     if (!token.startsWith("-") && !token.startsWith("+")) {
@@ -410,22 +358,16 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
   return false;
 }
 
+/** Detect fish init-command options that run before the inline command. */
+export function hasFishInitCommandOption(argv: string[]): boolean {
+  return hasFishOption(
+    argv,
+    (token) =>
+      token.startsWith("-C") || token === "--init-command" || token.startsWith("--init-command="),
+  );
+}
+
 /** Detect fish attached `-cCOMMAND` forms that should not be rebound. */
 export function hasFishAttachedCommandOption(argv: string[]): boolean {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      continue;
-    }
-    if (token === "--") {
-      return false;
-    }
-    if (token.startsWith("-c") && token !== "-c") {
-      return true;
-    }
-    if (!token.startsWith("-") && !token.startsWith("+")) {
-      return false;
-    }
-  }
-  return false;
+  return hasFishOption(argv, (token) => token.startsWith("-c") && token !== "-c");
 }

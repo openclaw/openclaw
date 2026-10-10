@@ -18,6 +18,7 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { replyRunRegistry } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { buildReplyUsageState, recordReplyUsageState } from "./reply-usage-state.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
@@ -57,13 +58,12 @@ export async function accountAgentTurnCompaction(params: {
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
     const persistedCount = await incrementCompactionCount({
-      agentId: fact.target.agentId,
+      ...fact.target,
       sessionStore: params.sessionStore,
-      sessionKey: fact.target.sessionKey,
-      storePath: fact.target.storePath,
       expectedSession: fact.target,
       amount: fact.count,
       tokensAfter: fact.currentContextSnapshot?.tokens,
+      transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
       authorize,
     });
     if (persistedCount !== undefined) {
@@ -107,12 +107,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     : undefined;
 
   const runResult = execution.result;
-  const fallbackProvider = execution.resolved.provider;
-  const fallbackModel = execution.resolved.model;
-  const fallbackExhausted = execution.fallback.exhausted;
-  const fallbackAttempts = execution.fallback.attempts;
-  const directlySentBlockKeys = execution.directlySentBlockKeys;
-  const directlySentBlockPayloads = execution.directlySentBlockPayloads;
+  const { provider: fallbackProvider, model: fallbackModel } = execution.resolved;
+  const { exhausted: fallbackExhausted, attempts: fallbackAttempts } = execution.fallback;
+  const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
+  const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
   const { autoCompactionCount, didLogHeartbeatStrip } = execution;
 
@@ -200,10 +198,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     requestedModel: followupRun.run.model,
     durationMs: Date.now() - runStartedAt,
     compactionCount: typeof compactions === "number" ? compactions : undefined,
-    contextTokenBudget:
-      typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
-    contextUsedTokens:
-      typeof promptTokens === "number" && Number.isFinite(promptTokens) ? promptTokens : undefined,
+    contextTokenBudget: ctxTokens,
+    contextUsedTokens: promptTokens,
     promptTokens,
     usage,
     lastCallUsage,
@@ -258,10 +254,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     }
   }
   const runtimeContextTokens =
-    typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
-    Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
-    runResult.meta.agentMeta.contextTokens > 0
-      ? Math.floor(runResult.meta.agentMeta.contextTokens)
+    typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
+      ? Math.floor(ctxTokens)
       : undefined;
   const resolvedContextTokens =
     runtimeContextTokens === undefined
@@ -291,7 +285,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     sessionStore: activeSessionStore,
     replyOperation: operation,
   });
-  await persistSessionUsageUpdate({
+  const usageCommit = await persistSessionUsageUpdate({
     agentId: latestCompaction?.target.agentId ?? followupRun.run.agentId,
     sessionStore: activeSessionStore,
     storePath: latestCompaction?.target.storePath ?? storePath,
@@ -301,7 +295,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
     agentDir: followupRun.run.agentDir,
     usage,
-    lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+    lastCallUsage,
     currentContextSnapshot,
     promptTokens,
     isHeartbeat,
@@ -329,6 +323,11 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       agentId: followupRun.run.agentId,
       providerUsed: sessionModel.provider,
       modelUsed: sessionModel.model,
+      usageCommit:
+        usageCommit?.entry.sessionId === expectedSession.sessionId &&
+        usageCommit.entry.lifecycleRevision === expectedSession.lifecycleRevision
+          ? usageCommit
+          : undefined,
     });
   }
 
@@ -344,8 +343,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     configuredFallbackModel,
     contextTokensUsed,
     didLogHeartbeatStrip,
-    directlySentBlockKeys,
-    directlySentBlockPayloads,
+    hasDirectlySentBlockReply,
+    directBlockDeliveries,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
@@ -399,7 +398,7 @@ export async function accountFollowupTurn(params: {
     cfg: turn.config,
     defaultModel: defaults.defaultModel,
     followupRun: turn.queued,
-    isHeartbeat: defaults.opts?.isHeartbeat === true,
+    isHeartbeat: false,
     pendingToolTasks: execution.pendingToolTasks,
     replyOperation: turn.operation,
     preflightCompactionApplied: turn.preflightCompactionApplied,
@@ -428,7 +427,8 @@ export async function accountFollowupTurn(params: {
       nextSessionFile: queueKey,
       nextProvider: accounting.sessionModel.provider,
       nextModel: accounting.sessionModel.model,
-      nextModelOverrideSource: entry?.modelOverrideSource,
+      nextModelOverrideSource:
+        entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
       nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
     });
@@ -454,11 +454,12 @@ export async function accountFollowupTurn(params: {
   }
   if (turn.queued.run.verboseLevelOverride !== "off" || turn.queued.run.traceAuthorized === true) {
     turn.session.publish(
-      refreshSessionEntryFromStore({
+      await refreshSessionEntryFromStore({
         storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
         sessionKey,
         fallbackEntry: turn.session.current(),
         expectedGeneration: accounting.expectedSession,
+        reader: getReplyOperationSessionReader(turn.operation),
       }),
     );
   }

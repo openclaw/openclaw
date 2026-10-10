@@ -1,4 +1,3 @@
-// Control UI renderer for JSON-backed config form nodes.
 import { nothing, type TemplateResult } from "lit";
 import {
   getSensitiveRenderState,
@@ -6,31 +5,21 @@ import {
   renderFieldRow,
   renderJsonTextareaControl,
   renderSchemaDefaultDescription,
+  resolveConfigFieldPresentation,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
-import { resolveConfigFieldMeta as resolveFieldMeta } from "./config-form.search.ts";
-import { configFieldId } from "./config-form.shared.ts";
 
 export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch } = params;
-  const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
-  const helpId = showLabel && help ? configFieldId(path, "description") : undefined;
+  const { schema, value, path, disabled, onPatch } = params;
+  const field = resolveConfigFieldPresentation(params);
   const fallback = jsonValue(value !== undefined ? value : schema.default);
-  const sensitiveState = getSensitiveRenderState({
-    path,
-    value,
-    hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  });
+  const sensitiveState = getSensitiveRenderState(params);
   const control = renderJsonTextareaControl({
     schema,
     path,
-    ariaLabel: label,
-    descriptionId: helpId,
+    ariaLabel: field.label,
+    descriptionId: field.helpId,
     sourceValue: params.sourceIdentity ?? value,
-    rowIdentity: params.rowIdentity,
     fallback,
     rows: 3,
     sensitiveState,
@@ -41,14 +30,10 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
   });
 
   return renderFieldRow({
-    label,
-    help,
-    helpId,
+    ...field,
     defaultDescription: sensitiveState.isRedacted
       ? nothing
       : renderSchemaDefaultDescription(schema, value),
-    tags,
-    showLabel,
     stacked: true,
     control,
   });

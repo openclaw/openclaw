@@ -1,0 +1,123 @@
+import type { OperatorScope } from "../operator-scopes.js";
+import type { CoreGatewayMethodSpec } from "./core-descriptor-types.js";
+import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
+import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
+import {
+  DYNAMIC_GATEWAY_METHOD_SCOPE,
+  NODE_GATEWAY_METHOD_SCOPE,
+  type GatewayMethodDescriptorInput,
+  type GatewayMethodHandler,
+} from "./descriptor.js";
+
+type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
+
+export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;
+
+// Rows are `as const`, so a present policy flag is already the exact literal the spec allows.
+const CORE_GATEWAY_METHOD_SPEC_LIST: readonly CoreGatewayMethodSpec[] =
+  CORE_GATEWAY_METHOD_SPECS.map(([name, family, scope, since, policy]) =>
+    Object.assign({ name, scope, since, ...(family ? { family } : {}) }, policy),
+  );
+
+const CORE_GATEWAY_METHOD_SPEC_BY_NAME: ReadonlyMap<string, CoreGatewayMethodSpec> = new Map(
+  CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => [spec.name, spec]),
+);
+
+/** Core methods that are listed early but return retryable unavailable until sidecars are ready. */
+export const STARTUP_UNAVAILABLE_GATEWAY_METHODS = CORE_GATEWAY_METHOD_SPEC_LIST.filter(
+  (spec) => spec.startup === true,
+).map((spec) => spec.name);
+
+export function listCoreAdvertisedGatewayMethodNames(): string[] {
+  return CORE_GATEWAY_METHOD_SPEC_LIST.filter((spec) => spec.advertise !== false).map(
+    (spec) => spec.name,
+  );
+}
+
+export function listCoreGatewayMethodNames(): string[] {
+  return CORE_GATEWAY_METHOD_SPEC_LIST.map((spec) => spec.name);
+}
+
+export function listCoreGatewayMethodMetadata(): readonly CoreGatewayMethodMetadata[] {
+  return CORE_GATEWAY_METHOD_SPEC_LIST.map(({ name, scope, since }) => ({ name, scope, since }));
+}
+
+/** Groups lazy-owned core methods by the module family that dispatches them. */
+export function listCoreGatewayHandlerMethodNames(): ReadonlyMap<
+  CoreGatewayHandlerFamily,
+  readonly string[]
+> {
+  const methodsByFamily = new Map<CoreGatewayHandlerFamily, string[]>();
+  for (const [name, family] of CORE_GATEWAY_METHOD_SPECS) {
+    if (family) {
+      const methods = methodsByFamily.get(family) ?? [];
+      methods.push(name);
+      methodsByFamily.set(family, methods);
+    }
+  }
+  return methodsByFamily;
+}
+
+/** Looks up an operator-only core method scope, excluding node and dynamic methods. */
+export function resolveCoreOperatorGatewayMethodScope(method: string): OperatorScope | undefined {
+  const scope = CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope;
+  return scope === NODE_GATEWAY_METHOD_SCOPE || scope === DYNAMIC_GATEWAY_METHOD_SCOPE
+    ? undefined
+    : scope;
+}
+
+export function isCoreNodeGatewayMethod(method: string): boolean {
+  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope === NODE_GATEWAY_METHOD_SCOPE;
+}
+
+export function isDynamicOperatorGatewayMethod(method: string): boolean {
+  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.get(method)?.scope === DYNAMIC_GATEWAY_METHOD_SCOPE;
+}
+
+export function isCoreGatewayMethodClassified(method: string): boolean {
+  return CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(method);
+}
+
+export function createCoreGatewayMethodDescriptors(
+  handlers: Record<string, GatewayMethodHandler>,
+): GatewayMethodDescriptorInput[] {
+  const descriptors: GatewayMethodDescriptorInput[] = [];
+  for (const spec of CORE_GATEWAY_METHOD_SPEC_LIST) {
+    const handler = handlers[spec.name];
+    if (!handler) {
+      continue;
+    }
+    descriptors.push({
+      name: spec.name,
+      handler,
+      owner: { kind: "core", area: "gateway" },
+      scope: spec.scope,
+      ...(spec.shareKey
+        ? {
+            shareKey: spec.shareKey,
+            shareInvalidationEvents: spec.shareInvalidationEvents,
+            shareMaxAgeMs: spec.shareMaxAgeMs,
+          }
+        : {}),
+      profileAccess:
+        spec.sessionAccess || isCoreGatewayMethodProfileDependent(spec.name)
+          ? "required"
+          : "independent",
+      ...(spec.since ? { since: spec.since } : {}),
+      ...(spec.advertise === false ? { advertise: false } : {}),
+      ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
+      ...(spec.lifetime ? { lifetime: spec.lifetime } : {}),
+      ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
+      ...(spec.description ? { description: spec.description } : {}),
+      ...(spec.sessionAccess ? { sessionAccess: spec.sessionAccess } : {}),
+    });
+  }
+  for (const name of Object.keys(handlers)) {
+    if (!CORE_GATEWAY_METHOD_SPEC_BY_NAME.has(name)) {
+      // Unclassified core handlers would bypass scope/startup/write metadata, so fail before the
+      // dispatcher can expose a method with missing policy.
+      throw new Error(`gateway method handler is missing a descriptor: ${name}`);
+    }
+  }
+  return descriptors;
+}

@@ -5,13 +5,12 @@ import type {
   ChannelApprovalNativeTarget,
 } from "../channels/plugins/approval-native.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
-import type { ChannelApprovalKind } from "./approval-types.js";
-import type { ExecApprovalRequest } from "./exec-approvals.js";
-import type { PluginApprovalRequest } from "./plugin-approvals.js";
-import type { SystemAgentApprovalRequest } from "./system-agent-approvals.js";
-
-type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest | SystemAgentApprovalRequest;
+import type {
+  ApprovalRequestInput as ApprovalRequest,
+  ChannelApprovalKind,
+} from "./approval-types.js";
 
 /** One native approval delivery target selected by the channel adapter plan. */
 export type ChannelApprovalNativePlannedTarget = {
@@ -27,23 +26,6 @@ export type ChannelApprovalNativeDeliveryPlan = {
   notifyOriginWhenDmOnly: boolean;
 };
 
-function dedupeTargets(
-  targets: ChannelApprovalNativePlannedTarget[],
-): ChannelApprovalNativePlannedTarget[] {
-  const seen = new Set<string>();
-  const deduped: ChannelApprovalNativePlannedTarget[] = [];
-  for (const target of targets) {
-    const key = buildChannelApprovalNativeTargetKey(target.target);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    // Keep the first surface/reason so origin-preferred plans stay stable when DM targets overlap.
-    deduped.push(target);
-  }
-  return deduped;
-}
-
 /** Resolves the origin and approver-DM targets a channel should use for native approvals. */
 export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   cfg: OpenClawConfig;
@@ -53,45 +35,33 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
   adapter?: ChannelApprovalNativeAdapter | null;
 }): Promise<ChannelApprovalNativeDeliveryPlan> {
   const adapter = params.adapter;
+  const emptyPlan: ChannelApprovalNativeDeliveryPlan = {
+    targets: [],
+    originTarget: null,
+    notifyOriginWhenDmOnly: false,
+  };
   if (!adapter) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
-  const capabilities = adapter.describeDeliveryCapabilities({
+  const deliveryContext = () => ({
     cfg: params.cfg,
     accountId: params.accountId,
     approvalKind: params.approvalKind,
     request: params.request,
   });
+  const capabilities = adapter.describeDeliveryCapabilities(deliveryContext());
   if (!capabilities.enabled) {
-    return {
-      targets: [],
-      originTarget: null,
-      notifyOriginWhenDmOnly: false,
-    };
+    return emptyPlan;
   }
 
   const originTarget =
     capabilities.supportsOriginSurface && adapter.resolveOriginTarget
-      ? ((await adapter.resolveOriginTarget({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })) ?? null)
+      ? ((await adapter.resolveOriginTarget(deliveryContext())) ?? null)
       : null;
   const approverDmTargets =
     capabilities.supportsApproverDmSurface && adapter.resolveApproverDmTargets
-      ? await adapter.resolveApproverDmTargets({
-          cfg: params.cfg,
-          accountId: params.accountId,
-          approvalKind: params.approvalKind,
-          request: params.request,
-        })
+      ? await adapter.resolveApproverDmTargets(deliveryContext())
       : [];
 
   const plannedTargets: ChannelApprovalNativePlannedTarget[] = [];
@@ -108,26 +78,21 @@ export async function resolveChannelNativeApprovalDeliveryPlan(params: {
     });
   }
 
-  if (preferApproverDm) {
+  if (preferApproverDm || !originTarget) {
     for (const target of approverDmTargets) {
       plannedTargets.push({
         surface: "approver-dm",
         target,
-        reason: "preferred",
-      });
-    }
-  } else if (!originTarget) {
-    for (const target of approverDmTargets) {
-      plannedTargets.push({
-        surface: "approver-dm",
-        target,
-        reason: "fallback",
+        reason: preferApproverDm ? "preferred" : "fallback",
       });
     }
   }
 
   return {
-    targets: dedupeTargets(plannedTargets),
+    // Keep the first surface/reason when origin and DM targets overlap.
+    targets: dedupeByKey(plannedTargets, (entry) =>
+      buildChannelApprovalNativeTargetKey(entry.target),
+    ),
     originTarget,
     notifyOriginWhenDmOnly:
       capabilities.preferredSurface === "approver-dm" &&

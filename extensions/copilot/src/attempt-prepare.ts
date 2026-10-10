@@ -91,6 +91,7 @@ export function prepareCopilotAttemptContext(
     modelProviderId: modelRef.provider,
     modelId: modelRef.id,
     trigger: input.trigger,
+    inputProvenance: input.inputProvenance,
     foregroundPromptContext: buildEmbeddedForegroundPromptContext(
       { ...input, agentId: sessionAgentId },
       input.agentDir ?? resolveAgentDir(input.config ?? {}, sessionAgentId),

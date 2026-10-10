@@ -1,12 +1,12 @@
 // Metadata registry loader tests cover metadata-only plugin registry assembly.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../../test/helpers/mock-logger.js";
 import type { PluginLoadOptions } from "../loader.js";
+import { loadPluginMetadataRegistrySnapshot } from "./metadata-registry-loader.js";
 
 const loadConfigMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
-
-let loadPluginMetadataRegistrySnapshot: typeof import("./metadata-registry-loader.js").loadPluginMetadataRegistrySnapshot;
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: () => loadConfigMock(),
@@ -49,10 +49,6 @@ function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
 }
 
 describe("loadPluginMetadataRegistrySnapshot", () => {
-  beforeAll(async () => {
-    ({ loadPluginMetadataRegistrySnapshot } = await import("./metadata-registry-loader.js"));
-  });
-
   beforeEach(() => {
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -115,11 +111,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
   });
 
   it("forwards an explicit logger through metadata snapshots", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
 
     loadPluginMetadataRegistrySnapshot({
       config: { plugins: {} },
@@ -147,11 +139,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
   });
 
   it("honors explicit load options when reusing a resolved runtime context", () => {
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    const logger = createInfoWarnErrorLogger();
     const env = { HOME: "/tmp/context-home" } as NodeJS.ProcessEnv;
     const manifestRegistry = { plugins: [], diagnostics: [] };
 

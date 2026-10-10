@@ -1,5 +1,6 @@
 {
   "id": "vllm",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },

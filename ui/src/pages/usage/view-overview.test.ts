@@ -1,32 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CostDailyEntry, UsageAggregates, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderUsageHeatmap } from "./view-heatmap.ts";
+import type { UsageAggregates, UsageProps, UsageSessionEntry } from "./types.ts";
+import { totals, dailyEntry } from "./usage-chart.test-support.ts";
+import { renderCostBreakdownCompact } from "./view-chart.ts";
 import {
-  renderDailyChartCompact,
-  renderCostBreakdownCompact,
   renderCostWindowComparison,
   renderFilterChips,
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
-
-const totals: UsageTotals = {
-  input: 100,
-  output: 40,
-  cacheRead: 300,
-  cacheWrite: 600,
-  totalTokens: 1040,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-};
+import { createUsageProps } from "./view.test-support.ts";
 
 const aggregates = {
   messages: {
@@ -48,36 +33,6 @@ const aggregates = {
   byChannel: [],
   daily: [],
 } as unknown as UsageAggregates;
-
-function dailyEntry(date: string, totalTokens: number, totalCost = 0): CostDailyEntry {
-  return {
-    ...totals,
-    date,
-    input: totalTokens,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens,
-    totalCost,
-  };
-}
-
-function renderDailyChart(
-  daily: CostDailyEntry[],
-  onSelectDay = vi.fn<(day: string, shiftKey: boolean) => void>(),
-) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  render(
-    renderDailyChartCompact(daily, [], "tokens", "total", () => {}, onSelectDay),
-    container,
-  );
-  return {
-    container,
-    onSelectDay,
-    bars: Array.from(container.querySelectorAll<HTMLElement>(".daily-bar-wrapper")),
-  };
-}
 
 afterEach(() => {
   document.body.replaceChildren();
@@ -106,16 +61,21 @@ function getSummaryCards(container: HTMLElement): Array<{
 }
 
 describe("renderUsageInsights", () => {
-  it("renders overview hints as focusable tooltip anchors", () => {
+  it("renders overview hints as focusable tooltip anchors and identifies agents in the breakdown", async () => {
     const container = document.createElement("div");
     document.body.append(container);
 
     render(
       renderUsageInsights(
         totals,
-        aggregates,
         {
-          durationSumMs: 0,
+          ...aggregates,
+          byAgent: [
+            { agentId: "main", totals },
+            { agentId: "research", totals },
+          ],
+        },
+        {
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -133,6 +93,14 @@ describe("renderUsageInsights", () => {
     const tooltips = [...container.querySelectorAll("openclaw-tooltip")];
     expect(buttons).toHaveLength(9);
     expect(tooltips).toHaveLength(9);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".usage-list-item .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
     expect(
       buttons.every(
         (button) =>
@@ -166,7 +134,6 @@ describe("renderUsageInsights", () => {
         totals,
         aggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -208,7 +175,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -247,7 +213,6 @@ describe("renderUsageInsights", () => {
         costTotals,
         costAggregates,
         {
-          durationSumMs: 0,
           durationCount: 0,
           avgDurationMs: 0,
           errorRate: 0,
@@ -262,44 +227,6 @@ describe("renderUsageInsights", () => {
     );
 
     expect(container.textContent).not.toContain("1000.0% of cost");
-  });
-});
-
-describe("renderUsageHeatmap", () => {
-  it("renders the selected activity range from usage cost data", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap(
-        [dailyEntry("2026-07-08", 10), dailyEntry("2026-07-09", 20)],
-        "2025-07-11",
-        "2026-07-09",
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".settings-section__heading")?.textContent?.trim()).toBe(
-      "Token Activity",
-    );
-    expect(container.querySelectorAll(".usage-heatmap__cell")).toHaveLength(52 * 7);
-    expect(
-      container
-        .querySelector(".usage-heatmap__svg .usage-heatmap__cell--l4")
-        ?.getAttribute("data-tooltip"),
-    ).toContain("20 tokens");
-  });
-
-  it("keeps short ranges at their natural cell width", () => {
-    const container = document.createElement("div");
-    render(
-      renderUsageHeatmap([dailyEntry("2026-08-01", 20)], "2026-08-01", "2026-08-01"),
-      container,
-    );
-
-    expect(
-      container
-        .querySelector<SVGElement>(".usage-heatmap__svg")
-        ?.style.getPropertyValue("--usage-heatmap-width"),
-    ).toBe("44px");
   });
 });
 
@@ -321,7 +248,12 @@ describe("usage overview presentation owners", () => {
       container,
     );
 
-    const categories = ["output", "input", "cache-write", "cache-read"];
+    const categories = [
+      "usage-token-output",
+      "usage-token-input",
+      "usage-token-cache-write",
+      "usage-token-cache-read",
+    ];
     expect(
       [...container.querySelectorAll(".cost-breakdown-bar .cost-segment")].map((segment) =>
         categories.find((category) => segment.classList.contains(category)),
@@ -343,16 +275,17 @@ describe("usage overview presentation owners", () => {
     const onClearDays = vi.fn();
     const onClearHours = vi.fn();
     const onClearSessions = vi.fn();
+    const props = createUsageProps();
+    Object.assign(props.filters, {
+      selectedDays: ["2026-08-01"],
+      selectedHours: [8],
+      selectedSessions: ["agent:main:usage"],
+    });
+    Object.assign(props.callbacks.filters, { onClearDays, onClearHours, onClearSessions });
     render(
       renderFilterChips(
-        ["2026-08-01"],
-        [8],
-        ["agent:main:usage"],
         [{ key: "agent:main:usage", label: "Usage thread" } as UsageSessionEntry],
-        onClearDays,
-        onClearHours,
-        onClearSessions,
-        vi.fn(),
+        props,
       ),
       container,
     );
@@ -371,147 +304,6 @@ describe("usage overview presentation owners", () => {
   });
 });
 
-describe("renderDailyChartCompact", () => {
-  it("keeps day selection operable with mouse and keyboard", () => {
-    const { bars, onSelectDay } = renderDailyChart([dailyEntry("2026-05-04", 500, 0.2)]);
-    const bar = expectDefined(bars[0], "daily usage bar");
-
-    bar.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: true }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-
-    bar.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", false);
-
-    const space = new KeyboardEvent("keydown", {
-      bubbles: true,
-      cancelable: true,
-      key: " ",
-      shiftKey: true,
-    });
-    bar.dispatchEvent(space);
-    expect(space.defaultPrevented).toBe(true);
-    expect(onSelectDay).toHaveBeenCalledWith("2026-05-04", true);
-  });
-
-  it("labels the chart scale with the selected metric", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 2)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map(
-        (entry) => entry.textContent,
-      ),
-    ).toEqual(["$2.00", "$1.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("labels the true midpoint of a compressed chart scale", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 1), dailyEntry("2026-05-04", 1_000, 100)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$100.00", "$25.00", "$0.00"]);
-    expect(container.querySelector(".daily-chart-scale-badge")?.textContent?.trim()).toBe("√");
-  });
-
-  it("preserves sub-cent values in chart scale labels", () => {
-    const container = document.createElement("div");
-    render(
-      renderDailyChartCompact(
-        [dailyEntry("2026-05-03", 500, 0.004), dailyEntry("2026-05-04", 1_000, 0.008)],
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.0080", "$0.0040", "$0.00"]);
-  });
-
-  it("normalizes a nonzero micro-cost bar to the labeled maximum", () => {
-    const container = document.createElement("div");
-    const microCostDay = {
-      ...dailyEntry("2026-05-04", 1_000, 0.00001),
-      inputCost: 0.000004,
-      outputCost: 0.000006,
-    };
-    render(
-      renderDailyChartCompact(
-        [microCostDay],
-        [],
-        "cost",
-        "by-type",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(
-      Array.from(container.querySelectorAll(".daily-chart-scale span")).map((entry) =>
-        entry.textContent?.trim(),
-      ),
-    ).toEqual(["$0.000010", "$0.000005", "$0.00"]);
-    expect(container.querySelector<HTMLElement>(".daily-bar")?.style.height).toBe("200px");
-    expect(container.querySelector(".daily-bar-total")?.textContent?.trim()).toBe("$0.000010");
-    const tooltip = container.querySelector<HTMLElement & { content: string }>("openclaw-tooltip");
-    expect(tooltip?.content).toContain("$0.000010");
-    expect(tooltip?.content).toContain("Output $0.000006");
-    expect(tooltip?.content).toContain("Input $0.000004");
-    expect(container.querySelector(".daily-chart-scale-badge")).toBeNull();
-  });
-
-  it("reserves the totals row when dense ranges hide bar totals", () => {
-    const container = document.createElement("div");
-    const daily = Array.from({ length: 15 }, (_, index) =>
-      dailyEntry(`2026-05-${String(index + 1).padStart(2, "0")}`, 1_000, index + 1),
-    );
-    render(
-      renderDailyChartCompact(
-        daily,
-        [],
-        "cost",
-        "total",
-        () => {},
-        () => {},
-      ),
-      container,
-    );
-
-    expect(container.querySelectorAll(".daily-bar-total--placeholder")).toHaveLength(15);
-  });
-});
-
 describe("renderCostWindowComparison", () => {
   it("shows the selected range and shorter calendar periods", () => {
     const container = document.createElement("div");
@@ -524,6 +316,7 @@ describe("renderCostWindowComparison", () => {
         ],
         "2026-06-01",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -547,6 +340,7 @@ describe("renderCostWindowComparison", () => {
         [dailyEntry("2026-07-01", 300, 0.003)],
         "2026-06-02",
         "2026-07-01",
+        "local",
       ),
       container,
     );
@@ -565,36 +359,166 @@ describe("renderSessionsCard", () => {
       selected?: string[];
       days?: string[];
       tokens?: boolean;
-      sort?: Parameters<typeof renderSessionsCard>[4];
-      direction?: Parameters<typeof renderSessionsCard>[5];
+      sort?: UsageProps["display"]["sessionSort"];
+      direction?: UsageProps["display"]["sessionSortDir"];
       recent?: string[];
-      tab?: Parameters<typeof renderSessionsCard>[7];
-      onSelect?: Parameters<typeof renderSessionsCard>[8];
+      tab?: UsageProps["display"]["sessionsTab"];
+      onSelect?: UsageProps["callbacks"]["details"]["onSelectSession"];
+      totalSessions?: number;
     } = {},
   ) => {
     const container = document.createElement("div");
+    const props = createUsageProps();
+    props.filters.selectedSessions = options.selected ?? [];
+    props.filters.selectedDays = options.days ?? [];
+    Object.assign(props.display, {
+      chartMode: options.tokens === false ? "cost" : "tokens",
+      sessionSort: options.sort ?? "tokens",
+      sessionSortDir: options.direction ?? "desc",
+      recentSessions: options.recent ?? [],
+      sessionsTab: options.tab ?? "all",
+    });
+    props.callbacks.details.onSelectSession = options.onSelect ?? noop;
     render(
-      renderSessionsCard(
-        sessions,
-        options.selected ?? [],
-        options.days ?? [],
-        options.tokens ?? true,
-        options.sort ?? "tokens",
-        options.direction ?? "desc",
-        options.recent ?? [],
-        options.tab ?? "all",
-        options.onSelect ?? noop,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
+      renderSessionsCard(sessions, props, options.totalSessions ?? sessions.length),
       container,
     );
     return container;
   };
+
+  it("identifies mixed-agent sessions", async () => {
+    const container = renderCard([
+      { key: "agent:main:one", agentId: "main", usage: null },
+      { key: "agent:research:two", agentId: "research", usage: null },
+    ]);
+    document.body.append(container);
+    await Promise.all(
+      [...container.querySelectorAll("openclaw-agent-row-chip")].map((chip) => chip.updateComplete),
+    );
+    expect(
+      [...container.querySelectorAll(".session-bar-row .agent-row-chip")].map((chip) =>
+        chip.getAttribute("data-agent-id"),
+      ),
+    ).toEqual(["main", "research"]);
+  });
+
+  const shownCountCases: Array<{
+    name: string;
+    sessionCount: number;
+    options?: Parameters<typeof renderCard>[1];
+    shown: number;
+    header: string;
+    empty?: string;
+    more?: string;
+    primaryLabels?: string[];
+    selectedLabel?: string;
+  }> = [
+    {
+      name: "empty All list",
+      sessionCount: 0,
+      shown: 0,
+      header: "0 shown",
+      empty: "No sessions in range",
+    },
+    {
+      name: "All list below the display cap",
+      sessionCount: 3,
+      shown: 3,
+      header: "3 shown",
+    },
+    {
+      name: "All list above the display cap",
+      sessionCount: 51,
+      shown: 50,
+      header: "50 shown · 51 total",
+      more: "+1 more",
+    },
+    {
+      name: "empty Recently viewed list",
+      sessionCount: 3,
+      options: { tab: "recent" },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "Recently viewed list with a separate selected comparison",
+      sessionCount: 3,
+      options: {
+        tab: "recent",
+        recent: ["session-2", "missing", "session-0"],
+        selected: ["session-0", "session-1"],
+      },
+      shown: 2,
+      header: "2 shown · 3 total",
+      primaryLabels: ["Session 2", "Session 0"],
+      selectedLabel: "Selected (2)",
+    },
+    {
+      name: "Recently viewed list whose keys no longer match",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["missing"] },
+      shown: 0,
+      header: "0 shown · 3 total",
+      empty: "No recent sessions",
+    },
+    {
+      name: "filtered All list with its original total",
+      sessionCount: 3,
+      options: { totalSessions: 7 },
+      shown: 3,
+      header: "3 shown · 7 total",
+    },
+    {
+      name: "filtered Recently viewed list with its original total",
+      sessionCount: 3,
+      options: { tab: "recent", recent: ["session-1", "missing"], totalSessions: 7 },
+      shown: 1,
+      header: "1 shown · 7 total",
+      primaryLabels: ["Session 1"],
+    },
+  ];
+
+  it.each(shownCountCases)("reports the rows shown in the $name", (scenario) => {
+    const sessions: UsageSessionEntry[] = Array.from(
+      { length: scenario.sessionCount },
+      (_, index) => ({
+        key: `session-${index}`,
+        label: `Session ${index}`,
+        usage: {
+          ...totals,
+          input: 100 - index,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 100 - index,
+        },
+      }),
+    );
+    const container = renderCard(sessions, scenario.options);
+    const primaryList = container.querySelector(".sessions-card > .session-bars");
+    expect(primaryList?.querySelectorAll(".session-bar-row").length ?? 0).toBe(scenario.shown);
+    expect(
+      container
+        .querySelector(".sessions-card-header .sessions-card-count")
+        ?.textContent?.replace(/\s+/g, " ")
+        .trim(),
+    ).toBe(scenario.header);
+    expect(container.querySelector(".usage-empty-block")?.textContent?.trim()).toBe(scenario.empty);
+    expect(container.querySelector(".usage-more-sessions")?.textContent?.trim()).toBe(
+      scenario.more,
+    );
+    expect(
+      container.querySelector(".sessions-selected-group .sessions-card-count")?.textContent?.trim(),
+    ).toBe(scenario.selectedLabel);
+    if (scenario.primaryLabels) {
+      expect(
+        [...(primaryList?.querySelectorAll(".session-bar-title") ?? [])].map((label) =>
+          label.textContent?.trim(),
+        ),
+      ).toEqual(scenario.primaryLabels);
+    }
+  });
 
   it.each([
     { copied: true, feedback: "Copied!" },
@@ -624,26 +548,10 @@ describe("renderSessionsCard", () => {
       },
     ] as UsageSessionEntry[];
 
-    render(
-      renderSessionsCard(
-        sessions,
-        ["agent:main:selected"],
-        [],
-        true,
-        "tokens",
-        "desc",
-        [],
-        "all",
-        onSelectSession,
-        noop,
-        noop,
-        noop,
-        [],
-        sessions.length,
-        noop,
-      ),
-      container,
-    );
+    const props = createUsageProps();
+    props.filters.selectedSessions = ["agent:main:selected"];
+    props.callbacks.details.onSelectSession = onSelectSession;
+    render(renderSessionsCard(sessions, props, sessions.length), container);
 
     const rows = [...container.querySelectorAll<HTMLElement>(".session-bar-row")];
     const selected = rows[0]?.querySelector<HTMLButtonElement>(".session-bar-selection");
@@ -683,13 +591,6 @@ describe("renderSessionsCard", () => {
   it.each([
     {
       tokens: true,
-      sort: "tokens",
-      names: ["All time winner", "Day winner"],
-      values: ["30", "10"],
-      avg: "20",
-    },
-    {
-      tokens: true,
       sort: "cost",
       names: ["Day winner", "All time winner"],
       values: ["10", "30"],
@@ -700,13 +601,6 @@ describe("renderSessionsCard", () => {
       sort: "tokens",
       names: ["All time winner", "Day winner"],
       values: ["$1.00", "$10.00"],
-      avg: "$5.50",
-    },
-    {
-      tokens: false,
-      sort: "cost",
-      names: ["Day winner", "All time winner"],
-      values: ["$10.00", "$1.00"],
       avg: "$5.50",
     },
   ] as const)("uses selected-day display and sort metrics independently (%j)", (scenario) => {

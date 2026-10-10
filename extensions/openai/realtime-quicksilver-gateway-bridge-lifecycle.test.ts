@@ -2,6 +2,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import {
   createCallResponse,
   emitSideband,
@@ -45,7 +46,7 @@ function createBridge(params: {
       })),
       createPeer,
       fetchImpl,
-      webSocketFactory: () => {
+      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
         socket = new FakeSocket();
         const send = socket.send.bind(socket);
         socket.send = (payload) => {
@@ -60,7 +61,7 @@ function createBridge(params: {
           }
         };
         return socket;
-      },
+      }),
     },
     openAIRealtimeHost,
   );
@@ -115,7 +116,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
       expect(onTranscript).toHaveBeenCalledWith("assistant", "Recovered", true);
       expect(harness.bridge.isConnected()).toBe(true);
     } finally {
-      harness.bridge.close();
+      await harness.bridge.close();
     }
   });
 
@@ -135,7 +136,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
     emitDelegation(socket, "delegation-abort", "Cancel this on close");
     await vi.waitFor(() => expect(runAgentConsult).toHaveBeenCalledOnce());
 
-    harness.bridge.close();
+    await harness.bridge.close();
     expect(consultSignal?.aborted).toBe(true);
     await Promise.resolve();
     expect(parseSent(socket).filter((event) => event.type === "delegation.context.append")).toEqual(
@@ -177,7 +178,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
           parseSent(socket).filter((event) => event.type === "session.context.append"),
         ).toHaveLength(classified ? 1 : 0);
 
-        harness.bridge.close({ disposition: "detach" });
+        await harness.bridge.close({ disposition: "detach" });
         const sentAtClose = socket.sent.length;
         emitDelegation(socket, "late", "Do not acknowledge after detach");
         expect(consultSignal?.aborted).toBe(false);
@@ -190,7 +191,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
         expect(runAgentConsult).toHaveBeenCalledOnce();
       } finally {
         resolveConsult({ text: "Finished" });
-        harness.bridge.close();
+        await harness.bridge.close();
       }
     },
   );

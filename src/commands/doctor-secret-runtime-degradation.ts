@@ -2,10 +2,10 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
+  formatSecretDegradationRetryHint,
   redactSecretDegradationReason,
-  SECRET_DEGRADATION_RETRY_HINT,
 } from "../secrets/runtime-degraded-state.js";
-import type { StatusSummary } from "../status/types.js";
+import type { StatusSummary } from "../status/summary.js";
 
 const DOCTOR_SECRET_OWNER_ID_MAX_CHARS = 96;
 const DOCTOR_SECRET_OWNER_PATH_MAX_CHARS = 120;
@@ -35,7 +35,7 @@ export function projectDoctorSecretRuntimeDegradations(
       message: `${owner.degradationState ?? "cold"} ${target} (${paths || "no affected paths reported"}): ${redactSecretDegradationReason(owner.reason)}`,
       path: visiblePaths[0] ?? "gateway",
       target,
-      retryHint: SECRET_DEGRADATION_RETRY_HINT,
+      retryHint: formatSecretDegradationRetryHint(owner.reason),
     };
   });
   if (status.secretEgressProxy?.state !== "degraded") {

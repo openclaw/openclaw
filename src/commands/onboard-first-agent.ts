@@ -1,3 +1,5 @@
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { loadAgentTeamPreset, validateAgentTeamMemberIds } from "../agents/agent-roles.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { type FirstOnboardingAgent, validateFirstOnboardingAgentName } from "./onboard-agent.js";
 
@@ -6,20 +8,47 @@ export async function promptFirstOnboardingAgent(
   requestedName: string | undefined,
   prompter: WizardPrompter,
   nonInteractive = false,
+  options?: { team?: boolean; offerTeam?: boolean },
 ): Promise<FirstOnboardingAgent | undefined> {
   if (hasAuthoredRoster) {
     return undefined;
   }
+  const createTeam =
+    options?.team ??
+    (options?.offerTeam === true &&
+      !requestedName &&
+      (await prompter.select({
+        message: "What would you like to create?",
+        initialValue: "one",
+        options: [
+          { value: "one", label: "One agent" },
+          { value: "team", label: "A small team: a chief of staff plus specialists" },
+        ],
+      })) === "team");
+  const teamPreset = createTeam ? await loadAgentTeamPreset() : undefined;
+  const specialistIds = teamPreset?.specialists.map(({ id }) => id) ?? [];
+  const validateName = (value: string) =>
+    validateFirstOnboardingAgentName(value) ??
+    (teamPreset
+      ? validateAgentTeamMemberIds([normalizeAgentId(value), ...specialistIds])
+      : undefined);
+  const defaultName = teamPreset?.coordinator.id ?? "main";
   const name =
     requestedName ??
     (nonInteractive
-      ? "main"
+      ? defaultName
       : await prompter.text({
-          message: "What should we call your first agent?",
-          initialValue: "main",
-          validate: validateFirstOnboardingAgentName,
+          message: createTeam
+            ? "What should we call your chief of staff?"
+            : "What should we call your first agent?",
+          initialValue: defaultName,
+          validate: validateName,
         }));
-  return { name };
+  const error = validateName(name);
+  if (error) {
+    throw new Error(error);
+  }
+  return { name, ...(createTeam ? { team: true } : {}) };
 }
 
 export async function showSessionMigrationWarnings(

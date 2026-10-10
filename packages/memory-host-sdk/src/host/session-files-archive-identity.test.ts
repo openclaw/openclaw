@@ -10,7 +10,10 @@ import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../../../src/state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { listSessionTranscriptCorpusEntriesForAgent } from "./session-files.js";
 
@@ -38,6 +41,7 @@ describe("session archive identity", () => {
         storePath,
         target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
       });
+      await closeOpenClawAgentDatabasesAsync(state.root);
       closeOpenClawAgentDatabasesForTest();
 
       const archivedPath = deleted.archivedTranscripts[0]?.archivedPath;

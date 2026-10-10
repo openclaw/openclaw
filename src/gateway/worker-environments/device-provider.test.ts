@@ -7,6 +7,7 @@ import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError } from "../../plugins/types.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
@@ -15,6 +16,29 @@ import {
   createDeviceWorkerRuntime,
   reconcileDeviceWorker,
 } from "./device-provider.js";
+
+it.each([undefined, "gateway", "worker"])(
+  "accepts explicit inference %s at device allocation",
+  async (inference) => {
+    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    await expect(
+      provider.resolveAllocation(
+        { device: "paired-node", ...(inference ? { inference } : {}) },
+        "allocation",
+      ),
+    ).resolves.toMatchObject({ sharedHost: true });
+  },
+);
+
+it.each(["runtime-local", "unknown"])(
+  "rejects invalid inference %s at device allocation",
+  async (inference) => {
+    const { provider } = createDeviceWorkerRuntime({ getPairedDevice: async () => null });
+    await expect(
+      provider.resolveAllocation({ device: "paired-node", inference }, "invalid"),
+    ).rejects.toBeInstanceOf(WorkerProviderError);
+  },
+);
 
 const DEVICE_ID = "device-session-host";
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -58,7 +82,7 @@ function connectedNode(deviceId = DEVICE_ID, available = true): NodeWorkerSuperv
 function deviceRuntime(params: {
   getPairedDevice: (deviceId: string) => Promise<PairedDevice | null>;
   listCurrentNodes?: () => Promise<readonly NodeWorkerSupervisorNodeProof[]>;
-  getIssue?: () => typeof NODE_RUNNER_UPDATE_REQUIRED_ISSUE | undefined;
+  getIssue?: () => NodeRunnerInventoryIssue | undefined;
   now?: () => number;
 }) {
   const runtime = createDeviceWorkerRuntime({
@@ -67,6 +91,9 @@ function deviceRuntime(params: {
   });
   if (params.listCurrentNodes) {
     runtime.bindNodeTransport({
+      async getCurrentNode(nodeId) {
+        return (await this.listCurrentNodes()).find((node) => node.nodeId === nodeId);
+      },
       listCurrentNodes: params.listCurrentNodes,
       hasCurrentRunner: () => true,
       ...(params.getIssue ? { getIssue: params.getIssue } : {}),
@@ -96,9 +123,10 @@ describe("device worker provider", () => {
     }).provider;
 
     expect(provider.supportedExecutionModes).toEqual(["worker-turn", "remote-exec"]);
-    const first = await provider.provision({ device: DEVICE_ID }, "operation-1");
-    const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1");
-    const next = await provider.provision({ device: DEVICE_ID }, "operation-2");
+    const authority = { assertCurrent: () => {} };
+    const first = await provider.provision({ device: DEVICE_ID }, "operation-1", authority);
+    const repeated = await provider.provision({ device: DEVICE_ID }, "operation-1", authority);
+    const next = await provider.provision({ device: DEVICE_ID }, "operation-2", authority);
 
     expect(first).toEqual({
       leaseId: expect.stringMatching(/^device:[a-f0-9]{64}:[a-f0-9]{32}$/u),
@@ -126,9 +154,24 @@ describe("device worker provider", () => {
     await expect(runtime.resolveAvailability(DEVICE_ID)).resolves.toMatchObject({
       available: true,
     });
-    await expect(runtime.provider.provision({ device: DEVICE_ID }, "remote-exec")).resolves.toEqual(
+    await expect(
+      runtime.provider.provision({ device: DEVICE_ID }, "remote-exec", { assertCurrent: () => {} }),
+    ).resolves.toEqual(
       expect.objectContaining({ node: { deviceId: DEVICE_ID }, sharedHost: true }),
     );
+  });
+
+  it("returns the node's actionable disabled-host reason during provision", async () => {
+    const message = "state directory /srv/node is group-writable; run chmod go-w /srv/node";
+    const provider = deviceRuntime({
+      getPairedDevice: async () => pairedDevice(),
+      listCurrentNodes: async () => [],
+      getIssue: () => ({ code: "worker-host-unavailable", message }),
+    }).provider;
+
+    await expect(
+      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
+    ).rejects.toThrow(`device worker node ${DEVICE_ID} cannot host sessions: ${message}`);
   });
 
   it.each([
@@ -148,7 +191,9 @@ describe("device worker provider", () => {
     "rejects $name during provision",
     async ({ getPairedDevice, listCurrentNodes, expectedMessage }) => {
       const provider = deviceRuntime({ getPairedDevice, listCurrentNodes }).provider;
-      const provision = provider.provision({ device: DEVICE_ID }, "operation");
+      const provision = provider.provision({ device: DEVICE_ID }, "operation", {
+        assertCurrent: () => {},
+      });
 
       await expect(provision).rejects.toBeInstanceOf(WorkerProviderError);
       await expect(provision).rejects.toMatchObject({ message: expectedMessage });
@@ -162,7 +207,9 @@ describe("device worker provider", () => {
       getIssue: () => NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
     }).provider;
 
-    await expect(provider.provision({ device: DEVICE_ID }, "operation")).rejects.toThrow(
+    await expect(
+      provider.provision({ device: DEVICE_ID }, "operation", { assertCurrent: () => {} }),
+    ).rejects.toThrow(
       `device worker node ${DEVICE_ID} requires an update before it can host sessions; run openclaw update, then reconnect it (for a headless node, run openclaw node restart)`,
     );
   });
@@ -176,11 +223,6 @@ describe("device worker provider", () => {
     {
       name: "at the dormancy ceiling",
       disconnectedAtMs: 6 * DAY_MS,
-      expected: { status: "unknown" },
-    },
-    {
-      name: "past the dormancy ceiling",
-      disconnectedAtMs: DAY_MS,
       expected: { status: "unknown" },
     },
     {

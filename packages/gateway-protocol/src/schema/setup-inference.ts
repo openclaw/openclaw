@@ -12,7 +12,7 @@ export const SetupInferenceFailureStatusSchema = Type.Union([
   Type.Literal("unknown"),
 ]);
 
-/** Finalized rejection before model/credential promotion; preparatory effects may remain. */
+/** Finalized rejection before the model config commit; saved credentials may remain. */
 export const SetupInferenceActivationRejectionSchema = closedObject({
   disposition: Type.Literal("rejected-before-promotion"),
   status: SetupInferenceFailureStatusSchema,

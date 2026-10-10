@@ -3,7 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
   withOpenClawTestState,
@@ -66,10 +66,12 @@ vi.mock("./reply/model-selection.js", async (importOriginal) => ({
     typeof import("./reply/model-selection.js").createModelSelectionState
   >(async (params) => createModelSelectionStateFixture(params)),
 }));
-vi.mock("./reply/session-reset-model.runtime.js", () => ({
+vi.mock("./reply/session-reset-model.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/session-reset-model.js")>()),
   applyResetModelOverride: vi.fn(async () => undefined),
 }));
-vi.mock("./reply/stage-sandbox-media.runtime.js", () => ({
+vi.mock("./reply/stage-sandbox-media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply/stage-sandbox-media.js")>()),
   stageSandboxMedia: vi.fn(async () => undefined),
 }));
 vi.mock("./reply/typing.js", () => ({

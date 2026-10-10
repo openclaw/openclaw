@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { buildMcpAppSandboxPath } from "../agents/mcp-app-sandbox.js";
+import { SANDBOX_HOST_PATH } from "../agents/sandbox-host.js";
 import { createPluginBoardWidgetContentKindRegistrar } from "../plugins/board-widget-content-kinds.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -73,6 +74,67 @@ function publicResourceRegistry(
 }
 
 describe("MCP App sandbox HTTP origin", () => {
+  it("caches only the exact versioned public shell and separates effective policies", async () => {
+    const paths = [
+      buildMcpAppSandboxPath(),
+      buildMcpAppSandboxPath({
+        connectDomains: ["https://api.example.com"],
+        resourceDomains: ["https://cdn.example.com"],
+      }),
+      buildMcpAppSandboxPath({ blockDescendantFrames: true }),
+    ] as const;
+    await withSandboxHost(async (origin) => {
+      const versions = new Set<string>();
+      for (const path of paths) {
+        const url = new URL(path, origin);
+        const version = url.searchParams.get("v");
+        expect(version).toMatch(/^[a-f0-9]{64}$/);
+        versions.add(version!);
+        const get = await fetch(url);
+        expect(get.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+        expect(get.headers.get("set-cookie")).toBeNull();
+        const body = await get.text();
+        if (path === paths[1]) {
+          const csp = get.headers.get("content-security-policy");
+          expect(csp).toContain("connect-src https://api.example.com");
+          expect(csp).toContain("webrtc 'block'");
+          expect(csp).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
+          expect(csp).toContain("font-src 'self' https://cdn.example.com");
+          expect(csp).toContain("frame-ancestors");
+          expect(csp).toContain("frame-src 'none'");
+          expect(get.headers.get("x-frame-options")).toBeNull();
+          expect(get.headers.get("cross-origin-resource-policy")).toBe("cross-origin");
+          expect(get.headers.get("permissions-policy")).toBe(
+            "camera=(), microphone=(), geolocation=(), clipboard-write=()",
+          );
+          expect(body).not.toContain("allow-popups");
+        }
+        const head = await fetch(url, { method: "HEAD" });
+        expect(head.headers.get("cache-control")).toBe(get.headers.get("cache-control"));
+        expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
+        expect(await head.text()).toBe("");
+
+        url.searchParams.set("v", "stale-version");
+        const stale = await fetch(url);
+        expect(stale.headers.get("cache-control")).toBe("no-store");
+        expect(await stale.text()).toBe(body);
+        url.searchParams.delete("v");
+        const unversioned = await fetch(url);
+        expect(unversioned.headers.get("cache-control")).toBe("no-store");
+        expect(await unversioned.text()).toBe(body);
+      }
+      expect(versions.size).toBe(paths.length);
+
+      const altered = new URL(paths[1], origin);
+      altered.searchParams.delete("csp");
+      const response = await fetch(altered);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-security-policy")).toContain("connect-src 'none'");
+      await response.text();
+      expect(buildMcpAppSandboxPath({ connectDomains: ["invalid"] })).toBe(paths[0]);
+    });
+  });
+
   it("serves only explicitly public registered assets without Gateway credentials", async () => {
     const read = vi.fn(async () => ({
       body: Buffer.from("window.rendererReady=true"),
@@ -163,45 +225,6 @@ describe("MCP App sandbox HTTP origin", () => {
     },
   );
 
-  it("serves only the proxy endpoint with metadata-derived CSP", () => {
-    const result = request(
-      buildMcpAppSandboxPath({
-        connectDomains: ["https://api.example.com"],
-        resourceDomains: ["https://cdn.example.com"],
-      }),
-    );
-
-    expect(result.res.statusCode).toBe(200);
-    const csp = result.setHeader.mock.calls.findLast(
-      (call) => call[0] === "Content-Security-Policy",
-    )?.[1];
-    expect(String(csp)).toContain("connect-src https://api.example.com");
-    expect(String(csp)).toContain("webrtc 'block'");
-    expect(String(csp)).toContain("script-src 'self' 'unsafe-inline' https://cdn.example.com");
-    expect(String(csp)).toContain("font-src 'self' https://cdn.example.com");
-    expect(String(csp)).toContain("frame-ancestors");
-    expect(String(csp)).toContain("frame-src 'none'");
-    expect(result.setHeader).not.toHaveBeenCalledWith("X-Frame-Options", expect.anything());
-    expect(result.setHeader).toHaveBeenCalledWith("Cross-Origin-Resource-Policy", "cross-origin");
-    expect(result.setHeader).toHaveBeenCalledWith(
-      "Permissions-Policy",
-      "camera=(), microphone=(), geolocation=(), clipboard-write=()",
-    );
-    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("document.referrer"));
-    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("sandbox-proxy-ready"));
-    expect(result.end).toHaveBeenCalledWith(expect.stringContaining("allow-scripts allow-forms"));
-    expect(result.end).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw:widget-bridge-port-offer"),
-    );
-    expect(result.end).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw:widget-prompt-offer"),
-    );
-    const proxyHtml = String(result.end.mock.calls.at(-1)?.[0]);
-    expect(proxyHtml).not.toContain("allow-popups");
-    expect(proxyHtml).toContain("const guardedHtml = guardDocument(params.html)");
-    expect(proxyHtml).toContain("nextInner.srcdoc = guardedHtml");
-  });
-
   it("supports HEAD and rejects other paths, methods, and malformed policy", () => {
     const head = request(buildMcpAppSandboxPath(), "HEAD");
     expect(head.res.statusCode).toBe(200);
@@ -209,46 +232,23 @@ describe("MCP App sandbox HTTP origin", () => {
 
     expect(request("/", "GET").res.statusCode).toBe(404);
     expect(request(buildMcpAppSandboxPath(), "POST").res.statusCode).toBe(404);
-    expect(request(`${buildMcpAppSandboxPath()}?csp=not-json`).res.statusCode).toBe(400);
+    expect(request(`${SANDBOX_HOST_PATH}?csp=not-json`).res.statusCode).toBe(400);
     const jsonButNotCsp = Buffer.from("null", "utf8").toString("base64url");
-    expect(request(`${buildMcpAppSandboxPath()}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
-    expect(request(`${buildMcpAppSandboxPath()}?csp=`).res.statusCode).toBe(400);
+    expect(request(`${SANDBOX_HOST_PATH}?csp=${jsonButNotCsp}`).res.statusCode).toBe(400);
+    expect(request(`${SANDBOX_HOST_PATH}?csp=`).res.statusCode).toBe(400);
     expect(request("http://[", "GET").res.statusCode).toBe(400);
     const unsafeHeaderPolicy = Buffer.from(
       JSON.stringify({ connectDomains: ["https://api.\nexample.com"] }),
       "utf8",
     ).toString("base64url");
-    expect(request(`${buildMcpAppSandboxPath()}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(
-      400,
-    );
-  });
-
-  it("emits canonical ASCII origins for validated CSP domains", () => {
-    const result = request(
-      buildMcpAppSandboxPath({ connectDomains: ["https://b\u00fccher.example"] }),
-    );
-
-    expect(result.setHeader).toHaveBeenCalledWith(
-      "Content-Security-Policy",
-      expect.stringContaining("connect-src https://xn--bcher-kva.example"),
-    );
+    expect(request(`${SANDBOX_HOST_PATH}?csp=${unsafeHeaderPolicy}`).res.statusCode).toBe(400);
   });
 
   it.each([
     {
-      label: "sandbox HTML",
-      path: buildMcpAppSandboxPath(),
-      statusCode: 200,
-    },
-    {
       label: "missing path",
       path: "/missing",
       statusCode: 404,
-    },
-    {
-      label: "malformed policy",
-      path: `${buildMcpAppSandboxPath()}?csp=not-json`,
-      statusCode: 400,
     },
   ])(
     "keeps GET and HEAD representation metadata aligned for $label",

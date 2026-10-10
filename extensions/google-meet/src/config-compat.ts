@@ -1,4 +1,3 @@
-// Google Meet helper module supports config compat behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asNullableRecord,
@@ -11,16 +10,14 @@ type LegacyConfigRule = {
   match: (value: unknown) => boolean;
 };
 
-function hasOwn(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
-
 function hasLegacyGoogleRealtimeProvider(value: unknown): boolean {
   const realtime = asNullableRecord(value);
   if (!realtime || normalizeProviderId(realtime.provider) !== "google") {
     return false;
   }
-  return !hasOwn(realtime, "voiceProvider") || !hasOwn(realtime, "transcriptionProvider");
+  return (
+    !Object.hasOwn(realtime, "voiceProvider") || !Object.hasOwn(realtime, "transcriptionProvider")
+  );
 }
 
 export const legacyConfigRules: LegacyConfigRule[] = [
@@ -56,10 +53,10 @@ function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
   nextPluginConfig.realtime = nextRealtime;
 
   nextRealtime.provider = "openai";
-  if (!hasOwn(nextRealtime, "transcriptionProvider")) {
+  if (!Object.hasOwn(nextRealtime, "transcriptionProvider")) {
     nextRealtime.transcriptionProvider = "openai";
   }
-  if (!hasOwn(nextRealtime, "voiceProvider")) {
+  if (!Object.hasOwn(nextRealtime, "voiceProvider")) {
     nextRealtime.voiceProvider = "google";
   }
 

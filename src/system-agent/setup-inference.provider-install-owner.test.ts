@@ -10,6 +10,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolvePluginArtifactDeclaredSurface } from "../plugins/capability-artifact.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import * as loader from "../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
@@ -52,7 +53,7 @@ it.each([false, true])(
           gateway: { mode: "local" },
           agents: {
             defaults: { workspace: state.workspaceDir },
-            entries: { main: { default: true, workspace: state.workspaceDir } },
+            entries: { main: { workspace: state.workspaceDir } },
           },
           plugins: { entries: {} },
         };
@@ -68,7 +69,10 @@ it.each([false, true])(
         const runningRegistry = createEmptyPluginRegistry();
         setActivePluginRegistry(runningRegistry);
         const loaded = vi.spyOn(loader, "loadPluginRegistryHandle");
-        const projectRoot = state.statePath("npm", "projects", "fixture-provider");
+        const projectRoot = resolvePluginNpmProjectDir({
+          npmDir: state.statePath("npm"),
+          packageName: "@fixture/provider",
+        });
         const pluginRoot = path.join(projectRoot, "node_modules", "@fixture", "provider");
         const pluginEntry = path.join(pluginRoot, "index.cjs");
         const pluginSource = `module.exports = {
@@ -87,7 +91,7 @@ it.each([false, true])(
           throw new Error("Synthetic credential has no fingerprint");
         }
         let trustedRecord: PluginInstallRecord | undefined;
-        prepareProvider.mockImplementation(async (params) => {
+        prepareProvider.mockImplementation(async (params, consume) => {
           // Acquisition and auth are synthetic. Discovery, runtime registration,
           // owner fingerprints, activation checks, and final promotion are real.
           await fs.mkdir(pluginRoot, { recursive: true });
@@ -146,14 +150,16 @@ it.each([false, true])(
             acceptedSurfaceAt: "2026-09-06T00:00:00.000Z",
             acceptedSurfaceIntegrity: integrity,
           };
-          return {
-            config,
-            agentModelOverride: "fixture-provider/fixture-model",
-            authProfiles: [],
-            pendingPluginInstalls: { "fixture-provider": trustedRecord },
-            persistAuthProfiles: async () => {},
-            provider: { id: "fixture-provider", label: "Fixture", auth: [] },
-          };
+          return await consume(
+            {
+              config,
+              agentModelOverride: "fixture-provider/fixture-model",
+              authProfiles: [],
+              pendingPluginInstalls: { "fixture-provider": trustedRecord },
+              persistAuthProfiles: async () => {},
+            },
+            { id: "fixture-provider", label: "Fixture", auth: [] },
+          );
         });
         const capture = vi.fn(captureSystemAgentOwnerPluginArtifacts);
         const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(
@@ -246,7 +252,7 @@ it.each([false, true])(
                 modelRef: "fixture-provider/fixture-model",
               });
               // The running generation intentionally retains its pre-install cache.
-              const records = await withPluginLifecycleLease({}, () =>
+              const records = await withPluginLifecycleLease({}, async () =>
                 readPersistedInstalledPluginIndexInstallRecords({ stateDir: state.stateDir }),
               );
               if (!trustedRecord) {

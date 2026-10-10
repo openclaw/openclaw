@@ -19,8 +19,12 @@ struct MacControlOptions {
     var passwordSource: SecretSource?
 
     static func parse(_ args: [String], environment: [String: String] = [:]) throws -> Self {
-        let (values, flags, words) = try self.tokenize(args)
-        let profile = try MacControlProfile(rawValue: values["--profile"] ?? environment["OPENCLAW_PROFILE"])
+        try self.parse(MacCLIContext(arguments: args, environment: environment))
+    }
+
+    static func parse(_ context: MacCLIContext) throws -> Self {
+        let (values, flags, words) = try tokenize(context.arguments)
+        let profile = context.profile
         let command = words.first ?? "status"
         let subcommand = words.count > 1 ? words[1] : ""
         let operation = try self.operation(
@@ -49,7 +53,7 @@ struct MacControlOptions {
         guard !(options.tokenSource == .stdin && options.passwordSource == .stdin) else {
             throw self.usage("Standard input can supply only one secret.")
         }
-        let globals: Set = ["--profile", "--timeout", "--json", "--launch", "--no-launch"]
+        let globals: Set = ["--timeout", "--json", "--launch", "--no-launch"]
         let secrets: Set = ["--token-file", "--password-file", "--token-stdin", "--password-stdin"]
         var allowed = globals
         switch operation {
@@ -106,7 +110,7 @@ struct MacControlOptions {
         var flags = Set<String>()
         var words: [String] = []
         let valueFlags: Set = [
-            "--profile", "--timeout", "--ssh-target", "--remote-port", "--local-port", "--identity",
+            "--timeout", "--ssh-target", "--remote-port", "--local-port", "--identity",
             "--ssh-host-key-policy", "--direct-url", "--tls-fingerprint", "--url", "--token-file", "--password-file",
         ]
         let switchFlags: Set = [

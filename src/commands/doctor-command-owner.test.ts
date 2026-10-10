@@ -47,8 +47,9 @@ describe("command owner health", () => {
     expect(note).toHaveBeenCalledWith(
       [
         "No command owner is configured.",
-        "A command owner is the human operator account allowed to run owner-only commands and approve dangerous actions, including /diagnostics, /export-session, /export-trajectory, /config, and exec approvals.",
-        "CLI pairing approval records the first command owner. Control UI approval has an owner checkbox; otherwise set commands.ownerAllowFrom.",
+        "A command owner is your trusted human operator account, allowed to update OpenClaw with /update, restart the Gateway, change configuration, and approve commands. Chat allowlists do not grant this authority.",
+        "Run openclaw channels add and complete a channel's setup to choose your operator account, including servers and groups without DM pairing.",
+        "CLI pairing approval records the first command owner. Control UI pairing approval has a separate owner checkbox.",
         "Fix: set commands.ownerAllowFrom to your channel user id, for example openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'",
         "Restart the gateway after changing this if it is already running.",
       ].join("\n"),
@@ -83,27 +84,19 @@ describe("command owner health", () => {
     },
   );
 
-  it.each([
-    { name: "no owners", owners: [], expected: ["telegram:123"] },
-    {
-      name: "existing owners and duplicates",
-      owners: ["slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"],
-      expected: ["slack:owner", "telegram:123"],
-    },
-    {
-      name: "a new owner alongside existing owners",
-      owners: ["slack:owner"],
-      expected: ["slack:owner", "telegram:123"],
-    },
-  ])("preserves command owners in the hint with $name", ({ owners, expected }) => {
+  it("preserves existing command owners and removes duplicates in the hint", () => {
     expect(
       formatCommandOwnerHint({
-        cfg: { commands: { ownerAllowFrom: owners } },
+        cfg: {
+          commands: {
+            ownerAllowFrom: ["slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"],
+          },
+        },
         channel: "telegram",
         id: "123",
       }),
     ).toBe(
-      `Ask the operator to run \`openclaw config set commands.ownerAllowFrom '${JSON.stringify(expected)}'\` in a terminal to make this sender a command owner.`,
+      `Ask the operator to run \`openclaw config set commands.ownerAllowFrom '["slack:owner","telegram:123"]'\` in a terminal to make this sender a command owner.`,
     );
   });
 

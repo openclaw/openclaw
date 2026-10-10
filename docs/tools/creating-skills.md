@@ -6,7 +6,7 @@ summary: "Build, test, and publish custom SKILL.md workspace skills or personal 
 read_when:
   - You are creating a new custom skill
   - You need a quick starter workflow for SKILL.md-based skills
-  - You want to use Skill Workshop to propose a skill for agent review
+  - You want the agent to save or update a skill for you with Skill Workshop
 ---
 
 Skills teach the agent how and when to use tools. Each skill is a directory
@@ -36,7 +36,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
   <Step title="Write SKILL.md">
     The frontmatter defines metadata; the body gives the agent instructions.
 
-    ```markdown
+    ````markdown
     ---
     name: hello-world
     description: A simple skill that prints a greeting.
@@ -49,7 +49,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
     ```bash
     echo "Hello from your custom skill!"
     ```
-    ```
+    ````
 
     Naming rules:
     - Use lowercase letters, digits, and hyphens for `name`.
@@ -98,9 +98,8 @@ You do not need host shell access or permission to edit shared Gateway settings.
 
 You can also ask the agent to create or improve a personal skill. Its
 `skill_workshop` tool uses the Gateway's authorized library service; it does not
-write managed revision directories directly. The result distinguishes a
-published skill from a pending proposal and explains when the session can use
-it. Ask explicitly to use the new revision in the current session or share it
+write managed revision directories directly. The result names the published
+revision and explains when the session can use it. Ask explicitly to use the new revision in the current session or share it
 with the team.
 
 The single-admin default remains the workspace workflow above. Extra channel
@@ -189,46 +188,21 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
   </Accordion>
 </AccordionGroup>
 
-## Propose via Skill Workshop
+## Learned skills (Skill Workshop)
 
-For agent-drafted skills or when you want operator review before a skill goes
-live, use [Skill Workshop](/tools/skill-workshop) proposals instead of writing
-`SKILL.md` directly.
-
-```bash
-# Propose a brand-new skill
-openclaw skills workshop propose-create \
-  --name "hello-world" \
-  --description "A simple skill that prints a greeting." \
-  --proposal ./PROPOSAL.md
-
-# Propose an update to an existing skill
-openclaw skills workshop propose-update hello-world \
-  --proposal ./PROPOSAL.md \
-  --description "Updated greeting skill"
-```
-
-Use `--proposal-dir` when the proposal includes support files:
+Agents also write their own skills through [Skill Workshop](/tools/skill-workshop).
+Those learned skills apply immediately and keep their previous versions, so any
+change can be undone. Inspect and manage them from the CLI:
 
 ```bash
-openclaw skills workshop propose-create \
-  --name "hello-world" \
-  --description "A simple skill that prints a greeting." \
-  --proposal-dir ./hello-world-proposal/
+openclaw skills workshop list
+openclaw skills workshop changes
+openclaw skills workshop show hello-world
+openclaw skills workshop archive hello-world --reason "Replaced by greeting"
+openclaw skills workshop restore hello-world
 ```
 
-The directory must contain `PROPOSAL.md` at its root. Support files go under
-`assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
-
-After review:
-
-```bash
-openclaw skills workshop inspect <proposal-id>
-openclaw skills workshop evaluate <proposal-id>
-openclaw skills workshop apply <proposal-id>
-```
-
-See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
+See [`openclaw skills workshop`](/cli/skills#skill-workshop) for every option.
 
 ## Publishing to ClawHub
 
@@ -280,7 +254,7 @@ personal owner or an organization where you have publisher access.
     Loading order, gating, allowlists, and SKILL.md format.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">
-    Proposal queue for agent-drafted skills.
+    Skills your agent saves and updates on its own, with undo.
   </Card>
   <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Full `skills.*` config schema.
@@ -290,5 +264,8 @@ personal owner or an organization where you have publisher access.
   </Card>
   <Card title="Building plugins" href="/plugins/building-plugins" icon="plug">
     Plugins can ship skills alongside the tools they document.
+  </Card>
+  <Card title="Slash commands" href="/tools/slash-commands" icon="terminal">
+    How the command a skill registers is invoked and gated.
   </Card>
 </CardGroup>

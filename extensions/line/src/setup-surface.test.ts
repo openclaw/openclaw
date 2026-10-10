@@ -12,7 +12,7 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
@@ -20,9 +20,21 @@ import { stubLineApiFetch } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
+const monitorLineProviderMock = vi.hoisted(() =>
+  vi.fn<
+    (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => Promise<void>
+  >(),
+);
+vi.mock("./monitor.js", () => ({ monitorLineProvider: monitorLineProviderMock }));
+
 afterEach(() => {
+  monitorLineProviderMock.mockReset();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+});
+afterAll(() => {
+  vi.doUnmock("./monitor.js");
+  vi.resetModules();
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
@@ -128,36 +140,29 @@ describe("linePlugin status.probeAccount", () => {
     expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
       "https://api.line.me/v2/bot/info",
       "https://api.line.me/v2/bot/message/quota",
+      "https://api.line.me/v2/bot/channel/webhook/endpoint",
     ]);
   });
 });
 
 function createRuntime() {
   const providerStarted = createDeferred<void>();
-  const monitorLineProvider = vi.fn(
-    async (opts: Parameters<typeof import("./monitor.js").monitorLineProvider>[0]) => {
-      providerStarted.resolve();
-      await waitForAbortSignal(opts.abortSignal);
-      return {
-        account: { accountId: "default" },
-        handleWebhook: async () => {},
-        stop: async () => {},
-      };
-    },
-  );
+  monitorLineProviderMock.mockImplementation(async (opts) => {
+    providerStarted.resolve();
+    await waitForAbortSignal(opts.abortSignal);
+  });
 
   const runtime = {
-    channel: {
-      line: {
-        monitorLineProvider,
-      },
-    },
     logging: {
       shouldLogVerbose: () => false,
     },
   } as unknown as PluginRuntime;
 
-  return { runtime, monitorLineProvider, providerStarted: providerStarted.promise };
+  return {
+    runtime,
+    monitorLineProvider: monitorLineProviderMock,
+    providerStarted: providerStarted.promise,
+  };
 }
 
 function createAccount(params: { token: string; secret: string }): ResolvedLineAccount {

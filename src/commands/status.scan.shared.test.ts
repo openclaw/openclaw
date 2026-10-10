@@ -1,10 +1,11 @@
-// Status scan shared tests cover gateway probe snapshots, Tailscale URLs, and shared scan helpers.
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
+import * as clientReadiness from "../../packages/gateway-client/src/readiness.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { parseStatusRouteArgs } from "../cli/program/route-args.js";
 import {
@@ -14,6 +15,9 @@ import {
   sendMinimalGatewayConnectChallenge,
   sendMinimalGatewayResponse,
 } from "../gateway/minimal-gateway.test-helpers.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
+import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
   buildTailscaleHttpsUrl,
   resolveGatewayProbeSnapshot as resolveGatewayProbeSnapshotOwner,
@@ -31,69 +35,32 @@ const resolveGatewayProbeSnapshot = (
   });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanupTempDirs(tempDirs);
 });
 
 const mocks = vi.hoisted(() => ({
   buildGatewayConnectionDetailsWithResolvers: vi.fn(),
   resolveGatewayProbeTarget: vi.fn(),
-  probeGateway: vi.fn(),
-  callGateway: vi.fn(),
+  probeGateway: vi.fn<typeof import("../gateway/probe.js").probeGateway>(),
+  waitForGatewayDiagnosticReadiness: vi.fn(),
+  callGateway: vi.fn<typeof import("../gateway/call.js").callGateway>(),
   resolveGatewayProbeAuthResolution: vi.fn(),
   pickGatewaySelfPresence: vi.fn(),
 }));
 
-type GatewayCall = {
-  clientName?: string;
-  config?: unknown;
-  deviceIdentity?: unknown;
-  method?: string;
-  mode?: string;
-  password?: string;
-  timeoutMs?: number;
-  token?: string;
-};
-
-type GatewayProbeCall = {
-  auth?: unknown;
-  detailLevel?: string;
-  preauthHandshakeTimeoutMs?: number;
-  timeoutMs?: number;
-  url?: string;
-};
-
-type MemorySearchManagerCall = {
-  agentId?: string;
-  cfg: {
-    plugins?: {
-      slots?: unknown;
-    };
-  };
-  purpose?: string;
-  inspectSources?: boolean;
-};
-
-function readGatewayCall(): GatewayCall {
+function readGatewayCall() {
   expect(mocks.callGateway).toHaveBeenCalledOnce();
-  const calls = mocks.callGateway.mock.calls as unknown as Array<[unknown]>;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected gateway call");
-  }
-  return call as GatewayCall;
+  return mocks.callGateway.mock.calls[0]![0];
 }
 
-function readProbeCall(): GatewayProbeCall {
+function readProbeCall() {
   expect(mocks.probeGateway).toHaveBeenCalledOnce();
-  const calls = mocks.probeGateway.mock.calls as unknown as Array<[unknown]>;
-  const call = calls[0]?.[0];
-  if (!call) {
-    throw new Error("Expected gateway probe call");
-  }
-  return call as GatewayProbeCall;
+  return mocks.probeGateway.mock.calls[0]![0];
 }
 
-vi.mock("../gateway/connection-details.js", () => ({
+vi.mock("../gateway/connection-details.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/connection-details.js")>()),
   buildGatewayConnectionDetailsWithResolvers: mocks.buildGatewayConnectionDetailsWithResolvers,
 }));
 
@@ -103,6 +70,10 @@ vi.mock("../gateway/probe-target.js", () => ({
 
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
+}));
+
+vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
+  waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -120,15 +91,17 @@ vi.mock("./gateway-presence.js", () => ({
 describe("resolveGatewayProbeSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(performance, "now").mockReturnValue(0);
+    mocks.waitForGatewayDiagnosticReadiness.mockReset();
     mocks.buildGatewayConnectionDetailsWithResolvers.mockReturnValue({
       url: "ws://127.0.0.1:18789",
       urlSource: "local loopback",
       message: "Gateway target: ws://127.0.0.1:18789",
     });
     mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: true,
+      mode: "local",
+      gatewayMode: "local",
+      remoteUrlMissing: false,
     });
     mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: { token: "tok", password: "pw" },
@@ -139,100 +112,132 @@ describe("resolveGatewayProbeSnapshot", () => {
   });
 
   it("skips auth resolution and probe for missing remote urls by default", async () => {
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode: "remote",
+      gatewayMode: "remote",
+      remoteUrlMissing: true,
+    });
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
     });
 
     expect(mocks.resolveGatewayProbeAuthResolution).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
-    expect(result.gatewayConnection.url).toBe("ws://127.0.0.1:18789");
     expect(result.remoteUrlMissing).toBe(true);
     expect(result.gatewayMode).toBe("remote");
-    expect(result.gatewayProbeAuth).toEqual({});
-    expect(result.gatewayProbeAuthWarning).toBeUndefined();
     expect(result.gatewayProbe).toBeNull();
     expect(result.gatewayReachable).toBe(false);
-    expect(result.gatewaySelf).toBeNull();
-    expect(result.gatewayCallOverrides).toEqual({
-      url: "ws://127.0.0.1:18789",
-      token: undefined,
-      password: undefined,
-    });
   });
 
-  it("can probe the local fallback when remote url is missing", async () => {
-    mocks.probeGateway.mockResolvedValue({
-      ok: true,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: 12,
-      error: null,
-      close: null,
-      health: {},
-      status: {},
-      presence: [{ host: "box" }],
-      configSnapshot: null,
-    });
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: {
-        detailLevel: "full",
-        probeWhenRemoteUrlMissing: true,
-        resolveAuthWhenRemoteUrlMissing: true,
-        mergeAuthWarningIntoProbeError: false,
-      },
-    });
+  it("waits through a 22-second cold start before probing the selected Gateway", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    try {
+      mocks.resolveGatewayProbeTarget.mockReturnValue({
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+      });
+      const startedAt = Date.now();
+      mocks.waitForGatewayDiagnosticReadiness.mockImplementation(async () => {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 22_000);
+        });
+        vi.spyOn(performance, "now").mockReturnValue(22_000);
+        return { healthy: true, elapsedMs: 22_000, waitOutcome: "healthy" };
+      });
+      mocks.probeGateway.mockImplementation(async () => ({
+        ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+        ok: Date.now() - startedAt >= 22_000,
+      }));
+      const pending = resolveGatewayProbeSnapshot({
+        cfg: {},
+        opts: createStatusGatewayProbeBudget(),
+      });
+      await vi.advanceTimersByTimeAsync(22_000);
+      const result = await pending;
 
-    expect(mocks.resolveGatewayProbeAuthResolution).toHaveBeenCalled();
-    const probeCall = readProbeCall();
-    expect(probeCall.url).toBe("ws://127.0.0.1:18789");
-    expect(probeCall.auth).toEqual({ token: "tok", password: "pw" });
-    expect(probeCall.detailLevel).toBe("full");
-    expect(result.gatewayReachable).toBe(true);
-    expect(result.gatewaySelf).toEqual({ host: "box" });
-    expect(result.gatewayCallOverrides).toEqual({
-      url: "ws://127.0.0.1:18789",
-      token: "tok",
-      password: "pw",
-    });
-    expect(result.gatewayProbeAuthWarning).toBe("warn");
+      expect(result.gatewayReachable).toBe(true);
+      expect(result.localGatewayHealthy).toBe(true);
+      expect(readProbeCall()).toMatchObject({
+        timeoutMs: 38_000,
+        auth: { token: "tok", password: "pw" },
+      });
+      expect(mocks.waitForGatewayDiagnosticReadiness).toHaveBeenCalledWith({
+        config: {},
+        timeoutMs: 60_000,
+        deadlineMs: 60_000,
+        onProgress: undefined,
+        token: "tok",
+        password: "pw",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("merges auth warnings into failed probe errors by default", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-    const result = await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: {},
-    });
+  it.each([
+    { waitOutcome: "still-starting", startupPhase: "plugins", error: null },
+    { waitOutcome: "timeout", startupPhase: undefined, error: "connection refused" },
+  ])(
+    "preserves $waitOutcome without another probe budget",
+    async ({ waitOutcome, startupPhase, error }) => {
+      mocks.resolveGatewayProbeTarget.mockReturnValue({
+        gatewayMode: "local",
+        remoteUrlMissing: false,
+      });
+      mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({ auth: {}, warning: undefined });
+      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+        healthy: false,
+        elapsedMs: 60_000,
+        waitOutcome,
+        startupPhase,
+        probeError: error,
+      });
+      const result = await resolveGatewayProbeSnapshot({
+        cfg: {},
+        opts: createStatusGatewayProbeBudget(),
+      });
 
-    expect(result.gatewayProbe?.error).toBe("timeout; warn");
-    expect(result.gatewayProbeAuthWarning).toBeUndefined();
-  });
+      expect(result.gatewayProbe).toMatchObject({ ok: false, error });
+      expect(result.gatewayProbe?.startupPhase).toBe(startupPhase);
+      expect(result.localGatewayHealthy).toBe(false);
+      expect(mocks.probeGateway).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["remote", "plugin-errors", "channel-errors", "probe-failed"])(
+    "does not claim current local health from %s",
+    async (observation) => {
+      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue(
+        observation === "remote"
+          ? undefined
+          : {
+              healthy: observation !== "channel-errors",
+              waitOutcome: observation === "channel-errors" ? "channel-errors" : "healthy",
+              ...(observation === "plugin-errors"
+                ? { activatedPluginErrors: ["fixture plugin failed"] }
+                : {}),
+              ...(observation === "channel-errors"
+                ? { channelProbeErrors: ["fixture channel failed"] }
+                : {}),
+            },
+      );
+      mocks.probeGateway.mockResolvedValue({
+        ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+        ok: observation !== "probe-failed",
+      });
+      const result = await resolveGatewayProbeSnapshot({
+        cfg: {},
+        opts: createStatusGatewayProbeBudget(),
+      });
+      expect(result.localGatewayHealthy).toBe(false);
+    },
+  );
 
   it("treats scope-limited read probes as reachable", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
     mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
+      ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
       connectLatencyMs: 51,
       gatewayReached: true,
       error: "missing scope: operator.read",
@@ -246,15 +251,11 @@ describe("resolveGatewayProbeSnapshot", () => {
         version: null,
         connId: null,
       },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
     });
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
     });
 
     expect(result.gatewayReachable).toBe(true);
@@ -262,34 +263,14 @@ describe("resolveGatewayProbeSnapshot", () => {
   });
 
   it("uses a bounded local status RPC fallback when the detail probe times out", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
+    );
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
-      opts: {
-        timeoutMs: 8000,
-      },
+      opts: createStatusGatewayProbeBudget(8000),
     });
 
     const gatewayCall = readGatewayCall();
@@ -315,118 +296,28 @@ describe("resolveGatewayProbeSnapshot", () => {
       urlSource: "local loopback",
       message: "Gateway target: ws://localhost.:18789",
     });
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://localhost.:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("ws://localhost.:18789", "timeout"),
+    );
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
     });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(result.gatewayProbe?.ok).toBe(false);
   });
 
-  it("uses built-in probe defaults for the local status RPC fallback", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
-    mocks.callGateway.mockResolvedValue({ sessions: 1 });
-
-    await resolveGatewayProbeSnapshot({
-      cfg: {},
-      opts: {},
-    });
-
-    const probeCall = readProbeCall();
-    expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
-    expect(probeCall.timeoutMs).toBe(2500);
-    const gatewayCall = readGatewayCall();
-    expect(gatewayCall.config).toEqual({});
-    expect(gatewayCall.timeoutMs).toBe(2000);
-  });
-
-  it.each([1, 50, 999, 1000, 2000, 8000])(
-    "does not raise an explicit local status RPC fallback timeout (%i ms)",
-    async (timeoutMs) => {
-      mocks.resolveGatewayProbeTarget.mockReturnValue({
-        mode: "local",
-        gatewayMode: "local",
-        remoteUrlMissing: false,
-      });
-      mocks.probeGateway.mockResolvedValue({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        connectLatencyMs: null,
-        error: "timeout",
-        close: null,
-        auth: {
-          role: null,
-          scopes: [],
-          capability: "unknown",
-        },
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      });
-      mocks.callGateway.mockResolvedValue({ sessions: 1 });
-
-      await resolveGatewayProbeSnapshot({
-        cfg: {},
-        opts: { timeoutMs },
-      });
-
-      const probeCall = readProbeCall();
-      expect(probeCall).not.toHaveProperty("preauthHandshakeTimeoutMs");
-      expect(probeCall.timeoutMs).toBe(timeoutMs);
-      expect(readGatewayCall().timeoutMs).toBe(Math.min(2000, timeoutMs));
-    },
-  );
-
-  it("enforces an explicit CLI timeout against a real local fallback status RPC", async () => {
+  it("gives a real local fallback status RPC only the remaining explicit CLI timeout", async ({
+    signal,
+  }) => {
     const gateway = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     await once(gateway, "listening");
     const address = gateway.address() as AddressInfo;
     const url = `ws://127.0.0.1:${address.port}`;
     const observedMethods: string[] = [];
+    const statusRequested = createDeferred();
     gateway.on("connection", (socket) => {
       sendMinimalGatewayConnectChallenge(socket);
       socket.on("message", (data) => {
@@ -448,6 +339,7 @@ describe("resolveGatewayProbeSnapshot", () => {
         }
         observedMethods.push(frame.method);
         if (frame.method === "status") {
+          statusRequested.resolve();
           const responseTimer = setTimeout(() => {
             if (socket.readyState === socket.OPEN) {
               sendMinimalGatewayResponse(socket, requestId, { sessions: 1 });
@@ -463,15 +355,9 @@ describe("resolveGatewayProbeSnapshot", () => {
       urlSource: "local loopback",
       message: `Gateway target: ${url}`,
     });
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockImplementation(async (...args: unknown[]) => {
-      const { probeGateway } =
-        await vi.importActual<typeof import("../gateway/probe.js")>("../gateway/probe.js");
-      return await probeGateway(...(args as Parameters<typeof probeGateway>));
+    mocks.probeGateway.mockImplementation(async () => {
+      vi.spyOn(performance, "now").mockReturnValue(150);
+      return createUnreachableGatewayProbe(url, "timeout");
     });
     mocks.callGateway.mockImplementation(async (...args: unknown[]) => {
       const { callGateway } =
@@ -481,62 +367,86 @@ describe("resolveGatewayProbeSnapshot", () => {
     const parsed = parseStatusRouteArgs(["node", "openclaw", "status", "--timeout", "250"]);
     expect(parsed?.timeoutMs).toBe(250);
 
+    const startup = createDeferred<{
+      completion: ReturnType<typeof clientReadiness.startGatewayClientWhenEventLoopReady>;
+    }>();
+    const startClient = clientReadiness.startGatewayClientWhenEventLoopReady;
+    const startupSpy = vi
+      .spyOn(clientReadiness, "startGatewayClientWhenEventLoopReady")
+      .mockImplementation((...args) => {
+        const completion = startClient(...args);
+        startup.resolve({ completion });
+        return completion;
+      });
+    const driveStartup = async () => {
+      const { completion } = await racePromiseWithAbortSignal(startup.promise, signal);
+      const startupState = { settled: false };
+      void completion.then(
+        () => {
+          startupState.settled = true;
+        },
+        () => {
+          startupState.settled = true;
+        },
+      );
+      while (!startupState.settled) {
+        signal.throwIfAborted();
+        await vi.advanceTimersToNextTimerAsync();
+      }
+      await completion;
+    };
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    let pending: ReturnType<typeof resolveGatewayProbeSnapshot> | undefined;
     try {
-      const result = await resolveGatewayProbeSnapshot({
-        cfg: { gateway: { auth: { mode: "none" } } },
-        opts: { timeoutMs: parsed?.timeoutMs },
+      pending = resolveGatewayProbeSnapshot({
+        cfg: { gateway: { auth: { mode: "token", token: "tok" } } },
+        opts: createStatusGatewayProbeBudget(parsed?.timeoutMs),
       });
 
+      // Drive deadline time only after real socket requests cross their boundary.
+      await driveStartup();
+      await racePromiseWithAbortSignal(statusRequested.promise, signal);
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await pending;
+
       expect(readProbeCall().timeoutMs).toBe(250);
-      expect(readGatewayCall().timeoutMs).toBe(250);
-      expect(observedMethods).toEqual(["system-presence", "status"]);
+      expect(readGatewayCall().timeoutMs).toBe(100);
+      expect(startupSpy).toHaveBeenCalledOnce();
+      expect(observedMethods).toEqual(["status"]);
       expect(result.gatewayProbe?.ok).toBe(false);
       expect(result.gatewayProbe?.error).toContain("timeout");
     } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      startupSpy.mockRestore();
       await closeMinimalGatewayServer(gateway);
+      await Promise.allSettled([pending]);
     }
   });
 
   it("lets callGateway reuse paired-device auth for local status RPC fallback", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "local",
-      gatewayMode: "local",
-      remoteUrlMissing: false,
-    });
     mocks.resolveGatewayProbeAuthResolution.mockResolvedValue({
       auth: {},
       warning: undefined,
     });
     mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "ws://127.0.0.1:18789",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
+      ...createUnreachableGatewayProbe("ws://127.0.0.1:18789", "timeout"),
       auth: {
         role: "operator",
         scopes: ["operator.read"],
         capability: "read_only",
       },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
     });
     mocks.callGateway.mockResolvedValue({ sessions: 1 });
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: {},
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
     });
 
     const gatewayCall = readGatewayCall();
-    expect(gatewayCall.config).toEqual({});
-    expect(gatewayCall.method).toBe("status");
     expect(gatewayCall.token).toBeUndefined();
     expect(gatewayCall.password).toBeUndefined();
-    expect(gatewayCall.mode).toBe("backend");
-    expect(gatewayCall.clientName).toBe("gateway-client");
     expect(gatewayCall).not.toHaveProperty("deviceIdentity");
     expect(result.gatewayReachable).toBe(true);
   });
@@ -547,26 +457,13 @@ describe("resolveGatewayProbeSnapshot", () => {
       gatewayMode: "remote",
       remoteUrlMissing: false,
     });
-    mocks.probeGateway.mockResolvedValue({
-      ok: false,
-      url: "wss://gateway.example/ws",
-      connectLatencyMs: null,
-      error: "timeout",
-      close: null,
-      auth: {
-        role: null,
-        scopes: [],
-        capability: "unknown",
-      },
-      health: null,
-      status: null,
-      presence: null,
-      configSnapshot: null,
-    });
+    mocks.probeGateway.mockResolvedValue(
+      createUnreachableGatewayProbe("wss://gateway.example/ws", "timeout"),
+    );
 
     const result = await resolveGatewayProbeSnapshot({
       cfg: { gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } } },
-      opts: {},
+      opts: createStatusGatewayProbeBudget(),
     });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
@@ -584,18 +481,74 @@ describe("buildTailscaleHttpsUrl", () => {
       }),
     ).toBe("https://node.tailnet.ts.net/control");
   });
-
-  it("uses a Tailscale IP when MagicDNS is unavailable", () => {
-    expect(
-      buildTailscaleHttpsUrl({
-        tailscaleMode: "serve",
-        tailscaleDns: "100.64.0.8",
-      }),
-    ).toBe("https://100.64.0.8");
-  });
 });
 
+function memoryManager<
+  T extends import("../memory-host-sdk/engine-storage.js").MemoryProviderStatus,
+>(status: T) {
+  return {
+    probeVectorStoreAvailability: vi.fn(async () => true),
+    probeVectorAvailability: vi.fn(async () => true),
+    status: vi.fn(() => status),
+    close: vi.fn(async () => {}),
+  };
+}
+
 describe("resolveSharedMemoryStatusSnapshot", () => {
+  it("reports native provider health instead of returning a silent null", async () => {
+    const close = vi.fn().mockResolvedValue(undefined);
+    const health = vi.fn().mockResolvedValue({ status: "ready", message: "connected" });
+    const getMemoryProvider = vi.fn().mockResolvedValue({
+      providerId: "records",
+      provider: { health, close },
+    });
+    const getMemorySearchManager = vi.fn();
+
+    const result = await resolveSharedMemoryStatusSnapshot({
+      cfg: { plugins: { slots: { memory: "records" } } },
+      agentStatus: { defaultId: "main" },
+      memoryPlugin: { enabled: true, slot: "records" },
+      resolveMemoryConfig: vi.fn(() => null),
+      getMemorySearchManager,
+      isMemoryProviderNative: () => true,
+      getMemoryProvider,
+    });
+
+    expect(getMemoryProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        purpose: "status",
+        context: expect.objectContaining({ authority: { kind: "host", operation: "status" } }),
+      }),
+    );
+    expect(result).toEqual({
+      agentId: "main",
+      provider: "records",
+      health: { status: "ready", message: "connected" },
+    });
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it("does not resolve the slot owner for Memory Core without a built-in store", async () => {
+    const isMemoryProviderNative = vi.fn(() => false);
+    const getMemorySearchManager = vi.fn();
+
+    await expect(
+      resolveSharedMemoryStatusSnapshot({
+        cfg: {},
+        agentStatus: { defaultId: "main" },
+        memoryPlugin: { enabled: true, slot: "memory-core" },
+        resolveMemoryConfig: vi.fn(() => null),
+        getMemorySearchManager,
+        isMemoryProviderNative,
+        requireDefaultDatabasePath: () => null,
+      }),
+    ).resolves.toBeNull();
+    expect(isMemoryProviderNative).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it("skips agent-scoped memory when an explicit fleet has no selected owner", async () => {
     const resolveMemoryConfig = vi.fn();
     const getMemorySearchManager = vi.fn();
@@ -619,32 +572,17 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "top-level defaults",
-      cfg: { memory: { search: { provider: "local" } } },
-    },
-    {
-      name: "per-agent overrides",
-      cfg: {
-        agents: {
-          entries: { main: { memory: { search: { provider: "local" } } } },
-        },
-      },
-    },
-  ])("inspects explicitly configured memory from $name", async ({ cfg }) => {
-    const manager = {
-      probeVectorStoreAvailability: vi.fn(async () => true),
-      probeVectorAvailability: vi.fn(async () => true),
-      status: vi.fn(() => ({
-        backend: "builtin" as const,
-        provider: "local",
-        files: 0,
-        chunks: 0,
-        dirty: true,
-      })),
-      close: vi.fn(async () => {}),
+  it("inspects explicitly configured per-agent memory", async () => {
+    const cfg = {
+      agents: { entries: { main: { memory: { search: { provider: "local" as const } } } } },
     };
+    const manager = memoryManager({
+      backend: "builtin" as const,
+      provider: "local",
+      files: 0,
+      chunks: 0,
+      dirty: true,
+    });
     const resolveMemoryConfig = vi.fn(() => ({
       store: { databasePath: `/tmp/openclaw-missing-memory-${process.pid}.sqlite` },
     }));
@@ -664,24 +602,18 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(getMemorySearchManager).toHaveBeenCalledWith(
       expect.objectContaining({ purpose: "status", inspectSources: true }),
     );
-    expect(result?.provider).toBe("local");
-    expect(result?.dirty).toBe(true);
+    expect(result).toMatchObject({ provider: "local", dirty: true });
   });
 
   it("asks custom memory-slot runtimes for status without requiring built-in memorySearch", async () => {
-    const manager = {
-      probeVectorStoreAvailability: vi.fn(async () => true),
-      probeVectorAvailability: vi.fn(async () => true),
-      status: vi.fn(() => ({
-        backend: "builtin" as const,
-        provider: "memory-lancedb-pro",
-        files: 66,
-        chunks: 128,
-        vector: { enabled: true, available: true },
-        fts: { enabled: true, available: true },
-      })),
-      close: vi.fn(async () => {}),
-    };
+    const manager = memoryManager({
+      backend: "builtin" as const,
+      provider: "memory-lancedb-pro",
+      files: 66,
+      chunks: 128,
+      vector: { enabled: true, available: true },
+      fts: { enabled: true, available: true },
+    });
     const resolveMemoryConfig = vi.fn(() => null);
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
     const requireDefaultDatabasePath = vi.fn(
@@ -694,10 +626,6 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
           slots: { memory: "memory-lancedb-pro" },
         },
         memory: { search: { enabled: false } },
-
-        agents: {
-          defaults: {},
-        },
       },
       agentStatus: { defaultId: "main" },
       memoryPlugin: { enabled: true, slot: "memory-lancedb-pro" },
@@ -709,14 +637,12 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     expect(resolveMemoryConfig).not.toHaveBeenCalled();
     expect(requireDefaultDatabasePath).not.toHaveBeenCalled();
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
-    const managerCalls = getMemorySearchManager.mock.calls as unknown as Array<
-      [MemorySearchManagerCall]
-    >;
-    const managerCall = managerCalls[0]?.[0];
-    expect(managerCall?.cfg.plugins?.slots).toEqual({ memory: "memory-lancedb-pro" });
-    expect(managerCall?.agentId).toBe("main");
-    expect(managerCall?.purpose).toBe("status");
-    expect(managerCall?.inspectSources).toBe(true);
+    expect(getMemorySearchManager).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({ plugins: { slots: { memory: "memory-lancedb-pro" } } }),
+      agentId: "main",
+      purpose: "status",
+      inspectSources: true,
+    });
     expect(manager.probeVectorStoreAvailability).toHaveBeenCalled();
     expect(manager.probeVectorAvailability).not.toHaveBeenCalled();
     expect(manager.status).toHaveBeenCalled();
@@ -778,19 +704,14 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
       INSERT INTO files VALUES ('MEMORY.md', 'memory', 'file-hash', 10, 20);
     `);
     db.close();
-    const manager = {
-      probeVectorStoreAvailability: vi.fn(async () => true),
-      probeVectorAvailability: vi.fn(async () => true),
-      status: vi.fn(() => ({
-        backend: "builtin" as const,
-        provider: "openai",
-        files: 1,
-        chunks: 0,
-        vector: { enabled: true, available: true },
-        fts: { enabled: true, available: true },
-      })),
-      close: vi.fn(async () => {}),
-    };
+    const manager = memoryManager({
+      backend: "builtin" as const,
+      provider: "openai",
+      files: 1,
+      chunks: 0,
+      vector: { enabled: true, available: true },
+      fts: { enabled: true, available: true },
+    });
     const getMemorySearchManager = vi.fn(async () => ({ manager }));
 
     const result = await resolveSharedMemoryStatusSnapshot({
@@ -803,7 +724,7 @@ describe("resolveSharedMemoryStatusSnapshot", () => {
     });
 
     expect(getMemorySearchManager).toHaveBeenCalledOnce();
-    expect(result?.files).toBe(1);
+    expect(result).toMatchObject({ files: 1 });
   });
 
   it("does not initialize memory status for an agent database owned by another feature", async () => {

@@ -1,15 +1,22 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { renderNode } from "../../components/config-form.node.ts";
-import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
+import {
+  humanize,
+  localizedHintForPath,
+  type JsonSchema,
+} from "../../components/config-form.shared.ts";
 import {
   renderSettingsGroup,
   renderSettingsPage,
   renderSettingsRow,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { SETUP_CONSENT_DEFAULTS, SETUP_HISTORY_KEYS } from "./setup-schema.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+registerSettingsEnglish();
 
 export function renderSetupSection(schema: JsonSchema, props: ConfigProps, disabled: boolean) {
   const wizard = isRecord(props.formValue?.wizard) ? props.formValue.wizard : {};
@@ -46,7 +53,7 @@ export function renderSetupSection(schema: JsonSchema, props: ConfigProps, disab
           if (typeof value !== "string" || !value) {
             return [];
           }
-          const hint = hintForPath(["wizard", key], props.uiHints);
+          const hint = localizedHintForPath(["wizard", key], props.uiHints);
           return [
             renderSettingsRow({
               title: hint?.label ?? schema.properties?.[key]?.title ?? humanize(key),

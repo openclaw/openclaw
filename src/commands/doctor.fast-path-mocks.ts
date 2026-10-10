@@ -10,11 +10,21 @@ vi.mock("./doctor-bootstrap-size.js", () => ({
 }));
 
 vi.mock("./doctor-auth-flat-profiles.js", () => ({
+  maybeRepairLegacyAuthProfileStores: ({
+    profileIdMap,
+  }: {
+    profileIdMap: Map<string, string>;
+  }) => ({
+    changes: [],
+    warnings: [],
+    profileIdMap,
+  }),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map()),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn().mockResolvedValue({
     detected: [],
     changes: [],
-    configOwnerMigrationApplied: false,
+    migratedProfileIds: new Set<string>(),
+    blockedProfileIds: new Set<string>(),
     warnings: [],
   }),
   maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
@@ -31,16 +41,7 @@ vi.mock("./doctor-auth-legacy-oauth.js", () => ({
   })),
 }));
 
-vi.mock("./doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
-}));
-
 vi.mock("./doctor-browser.js", () => ({
-  detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
-  maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
   maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
     changes: [],
     warnings: [],
@@ -85,6 +86,10 @@ vi.mock("./doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("./doctor-foreign-launchd-jobs.js", () => ({
+  noteMacForeignLaunchdJobs: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("./doctor-gateway-health.js", () => ({
   checkGatewayHealth: vi.fn().mockResolvedValue({ healthOk: false }),
   probeGatewayMemoryStatus: vi
@@ -92,9 +97,12 @@ vi.mock("./doctor-gateway-health.js", () => ({
     .mockResolvedValue({ checked: false, ready: false, skipped: false }),
 }));
 
-vi.mock("./doctor-memory-search.js", () => ({
+vi.mock("./doctor-memory-recall.js", () => ({
   maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
   noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -104,23 +112,24 @@ vi.mock("./doctor-plugin-manifests.js", () => ({
 
 vi.mock("./doctor-plugin-registry.js", () => ({
   maybeRepairPluginRegistryState: vi.fn(async ({ config }: { config: unknown }) => ({ config })),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => null),
 }));
 
-vi.mock("./doctor-platform-notes.js", () => ({
+vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-platform-notes.js")>()),
   noteStartupOptimizationHints: vi.fn(),
-  noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
-  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn().mockResolvedValue(undefined),
-  noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
+  noteMacGatewayPlatformWarnings: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-sandbox.js", () => ({
   maybeRepairSandboxImages: vi.fn(async (cfg: unknown) => cfg),
+  noteCodexBwrapNamespaceWarnings: vi.fn(),
   maybeRepairSandboxRegistryFiles: vi.fn().mockResolvedValue(undefined),
   noteSandboxScopeWarnings: vi.fn(),
 }));
 
 vi.mock("./doctor-security.js", () => ({
-  noteSecurityWarnings: vi.fn().mockResolvedValue(undefined),
+  noteSecurityWarnings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-install-policy.js", () => ({
@@ -140,9 +149,12 @@ vi.mock("./doctor-skills.js", () => ({
 }));
 
 vi.mock("./doctor-state-integrity.js", () => ({
-  collectWorkspaceBackupTip: vi.fn(() => null),
   noteStateIntegrity: vi.fn().mockResolvedValue(undefined),
-  noteWorkspaceBackupTip: vi.fn(),
+}));
+
+vi.mock("./doctor-workspace.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-workspace.js")>()),
+  collectWorkspaceBackupTip: vi.fn(() => null),
 }));
 
 vi.mock("./doctor-ui.js", () => ({

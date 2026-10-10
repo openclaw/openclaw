@@ -1,6 +1,5 @@
-// Litellm setup module handles plugin onboarding behavior.
 import {
-  createDefaultModelPresetAppliers,
+  createDefaultModelsPresetAppliers,
   type ModelDefinitionConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
@@ -30,10 +29,10 @@ export function buildLitellmModelDefinition(): ModelDefinitionConfig {
 }
 
 export const { applyConfig: applyLitellmConfig, applyProviderConfig: applyLitellmProviderConfig } =
-  createDefaultModelPresetAppliers<[]>({
+  createDefaultModelsPresetAppliers<[]>({
     primaryModelRef: LITELLM_DEFAULT_MODEL_REF,
     resolveParams: (cfg: OpenClawConfig) => {
-      const existingProvider = cfg.models?.providers?.litellm as { baseUrl?: unknown } | undefined;
+      const existingProvider = cfg.models?.providers?.litellm;
       const resolvedBaseUrl =
         typeof existingProvider?.baseUrl === "string" ? existingProvider.baseUrl.trim() : "";
 
@@ -41,7 +40,9 @@ export const { applyConfig: applyLitellmConfig, applyProviderConfig: applyLitell
         providerId: "litellm",
         api: "openai-completions" as const,
         baseUrl: resolvedBaseUrl || LITELLM_BASE_URL,
-        defaultModel: buildLitellmModelDefinition(),
+        // Replace mode disables discovery, so it still needs the configured default.
+        defaultModels:
+          resolvedBaseUrl && cfg.models?.mode !== "replace" ? [] : [buildLitellmModelDefinition()],
         defaultModelId: LITELLM_DEFAULT_MODEL_ID,
         aliases: [{ modelRef: LITELLM_DEFAULT_MODEL_REF, alias: "LiteLLM" }],
       };

@@ -1,30 +1,22 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
+import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
+import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
-// v19 qualifies immutable creator namespaces without deriving authority from sandbox policy.
-// v18 separates participant identity namespaces and preserves unknown historical times.
-// v17 retires the tenant-free per-agent state lease table.
-// v16 retires legacy top-level Media* transcript fields. It is a downgrade
-// guard only; the physical schema is unchanged and Doctor owns the data rewrite.
-// v15 makes board and session-sharing tables part of the canonical agent schema.
-// v14 = logical session nodes, generation windows, and node-owned artifact FKs.
-// v13 = one durable rewrite watermark per raw session transcript.
-// v12 = session-owned ACP parent-stream events.
-// v11 = durable delivery operations, canonical external conversation addresses,
-// and bounded per-session heartbeat outcome context.
-// v10 = materialized active transcript paths.
-// v9 = SQLite STRICT tables.
-// v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
-// v6 added session/transcript hot-path indexes.
-// v5 added transcript mutation watermarks.
-// The v4 session/transcript flip and main's v2 memory-identity
-// change is folded in structure-gated migrations, so v2 main DBs and
-// pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 19;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 25;
+export const CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION = 25;
+export const AGENT_STORAGE_SCHEMA_VERSION = 23;
+export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
+export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
+// Bound the disk work shared by startup inspection, admission, and canonical preparation.
+export { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../infra/worker-pool-sizing.js";
+// Bounds startup session reconciliation for large fleets without letting one slow store hold every slot.
+export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
 
-/** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
   agentId: string;
   db: DatabaseSync;
@@ -32,9 +24,16 @@ export type OpenClawAgentDatabase = {
   walMaintenance: SqliteWalMaintenance;
 };
 
-/** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
+};
+
+/** Internal Doctor custody; never part of the plugin-facing database options. */
+export type OpenClawAgentDatabaseRepairAdmission = {
+  /** Bind repair admission to the physical database inspected and backed up by its owner. */
+  expectedIdentity?: DatabaseFileIdentity;
+  /** Live caller authority for native open and schema/registry admission mutations. */
+  assertCurrent?: () => void;
 };
 
 /** Shared-state registry row describing an agent database seen by this process. */
@@ -46,7 +45,35 @@ export type OpenClawRegisteredAgentDatabase = {
   sizeBytes: number | null;
 };
 
+export type OpenClawAgentDatabaseRegistryReadResult =
+  | { status: "available"; entries: OpenClawRegisteredAgentDatabase[] }
+  | { status: "unavailable" };
+
+/** An in-process witness from the canonical invalidator, never serialized as authority. */
+export type AgentDatabaseRegistryChange = Readonly<{ previous: symbol; current: symbol }>;
+
+export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
+  agentId: string;
+  agentPath: string;
+  stateDatabasePath: string;
+  stateDatabaseIdentity: string;
+}>;
+
+export type AgentDatabaseRegistryWorkerOperations = {
+  "agentDatabaseRegistry.remove": {
+    input: { agentId: string; agentPath: string; identity: DatabasePathIdentity };
+    output: OpenClawAgentDatabaseRegistrationCommit;
+  };
+};
+
+export type OpenClawAgentDatabaseRegistrationObserver = {
+  starting?: () => void;
+  committed?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void;
+};
+
 export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "owned"; agentId: string }
   | { status: "unowned" }
   | { status: "unreadable" };
+
+export const SESSION_PARTICIPANTS_TABLE = "session_participants";

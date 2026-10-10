@@ -1,5 +1,5 @@
 import type { RouteLocation, RouterHistory } from "@openclaw/uirouter";
-import { sameRouteLocation, type RouteId } from "../../app-routes.ts";
+import { pluginSlugCandidate, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
@@ -11,13 +11,14 @@ export function isDefaultChatLanding(
 ): boolean {
   return (
     !new URLSearchParams(location.search + "&" + location.hash.slice(1)).has("session") &&
+    !pluginSlugCandidate(location.pathname, basePath) &&
     (routeIdFromPath(location.pathname, basePath) === null ||
       /^\/chat(?:\/main)?\/?$/u.test(location.pathname.slice(basePath.length)))
   );
 }
 
 export async function startModelSetupFirstRunRedirectAfterLocation(params: {
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   enabled: boolean;
   history: Pick<RouterHistory, "location" | "replace">;
   initialLocationReady: Promise<RouteLocation>;
@@ -52,9 +53,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
       params.onInitialDecision?.();
     }
   };
-  const handleSnapshot: Parameters<ApplicationContext<RouteId>["gateway"]["subscribe"]>[0] = (
-    snapshot,
-  ) => {
+  const handleSnapshot: Parameters<ApplicationContext["gateway"]["subscribe"]>[0] = (snapshot) => {
     if (initialDecisionSettled) {
       return;
     }
@@ -81,17 +80,23 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
           if (localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")) {
             const ownerRevision = context.gateway.connectionRevision;
             // Crypto stays lazy; only an existing receipt suspends startup.
-            void import("./model-setup-page.ts")
-              .then(({ resumeFirstRunActivation }) =>
-                resumeFirstRunActivation(
-                  { context, isStillDefaultLanding, redirect },
-                  snapshot,
-                  ownerRevision,
-                  selectedAgentId,
-                  () => initialDecisionSettled,
-                  settleInitialDecision,
-                ),
-              )
+            void import("./first-run-activation-receipt.ts")
+              .then(({ readFirstRunActivationReceipt }) => {
+                const current = context.gateway.snapshot;
+                if (
+                  !initialDecisionSettled &&
+                  current.phase === "connected" &&
+                  current.client === snapshot.client &&
+                  current.hello === snapshot.hello &&
+                  context.gateway.connectionRevision === ownerRevision &&
+                  (context.agentSelection.state.selectedId?.trim() || null) === selectedAgentId &&
+                  isStillDefaultLanding() &&
+                  readFirstRunActivationReceipt(context) !== null
+                ) {
+                  redirect();
+                }
+                settleInitialDecision();
+              })
               .catch(settleInitialDecision);
             return;
           }

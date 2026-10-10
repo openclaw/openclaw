@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   renderSettingsSection,
@@ -7,17 +7,18 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
-import { formatDurationHuman } from "../../lib/format.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 type SystemSectionProps = {
   systemInfo?: SystemInfoResult | null;
   systemInfoUnavailable?: boolean;
+  systemInfoLoading?: boolean;
 };
 
 type SystemStat = {
   label: string;
-  value: string;
+  value: string | TemplateResult;
   unit?: string;
   detail?: string;
   /** Used share of the resource (0..1); renders the meter bar when present. */
@@ -26,20 +27,11 @@ type SystemStat = {
   title?: string;
 };
 
-// Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
-function systemMeterTone(fraction: number): "ok" | "warn" | "critical" {
-  if (fraction >= 0.92) {
-    return "critical";
-  }
-  if (fraction >= 0.75) {
-    return "warn";
-  }
-  return "ok";
-}
-
 function renderSystemMeter(label: string, fraction: number) {
   const clamped = Math.min(Math.max(fraction, 0), 1);
   const percent = Math.round(clamped * 100);
+  // Meter tones reuse the status palette: calm until 75%, warn to 92%, critical beyond.
+  const tone = clamped >= 0.92 ? "critical" : clamped >= 0.75 ? "warn" : "ok";
   return html`
     <div
       class="config-host__meter"
@@ -50,7 +42,7 @@ function renderSystemMeter(label: string, fraction: number) {
       aria-valuenow=${percent}
     >
       <div
-        class="config-host__meter-fill config-host__meter-fill--${systemMeterTone(clamped)}"
+        class="config-host__meter-fill config-host__meter-fill--${tone}"
         style="--config-host-meter-fill: ${percent}%"
       ></div>
     </div>
@@ -60,7 +52,7 @@ function renderSystemMeter(label: string, fraction: number) {
 function renderSystemStat(stat: SystemStat) {
   const label = stat.path ? `${stat.label} ${stat.path}` : stat.label;
   return html`
-    <div class="config-host__stat" title=${stat.path ?? stat.title ?? ""}>
+    <div class="config-host__stat" title=${stat.title ?? nothing}>
       <div class="config-host__stat-label">
         ${stat.label}${
           stat.path ? html` <span class="config-host__stat-path">${stat.path}</span>` : nothing
@@ -77,15 +69,31 @@ function renderSystemStat(stat: SystemStat) {
   `;
 }
 
-function usedFraction(totalBytes: number | undefined, freeBytes: number | undefined) {
-  if (totalBytes == null || freeBytes == null || totalBytes <= 0) {
-    return undefined;
-  }
-  return (totalBytes - freeBytes) / totalBytes;
-}
-
 function formatUsedPercent(fraction: number) {
   return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
+}
+
+function resourceStat(
+  kind: "memory" | "disk",
+  totalBytes: number | undefined,
+  freeBytes: number | undefined,
+  path?: string,
+): SystemStat {
+  const used =
+    totalBytes == null || freeBytes == null || totalBytes <= 0
+      ? undefined
+      : (totalBytes - freeBytes) / totalBytes;
+  return {
+    label: t(`quickSettings.system.${kind}`),
+    value: used == null ? "—" : formatUsedPercent(used),
+    unit: used == null ? undefined : t("quickSettings.system.used"),
+    detail: t("quickSettings.system.freeOf", {
+      free: formatBytes(freeBytes),
+      total: formatBytes(totalBytes),
+    }),
+    usedFraction: used,
+    path,
+  };
 }
 
 function buildSystemStats(info: SystemInfoResult): SystemStat[] {
@@ -106,7 +114,6 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
           label: t("quickSettings.system.cpu"),
           value: coresLabel,
           detail: info.cpuModel,
-          title: cpuTitle,
         }
       : {
           label: t("quickSettings.system.cpu"),
@@ -117,44 +124,14 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
           usedFraction: info.cpuCount > 0 ? load / info.cpuCount : undefined,
           title: cpuTitle,
         };
-  const memoryUsed = usedFraction(info.memoryTotalBytes, info.memoryFreeBytes);
-  const memory: SystemStat = {
-    label: t("quickSettings.system.memory"),
-    value: memoryUsed == null ? "—" : formatUsedPercent(memoryUsed),
-    unit: memoryUsed == null ? undefined : t("quickSettings.system.used"),
-    detail: t("quickSettings.system.freeOf", {
-      free: formatBytes(info.memoryFreeBytes),
-      total: formatBytes(info.memoryTotalBytes),
-    }),
-    usedFraction: memoryUsed,
-  };
-  const stats = [cpu, memory];
+  const stats = [cpu, resourceStat("memory", info.memoryTotalBytes, info.memoryFreeBytes)];
   for (const disk of info.disks ?? []) {
-    const diskUsed = usedFraction(disk.totalBytes, disk.availableBytes);
-    if (diskUsed == null) {
-      continue;
+    const stat = resourceStat("disk", disk.totalBytes, disk.availableBytes, disk.path);
+    if (stat.usedFraction != null) {
+      stats.push(stat);
     }
-    stats.push({
-      label: t("quickSettings.system.disk"),
-      value: formatUsedPercent(diskUsed),
-      unit: t("quickSettings.system.used"),
-      detail: t("quickSettings.system.freeOf", {
-        free: formatBytes(disk.availableBytes),
-        total: formatBytes(disk.totalBytes),
-      }),
-      usedFraction: diskUsed,
-      path: disk.path,
-    });
   }
   return stats;
-}
-
-function buildSystemStatsPlaceholder(): SystemStat[] {
-  return [
-    { label: t("quickSettings.system.cpu"), value: "—" },
-    { label: t("quickSettings.system.memory"), value: "—" },
-    { label: t("quickSettings.system.disk"), value: "—" },
-  ];
 }
 
 /** Gateway host section with the stable settings-search scroll target id. */
@@ -163,15 +140,21 @@ export function renderSystemSection(props: SystemSectionProps) {
     return nothing;
   }
   const info = props.systemInfo;
-  const placeholder = "—";
+  const placeholder = props.systemInfoLoading
+    ? html`<span class="skeleton config-host__placeholder" aria-hidden="true"></span>`
+    : "—";
   const hostTitle = info && info.hostname !== info.machineName ? info.hostname : undefined;
   const address = info?.lanAddress
     ? `${info.lanAddress}${info.port == null ? "" : `:${info.port}`}`
     : undefined;
-  const stats = info ? buildSystemStats(info) : buildSystemStatsPlaceholder();
+  const stats = info
+    ? buildSystemStats(info)
+    : ["cpu", "memory", "disk"].map((kind) => ({
+        label: t(`quickSettings.system.${kind}`),
+        value: placeholder,
+      }));
 
-  // Escape hatch: host identity + metered stats are a genuine two-column grid,
-  // kept as custom markup inside the single group with row-matched paddings.
+  // Host identity and metered stats use a custom two-column grid with aligned row padding.
   const sectionProps: SettingsSectionProps = {
     title: t("quickSettings.system.gatewayHost"),
     actions: info
@@ -182,7 +165,7 @@ export function renderSystemSection(props: SystemSectionProps) {
       : undefined,
   };
   return html`
-    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host}>
+    <div id=${CONNECTION_SETTINGS_TARGET_IDS.host} aria-busy=${Boolean(props.systemInfoLoading)}>
       ${renderSettingsSection(
         sectionProps,
         html`

@@ -1,19 +1,15 @@
-// Whatsapp plugin module implements agent tools login behavior.
 import {
   optionalPositiveIntegerSchema,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
-import { hasNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
 
 const QR_DATA_URL_MAX_LENGTH = 16_384;
-
-function readLoginStringPreservingWhitespace(value: unknown): string | undefined {
-  return hasNonEmptyString(value) ? value : undefined;
-}
 
 export function createWhatsAppLoginTool(
   context: OpenClawPluginToolContext,
@@ -41,15 +37,18 @@ export function createWhatsAppLoginTool(
     }),
     execute: async (_toolCallId, args, signal) => {
       const beforeCredentialPersistence = async () => {
+        context.assertInvocationCurrent?.();
         if (!signal || signal.aborted) {
           throw new Error("WhatsApp login authority is no longer active.");
         }
       };
-      const renderQrReply = (params: {
-        message: string;
-        qrDataUrl: string;
-        connected?: boolean;
-      }) => {
+      const renderReply = (
+        params: { message: string; qrDataUrl?: string; connected?: boolean },
+        noQrDetails: { connected: boolean } | { qr: false },
+      ) => {
+        if (!params.qrDataUrl) {
+          return textResult(params.message, noQrDetails);
+        }
         const text = [
           params.message,
           "",
@@ -57,39 +56,24 @@ export function createWhatsAppLoginTool(
           "",
           `![whatsapp-qr](${params.qrDataUrl})`,
         ].join("\n");
-        return {
-          content: [{ type: "text" as const, text }],
-          details: {
-            connected: params.connected ?? false,
-            qr: true,
-          },
-        };
+        return textResult(text, {
+          connected: params.connected ?? false,
+          qr: true,
+        });
       };
 
       const action = (args as { action?: string })?.action ?? "start";
-      const accountId = readLoginStringPreservingWhitespace(
-        (args as { accountId?: unknown }).accountId,
-      );
+      const accountId = readNonBlankString((args as { accountId?: unknown }).accountId);
       const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
       if (action === "wait") {
         const result = await waitForWebLogin({
           accountId,
           timeoutMs,
-          currentQrDataUrl: readLoginStringPreservingWhitespace(
+          currentQrDataUrl: readNonBlankString(
             (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
           ),
         });
-        if (result.qrDataUrl) {
-          return renderQrReply({
-            message: result.message,
-            qrDataUrl: result.qrDataUrl,
-            connected: result.connected,
-          });
-        }
-        return {
-          content: [{ type: "text", text: result.message }],
-          details: { connected: result.connected },
-        };
+        return renderReply(result, { connected: result.connected });
       }
 
       await beforeCredentialPersistence();
@@ -103,27 +87,14 @@ export function createWhatsAppLoginTool(
             : false,
       });
 
-      if (!result.qrDataUrl) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: result.message,
-            },
-          ],
-          details: { qr: false },
-        };
-      }
-
-      return renderQrReply({
-        message: result.message,
-        qrDataUrl: result.qrDataUrl,
-        connected: result.connected,
-      });
+      return renderReply(result, { qr: false });
     },
   };
 }
 
 export function registerWhatsAppLoginTool(api: OpenClawPluginApi): void {
-  api.registerTool((context) => createWhatsAppLoginTool(context), { name: "whatsapp_login" });
+  api.registerTool(
+    { contextVersion: 2, create: (context) => createWhatsAppLoginTool(context) },
+    { name: "whatsapp_login" },
+  );
 }

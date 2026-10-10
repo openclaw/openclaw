@@ -84,6 +84,23 @@ describe("migrateScheduledToolPolicy", () => {
     expect(result.legacyScheduledToolPolicyJobs).toEqual(["Legacy"]);
   });
 
+  it("recovers a capless creator account without changing execution permissions", () => {
+    const raw = job({
+      owner: { agentId: "main", sessionKey: "agent:main:discord:work:direct:user-1" },
+      payload: { kind: "agentTurn", message: "run" },
+    });
+    const result = normalizeStoredCronJobs([raw]);
+    expect(raw.owner).toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:discord:work:direct:user-1",
+      accountId: "work",
+    });
+    expect(raw.payload).toEqual({ kind: "agentTurn", message: "run" });
+    expect(raw.scheduledToolPolicy).toBeUndefined();
+    expect(result.issues).toMatchObject({ reconciledOwnerAccount: 1 });
+    expect(normalizeStoredCronJobs([raw]).issues).not.toHaveProperty("reconciledOwnerAccount");
+  });
+
   it("rejects malformed and owner-inconsistent provenance", () => {
     const malformed = job({ scheduledToolPolicy: { version: 2, mode: "trusted" } });
     expect(normalizeStoredCronJobs([malformed]).invalidScheduledToolPolicyJobs).toEqual(["Legacy"]);
@@ -99,6 +116,45 @@ describe("migrateScheduledToolPolicy", () => {
     expect(normalizeStoredCronJobs([inconsistent]).invalidScheduledToolPolicyJobs).toEqual([
       "Legacy",
     ]);
+  });
+
+  it("does not require tool authority for command payloads without a trigger", () => {
+    const policy = {
+      version: 1,
+      mode: "account",
+      ownerSessionKey: "agent:main:discord:group:ops",
+      ownerAccountId: "work",
+    };
+    const payload = { kind: "command", argv: ["sh", "-lc", "true"] };
+    const command = job({
+      name: "Command",
+      payload,
+      scheduledToolPolicy: structuredClone(policy),
+    });
+    const agent = job({ name: "Agent without authority", owner: undefined });
+    const triggered = job({
+      name: "Trigger without authority",
+      owner: undefined,
+      payload: { ...payload, toolsAllow: ["read"] },
+      trigger: { script: "json({ fire: true })" },
+    });
+
+    const result = normalizeStoredCronJobs([command, agent, triggered]);
+
+    expect(result.invalidScheduledToolPolicyJobs).toEqual([]);
+    expect(result.legacyScheduledToolPolicyJobs).toEqual([
+      "Agent without authority",
+      "Trigger without authority",
+    ]);
+    expect(command.scheduledToolPolicy).toEqual(policy);
+    expect(command.payload).toEqual({ kind: "command", argv: ["sh", "-lc", "true"] });
+    expect(command.toolsAllowProvenance).toBeUndefined();
+    expect(
+      formatScheduledToolPolicyAdvisory({
+        legacyJobs: result.legacyScheduledToolPolicyJobs,
+        invalidJobs: result.invalidScheduledToolPolicyJobs,
+      }),
+    ).not.toContain("Command");
   });
 
   it("preserves valid trusted provenance", () => {
@@ -125,7 +181,7 @@ describe("migrateScheduledToolPolicy", () => {
         legacyJobs: result.legacyScheduledToolPolicyJobs,
         invalidJobs: result.invalidScheduledToolPolicyJobs,
       }),
-    ).toContain("openclaw cron edit <id> --tools");
+    ).toContain("openclaw automations edit <id> --tools");
   });
 
   it("reports alias-only Gateway exec jobs without converting their authority", () => {

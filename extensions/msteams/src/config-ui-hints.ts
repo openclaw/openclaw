@@ -22,6 +22,18 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Graph Media Fallback",
     help: "Query Microsoft Graph for unresolved channel or group-chat HTML media. Adds one lookup per matching message when enabled (default: false).",
   },
+  requireMentionInBotThreads: {
+    label: "Require Mentions in Bot Threads",
+    help: "Override mention requirements for channel threads rooted at this bot's tracked messages. Unset preserves existing behavior. Channel overrides win over team and global values. Ownership tracking lasts up to 24 hours.",
+  },
+  "teams.*.requireMentionInBotThreads": {
+    label: "Team Bot Thread Mentions",
+    help: "Override mention requirements for this bot's channel threads in this team. Unset inherits the global value.",
+  },
+  "teams.*.channels.*.requireMentionInBotThreads": {
+    label: "Channel Bot Thread Mentions",
+    help: "Override mention requirements for this bot's threads in this channel. Unset inherits the team or global value.",
+  },
   ...createChannelConfigUiHints({
     channelLabel: "MS Teams",
     streaming: {

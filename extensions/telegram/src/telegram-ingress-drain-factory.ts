@@ -1,5 +1,4 @@
-// Telegram plugin module builds transport-shared durable ingress monitors.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { runWithTelegramUpdateProcessingFrame } from "./bot-processing-outcome.js";
@@ -18,9 +17,8 @@ type TelegramSpooledBot = {
 };
 
 type CreateTelegramTransportIngressMonitorParams = {
-  spoolDir: string;
+  stateDir?: string;
   bot: TelegramSpooledBot;
-  cfg: OpenClawConfig;
   accountId: string;
   botInfo?: TelegramBotInfo;
   adoptionStallTimeoutMs?: number;
@@ -37,14 +35,14 @@ type CreateTelegramTransportIngressMonitorParams = {
 export function createTelegramTransportIngressMonitor(
   params: CreateTelegramTransportIngressMonitorParams,
 ) {
-  const queue = openTelegramIngressQueue(params.spoolDir);
+  const queue = openTelegramIngressQueue(params);
   const adoptionStallTimeoutMs = resolveTelegramAdoptionStallTimeoutMs({
     configured: params.adoptionStallTimeoutMs,
     env: process.env,
   });
   return createTelegramIngressMonitor({
     queue,
-    cfg: params.cfg,
+    getConfig: getRuntimeConfig,
     accountId: params.accountId,
     botInfo: params.botInfo,
     adoptionStallTimeoutMs,
@@ -55,10 +53,7 @@ export function createTelegramTransportIngressMonitor(
     // Core runs this after append commit and before claim, so callback acknowledgement
     // cannot erase Telegram's redelivery path or wait behind the handler lane.
     onDurableAdmission: (update, context) => {
-      if (!isRecord(update)) {
-        return;
-      }
-      const callbackQuery = update.callback_query;
+      const callbackQuery = isRecord(update) ? update.callback_query : undefined;
       if (!isRecord(callbackQuery)) {
         return;
       }

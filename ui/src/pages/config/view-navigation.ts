@@ -1,7 +1,11 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { isKernelOwnedChannelConfigKey } from "../../../../src/config/channel-config-keys.js";
 import type { ConfigUiHints } from "../../api/types.ts";
-import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
+import {
+  humanize,
+  localizedHintForPath,
+  type JsonSchema,
+} from "../../components/config-form.shared.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { ConfigProps } from "./view-types.ts";
@@ -12,7 +16,7 @@ export function getChannelConfigGroups(schema: JsonSchema, hints: ConfigUiHints)
     .filter(([key]) => !isKernelOwnedChannelConfigKey(key))
     .map(([key, node]) => ({
       key,
-      label: hintForPath(["channels", key], hints)?.label ?? node.title ?? humanize(key),
+      label: localizedHintForPath(["channels", key], hints)?.label ?? node.title ?? humanize(key),
       keys: [key],
     }))
     .toSorted((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
@@ -116,10 +120,6 @@ export const CATEGORISED_KEYS = new Set(
   SECTION_CATEGORIES.flatMap((category) => category.sections),
 );
 
-function getSectionIcon(key: string) {
-  return sidebarIcons[key] ?? icons.file;
-}
-
 export function renderConfigAccordionNav(
   props: Pick<ConfigProps, "activeSection" | "onSectionChange">,
   allCategories: SectionCategory[],
@@ -145,7 +145,7 @@ export function renderConfigAccordionNav(
               }}
             >
               <span class="config-accordion-group__icon">
-                ${getSectionIcon(category.sections[0]?.key ?? "default")}
+                ${sidebarIcons[category.sections[0]?.key ?? "default"] ?? icons.file}
               </span>
               <span>${category.label}</span>
               <svg
@@ -159,7 +159,7 @@ export function renderConfigAccordionNav(
                 width="14"
                 height="14"
               >
-                <polyline points="6 9 12 15 18 9"></polyline>
+                <polyline points="9 6 15 12 9 18"></polyline>
               </svg>
             </button>
             <div id=${panelId} class="config-accordion-group__items" ?hidden=${!expanded}>
@@ -177,7 +177,7 @@ export function renderConfigAccordionNav(
                   }}
                 >
                   <span class="config-accordion-group__item-icon">
-                    ${getSectionIcon(section.key)}
+                    ${sidebarIcons[section.key] ?? icons.file}
                   </span>
                   ${section.label}
                 </button>`,

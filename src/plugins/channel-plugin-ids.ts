@@ -1,12 +1,15 @@
 /** Channel presence and gateway startup plugin id helpers. */
 export {
   hasConfiguredChannelsForReadOnlyScope,
+  hasConfiguredChannelsForReadOnlyScopeAsync,
   hasExplicitChannelConfig,
   listAmbientOnlyConfiguredChannelIds,
   listConfiguredAnnounceChannelIdsForConfig,
   listConfiguredChannelIdsForReadOnlyScope,
+  listConfiguredChannelIdsForReadOnlyScopeAsync,
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
+  resolveConfiguredChannelPluginIdsAsync,
   resolveConfiguredChannelPresencePolicy,
   resolveDiscoverableScopedChannelPluginIds,
   type ConfiguredChannelBlockedReason,
@@ -26,6 +29,5 @@ export {
   loadGatewayStartupPluginPlan,
   loadGatewayStartupPluginPlanWithMetadata,
   resolveGatewayStartupPluginPlanFromRegistry,
-  resolveGatewayStartupPluginIdsFromRegistry,
   type GatewayStartupPluginPlan,
 } from "./gateway-startup-plugin-ids.js";

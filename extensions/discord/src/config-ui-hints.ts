@@ -17,8 +17,8 @@ export const discordChannelConfigUiHints = {
     },
     nativeCommands: true,
     streaming: {
-      "": 'Discord preview streaming is off by default. Set mode to "partial", "block", or "progress" to opt in. Run openclaw doctor --fix to migrate legacy keys.',
-      mode: 'Discord preview mode: "off" | "partial" | "block" | "progress". Default: "off".',
+      "": 'Discord shows useful work status by default without streaming answer text. Set mode to "off" for quiet final-only delivery, or "partial"/"block" for answer previews. Run openclaw doctor --fix to migrate legacy keys.',
+      mode: 'Discord preview mode: "off" | "partial" | "block" | "progress". Default: "progress"; "off" explicitly disables progress drafts.',
       chunkMode:
         'Chunking mode for outbound Discord text delivery: "length" (default) or "newline".',
       "block.enabled":
@@ -37,9 +37,21 @@ export const discordChannelConfigUiHints = {
     },
     progress: { includeCommentary: true },
   }),
+  "streaming.progress.toolProgress": {
+    label: "Discord Progress Tool Lines",
+    help: "Show the detailed rolling tool log (default: false). Work status, delegated-task states, plans, and authored progress remain visible without it. Set streaming.mode to off for quiet final-only delivery.",
+  },
   joinIntro: {
     label: "Discord Guild Join Introduction",
     help: "Post one brief, room-specific introduction when the bot joins an allowed Discord guild (default: true). Account settings override the channel-wide setting.",
+  },
+  "guilds.*.requireMentionInBotThreads": {
+    label: "Require Mention in Bot-Created Threads",
+    help: "Override mention gating only in threads owned by this bot. False allows unmentioned follow-ups; true requires a mention even with autoThread enabled. Omitted preserves existing behavior. Sender and channel access rules still apply.",
+  },
+  "guilds.*.channels.*.requireMentionInBotThreads": {
+    label: "Require Mention in Bot-Created Threads",
+    help: "Override the guild setting for this channel. Applies only when Discord identifies this bot as the thread owner; unknown or other owners keep ordinary mention rules. Unmentioned messages require Message Content Intent.",
   },
   proxy: {
     label: "Discord Proxy URL",
@@ -103,7 +115,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.6-sol). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-6-astra). Leave unset to inherit the routed agent model.",
   },
   "voice.mode": {
     label: "Discord Voice Mode",
@@ -276,7 +288,7 @@ export const discordChannelConfigUiHints = {
   },
   allowBots: {
     label: "Discord Allow Bot Messages",
-    help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+    help: 'Allow bot-authored messages through normal Discord mention and access rules (default: true). Set false to disable bot-triggered turns, or "mentions" to require a bot mention. Accessible bot messages remain available as conversation context.',
   },
   botLoopProtection: {
     label: "Discord Bot Loop Protection",

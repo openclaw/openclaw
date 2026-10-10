@@ -60,7 +60,7 @@ No global install yet? Run it from this repo instead:
 pnpm openclaw setup --baseline
 ```
 
-(Bare `openclaw setup`, without `--baseline`, is an alias for `openclaw onboard` and runs the full interactive wizard.)
+(Bare `openclaw setup`, without `--baseline`, opens an interactive OpenClaw chat on a configured system and falls through to guided onboarding on a fresh one. See [Setup CLI](/cli/setup) for the full routing order.)
 
 ## Run the Gateway from this repo
 
@@ -131,7 +131,7 @@ What `gateway:watch` does:
   `openclaw doctor --fix --non-interactive` once and retries. Set
   `OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0` to disable that dev-only repair pass.
 
-TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets. When the Gateway starts, it rebuilds missing, incomplete, or stale bundled UI assets before serving them. Headless commands do not rebuild the UI. Run `pnpm ui:build` after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
+TypeScript rebuilds triggered by `pnpm openclaw ...` or `pnpm gateway:watch` preserve existing `dist/control-ui` assets. When the Gateway starts, it rebuilds missing, incomplete, or stale bundled UI assets before serving them. UI builds replace `dist/control-ui` only after the complete bundle passes validation, so a failed build leaves the previous bundle in place. If a build is killed while swapping in its output, the next build restores the previous bundle first. Headless commands do not rebuild the UI. Run `pnpm ui:build` after `ui/` changes, or use `pnpm ui:dev` while developing the Control UI.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -183,7 +183,7 @@ Use this when debugging auth or deciding what to back up:
 - **Model auth profiles**: shared and agent-local SQLite auth stores; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability) for inheritance and legacy shared-store relocation
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
-  More detail: [Security](/gateway/security#credential-storage-map).
+  More detail: [Security](/gateway/security/secrets-and-storage#credential-storage-map).
 
 ## Updating (without wrecking your setup)
 

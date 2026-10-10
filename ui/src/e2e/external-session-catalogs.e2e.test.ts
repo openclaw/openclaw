@@ -98,6 +98,11 @@ suite.define(() => {
           },
         });
         await page.goto(`${suite.server.baseUrl}chat`);
+        // Shared imports have no current-viewer owner; selecting All must not rewrite their authors.
+        await page
+          .locator(".sidebar-navigation-scope")
+          .getByRole("button", { name: "All", exact: true })
+          .click();
         for (const catalogId of catalogIds) {
           await page.getByText(`${catalogId} shared transcript`, { exact: true }).click();
           // Every catalog has the same transcript; wait for the clicked pane before reading it.
@@ -293,7 +298,7 @@ suite.define(() => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
             .locator("wa-dropdown.sidebar-agent-menu")
-            .getByRole("menuitemradio", { name: "Other", exact: true })
+            .getByRole("menuitem", { name: "Other", exact: true })
             .click();
           await waitForControlUiRoute(page, {
             routeId: "chat",
@@ -402,6 +407,10 @@ suite.define(() => {
         await visiblePanes.getByText("other native transcript", { exact: true }).click();
         await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
         await assertOwner("other");
+        await composer().fill("/bt");
+        await page.getByRole("option").filter({ hasText: "/btw" }).click();
+        expect(await gateway.getRequests("sessions.catalog.continue")).toHaveLength(0);
+        expect(await composer().inputValue()).toBe("/btw ");
         await composer().fill("Continue under Other");
         await activePane.getByRole("button", { name: "Send message", exact: true }).click();
         expect((await gateway.waitForRequest("sessions.catalog.continue")).params).toMatchObject({

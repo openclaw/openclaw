@@ -28,7 +28,7 @@ suite.define(() => {
         sessionKey: key,
         methodResponses: {
           "sessions.list": sessionsListResponse([
-            sessionRow(key, "Keyboard appearance", Date.now()),
+            sessionRow(key, "Keyboard appearance", Date.now(), { icon: "🦞" }),
           ]),
           "sessions.patch": {},
         },
@@ -38,13 +38,10 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, key));
         const trigger =
           surface === "sidebar"
-            ? page.getByRole("button", {
-                name: "Open session menu: Keyboard appearance",
-                exact: true,
-              })
+            ? page.locator(`[data-session-key="${key}"] .sidebar-recent-session__link`)
             : page.locator(".chat-header-session-menu__trigger");
         await trigger.focus();
-        await page.keyboard.press("Enter");
+        await page.keyboard.press(surface === "sidebar" ? "Shift+F10" : "Enter");
         if (surface === "compact") {
           await expect
             .poll(() =>
@@ -53,22 +50,29 @@ suite.define(() => {
                 .count(),
             )
             .toBe(1);
-          const appearance = page.getByRole("menuitem", { name: "Icon & color", exact: true });
-          const index = await appearance.evaluate((element) =>
-            [...(element.parentElement?.children ?? [])]
-              .filter(
-                (item) =>
-                  item.localName === "wa-dropdown-item" &&
-                  item.getAttribute("aria-disabled") !== "true",
-              )
-              .indexOf(element),
-          );
-          await page.keyboard.press("Home");
-          for (let step = 0; step < index; step += 1) {
-            await page.keyboard.press("ArrowDown");
+          for (const name of ["Advanced", "Icon & color"]) {
+            const item = page.getByRole("menuitem", { name, exact: true });
+            const index = await item.evaluate((element) =>
+              [...(element.parentElement?.children ?? [])]
+                .filter(
+                  (candidate) =>
+                    candidate.localName === "wa-dropdown-item" &&
+                    candidate.getAttribute("aria-disabled") !== "true",
+                )
+                .indexOf(element),
+            );
+            expect(index).toBeGreaterThanOrEqual(0);
+            await page.keyboard.press("Home");
+            for (let step = 0; step < index; step += 1) {
+              await page.keyboard.press("ArrowDown");
+            }
+            await expect
+              .poll(() => item.evaluate((element) => element === document.activeElement))
+              .toBe(true);
+            await page.keyboard.press("Enter");
           }
-          await page.keyboard.press("Enter");
         } else {
+          await openSessionMenuSubmenu(page, "Advanced");
           await openSessionMenuSubmenu(page, "Icon & color");
         }
         const picker = page.locator(".session-menu__appearance:visible");
@@ -91,7 +95,7 @@ suite.define(() => {
                 .querySelector(".session-menu__appearance :focus")
                 ?.getAttribute("aria-label") ?? null,
           );
-        await expect.poll(focused).toBe("Default");
+        await expect.poll(focused).toBe("No color");
         await page.keyboard.press("Tab");
         await expect.poll(focused).toBe("Red");
         await page.keyboard.press("Enter");
@@ -124,11 +128,13 @@ suite.define(() => {
           )
           .toBe(true);
         await page.keyboard.press("Shift+Tab");
-        await page.keyboard.press("ArrowUp");
-        await page.keyboard.press("ArrowLeft");
-        await page.keyboard.press("ArrowLeft");
+        const iconCount = await picker.locator(".session-menu__icon-choice").count();
+        for (let index = 0; index < iconCount && (await focused()) !== "Custom icon…"; index += 1) {
+          await page.keyboard.press("ArrowRight");
+        }
+        await expect.poll(focused).toBe("Custom icon…");
         await page.keyboard.press("Enter");
-        const custom = picker.getByRole("textbox", { name: "Custom emoji", exact: true });
+        const custom = picker.getByRole("textbox", { name: "Custom icon", exact: true });
         await expect
           .poll(() => custom.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -138,7 +144,7 @@ suite.define(() => {
         await waitForPatch(gateway, (params) => params.key === key && params.icon === "✨");
         await page.keyboard.press("Shift+Tab");
         await page.keyboard.press("Escape");
-        await expect.poll(focused).toBe("Custom emoji…");
+        await expect.poll(focused).toBe("Custom icon…");
         await page.keyboard.press("Tab");
         await expect
           .poll(() =>
@@ -256,6 +262,7 @@ suite.define(() => {
       expect(await imported.getAttribute("style")).toContain("--session-color-cyan");
 
       await row.click({ button: "right" });
+      await openSessionMenuSubmenu(page, "Advanced");
       await openSessionMenuSubmenu(page, "Icon & color");
       await page.getByRole("button", { name: "Purple", exact: true }).click();
       const set = await waitForPatch(
@@ -303,7 +310,16 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       await page.keyboard.press("Escape");
 
-      Object.assign(designReview, { label: "Design review refreshed", color: null, icon: "book" });
+      const committed = await gateway.getSessionRow(key);
+      Object.assign(designReview, {
+        ...committed,
+        // This replaces stored facts; let the next wire read sample its own clock.
+        snapshotAt: undefined,
+        label: "Design review refreshed",
+        color: null,
+        icon: "book",
+        updatedAt: committed.updatedAt! + 1,
+      });
       await gateway.setSessionsListResponse(sessionsListResponse(sessions));
       await gateway.emitGatewayEvent("sessions.changed", { sessionKey: key, color: null });
       // Only the roster response carries this label; wait for that render so a
@@ -317,6 +333,7 @@ suite.define(() => {
 
       await page.setViewportSize({ width: 560, height: 900 });
       await page.locator(".chat-header-session-menu__trigger").click();
+      await page.getByRole("menuitem", { name: "Advanced", exact: true }).click();
       await page.getByRole("menuitem", { name: "Icon & color", exact: true }).click();
       await page.getByRole("button", { name: "Blue", exact: true }).click();
       await waitForPatch(gateway, (params) => params.key === key && params.color === "blue");

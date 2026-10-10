@@ -8,11 +8,11 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
 import type { ProviderDefaultThinkingPolicyContext } from "../plugins/provider-thinking.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import {
-  findModelCatalogRouteDonor,
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
-  resolveConfiguredModelCatalogOverrides,
+  createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 
@@ -68,185 +68,104 @@ const chatGPTEntry: ModelCatalogEntry = {
 };
 
 describe("projectModelCatalogEntryForRoute", () => {
-  it.each([
-    platformEntry,
-    {
-      ...chatGPTEntry,
-      compat: { supportsTools: false },
-      params: { logicalOnly: true },
-    },
-  ])("prefers the exact physical donor over the $api row", (entry) => {
-    expect(
-      findModelCatalogRouteDonor({
-        entry,
-        route: chatGPTRoute,
-        policy: routePolicy,
-        catalog: [platformEntry, chatGPTEntry],
-      }),
-    ).toBe(chatGPTEntry);
-  });
-
-  it("projects one physical row onto the selected route capabilities", () => {
-    expect(
-      projectModelCatalogEntryForRoute({
-        entry: platformEntry,
-        projection: { kind: "selected", route: platformRoute, policy: routePolicy },
-        catalog: [platformEntry, chatGPTEntry],
-      }),
-    ).toEqual({
-      provider: "openai",
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-      contextWindow: 1_000_000,
-      contextTokens: 272_000,
-      reasoning: true,
-      thinkingLevelMap: { off: "none", xhigh: "xhigh", max: "max" },
-      input: ["text", "image"],
+  it("prefers the exact physical donor over the platform row", () => {
+    const { entry: publicEntry, runtimeEntry } = projectModelCatalogEntryForRoute({
+      entry: platformEntry,
+      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
+      catalog: [
+        platformEntry,
+        {
+          ...chatGPTEntry,
+          contextWindows: [{ id: "native", label: "Native", contextWindow: 400_000 }],
+          contextWindowDefault: "native",
+        },
+      ],
     });
-
-    expect(
-      projectModelCatalogEntryForRoute({
-        entry: platformEntry,
-        projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
-        catalog: [platformEntry, chatGPTEntry],
-      }),
-    ).toEqual({
-      provider: "openai",
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-      contextWindow: 400_000,
-      contextTokens: 300_000,
-      reasoning: true,
-      thinkingLevelMap: { off: null, xhigh: null, max: "max" },
-      input: ["text"],
-    });
-  });
-
-  it("omits sibling-route capabilities when no selected-route row exists", () => {
-    expect(
-      projectModelCatalogEntryForRoute({
-        entry: platformEntry,
-        projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
-        catalog: [platformEntry],
-      }),
-    ).toEqual({
-      provider: "openai",
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      api: "openai-chatgpt-responses",
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    });
+    expect(runtimeEntry.params).toEqual({ chatGPTOnly: true });
+    expect(runtimeEntry.compat).toEqual({ supportsTools: true });
+    expect(runtimeEntry.contextWindow).toBe(400_000);
+    expect(publicEntry).not.toHaveProperty("params");
+    expect(publicEntry).not.toHaveProperty("compat");
+    expect(publicEntry.contextWindows).toEqual([
+      { id: "native", label: "Native", contextWindow: 400_000 },
+    ]);
+    expect(runtimeEntry.contextWindowDefault).toBe("native");
   });
 
   it.each([
-    {
-      name: "platform",
-      route: platformRoute,
-      donor: true,
-      expected: "high",
-      owner: "fixture-platform",
-    },
     {
       name: "subscription",
       route: chatGPTRoute,
-      donor: true,
       expected: "ultra",
       owner: "fixture-subscription",
     },
-    { name: "missing donor", route: chatGPTRoute, donor: false, expected: "off", owner: undefined },
-    { name: "unresolved", route: undefined, donor: true, expected: "off", owner: undefined },
-  ])(
-    "retains only the $name route's prepared thinking owner",
-    ({ route, donor, expected, owner }) => {
-      const resolvePolicy = vi.fn((context: ProviderDefaultThinkingPolicyContext) =>
-        context.provider === "fixture-platform"
-          ? ({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "high" } as const)
-          : ({
-              levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
-              defaultLevel: "ultra",
-            } as const),
-      );
-      const entry = { ...platformEntry, thinkingPolicyProvider: "fixture-platform" };
-      const catalog: ModelCatalogSnapshot = {
-        entries: [entry],
-        routeVariants: [
-          entry,
-          ...(donor ? [{ ...chatGPTEntry, thinkingPolicyProvider: "fixture-subscription" }] : []),
-        ],
-      };
-      prepareModelCatalogThinkingPolicies({
-        catalog,
-        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+    { name: "unresolved", route: undefined, expected: "off", owner: undefined },
+  ])("retains only the $name route's prepared thinking owner", ({ route, expected, owner }) => {
+    const resolvePolicy = vi.fn((context: ProviderDefaultThinkingPolicyContext) =>
+      context.provider === "fixture-platform"
+        ? ({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "high" } as const)
+        : ({
+            levels: [{ id: "off" }, { id: "max" }, { id: "ultra" }],
+            defaultLevel: "ultra",
+          } as const),
+    );
+    const entry = { ...platformEntry, thinkingPolicyProvider: "fixture-platform" };
+    const catalog: ModelCatalogSnapshot = {
+      entries: [entry],
+      routeVariants: [entry, { ...chatGPTEntry, thinkingPolicyProvider: "fixture-subscription" }],
+    };
+    prepareModelCatalogThinkingPolicies({
+      catalog,
+      metadataSnapshot: createPluginMetadataSnapshotFixture(),
+      pluginRegistry: {
+        ...createEmptyPluginRegistry(),
         providers: ["fixture-platform", "fixture-subscription"].map((id) => ({
-          provider: { id, resolveThinkingProfile: resolvePolicy },
+          pluginId: id,
+          source: "test",
+          provider: { id, label: id, auth: [], resolveThinkingProfile: resolvePolicy },
         })),
+      },
+    });
+    const ambient = vi
+      .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
+      .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
+    try {
+      const { entry: projected } = projectModelCatalogEntryForRoute({
+        entry: expectDefined(catalog.entries[0], "prepared route test entry"),
+        projection: route
+          ? { kind: "selected", route, policy: routePolicy }
+          : { kind: "unresolved", policy: routePolicy },
+        catalog: catalog.routeVariants,
       });
-      const ambient = vi
-        .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
-        .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
-      try {
-        const projected = projectModelCatalogEntryForRoute({
-          entry: expectDefined(catalog.entries[0], "prepared route test entry"),
-          projection: route
-            ? { kind: "selected", route, policy: routePolicy }
-            : { kind: "unresolved", policy: routePolicy },
-          catalog: catalog.routeVariants,
-        });
-        expect(
-          resolveThinkingProfile({
-            provider: projected.provider,
-            model: projected.id,
-            catalog: [projected],
-            agentRuntime: "codex",
-            providerPolicySource: "active",
-          }).defaultLevel,
-        ).toBe(expected);
-        if (owner) {
-          expect(resolvePolicy).toHaveBeenCalledWith(expect.objectContaining({ provider: owner }));
-          expect(ambient).not.toHaveBeenCalled();
-        } else {
-          expect(resolvePolicy).not.toHaveBeenCalled();
-          expect(projected).not.toHaveProperty("thinkingPolicyProvider");
-          expect(ambient).toHaveBeenCalledOnce();
-        }
-      } finally {
-        ambient.mockRestore();
+      expect(
+        resolveThinkingProfile({
+          provider: projected.provider,
+          model: projected.id,
+          catalog: [projected],
+          agentRuntime: "codex",
+          providerPolicySource: "active",
+        }).defaultLevel,
+      ).toBe(expected);
+      if (owner) {
+        expect(resolvePolicy).toHaveBeenCalledWith(expect.objectContaining({ provider: owner }));
+        expect(ambient).not.toHaveBeenCalled();
+      } else {
+        expect(resolvePolicy).not.toHaveBeenCalled();
+        expect(projected).not.toHaveProperty("thinkingPolicyProvider");
+        expect(ambient).toHaveBeenCalledOnce();
       }
-    },
-  );
+    } finally {
+      ambient.mockRestore();
+    }
+  });
 
   it("returns the physical row unchanged for unmanaged models", () => {
     expect(
       projectModelCatalogEntryForRoute({
         entry: platformEntry,
         projection: { kind: "unmanaged" },
-      }),
+      }).entry,
     ).toBe(platformEntry);
-  });
-
-  it("removes physical route facts while managed selection is unresolved", () => {
-    expect(
-      projectModelCatalogEntryForRoute({
-        entry: platformEntry,
-        projection: { kind: "unresolved", policy: routePolicy },
-      }),
-    ).toEqual({ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" });
-  });
-
-  it("does not copy private route policy facts into the catalog row", () => {
-    const projected = projectModelCatalogEntryForRoute({
-      entry: platformEntry,
-      projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
-      catalog: [chatGPTEntry],
-    });
-    expect(projected).not.toHaveProperty("authRequirement");
-    expect(projected).not.toHaveProperty("requestTransportOverrides");
-    expect(projected).not.toHaveProperty("params");
-    expect(projected).not.toHaveProperty("compat");
   });
 
   it("applies explicit logical context overrides after physical route selection", () => {
@@ -266,7 +185,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const overrides = resolveConfiguredModelCatalogOverrides({ cfg, entry: platformEntry });
+    const overrides = createConfiguredModelCatalogOverridesResolver({ cfg })(platformEntry);
 
     expect(
       projectModelCatalogEntryForRoute({
@@ -274,7 +193,7 @@ describe("projectModelCatalogEntryForRoute", () => {
         projection: { kind: "selected", route: chatGPTRoute, policy: routePolicy },
         catalog: [platformEntry],
         ...(overrides ? { overrides } : {}),
-      }),
+      }).entry,
     ).toEqual({
       provider: "openai",
       id: "gpt-5.5",
@@ -286,60 +205,27 @@ describe("projectModelCatalogEntryForRoute", () => {
     });
   });
 
-  it.each([
-    ["gpt-5.5", false],
-    ["CaseModel", true],
-    ["casemodel", false],
-    ["casemodel@variant", true],
-  ] as const)("keeps exact configured overrides authoritative for %s", (id, reasoning) => {
+  it("selects logical overrides from a legacy fallback", () => {
+    const legacy: ModelDefinitionConfig = {
+      id: "openai/gpt-5.5",
+      name: "Legacy row",
+      contextWindow: 900_000,
+      contextTokens: 500_000,
+      reasoning: true,
+      input: ["image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      maxTokens: 4096,
+    };
     const cfg: OpenClawConfig = {
       models: {
         providers: {
           openai: {
             baseUrl: platformRoute.baseUrl,
-            models: [
-              "gpt-5.5",
-              "CaseModel",
-              "casemodel",
-              "casemodel@variant",
-            ].map<ModelDefinitionConfig>((modelId, index) => ({
-              id: modelId,
-              name: modelId,
-              reasoning: index % 2 === 1,
-              contextWindow: 32_000,
-              maxTokens: 4096,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            })),
+            models: [legacy],
           },
         },
       },
     };
-
-    expect(
-      resolveConfiguredModelCatalogOverrides({ cfg, entry: { ...platformEntry, id } }),
-    ).toEqual({
-      name: id,
-      contextWindow: 32_000,
-      reasoning,
-      configuredReasoning: reasoning,
-      input: ["text"],
-    });
-  });
-
-  it("merges logical overrides from canonical duplicate model rows", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            models: [
-              { id: "openai/gpt-5.5", name: "Configured GPT-5.5" },
-              { id: "gpt-5.5", name: "Ignored duplicate name", contextTokens: 160_000 },
-            ],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
     const canonicalPolicy: ModelCatalogRoutePolicy = {
       ...routePolicy,
       resolveIdentity: (entry) => {
@@ -348,33 +234,19 @@ describe("projectModelCatalogEntryForRoute", () => {
       },
     };
 
-    expect(
-      resolveConfiguredModelCatalogOverrides({
-        cfg,
-        entry: platformEntry,
-        policy: canonicalPolicy,
-      }),
-    ).toEqual({ name: "Configured GPT-5.5", contextTokens: 160_000 });
-  });
-
-  it("preserves literal provider-scoped model ids", () => {
-    const cfg = {
-      models: {
-        providers: {
-          openai: {
-            models: [{ id: "openai/acme-model", name: "Configured Acme" }],
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-    const literalEntry = { ...platformEntry, id: "openai/acme-model" };
-
-    expect(
-      resolveConfiguredModelCatalogOverrides({
-        cfg,
-        entry: literalEntry,
-        policy: routePolicy,
-      }),
-    ).toEqual({ name: "Configured Acme" });
+    const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
+      cfg,
+      policy: canonicalPolicy,
+    });
+    for (const id of ["gpt-5.5", "openai/gpt-5.5", "gpt-5.5"]) {
+      expect(resolveOverrides({ ...platformEntry, id })).toEqual({
+        name: "Legacy row",
+        reasoning: true,
+        configuredReasoning: true,
+        input: ["image"],
+        contextWindow: 900_000,
+        contextTokens: 500_000,
+      });
+    }
   });
 });

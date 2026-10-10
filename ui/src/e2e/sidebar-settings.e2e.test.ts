@@ -4,6 +4,7 @@ import {
   installMockGateway,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { deviceSystemInfo } from "../test-helpers/devices-fixtures.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 import {
@@ -16,7 +17,7 @@ const suite = createSidebarCustomizationSuite("Control UI sidebar settings mocke
 
 const FAILED_CRON_RESPONSE = {
   jobs: [
-    {
+    compactCronJobFixture({
       id: "failed-settings-transition",
       name: "Failed settings transition",
       enabled: true,
@@ -27,7 +28,7 @@ const FAILED_CRON_RESPONSE = {
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "test" },
       state: { lastRunStatus: "error", lastError: "Provider request failed" },
-    },
+    }),
   ],
   snapshotRevision: "settings-transition-attention",
   total: 1,
@@ -59,6 +60,7 @@ suite.define(() => {
     const page = await context.newPage();
     await page.clock.setFixedTime(Date.now());
     const gateway = await installMockGateway(page, {
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
       methodResponses: {
         "cron.list": FAILED_CRON_RESPONSE,
         "models.authStatus": MISSING_AUTH_RESPONSE,
@@ -142,7 +144,7 @@ suite.define(() => {
     }
   });
 
-  it("refreshes stale auth attention after returning while the first auth read is pending", async () => {
+  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -167,6 +169,10 @@ suite.define(() => {
         }
       });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
+      for (let index = 0; index < 20; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      }
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
       await gateway.deferNext("models.authStatus");
       await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
       await gateway.waitForRequest("models.authStatus", { after: 1 });
@@ -190,6 +196,8 @@ suite.define(() => {
       }
       await gateway.setMethodResponse("models.authStatus", MISSING_AUTH_RESPONSE);
       await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await authWarning.waitFor({ state: "visible" });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
     } finally {
@@ -268,21 +276,24 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await page.keyboard.press("Control+Shift+,");
-      const { sidebar } = await waitForControlUiSettingsTakeover(page);
-      const picker = page.locator("#settings-font-chat");
-      await picker.click();
-      const selected = picker.locator("wa-option:state(selected)");
+      await waitForControlUiSettingsTakeover(page);
+      const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
+      await picker.locator(".picker-select__trigger").click();
+      const selected = picker.locator('[role="option"][aria-selected="true"]');
       await selected.waitFor({ state: "visible" });
-      const selectedValue = await selected.getAttribute("value");
+      const selectedValue = await selected.getAttribute("data-value");
       await page.keyboard.press("ArrowDown");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/appearance");
-      await expect.poll(() => picker.getAttribute("open")).toBeNull();
-      expect(await selected.getAttribute("value")).toBe(selectedValue);
+      await expect
+        .poll(() => picker.locator(".picker-select__trigger").getAttribute("aria-expanded"))
+        .toBe("false");
+      expect(await selected.getAttribute("data-value")).toBe(selectedValue);
       expect(
-        await picker.locator('input[role="combobox"]').evaluate((input) => input.matches(":focus")),
+        await picker
+          .locator(".picker-select__trigger")
+          .evaluate((input) => input.matches(":focus")),
       ).toBe(true);
-      await sidebar.locator(".settings-sidebar__item").first().focus();
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     } finally {
@@ -313,11 +324,7 @@ suite.define(() => {
         await page.locator(".sidebar-brand__collapse").click();
         await page.locator(".shell--nav-collapsed").waitFor();
       }
-      const chatInbox = page.locator(
-        testCase.collapseSidebar
-          ? ".sidebar-attention--floating .sidebar-issues-button"
-          : "openclaw-app-sidebar .sidebar-issues-button",
-      );
+      const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");
       await chatInbox.waitFor({ state: "visible" });
 
       await page.keyboard.press("Control+Shift+,");
@@ -351,9 +358,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".new-session-page__message").waitFor({ state: "visible" });
       await page.locator(".sidebar-brand__collapse").click();
-      const floatingInbox = page.locator(".sidebar-attention--floating");
+      const railInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
       await expect
-        .poll(() => floatingInbox.locator(".sidebar-issues-button__count").textContent())
+        .poll(() => railInbox.locator(".sidebar-issues-button__count").textContent())
         .toBe("2");
 
       await page.keyboard.press("Control+Shift+,");
@@ -362,8 +369,8 @@ suite.define(() => {
 
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      const restoredInbox = page.locator(".sidebar-attention--floating");
-      await restoredInbox.waitFor({ state: "visible" });
+      const restoredInbox = page.locator(".sidebar-rail__bottom openclaw-sidebar-attention");
+      await restoredInbox.locator(".sidebar-issues-button").waitFor({ state: "visible" });
       expect(await restoredInbox.locator(".sidebar-issues-button__count").textContent()).toBe("2");
 
       await gateway.setMethodResponse("cron.list", {
@@ -379,7 +386,7 @@ suite.define(() => {
       await waitForControlUiSettingsTakeover(page);
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
       await page.getByLabel("Gateway secret", { exact: true }).fill("replacement-owner-token");
-      await page.getByRole("button", { name: "Connect", exact: true }).click();
+      await page.getByRole("button", { name: "Apply and reconnect", exact: true }).click();
       await expect
         .poll(() =>
           page.evaluate(() => {
@@ -392,16 +399,20 @@ suite.define(() => {
         .toBe("connected");
       await page.keyboard.press("Escape");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+      await page
+        .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button")
+        .waitFor();
       expect(
-        await page.locator(".sidebar-attention--floating .sidebar-issues-button__count").count(),
+        await page
+          .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button__count")
+          .count(),
       ).toBe(0);
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("keeps one attention badge across expanded and collapsed presenters", async () => {
+  it("keeps one rail attention badge across expanded and collapsed navigation", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -423,7 +434,11 @@ suite.define(() => {
         .toBe(0);
 
       await page.locator(".sidebar-brand__collapse").click();
-      await page.locator(".sidebar-attention--floating .sidebar-issues-button").waitFor();
+      await page
+        .locator(".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button")
+        .waitFor();
+      expect(await page.locator(".sidebar-issues-button").count()).toBe(1);
+      expect(await page.locator(".sidebar-shell").isVisible()).toBe(false);
       await page.locator(".shell-chrome-controls__nav-toggle").click();
       await page.locator("openclaw-app-sidebar .sidebar-issues-button").waitFor();
 
@@ -447,7 +462,11 @@ suite.define(() => {
       await page.locator(".sidebar-brand__collapse").click();
       await expect
         .poll(() =>
-          page.locator(".sidebar-attention--floating .sidebar-issues-button__count").textContent(),
+          page
+            .locator(
+              ".sidebar-rail__bottom openclaw-sidebar-attention .sidebar-issues-button__count",
+            )
+            .textContent(),
         )
         .toBe("1");
     } finally {
@@ -498,11 +517,14 @@ suite.define(() => {
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "synthetic reconnect");
       const notice = page.locator('.connection-action-block[role="status"]');
-      await notice.waitFor();
+      await expect.poll(() => credential.getAttribute("type")).toBe("password");
+      expect(await notice.count()).toBe(0);
+      for (const input of [gatewayUrl, credential, sessionKey]) {
+        expect(await input.isEditable()).toBe(true);
+      }
       expect(await credential.getAttribute("type")).toBe("password");
       await gateway.waitForRequest("connect", { after: connections });
       await gateway.resolveDeferred("connect");
-      await notice.waitFor({ state: "hidden" });
       await gateway.waitForRequest("system.info", { after: reads });
       expect(await credential.getAttribute("type")).toBe("password");
 

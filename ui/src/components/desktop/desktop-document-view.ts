@@ -4,8 +4,11 @@ import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { strokeIcon } from "../icons-tools.ts";
 import { icons } from "../icons.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
-import type { DesktopPanelState } from "./desktop-panel-state.ts";
-import { renderDesktopPanelContent } from "./desktop-panel-view.ts";
+import {
+  renderDesktopPanelContent,
+  renderDesktopSizing,
+  type DesktopSizingOptions,
+} from "./desktop-panel-view.ts";
 
 registerDesktopEnglish();
 
@@ -22,20 +25,19 @@ const KEYBOARD_GLYPH = strokeIcon(svg`
   <path d="M8 17h8" />
 `);
 
-type DesktopDocumentViewOptions = {
-  state: DesktopPanelState;
+type DesktopDocumentViewOptions = Omit<
+  Parameters<typeof renderDesktopPanelContent>[0],
+  "connection"
+> & {
   controlling: boolean;
-  scaleViewport: boolean;
-  notice: TemplateResult | typeof nothing;
-  picker: TemplateResult;
-  credentials: TemplateResult;
-  recovery: TemplateResult;
+  sizing: DesktopSizingOptions;
   keyboardInputValue: string;
+  pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
   onControlToggle: () => void;
-  onKeyboardFocus: () => void;
+  onKeyboardFocus: (event: MouseEvent) => void;
   onKeyboardEvent: (event: KeyboardEvent) => void;
   onKeyboardInput: (event: InputEvent) => void;
-  onScaleToggle: () => void;
   onClose: () => void;
 };
 
@@ -63,11 +65,13 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
         @input=${options.onKeyboardInput}
       ></textarea>
       <nav class="desktop-touch-toolbar" aria-label=${t("desktop.touchControls")}>
+        ${options.audioControl ?? nothing} ${options.pictureInPictureControl}
         <button
           class="desktop-touch-action"
           type="button"
           aria-label=${t(options.controlling ? "desktop.switchToViewOnly" : "desktop.takeControl")}
           aria-pressed=${options.controlling ? "true" : "false"}
+          ?disabled=${options.state !== "connected"}
           @click=${options.onControlToggle}
         >
           <span class="desktop-touch-action__icon" aria-hidden="true">
@@ -87,18 +91,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
           <span class="desktop-touch-action__icon" aria-hidden="true">${KEYBOARD_GLYPH}</span>
           <span class="desktop-touch-action__label">${t("desktop.keyboard")}</span>
         </button>
-        <button
-          class="desktop-touch-action"
-          type="button"
-          aria-label=${t(options.scaleViewport ? "desktop.actualSize" : "desktop.fitScreen")}
-          aria-pressed=${options.scaleViewport ? "true" : "false"}
-          @click=${options.onScaleToggle}
-        >
-          <span class="desktop-touch-action__icon" aria-hidden="true">
-            ${options.scaleViewport ? icons.minimize : icons.maximize}
-          </span>
-          <span class="desktop-touch-action__label">${t("desktop.fit")}</span>
-        </button>
+        ${renderDesktopSizing(options.sizing)}
         <button
           class="desktop-touch-action"
           type="button"
@@ -114,14 +107,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
 
   return html`
     <section class="desktop-document" aria-label=${t("desktop.title")}>
-      ${renderDesktopPanelContent({
-        state: options.state,
-        notice: options.notice,
-        picker: options.picker,
-        recovery: options.recovery,
-        credentials: options.credentials,
-        connection,
-      })}
+      ${renderDesktopPanelContent({ ...options, connection })}
     </section>
   `;
 }

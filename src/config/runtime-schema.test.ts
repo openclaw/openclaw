@@ -24,7 +24,7 @@ let readBestEffortRuntimeConfigSchema: typeof import("./runtime-schema.js").read
 let loadGatewayRuntimeConfigSchema: typeof import("./runtime-schema.js").loadGatewayRuntimeConfigSchema;
 
 function explicitMainRoster(): OpenClawConfig {
-  return { agents: { list: [{ id: "main" }] } };
+  return { agents: { entries: { main: {} } } };
 }
 
 vi.mock("./config.js", () => {
@@ -98,75 +98,24 @@ function makeManifestRegistry() {
           },
         },
       },
-      {
-        id: "telegram",
-        name: "Telegram",
-        description: "Telegram plugin",
-        origin: "bundled",
-        channels: ["telegram"],
-        channelCatalogMeta: {
-          id: "telegram",
-          label: "Telegram",
-          blurb: "Telegram channel",
-        },
+      ...[
+        { id: "telegram", label: "Telegram", origin: "bundled", field: "botToken" },
+        { id: "slack", label: "Slack", origin: "bundled", field: "botToken" },
+        { id: "matrix", label: "Matrix", origin: "workspace", field: "homeserver" },
+      ].map(({ id, label, origin, field }) => ({
+        id,
+        name: label,
+        description: `${label} plugin`,
+        origin,
+        channels: [id],
+        channelCatalogMeta: { id, label, blurb: `${label} channel` },
         channelConfigs: {
-          telegram: {
-            schema: {
-              type: "object",
-              properties: {
-                botToken: { type: "string" },
-              },
-            },
+          [id]: {
+            schema: { type: "object", properties: { [field]: { type: "string" } } },
             uiHints: {},
           },
         },
-      },
-      {
-        id: "slack",
-        name: "Slack",
-        description: "Slack plugin",
-        origin: "bundled",
-        channels: ["slack"],
-        channelCatalogMeta: {
-          id: "slack",
-          label: "Slack",
-          blurb: "Slack channel",
-        },
-        channelConfigs: {
-          slack: {
-            schema: {
-              type: "object",
-              properties: {
-                botToken: { type: "string" },
-              },
-            },
-            uiHints: {},
-          },
-        },
-      },
-      {
-        id: "matrix",
-        name: "Matrix",
-        description: "Matrix plugin",
-        origin: "workspace",
-        channels: ["matrix"],
-        channelCatalogMeta: {
-          id: "matrix",
-          label: "Matrix",
-          blurb: "Matrix channel",
-        },
-        channelConfigs: {
-          matrix: {
-            schema: {
-              type: "object",
-              properties: {
-                homeserver: { type: "string" },
-              },
-            },
-            uiHints: {},
-          },
-        },
-      },
+      })),
     ],
   };
 }

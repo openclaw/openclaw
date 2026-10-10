@@ -11,6 +11,7 @@ export {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
   createProviderHttpError,
+  ProviderHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
   formatProviderErrorPayload,
@@ -30,23 +31,27 @@ export {
 export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   createProviderOperationTimeoutResolver,
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   fetchWithTimeout,
   fetchWithTimeoutGuarded,
   normalizeBaseUrl,
+  pollProviderOperation,
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
   postTranscriptionRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
+  resolveProviderHttpRequestConfigWithOriginTrust,
   resolveAudioTranscriptionUploadFileName,
   requireTranscriptionText,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "../media-understanding/shared.js";
+export { openProviderWebSocket } from "../infra/net/provider-websocket.js";
 export type {
   ProviderOperationDeadline,
   ProviderOperationTimeoutMs,
@@ -78,7 +83,7 @@ export type {
   ProviderRequestProxyOverride,
   ProviderRequestTlsOverride,
   ProviderRequestTransportOverrides,
-} from "../agents/provider-request-config.js";
+} from "../agents/provider-request-config.types.js";
 export { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
 export {
   resolveProviderEndpoint,

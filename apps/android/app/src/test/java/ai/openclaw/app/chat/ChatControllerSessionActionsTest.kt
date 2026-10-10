@@ -9,6 +9,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -34,6 +36,7 @@ class ChatControllerSessionActionsTest {
       cacheScope = { ChatCacheScope("gateway-test", 1L) },
       json = json,
       requestGateway = gateway::request,
+      gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" },
     ).also { it.outboxPresentationRestored.first { restored -> restored } }
 
   private fun ScriptedGateway.respondWithBranchHistory() {
@@ -49,6 +52,116 @@ class ChatControllerSessionActionsTest {
       """{"branches":[{"leafEntryId":"entry-user","headline":"Current work","messageCount":1,"updatedAt":"2026-07-20T12:00:00Z","active":true}]}""",
     )
   }
+
+  @Test
+  fun snoozeAndWakeSendLifecycleIdentityAndRefreshSessions() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith("sessions.patch", "{}")
+      val controller = controller(this, gateway)
+      val wakeAt = 1_800_003_600_000L
+
+      assertTrue(
+        controller.patchSession(
+          ChatSessionPatch(
+            key = "custom",
+            ownerAgentId = "main",
+            expectedSessionId = "session-custom",
+            snoozedUntil = wakeAt,
+          ),
+        ),
+      )
+      assertTrue(
+        controller.patchSession(
+          ChatSessionPatch(
+            key = "custom",
+            ownerAgentId = "main",
+            expectedSessionId = "session-custom",
+            clearSnooze = true,
+          ),
+        ),
+      )
+
+      val patches =
+        gateway.calls.filter { it.method == "sessions.patch" }.map { json.parseToJsonElement(it.paramsJson!!).jsonObject }
+      assertEquals(listOf(JsonPrimitive(wakeAt), JsonNull), patches.map { it["snoozedUntil"] })
+      assertTrue(patches.all { it["key"] == JsonPrimitive("custom") })
+      assertTrue(patches.all { it["agentId"] == JsonPrimitive("main") })
+      assertTrue(patches.all { it["expectedSessionId"] == JsonPrimitive("session-custom") })
+      assertEquals(2, gateway.callCount("sessions.list"))
+      assertEquals("main", controller.sessionKey.value)
+    }
+
+  @Test
+  fun snoozeAndWakeRequireDurableSessionIdentity() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = controller(this, gateway)
+
+      for (sessionId in listOf(null, " ")) {
+        for (clearSnooze in listOf(false, true)) {
+          assertFalse(
+            controller.patchSession(
+              ChatSessionPatch(
+                key = "custom",
+                ownerAgentId = "main",
+                expectedSessionId = sessionId,
+                snoozedUntil = if (clearSnooze) null else 1_800_003_600_000L,
+                clearSnooze = clearSnooze,
+              ),
+            ),
+          )
+          assertEquals("Session lifecycle action requires a durable session identity.", controller.errorText.value)
+        }
+      }
+      assertEquals(0, gateway.callCount("sessions.patch"))
+      assertEquals(0, gateway.callCount("sessions.list"))
+    }
+
+  @Test
+  fun sessionListParsesSnoozeAndEventsPreserveOmissionsButApplyNullClears() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      gateway.respondWith(
+        "sessions.list",
+        """{"sessions":[{"key":"custom","sessionId":"session-custom","snoozedUntil":1800003600000,"snoozedAt":1800000000000}]}""",
+      )
+      val controller = controller(this, gateway)
+
+      controller.refreshSessions()
+      runCurrent()
+      val initial = controller.sessions.value.single()
+      assertEquals(1_800_003_600_000L, initial.snoozedUntil)
+      assertEquals(1_800_000_000_000L, initial.snoozedAt)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"custom","agentId":"main","session":{"key":"custom","label":"Updated title"}}""",
+      )
+      runCurrent()
+      val omitted = controller.sessions.value.single()
+      assertEquals("Updated title", omitted.label)
+      assertEquals(initial.snoozedUntil, omitted.snoozedUntil)
+      assertEquals(initial.snoozedAt, omitted.snoozedAt)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"custom","agentId":"main","session":{"key":"custom","snoozedUntil":null}}""",
+      )
+      runCurrent()
+      val clearedUntil = controller.sessions.value.single()
+      assertNull(clearedUntil.snoozedUntil)
+      assertEquals(initial.snoozedAt, clearedUntil.snoozedAt)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"sessionKey":"custom","agentId":"main","session":{"key":"custom","snoozedAt":null}}""",
+      )
+      runCurrent()
+      val cleared = controller.sessions.value.single()
+      assertNull(cleared.snoozedUntil)
+      assertNull(cleared.snoozedAt)
+    }
 
   private inner class ArchiveFixture(
     private val scope: TestScope,
@@ -72,6 +185,7 @@ class ChatControllerSessionActionsTest {
         cacheScope = { gatewayScope },
         currentDefaultAgentId = { defaultAgentId },
         currentDefaultAgentRevision = { defaultAgentRevision },
+        gatewayAdvertisesCapability = { it == "session-scoped-model-catalog" },
       )
     private val archiveResponse = CompletableDeferred<String>()
 
@@ -98,10 +212,12 @@ class ChatControllerSessionActionsTest {
       val archive =
         scope.async {
           controller.patchSession(
-            key = "custom",
-            ownerAgentId = ownerAgentId,
-            expectedSessionId = expectedSessionId,
-            archived = true,
+            ChatSessionPatch(
+              key = "custom",
+              ownerAgentId = ownerAgentId,
+              expectedSessionId = expectedSessionId,
+              archived = true,
+            ),
           )
         }
       try {
@@ -335,18 +451,22 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun branchesListParsesAllFields() =
+  fun refreshBranchesPublishesAllFieldsIncludingOptionalTimestamps() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
         "sessions.branches.list",
-        """{"branches":[{"leafEntryId":"leaf-a","headline":"Earlier idea","messageCount":4,"updatedAt":"2026-07-20T12:00:00Z","active":false}]}""",
+        """{"branches":[{"leafEntryId":"leaf-a","headline":"Earlier idea","messageCount":4,"updatedAt":"2026-07-20T12:00:00Z","active":false},{"leafEntryId":"leaf-b","headline":"Current work","messageCount":1,"updatedAt":null,"active":true}]}""",
       )
       val controller = controller(this, gateway)
 
+      assertTrue(controller.refreshSessionBranches())
       assertEquals(
-        listOf(SessionBranch("leaf-a", "Earlier idea", 4, "2026-07-20T12:00:00Z", active = false)),
-        controller.listSessionBranches("main"),
+        listOf(
+          SessionBranch("leaf-a", "Earlier idea", 4, "2026-07-20T12:00:00Z", active = false),
+          SessionBranch("leaf-b", "Current work", 1, updatedAt = null, active = true),
+        ),
+        controller.sessionBranches.value,
       )
       val params = json.parseToJsonElement(gateway.calls.single().paramsJson!!).jsonObject
       assertEquals("main", params.getValue("agentId").jsonPrimitive.content)
@@ -378,18 +498,7 @@ class ChatControllerSessionActionsTest {
     }
 
   @Test
-  fun listFailureReturnsNullAndSurfacesError() =
-    runTest {
-      val gateway = ScriptedGateway(json)
-      gateway.respond("sessions.branches.list") { throw IllegalStateException("offline") }
-      val controller = controller(this, gateway)
-
-      assertNull(controller.listSessionBranches("main"))
-      assertEquals("offline", controller.errorText.value)
-    }
-
-  @Test
-  fun malformedBranchesResponseRetainsTheLastKnownBranchState() =
+  fun failedBranchesRefreshRetainsTheLastKnownBranchState() =
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith(
@@ -404,22 +513,10 @@ class ChatControllerSessionActionsTest {
 
       assertFalse(controller.refreshSessionBranches())
       assertEquals(known, controller.sessionBranches.value)
-    }
 
-  @Test
-  fun nullBranchTimestampRemainsAValidOptionalField() =
-    runTest {
-      val gateway = ScriptedGateway(json)
-      gateway.respondWith(
-        "sessions.branches.list",
-        """{"branches":[{"leafEntryId":"leaf-a","headline":"Known","messageCount":1,"updatedAt":null,"active":true}]}""",
-      )
-      val controller = controller(this, gateway)
-
-      assertEquals(
-        listOf(SessionBranch("leaf-a", "Known", 1, updatedAt = null, active = true)),
-        controller.listSessionBranches("main"),
-      )
+      gateway.respond("sessions.branches.list") { throw IllegalStateException("offline") }
+      assertFalse(controller.refreshSessionBranches())
+      assertEquals(known, controller.sessionBranches.value)
     }
 
   @Test

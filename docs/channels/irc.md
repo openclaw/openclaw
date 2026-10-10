@@ -34,11 +34,14 @@ openclaw plugins install @openclaw/irc
 }
 ```
 
-3. Start/restart the Gateway:
+3. Verify the channel:
 
 ```bash
-openclaw gateway run
+openclaw channels status --probe
 ```
+
+Config changes follow [hot reload](/gateway/configuration/hot-reload). If the
+Gateway is offline, start it with `openclaw gateway run`.
 
 Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
 
@@ -84,6 +87,9 @@ Long replies are rendered before splitting into IRC messages, so code fences and
 inline formatting remain consistent across chunk boundaries. `textChunkLimit`
 and `streaming.chunkMode` control text splitting; the socket also enforces
 IRC's line-size limit.
+
+If nonempty text becomes empty during formatting or IRC sanitization, the send
+fails instead of reporting delivery. Reply references do not count as message content.
 
 Send directly to a channel or nick with the message CLI:
 
@@ -234,7 +240,7 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 Notes:
 
 - `toolsBySender` keys should use explicit prefixes (`channel:`, `id:`, `e164:`, `username:`, `name:`). For IRC use `id:` with the sender identity value: `id:alice` or `id:alice!~alice@203.0.113.7` for stronger matching.
-- Legacy unprefixed keys are still accepted, matched as `id:` only, and emit a deprecation warning.
+- Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway.
 - The first matching sender policy wins; `"*"` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).
@@ -291,7 +297,7 @@ Default account supports:
 - `IRC_NICKSERV_PASSWORD`
 - `IRC_NICKSERV_REGISTER_EMAIL`
 
-`IRC_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security).
+`IRC_HOST` cannot be set from a workspace `.env`; see [Workspace `.env` files](/gateway/security#workspace-env-files).
 
 ## Troubleshooting
 
@@ -304,5 +310,5 @@ Default account supports:
 - [Channels Overview](/channels) — all supported channels
 - [Pairing](/channels/pairing) — DM authentication and pairing flow
 - [Groups](/channels/groups) — group chat behavior and mention gating
-- [Channel Routing](/channels/channel-routing) — session routing for messages
+- [Channel routing](/channels/channel-routing) — session routing for messages
 - [Security](/gateway/security) — access model and hardening

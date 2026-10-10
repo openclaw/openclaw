@@ -7,12 +7,18 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "../infra/agent-run-registry.js";
+import type {
+  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2,
+} from "../plugin-sdk/agent-harness-runtime.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
   consumeCronCreatorAuthorityGrant,
   createCronCreatorAuthorityRunScope,
   getCronManagementAuthority,
+  getCronManagementCallerOrigin,
   mintCronCreatorAuthorityGrant,
+  resolveCronCreatorAuthorityGrantProvenance,
   revokeCronCreatorAuthorityRunScope,
   withCronManagementGrant,
 } from "./cron-creator-authority-grant.js";
@@ -23,13 +29,15 @@ afterEach(() => {
 });
 
 function createManagementFixture(controlUiAdmin = true) {
+  let continuationCurrent = true;
   const runId = "run-admin-management";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const scope = createCronCreatorAuthorityRunScope(
     runId,
     { kind: "local" },
-    controlUiAdmin ? true : undefined,
+    controlUiAdmin ? { source: "control-ui-admin" } : undefined,
+    () => continuationCurrent,
   );
   const operation = new AbortController();
   const identity: AgentRuntimeIdentity = {
@@ -45,21 +53,56 @@ function createManagementFixture(controlUiAdmin = true) {
     identity,
     scope,
     operation,
+    revokeContinuation: () => {
+      continuationCurrent = false;
+    },
     mint: (method = "cron.get") =>
       mintCronCreatorAuthorityGrant(scope, operation.signal, undefined, { method, authority }),
   };
 }
 
 describe("cron creator authority grants", () => {
-  it("consumes an exact live grant only once", () => {
-    const scope = createCronCreatorAuthorityRunScope("run-1");
-    const grant = mintCronCreatorAuthorityGrant(scope);
-
-    expect(() => consumeCronCreatorAuthorityGrant(grant)).not.toThrow();
-    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
-      "Configured MCP cron authority is no longer active",
+  it("preserves the Control UI admin SDK projection without granting creator authority", () => {
+    const scope = createCronCreatorAuthorityRunScope(
+      "sdk-compat",
+      { kind: "unknown" },
+      { source: "control-ui-admin" },
+    );
+    const legacy: Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability"> = {
+      cronCreatorAuthorityCapability: scope,
+    };
+    const current: Pick<EmbeddedRunAttemptParamsV2, "cronCreatorAuthorityCapability"> = legacy;
+    expect(legacy.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
+    expect(current.cronCreatorAuthorityCapability?.controlUiAdmin).toBe(true);
+    expect(() => mintCronCreatorAuthorityGrant(scope)).toThrow(
+      "Automation creation is not granted",
     );
     revokeCronCreatorAuthorityRunScope(scope);
+  });
+  it("carries direct-local origin without claiming channel requester authority", () => {
+    const local = createCronCreatorAuthorityRunScope("run-local", { kind: "local" });
+    const grant = mintCronCreatorAuthorityGrant(
+      local,
+      undefined,
+      undefined,
+      undefined,
+      "requester",
+    );
+
+    expect(resolveCronCreatorAuthorityGrantProvenance(grant, local.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerOrigin: { kind: "local" },
+    });
+
+    const external = createCronCreatorAuthorityRunScope("run-external", {
+      kind: "external",
+      channel: "discord",
+    });
+    expect(() =>
+      mintCronCreatorAuthorityGrant(external, undefined, undefined, undefined, "requester"),
+    ).toThrow("requires authenticated creator facts");
+    revokeCronCreatorAuthorityRunScope(local);
+    revokeCronCreatorAuthorityRunScope(external);
   });
 
   it("rejects a runId mismatch without consuming the exact grant", () => {
@@ -97,25 +140,6 @@ describe("cron creator authority grants", () => {
     revokeCronCreatorAuthorityRunScope(scope);
   });
 
-  it("cleans operation abort listeners after consume and run revocation", () => {
-    const consumedScope = createCronCreatorAuthorityRunScope("run-consume");
-    const consumedOperation = new AbortController();
-    const consumedRemove = vi.spyOn(consumedOperation.signal, "removeEventListener");
-    const consumedGrant = mintCronCreatorAuthorityGrant(consumedScope, consumedOperation.signal);
-
-    consumeCronCreatorAuthorityGrant(consumedGrant);
-    expect(consumedRemove).toHaveBeenCalledWith("abort", expect.any(Function));
-    revokeCronCreatorAuthorityRunScope(consumedScope);
-
-    const revokedScope = createCronCreatorAuthorityRunScope("run-revoke");
-    const revokedOperation = new AbortController();
-    const revokedRemove = vi.spyOn(revokedOperation.signal, "removeEventListener");
-    mintCronCreatorAuthorityGrant(revokedScope, revokedOperation.signal);
-
-    revokeCronCreatorAuthorityRunScope(revokedScope);
-    expect(revokedRemove).toHaveBeenCalledWith("abort", expect.any(Function));
-  });
-
   it("transports a private immutable runtime authority only through one-shot consumption", () => {
     const scope = createCronCreatorAuthorityRunScope("run-authority");
     const runtimeAuthority = {
@@ -128,16 +152,71 @@ describe("cron creator authority grants", () => {
     const grant = mintCronCreatorAuthorityGrant(scope, undefined, runtimeAuthority);
 
     expect(grant).toEqual({ runId: "run-authority", token: expect.any(String) });
-    expect(consumeCronCreatorAuthorityGrant(grant)).toEqual(runtimeAuthority);
+    expect(consumeCronCreatorAuthorityGrant(grant).authority).toEqual(runtimeAuthority);
     expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(
       "Configured MCP cron authority is no longer active",
     );
     revokeCronCreatorAuthorityRunScope(scope);
   });
+
+  it.each([
+    "issuer",
+    "scope",
+    "scope abort",
+    "run settlement",
+    "operation",
+    "channel owner",
+  ] as const)(
+    "rejects retained creator authority when its original %s is revoked after consumption",
+    async (revoked) => {
+      let issuerCurrent = true;
+      let scopeCurrent = true;
+      let channelOwnerCurrent = true;
+      const scope = createCronCreatorAuthorityRunScope(
+        "retained-creator",
+        { kind: "local" },
+        { source: "channel-owner", isCurrent: () => channelOwnerCurrent },
+        () => scopeCurrent,
+      );
+      const operation = new AbortController();
+      const grant = mintCronCreatorAuthorityGrant(
+        scope,
+        operation.signal,
+        undefined,
+        undefined,
+        "runtime",
+        () => issuerCurrent,
+      );
+      try {
+        const consumed = consumeCronCreatorAuthorityGrant(grant);
+        expect(consumed.authority).toBeUndefined();
+        expect(consumed.assertCurrent).not.toThrow();
+        expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
+        await Promise.resolve();
+        if (revoked === "issuer") {
+          issuerCurrent = false;
+        } else if (revoked === "scope") {
+          scopeCurrent = false;
+        } else if (revoked === "scope abort") {
+          scope.abort();
+        } else if (revoked === "run settlement") {
+          revokeCronCreatorAuthorityRunScope(scope);
+        } else if (revoked === "operation") {
+          operation.abort();
+        } else {
+          channelOwnerCurrent = false;
+        }
+        expect(consumed.assertCurrent).toThrow("no longer active");
+      } finally {
+        revokeCronCreatorAuthorityRunScope(scope);
+      }
+    },
+  );
 });
 
 describe("cron management authority grants", () => {
-  const denied = /Retry from a fresh authenticated Control UI administrator turn/;
+  const denied =
+    /Retry from a fresh authenticated configured channel owner or Control UI administrator turn/;
 
   it("retains a redeemed queued operation until its exact run closes, without permitting replay", async () => {
     const fixture = createManagementFixture();
@@ -146,12 +225,15 @@ describe("cron management authority grants", () => {
     await withCronManagementGrant(grant, fixture.identity, "cron.get", async () => {
       retained = getCronManagementAuthority(fixture.identity);
       expect(retained).toBeTypeOf("function");
+      expect(getCronManagementCallerOrigin(fixture.identity)).toEqual({ kind: "local" });
       expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
+      expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
       retained!();
       await Promise.resolve();
       retained!();
     });
     expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
+    expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
     expect(retained).not.toThrow();
     revokeCronCreatorAuthorityRunScope(fixture.scope);
     expect(retained).toThrow(denied);
@@ -241,6 +323,10 @@ describe("cron management authority grants", () => {
   });
 
   it.each([
+    [
+      "continuation ownership loss",
+      (fixture: ReturnType<typeof createManagementFixture>) => fixture.revokeContinuation(),
+    ],
     [
       "release",
       (fixture: ReturnType<typeof createManagementFixture>) =>

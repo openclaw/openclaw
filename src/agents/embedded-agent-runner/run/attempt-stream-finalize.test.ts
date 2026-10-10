@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
   clearActiveEmbeddedRun: vi.fn(),
@@ -28,6 +29,7 @@ vi.mock("./attempt-stream-settle.js", () => ({
   settleEmbeddedAttemptStream: mocks.settleStream,
 }));
 
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
 import { SessionManager } from "../../sessions/index.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
@@ -63,7 +65,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
   const sessionManager =
     overrides.sessionManager ??
     ({
-      appendLeafControl: vi.fn(),
+      appendLeafControlAsync: vi.fn(async () => undefined),
       buildSessionContext: () => ({ messages: repairedMessages }),
       getEntry: vi.fn(),
     } as never);
@@ -136,6 +138,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         },
         cacheTrace: {},
         contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
           getAfterTurnCheckpoint: vi.fn(() => 7),
           takePendingMidTurnPrecheckRequest: vi.fn(() => null),
         },
@@ -157,7 +160,7 @@ function createFixture(overrides: FixtureOverrides = {}) {
         runtimeInfo: { model: { id: "model" } },
         systemPromptReport: undefined,
       },
-      toolBase: { nestedToolActivities: [] },
+      toolBase: { nestedToolActivityState: createAttemptNestedToolActivityState() },
       toolCatalog: {
         effectiveTools: [{ name: "read" }],
         emptyExplicitToolAllowlistError: undefined,
@@ -315,11 +318,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("rewinds the exact rejected branch before the hidden retry can choose NO_REPLY", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
+    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
     const rejectedId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],
@@ -574,11 +573,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
 
   it("restores the rewound in-memory branch when settlement fails", async () => {
     const sessionManager = SessionManager.inMemory();
-    const promptId = sessionManager.appendMessage({
-      role: "user",
-      content: "Original request",
-      timestamp: 1,
-    });
+    const promptId = sessionManager.appendMessage(makeUserMessage("Original request", 1));
     const rejectedId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "Rejected first answer" }],

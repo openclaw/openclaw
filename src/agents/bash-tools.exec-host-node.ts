@@ -1,12 +1,6 @@
-/**
- * Node-host exec orchestration.
- * Combines local policy, remote node policy, auto-review, approval follow-ups,
- * and `node.invoke system.run` execution for host=node calls.
- */
 import { randomUUID } from "node:crypto";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "../gateway/operator-scopes.js";
 import {
-  type ExecAsk,
   type ExecSecurity,
   maxAsk,
   minSecurity,
@@ -16,11 +10,15 @@ import {
 } from "../infra/exec-approvals.js";
 import {
   defaultExecAutoReviewer,
+  EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
+  formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import {
-  buildExecApprovalRequesterContext,
+  buildExecAutoReviewDeniedToolResult,
+  formatExecApprovalContinuationSourceOutput,
+} from "./bash-tools.exec-approval-output.js";
+import {
   buildExecApprovalTurnSourceContext,
   isExecApprovalRunAbortedError,
   registerExecApprovalRequestForHostOrThrow,
@@ -36,6 +34,11 @@ import {
   prepareNodeSystemRun,
   resolveNodeExecutionTarget,
 } from "./bash-tools.exec-host-node-phases.js";
+import {
+  assertCurrentNodeGatewayPolicyAllowsDispatch,
+  type NodeGatewayDispatchAuthority,
+  type NodeGatewayPolicyCheckpoint,
+} from "./bash-tools.exec-host-node-policy.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import * as execHostShared from "./bash-tools.exec-host-shared.js";
 import { createApprovalSlug } from "./bash-tools.exec-runtime.js";
@@ -46,68 +49,6 @@ import { callGatewayTool } from "./tools/gateway.js";
 
 const APPROVED_NODE_INVOKE_SCOPES = [WRITE_SCOPE, APPROVALS_SCOPE];
 
-type NodeGatewayDispatchAuthority =
-  | "current-policy"
-  | "human-approval"
-  | "auto-review"
-  | "ask-fallback";
-
-type NodeGatewayPolicyCheckpoint = {
-  hostSecurity: ExecSecurity;
-  hostAsk: ExecAsk;
-  askFallback: ExecSecurity;
-};
-
-async function assertCurrentNodeGatewayPolicyAllowsDispatch(params: {
-  request: ExecuteNodeHostCommandParams;
-  authority: NodeGatewayDispatchAuthority;
-  currentPolicyAllows?: (policy: { hostSecurity: ExecSecurity; hostAsk: ExecAsk }) => boolean;
-  fallbackPolicy?: NodeGatewayPolicyCheckpoint;
-}): Promise<void> {
-  if (params.request.bypassHostApprovalFloors) {
-    return;
-  }
-  const current = await execHostShared.resolveExecHostApprovalContext({
-    agentId: params.request.agentId,
-    security: params.request.security,
-    ask: params.request.ask,
-    host: "node",
-  });
-  // A human grant may bypass ask/allowlist, but never a later deny. Auto-review
-  // additionally cannot stand in for a newly required human decision.
-  if (current.hostSecurity === "deny") {
-    throw new Error("exec denied: host=node security=deny");
-  }
-  if (params.authority === "human-approval") {
-    return;
-  }
-  if (params.authority === "auto-review") {
-    if (current.hostAsk === "always") {
-      throw new Error("exec denied: host=node ask=always requires human approval");
-    }
-    return;
-  }
-  if (params.authority === "ask-fallback") {
-    const expected = params.fallbackPolicy;
-    if (
-      !expected ||
-      current.hostSecurity !== expected.hostSecurity ||
-      current.hostAsk !== expected.hostAsk ||
-      current.askFallback !== expected.askFallback
-    ) {
-      throw new Error("exec denied: host=node fallback policy changed before dispatch");
-    }
-    return;
-  }
-  if (!params.currentPolicyAllows?.(current)) {
-    throw new Error("exec denied: host=node policy changed before dispatch");
-  }
-}
-
-/**
- * Executes a command on a remote node, requesting approval when policy requires it.
- * Node-host approval combines caller policy and remote node approval snapshots.
- */
 export async function executeNodeHostCommand(
   params: ExecuteNodeHostCommandParams,
 ): Promise<AgentToolResult<ExecToolDetails>> {
@@ -142,7 +83,8 @@ export async function executeNodeHostCommand(
     nodeSecurity,
     nodeAsk,
     inlineEvalHit,
-    requiresSecurityAuditSuppressionApproval,
+    autoReviewBlockedByShellStartup,
+    autoReviewEligibility,
     autoReviewArgv,
     allowAlwaysPersistence,
   } = approvalAnalysis;
@@ -171,9 +113,7 @@ export async function executeNodeHostCommand(
       analysisOk,
       allowlistSatisfied,
       durableApprovalSatisfied,
-    }) ||
-    inlineEvalHit !== null ||
-    requiresSecurityAuditSuppressionApproval;
+    }) || inlineEvalHit !== null;
   if (
     !requiresAsk &&
     effectiveSecurity === "allowlist" &&
@@ -196,11 +136,6 @@ export async function executeNodeHostCommand(
       },
     };
   }
-  if (requiresSecurityAuditSuppressionApproval) {
-    params.warnings.push(
-      "Warning: security audit suppression changes require explicit approval unless exec is running in yolo mode.",
-    );
-  }
   const registerNodeApproval = async (
     approvalId: string,
     options: { requireDeliveryRoute?: boolean; suppressDelivery?: boolean } = {},
@@ -218,19 +153,12 @@ export async function executeNodeHostCommand(
       ask: hostAsk,
       ...unavailableDecisionRequestParams,
       commandHighlighting: params.commandHighlighting,
-      ...buildExecApprovalRequesterContext({
-        agentId: prepared.agentId,
-        sessionKey: prepared.sessionKey,
-      }),
+      agentId: prepared.agentId,
+      sessionKey: prepared.sessionKey,
       approvalReviewerDeviceIds: params.approvalReviewerDeviceId
         ? [params.approvalReviewerDeviceId]
         : undefined,
-      ...(options.requireDeliveryRoute !== undefined
-        ? { requireDeliveryRoute: options.requireDeliveryRoute }
-        : {}),
-      ...(options.suppressDelivery !== undefined
-        ? { suppressDelivery: options.suppressDelivery }
-        : {}),
+      ...options,
       ...buildExecApprovalTurnSourceContext(params),
     });
 
@@ -268,19 +196,8 @@ export async function executeNodeHostCommand(
         hostSecurity: current.hostSecurity,
         hostAsk: current.hostAsk,
       });
-      if (current.askFallback === "full") {
-        return {
-          approvedByAsk: true,
-          deniedReason: null,
-          hostSecurity: current.hostSecurity,
-          hostAsk: current.hostAsk,
-          askFallback: current.askFallback,
-          requiresExplicitApproval:
-            currentAnalysis.inlineEvalHit !== null ||
-            currentAnalysis.requiresSecurityAuditSuppressionApproval,
-        };
-      }
       const authorizationSatisfied =
+        current.askFallback === "full" ||
         currentAnalysis.durableApprovalSatisfied ||
         (currentAnalysis.analysisOk && currentAnalysis.allowlistSatisfied);
       return {
@@ -289,9 +206,7 @@ export async function executeNodeHostCommand(
         hostSecurity: current.hostSecurity,
         hostAsk: current.hostAsk,
         askFallback: current.askFallback,
-        requiresExplicitApproval:
-          currentAnalysis.inlineEvalHit !== null ||
-          currentAnalysis.requiresSecurityAuditSuppressionApproval,
+        requiresExplicitApproval: currentAnalysis.inlineEvalHit !== null,
       };
     } catch {
       return {
@@ -312,6 +227,17 @@ export async function executeNodeHostCommand(
   let inlineDispatchAuthority: NodeGatewayDispatchAuthority = "current-policy";
   let inlineFallbackPolicy: NodeGatewayPolicyCheckpoint | undefined;
   if (requiresAsk) {
+    if (params.autoReview === true && hostAsk !== "always" && autoReviewBlockedByShellStartup) {
+      params.warnings.push(EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING);
+    }
+    if (
+      params.autoReview === true &&
+      hostAsk !== "always" &&
+      !autoReviewBlockedByShellStartup &&
+      !autoReviewEligibility.eligible
+    ) {
+      params.warnings.push(autoReviewEligibility.reason);
+    }
     const autoReviewHasBoundCommand = analysisOk && autoReviewArgv !== undefined;
     // Remote policy may be stricter; local auto-review cannot bypass that floor.
     const autoReviewBlockedByNodePolicy =
@@ -322,14 +248,16 @@ export async function executeNodeHostCommand(
         (nodeSecurity !== undefined && minSecurity(hostSecurity, nodeSecurity) !== hostSecurity));
     let autoReviewRequiresHumanApproval =
       autoReviewBlockedByNodePolicy ||
-      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand) ||
-      requiresSecurityAuditSuppressionApproval;
+      (params.autoReview === true && autoReviewBlockedByShellStartup) ||
+      (params.autoReview === true && !autoReviewEligibility.eligible) ||
+      (params.autoReview === true && hostAsk !== "always" && !autoReviewHasBoundCommand);
     if (
       params.autoReview === true &&
       hostAsk !== "always" &&
       autoReviewHasBoundCommand &&
       !autoReviewBlockedByNodePolicy &&
-      !requiresSecurityAuditSuppressionApproval
+      !autoReviewBlockedByShellStartup &&
+      autoReviewEligibility.eligible
     ) {
       const reviewer = params.autoReviewer ?? defaultExecAutoReviewer;
       const autoReviewReason =
@@ -344,7 +272,7 @@ export async function executeNodeHostCommand(
         command: prepared.rawCommand,
         argv: autoReviewArgv,
         cwd: prepared.cwd,
-        envKeys: Object.keys(params.requestedEnv ?? {}).toSorted(),
+        envKeys: Object.keys(target.env ?? {}).toSorted(),
         host: "node",
         reason: autoReviewReason,
         analysis: {
@@ -363,42 +291,52 @@ export async function executeNodeHostCommand(
         ? await abortable(params.signal, pendingDecision)
         : await pendingDecision;
       params.signal?.throwIfAborted();
-      const autoReviewAllowed = decision.decision === "allow-once" && decision.risk === "low";
-      if (autoReviewAllowed) {
-        const approvalId = randomUUID();
-        await registerNodeApproval(approvalId, {
-          requireDeliveryRoute: false,
-          suppressDelivery: true,
-        });
-        await callGatewayTool(
-          "exec.approval.resolve",
-          { timeoutMs: 15_000 },
-          { id: approvalId, decision: "allow-once" },
-          { scopes: [APPROVALS_SCOPE], requireAgentRuntimeIdentity: true },
-        );
-        inlineApprovedByAsk = true;
-        inlineApprovalDecision = "allow-once";
-        inlineApprovalId = approvalId;
-        inlineDispatchAuthority = "auto-review";
+      switch (decision.decision) {
+        case "deny":
+          return buildExecAutoReviewDeniedToolResult({
+            command: prepared.rawCommand,
+            cwd: prepared.cwd,
+            decision,
+            toolCallId: params.toolCallId,
+          });
+        case "ask":
+          break;
+        case "allow-once": {
+          if (decision.risk !== "low" && decision.risk !== "medium") {
+            break;
+          }
+          const approvalId = randomUUID();
+          await registerNodeApproval(approvalId, {
+            requireDeliveryRoute: false,
+            suppressDelivery: true,
+          });
+          await callGatewayTool(
+            "exec.approval.resolve",
+            { timeoutMs: 15_000 },
+            { id: approvalId, decision: "allow-once" },
+            { scopes: [APPROVALS_SCOPE], requireAgentRuntimeIdentity: true },
+          );
+          inlineApprovedByAsk = true;
+          inlineApprovalDecision = "allow-once";
+          inlineApprovalId = approvalId;
+          inlineDispatchAuthority = "auto-review";
+          break;
+        }
+        default:
+          throw new Error("Unsupported exec auto-review decision", {
+            cause: decision satisfies never,
+          });
       }
-      if (!autoReviewAllowed) {
+      if (!inlineApprovedByAsk) {
         autoReviewRequiresHumanApproval = true;
         params.warnings.push(
-          `Exec auto-review deferred to human approval (risk=${decision.risk}): ${decision.rationale}`,
+          `Exec auto-review deferred to human approval (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}`,
         );
       }
     }
 
     if (!inlineApprovedByAsk) {
-      // Keep routed approvals in the owning turn unless its caller explicitly
-      // delegates completion to a detached follow-up.
-      const approvalRoute = await execHostShared.createExecApprovalRequestRoute({
-        warnings: params.warnings,
-        approvalRunningNoticeMs: params.approvalRunningNoticeMs,
-        createApprovalSlug,
-        turnSourceChannel: params.turnSourceChannel,
-        turnSourceAccountId: params.turnSourceAccountId,
-        register: registerNodeApproval,
+      const approvalDecisionPolicy = {
         askFallback,
         resolveTimedOut: async () => {
           const fallback = await resolveCurrentTimeoutFallback();
@@ -408,9 +346,21 @@ export async function executeNodeHostCommand(
             context: fallback,
           };
         },
-        requiresExplicitApproval: (fallback) =>
-          fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
+        requiresExplicitApproval: (
+          fallback: Awaited<ReturnType<typeof resolveCurrentTimeoutFallback>> | undefined,
+        ) => fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
         requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+      };
+      // Keep routed approvals in the owning turn unless its caller explicitly
+      // delegates completion to a detached follow-up.
+      const approvalRoute = await execHostShared.createExecApprovalRequestRoute({
+        warnings: params.warnings,
+        approvalRunningNoticeMs: params.approvalRunningNoticeMs,
+        createApprovalSlug,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceAccountId: params.turnSourceAccountId,
+        register: registerNodeApproval,
+        ...approvalDecisionPolicy,
       });
       const {
         approvalId,
@@ -449,14 +399,7 @@ export async function executeNodeHostCommand(
           approvalId,
           preResolvedDecision,
           signal: params.signal,
-          askFallback,
-          resolveTimedOut: async () => {
-            const fallback = await resolveCurrentTimeoutFallback();
-            return { ...fallback, context: fallback };
-          },
-          requiresExplicitApproval: (fallback) =>
-            fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
-          requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+          ...approvalDecisionPolicy,
         });
         params.signal?.throwIfAborted();
         if (outcome.kind !== "resolved") {
@@ -468,7 +411,9 @@ export async function executeNodeHostCommand(
         inlineApprovedByAsk = true;
         inlineApprovalId = approvalId;
         inlineApprovalDecision =
-          outcome.decision === "allow-always" && inlineEvalHit === null
+          outcome.decision === "allow-always" &&
+          inlineEvalHit === null &&
+          allowAlwaysPersistence.kind !== "one-shot"
             ? "allow-always"
             : outcome.decision === "allow-once" || outcome.decision === "allow-always"
               ? "allow-once"
@@ -477,9 +422,9 @@ export async function executeNodeHostCommand(
         inlineDispatchAuthority = inlineApprovalSource ?? "human-approval";
         inlineFallbackPolicy = outcome.state.timeoutContext;
       } else {
-        const followupTarget = execHostShared.buildExecApprovalFollowupTarget({
+        const followupTarget = {
           approvalId,
-          agentId: params.agentId,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
           sessionKey: params.notifySessionKey ?? params.sessionKey,
           expectedSessionId: params.sessionId,
           sessionStore: params.sessionStore,
@@ -489,7 +434,7 @@ export async function executeNodeHostCommand(
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
           direct: params.approvalFollowupMode === "direct",
-        });
+        };
         const sendApprovalRequestFailedFollowup = async (): Promise<void> => {
           if (!params.signal?.aborted) {
             await execHostShared.sendExecApprovalFollowupResult(
@@ -506,18 +451,7 @@ export async function executeNodeHostCommand(
             approvalId,
             preResolvedDecision,
             signal: params.signal,
-            askFallback,
-            resolveTimedOut: async () => {
-              const fallback = await resolveCurrentTimeoutFallback();
-              return {
-                approvedByAsk: fallback.approvedByAsk,
-                deniedReason: fallback.deniedReason,
-                context: fallback,
-              };
-            },
-            requiresExplicitApproval: (fallback) =>
-              fallback?.requiresExplicitApproval ?? inlineEvalHit !== null,
-            requiresAutoReviewHumanApproval: autoReviewRequiresHumanApproval,
+            ...approvalDecisionPolicy,
           });
           if (approvalOutcome.kind !== "resolved") {
             if (approvalOutcome.kind === "request-failed") {
@@ -563,26 +497,18 @@ export async function executeNodeHostCommand(
               invokeWaitMs: target.invokeWaitMs,
               invoke: buildNodeSystemRunInvoke({
                 target,
-                command: prepared.argv,
-                rawCommand: prepared.transportRawCommand,
-                cwd: prepared.cwd,
-                agentId: prepared.agentId,
-                sessionKey: prepared.sessionKey,
-                turnSourceChannel: params.turnSourceChannel,
-                turnSourceTo: params.turnSourceTo,
-                turnSourceAccountId: params.turnSourceAccountId,
-                turnSourceThreadId: params.turnSourceThreadId,
+                prepared,
+                request: params,
                 approved: approvalSource ? undefined : approvedByAsk,
                 approvalDecision: approvalSource
                   ? null
-                  : approvalDecision === "allow-always" && inlineEvalHit !== null
+                  : approvalDecision === "allow-always" &&
+                      (inlineEvalHit !== null || allowAlwaysPersistence.kind === "one-shot")
                     ? "allow-once"
                     : approvalDecision,
                 approvalSource,
                 runId: approvalId,
                 suppressNotifyOnExit: true,
-                notifyOnExit: params.notifyOnExit,
-                systemRunPlan: prepared.plan,
               }),
               scopes: APPROVED_NODE_INVOKE_SCOPES,
               signal: params.signal,
@@ -666,21 +592,12 @@ export async function executeNodeHostCommand(
   params.signal?.throwIfAborted();
   const invoke = buildNodeSystemRunInvoke({
     target,
-    command: prepared.argv,
-    rawCommand: prepared.transportRawCommand,
-    cwd: prepared.cwd,
-    agentId: prepared.agentId,
-    sessionKey: prepared.sessionKey,
-    turnSourceChannel: params.turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
+    prepared,
+    request: params,
     approved: inlineApprovalSource ? undefined : inlineApprovedByAsk,
     approvalDecision: inlineApprovalSource ? null : inlineApprovalDecision,
     approvalSource: inlineApprovalSource,
     runId: inlineApprovalId,
-    notifyOnExit: params.notifyOnExit,
-    systemRunPlan: prepared.plan,
   });
   await assertCurrentNodeGatewayPolicyAllowsDispatch({
     request: params,
@@ -697,8 +614,7 @@ export async function executeNodeHostCommand(
       (current.hostSecurity !== "allowlist" ||
         durableApprovalSatisfied ||
         (analysisOk && allowlistSatisfied)) &&
-      inlineEvalHit === null &&
-      !requiresSecurityAuditSuppressionApproval,
+      inlineEvalHit === null,
   });
   params.signal?.throwIfAborted();
   return dispatchNodeSystemRun({

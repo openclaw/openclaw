@@ -7,9 +7,8 @@ import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { t } from "../../i18n/index.ts";
 import {
-  cloneConfigObject,
   removePathValue,
-  sanitizeRedactedFormForSubmit,
+  pruneEmptyConfigForm,
   schemaMayAcceptString,
   schemaType,
   serializeConfigForm,
@@ -18,14 +17,26 @@ import {
 } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
+import { configContentConflicts, replayConfigDraftEdits } from "./config-draft-replay.ts";
 import {
   resolveAgentConfigEntryTarget,
   resolveEditableSnapshotConfig,
+  setConfigSnapshot,
   type LoadConfigOptions,
   type RuntimeConfigState,
 } from "./config-state-model.ts";
 
 const autoAllowlistedPluginIdsByState = new WeakMap<RuntimeConfigState, Set<string>>();
+
+export function comparableSnapshotRaw(
+  snapshot: RuntimeConfigState["configSnapshot"],
+): string | null {
+  if (typeof snapshot?.raw === "string") {
+    return snapshot.raw;
+  }
+  const editable = resolveEditableSnapshotConfig(snapshot);
+  return editable ? serializeConfigForm(editable) : null;
+}
 
 export function clearConfigDraftTracking(state: RuntimeConfigState): void {
   autoAllowlistedPluginIdsByState.delete(state);
@@ -122,28 +133,30 @@ export function applyConfigSnapshot(
   snapshot: ConfigSnapshot,
   options: LoadConfigOptions = {},
 ) {
-  const preservePendingChanges = state.configFormDirty && options.discardPendingChanges !== true;
+  const preservePendingChanges =
+    (state.configFormDirty ||
+      state.configRecoveryError !== null ||
+      options.preservePendingChanges === true) &&
+    options.discardPendingChanges !== true;
   if (options.discardPendingChanges === true) {
     // Discard resets pending edits and stale save status, but NOT the restart
     // banner: a saved-but-unapplied config still needs an apply even after
     // the local draft is thrown away.
     state.configAutoSaveStatus = "idle";
+    state.configRecoveryError = null;
   }
   const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
   if (snapshot.appliedConfigHash !== undefined) {
     state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
   }
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
-  state.configSnapshot = snapshot;
+  setConfigSnapshot(state, snapshot);
   const editableConfig = resolveEditableSnapshotConfig(snapshot);
   const rawAvailable =
     typeof snapshot.raw === "string" || Boolean(editableConfig) || Boolean(state.configForm);
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
-  state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
-  state.configIssues = Array.isArray(snapshot.issues) ? snapshot.issues : [];
-
   if (!preservePendingChanges) {
     resetConfigPendingChanges(state);
   } else {
@@ -154,13 +167,18 @@ export function applyConfigSnapshot(
   }
 }
 
-function coerceBooleanString(value: string): boolean | string {
-  const trimmed = value.trim();
-  if (trimmed === "true") {
-    return true;
+function coerceFormString(value: string, type: string | undefined) {
+  if (type === "number" || type === "integer") {
+    return coerceConfigFormNumberString(value, type === "integer");
   }
-  if (trimmed === "false") {
-    return false;
+  if (type === "boolean") {
+    const trimmed = value.trim();
+    if (trimmed === "true") {
+      return true;
+    }
+    if (trimmed === "false") {
+      return false;
+    }
   }
   return value;
 }
@@ -201,65 +219,38 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
         return value;
       }
       for (const variant of variants) {
-        const variantType = schemaType(variant);
-        if (variantType === "number" || variantType === "integer") {
-          const coerced = coerceConfigFormNumberString(value, variantType === "integer");
-          if (coerced === undefined || typeof coerced === "number") {
-            return coerced;
-          }
-        }
-        if (variantType === "boolean") {
-          const coerced = coerceBooleanString(value);
-          if (typeof coerced === "boolean") {
-            return coerced;
-          }
+        const coerced = coerceFormString(value, schemaType(variant));
+        if (typeof coerced !== "string") {
+          return coerced;
         }
       }
     }
     for (const variant of variants) {
       const variantType = schemaType(variant);
-      if (variantType === "object" && typeof value === "object" && !Array.isArray(value)) {
-        return coerceFormValues(value, variant);
-      }
-      if (variantType === "array" && Array.isArray(value)) {
+      if (
+        (variantType === "object" && isRecord(value)) ||
+        (variantType === "array" && Array.isArray(value))
+      ) {
         return coerceFormValues(value, variant);
       }
     }
     return value;
   }
 
-  if (type === "number" || type === "integer") {
-    if (typeof value === "string") {
-      const coerced = coerceConfigFormNumberString(value, type === "integer");
-      if (coerced === undefined || typeof coerced === "number") {
-        return coerced;
-      }
-    }
-    return value;
-  }
-  if (type === "boolean") {
-    if (typeof value === "string") {
-      const coerced = coerceBooleanString(value);
-      if (typeof coerced === "boolean") {
-        return coerced;
-      }
-    }
-    return value;
+  if (type === "number" || type === "integer" || type === "boolean") {
+    return typeof value === "string" ? coerceFormString(value, type) : value;
   }
   if (type === "string") {
     return typeof value === "string" && value.length === 0 && schema.minLength ? undefined : value;
   }
-  if (type === "object") {
-    if (typeof value !== "object" || Array.isArray(value)) {
-      return value;
-    }
+  if (type === "object" && isRecord(value)) {
     const props = schema.properties ?? {};
     const additional =
       schema.additionalProperties && typeof schema.additionalProperties === "object"
         ? schema.additionalProperties
         : null;
     const result: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, val] of Object.entries(value)) {
       const propSchema = props[key] ?? additional;
       const coerced = propSchema ? coerceFormValues(val, propSchema) : val;
       if (coerced !== undefined) {
@@ -268,10 +259,7 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     }
     return result;
   }
-  if (type === "array") {
-    if (!Array.isArray(value)) {
-      return value;
-    }
+  if (type === "array" && Array.isArray(value)) {
     const items = schema.items;
     if (Array.isArray(items)) {
       return value.map((item, index) => {
@@ -286,14 +274,6 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   return value;
 }
 
-/**
- * Serialize the form state for submission to `config.set` / `config.apply`.
- *
- * HTML `<input>` elements produce string `.value` properties, so numeric and
- * boolean config fields can leak into `configForm` as strings.  We coerce
- * them back to their schema-defined types before JSON serialization so the
- * gateway's Zod validation always sees correctly typed values.
- */
 export function serializeFormForSubmit(state: RuntimeConfigState): string {
   // A clean snapshot submits its raw bytes verbatim: reserializing the parsed
   // form would destroy JSON5 comments/formatting the file already has (the
@@ -301,65 +281,133 @@ export function serializeFormForSubmit(state: RuntimeConfigState): string {
   if (!state.configFormDirty && typeof state.configSnapshot?.raw === "string") {
     return state.configSnapshot.raw;
   }
+  const form = configFormForSubmit(state);
+  return form ? serializeConfigForm(form) : state.configRaw;
+}
+
+export function configFormForSubmit(state: RuntimeConfigState): Record<string, unknown> | null {
   if (state.configFormMode !== "form" || !state.configForm) {
-    return state.configRaw;
+    return null;
   }
   const schema = isRecord(state.configSchema) ? (state.configSchema as JsonSchema) : null;
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  const sanitized = sanitizeRedactedFormForSubmit(
-    form,
-    state.configFormOriginal,
-    state.configRawOriginalParsed,
-  );
-  return serializeConfigForm(sanitized);
+  // The draft original is include-resolved source; raw only describes the root file.
+  return pruneEmptyConfigForm(form, state.configFormOriginal);
 }
 
-/**
- * Adopts a successful write ack as the authoritative local snapshot BEFORE
- * any reload: the submitted bytes are on disk under the acked hash, so the
- * raw/hash/originals must never keep describing the pre-save file (a failed
- * best-effort reload would otherwise leave stale-bytes paths alive — e.g.
- * apply re-submitting the old raw, or a revert-during-reload comparing
- * clean). Server-resolved values (secret redaction) still refresh via the
- * follow-up reload, which is purely cosmetic from here on.
- */
-export function adoptConfigSetAck(
+export type ConfigSubmittedDraft = {
+  raw: string;
+  form: Record<string, unknown> | null;
+  // Full-draft writes commit raw/form; independent writes do not submit this
+  // shared draft. Supply their pre-write source (the admitted source for a no-op), or
+  // null for a full draft or an independent write before the initial load.
+  independentSnapshot: ConfigSnapshot | null;
+};
+
+export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
+
+export function isConfigWriteAck(value: unknown): value is ConfigWriteAck {
+  return (
+    isRecord(value) &&
+    isRecord(value.config) &&
+    typeof value.hash === "string" &&
+    value.hash.length > 0
+  );
+}
+
+export function assertConfigDraftCurrent(state: RuntimeConfigState): void {
+  const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
+  if (!canonical || state.configDraftBaseHash !== state.configSnapshot?.hash) {
+    return;
+  }
+  const original = state.configFormOriginal ?? state.configRawOriginalParsed;
+  if (!original) {
+    throw new Error(t("configView.rawDraftUnverified"));
+  }
+  if (!configContentConflicts(original, original, canonical)) {
+    return;
+  }
+  const current = configFormForSubmit(state) ?? parseConfigRawDraft(state.configRaw);
+  if (!current || configContentConflicts(original, current, canonical)) {
+    throw new Error("config changed since last load; re-run config.get and retry");
+  }
+}
+
+export function adoptConfigWriteAck(
   state: RuntimeConfigState,
-  submittedRaw: string,
-  ackHash: string,
+  submitted: ConfigSubmittedDraft,
+  ack: ConfigWriteAck,
+  options: { raw?: ConfigSnapshot["raw"] } = {},
 ) {
-  const parsed = parseConfigRawDraft(submittedRaw);
-  state.configSnapshot = {
+  const acknowledgedRaw = options.raw ?? serializeConfigForm(ack.config);
+  const currentForm = configFormForSubmit(state);
+  // A refresh may already contain the submitted write; replay the actual local draft.
+  const currentRaw = currentForm ? serializeConfigForm(currentForm) : state.configRaw;
+  const previous = resolveEditableSnapshotConfig(submitted.independentSnapshot);
+  const staleForm = Boolean(
+    currentForm &&
+    state.configFormOriginal &&
+    previous &&
+    configContentConflicts(state.configFormOriginal, currentForm, previous, "form"),
+  );
+  const draft =
+    currentRaw === submitted.raw
+      ? structuredClone(ack.config)
+      : staleForm
+        ? null
+        : replayConfigDraftEdits(submitted.form, currentForm, ack.config);
+  setConfigSnapshot(state, {
     ...state.configSnapshot,
-    raw: submittedRaw,
-    hash: ackHash,
+    raw: acknowledgedRaw,
+    hash: ack.hash,
     valid: true,
     issues: [],
-    ...(parsed ? { config: parsed, sourceConfig: parsed } : {}),
-  };
+    config: ack.config,
+    sourceConfig: ack.config,
+  });
+  state.configDraftBaseHash = ack.hash;
   state.configValid = true;
   state.configIssues = [];
-  setConfigRawOriginal(state, submittedRaw);
-  if (parsed) {
-    state.configFormOriginal = cloneConfigObject(parsed);
-  }
-  state.configDraftBaseHash = ackHash;
-  if (!state.configFormDirty) {
-    // Clean drafts snap to the persisted bytes, mirroring what a reload's
-    // non-preserving snapshot application would do.
-    state.configRaw = submittedRaw;
-    if (parsed) {
-      state.configForm = cloneConfigObject(parsed);
+  state.configAutoSaveStatus = staleForm
+    ? "conflict"
+    : state.configAutoSaveStatus === "paused"
+      ? "paused"
+      : "idle";
+  if (!draft) {
+    if (!staleForm) {
+      setConfigRawOriginal(state, submitted.raw);
+      state.configFormOriginal = submitted.form;
     }
+    const original = state.configFormOriginal ?? state.configRawOriginalParsed;
+    const current = currentForm ?? parseConfigRawDraft(state.configRaw);
+    if (
+      staleForm ||
+      (original && current && configContentConflicts(original, current, ack.config))
+    ) {
+      state.configAutoSaveStatus = "conflict";
+      state.lastError = "config changed since last load; re-run config.get and retry";
+    }
+    state.configFormDirty = true;
+    return state.configAutoSaveStatus;
   }
+  setConfigRawOriginal(state, acknowledgedRaw);
+  state.configFormOriginal = structuredClone(ack.config);
+  state.configForm = draft;
+  state.configRaw = serializeConfigForm(draft);
+  state.configFormDirty = state.configRaw !== serializeConfigForm(ack.config);
+  if (!state.configFormDirty) {
+    state.configAutoSaveStatus = "idle";
+    state.configRaw = acknowledgedRaw;
+    clearConfigDraftTracking(state);
+  }
+  return state.configAutoSaveStatus;
 }
 
 function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unknown>) {
-  const original = cloneConfigObject(
-    state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
-  );
+  const original =
+    state.configFormOriginal ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {};
   const nextRaw = serializeConfigForm(nextForm);
   const originalRaw = serializeConfigForm(original);
   state.configForm = nextForm;
@@ -374,12 +422,10 @@ function syncConfigDraft(state: RuntimeConfigState, nextForm: Record<string, unk
 /**
  * Any mutation invalidates a lingering "Saved"/"Save failed" indicator: a
  * dirty edit is about to reschedule, and a clean revert makes the old
- * failure moot (its error is cleared too). Three states persist regardless:
- * "saving" reports the in-flight request, "conflict" marks the snapshot
- * itself stale, and "paused" marks the reconnect latch — only an explicit
- * Save/Apply or discard clears it, no local edit can.
+ * failure moot (its error is cleared too). In-flight writes, stale snapshots,
+ * reconnect pauses and publication recovery survive local edits.
  */
-function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
+export function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   if (
     state.configAutoSaveStatus === "saving" ||
     state.configAutoSaveStatus === "conflict" ||
@@ -387,7 +433,10 @@ function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
   ) {
     return;
   }
-  if (!state.configFormDirty && state.configAutoSaveStatus === "error") {
+  if (
+    state.configAutoSaveStatus === "rejected" ||
+    (!state.configFormDirty && state.configAutoSaveStatus === "error")
+  ) {
     state.lastError = null;
   }
   state.configAutoSaveStatus = "idle";
@@ -395,10 +444,7 @@ function resetStaleAutoSaveStatus(state: RuntimeConfigState) {
 
 function parseConfigRawDraft(raw: string): Record<string, unknown> | null {
   try {
-    const parsed = parseJson5Text(raw);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return asConfigRecord(parseJson5Text(raw));
   } catch {
     return null;
   }
@@ -461,21 +507,12 @@ function mutateConfigForm(
     }
     base = parsedRawDraft;
   } else {
-    base = cloneConfigObject(
+    base = structuredClone(
       state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot) ?? {},
     );
   }
   mutate(base);
   syncConfigDraft(state, base);
-}
-
-function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state);
-  if (pluginIds) {
-    pluginIds.add(pluginId);
-  } else {
-    autoAllowlistedPluginIdsByState.set(state, new Set([pluginId]));
-  }
 }
 
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
@@ -505,10 +542,7 @@ function syncEnabledPluginAllowlist(
     return;
   }
   const pluginId = path[2];
-  const plugins =
-    draft.plugins && typeof draft.plugins === "object" && !Array.isArray(draft.plugins)
-      ? (draft.plugins as Record<string, unknown>)
-      : null;
+  const plugins = asConfigRecord(draft.plugins);
   const allow = Array.isArray(plugins?.allow) ? plugins.allow : null;
   if (!allow) {
     untrackAutoAllowlistedPluginId(state, pluginId);
@@ -523,7 +557,9 @@ function syncEnabledPluginAllowlist(
       return;
     }
     setPathValue(draft, ["plugins", "allow"], [...allow, pluginId]);
-    trackAutoAllowlistedPluginId(state, pluginId);
+    const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+    pluginIds.add(pluginId);
+    autoAllowlistedPluginIdsByState.set(state, pluginIds);
     return;
   }
   const autoAllowlistedPluginIds = autoAllowlistedPluginIdsByState.get(state);
@@ -553,7 +589,11 @@ export function updateConfigFormValue(
   });
 }
 
-export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
+export function updateConfigRawValue(
+  state: RuntimeConfigState,
+  value: string,
+  hasPendingDraftWrite = false,
+) {
   // Raw drafts may carry JSON5 comments; warm the parser before any
   // mutateConfigForm/diff path needs it synchronously.
   void warmJson5().catch(() => undefined);
@@ -561,8 +601,12 @@ export function updateConfigRawValue(state: RuntimeConfigState, value: string) {
   state.configFormDirty = value !== state.configRawOriginal;
   if (state.configFormDirty) {
     state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
-  } else {
+  } else if (!hasPendingDraftWrite) {
     resetConfigPendingChanges(state);
+  } else {
+    // The refreshed snapshot may contain the pending write, not this raw revert.
+    state.configForm = structuredClone(state.configFormOriginal ?? {});
+    clearConfigDraftTracking(state);
   }
   // Raw edits own submission; a clean revert also restores the saved form
   // above so a later form edit cannot resurrect discarded values.
@@ -574,7 +618,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   // A retained draft can predate a reconnect snapshot. Adopt its document and
   // revision together; pairing old originals with the new hash bypasses CAS.
-  state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
+  state.configFormOriginal = structuredClone(editableConfig ?? {});
   const raw =
     state.configSnapshot?.raw ??
     (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);
@@ -584,7 +628,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
 
 export function resetConfigPendingChanges(state: RuntimeConfigState) {
   rebaseConfigDraft(state);
-  state.configForm = cloneConfigObject(state.configFormOriginal ?? {});
+  state.configForm = structuredClone(state.configFormOriginal ?? {});
   state.configRaw = state.configRawOriginal;
   state.configFormDirty = false;
   state.configFormMode = "form";
@@ -595,6 +639,56 @@ export function removeConfigFormValue(state: RuntimeConfigState, path: Array<str
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
 }
 
+/** Rebase surviving edits onto the saved snapshot without replaying this field's intent. */
+export function discardConfigFormValue(state: RuntimeConfigState, path: Array<string | number>) {
+  const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
+  const original = state.configFormOriginal;
+  if (
+    !canonical ||
+    !state.configSnapshot?.hash ||
+    state.configValid !== true ||
+    !original ||
+    !state.configForm ||
+    state.configFormMode !== "form"
+  ) {
+    return false;
+  }
+  let current = structuredClone(state.configForm);
+  const previous = path.reduce<unknown>(
+    (value, segment) =>
+      Array.isArray(value) && typeof segment === "number"
+        ? value[segment]
+        : isRecord(value) && typeof segment === "string"
+          ? value[segment]
+          : undefined,
+    original,
+  );
+  if (previous === undefined) {
+    removePathValue(current, path);
+  } else {
+    setPathValue(current, path, structuredClone(previous));
+  }
+  // Restore absence with the submission owner's existing empty-container rules;
+  // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.
+  current = pruneEmptyConfigForm(current, original);
+  if (configContentConflicts(original, current, canonical, "form")) {
+    state.configAutoSaveStatus = "conflict";
+    state.lastError = "config changed since last load; re-run config.get and retry";
+    return false;
+  }
+  const draft = replayConfigDraftEdits(original, current, canonical);
+  if (!draft) {
+    return false;
+  }
+  rebaseConfigDraft(state);
+  if (state.configAutoSaveStatus !== "paused") {
+    state.configAutoSaveStatus = "idle";
+  }
+  syncConfigDraft(state, draft);
+  state.lastError = null;
+  return true;
+}
+
 export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId: string): boolean {
   const source = state.configForm ?? resolveEditableSnapshotConfig(state.configSnapshot);
   const target = resolveAgentConfigEntryTarget(source, agentId);
@@ -603,21 +697,15 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
   }
   const authoredAgentId = target.path[2];
   mutateConfigForm(state, (draft) => {
-    const agents = isRecord(draft.agents) ? draft.agents : null;
-    const entries = isRecord(agents?.entries) ? agents.entries : null;
+    const agents = asConfigRecord(draft.agents);
+    const entries = asConfigRecord(agents?.entries);
     if (!entries) {
       return;
     }
-    for (const [id, entry] of Object.entries(entries)) {
-      if (!isRecord(entry)) {
-        continue;
-      }
-      if (id === authoredAgentId) {
-        entry.default = true;
-      } else {
-        delete entry.default;
-      }
+    if (Object.keys(entries).length > 1) {
+      setPathValue(draft, ["agents", "ownership"], "explicit");
     }
+    setPathValue(draft, ["agents", "defaults", "systemAgent", "agentId"], authoredAgentId);
   });
   return true;
 }

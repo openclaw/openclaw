@@ -61,12 +61,14 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const config = {
         agents: {
+          ownership: "explicit",
           defaults: {
+            systemAgent: { agentId: "main" },
             workspace: "/tmp/agents",
             model: { primary: primaryModel, fallbacks: [inheritedFallback] },
           },
           entries: {
-            main: { default: true },
+            main: {},
             writer: model === undefined ? {} : { model },
           },
         },
@@ -103,7 +105,7 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
-      const agentPicker = page.locator("openclaw-agents-page openclaw-agent-select");
+      const agentPicker = page.locator(".settings-sidebar__agent openclaw-agent-select");
       await agentPicker.locator(".agent-select__trigger").click();
       // Switching agents is the user action under test; the Tools panel must survive it.
       await agentPicker

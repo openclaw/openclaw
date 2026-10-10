@@ -8,6 +8,7 @@ import {
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const now = Date.parse("2026-09-07T12:00:00Z");
@@ -23,6 +24,7 @@ beforeEach(() => {
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 function seedRun(db: DatabaseSync, version = "2026.9.2", id = runId) {
@@ -43,29 +45,8 @@ function createV15Database(version: string | null = "2026.9.2") {
   closeOpenClawStateDatabaseForTest();
   const db = new DatabaseSync(databasePath);
   try {
+    removePreparedWorkerOwnershipColumns(db);
     db.exec(`
-      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
-      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
-      DROP TABLE skill_workshop_collection_reviews;
-      CREATE TABLE skill_workshop_collection_reviews (
-        review_id TEXT NOT NULL PRIMARY KEY,
-        workspace_dir TEXT NOT NULL,
-        backup_id TEXT NOT NULL,
-        create_time INTEGER NOT NULL,
-        kept_names_json TEXT NOT NULL,
-        written_names_json TEXT NOT NULL,
-        dropped_json TEXT NOT NULL
-      ) STRICT;
-      CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time
-        ON skill_workshop_collection_reviews(workspace_dir, create_time DESC, review_id DESC);
-      INSERT INTO skill_workshop_proposals (
-        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
-        created_at, updated_at, draft_hash, claim_released_time
-      ) VALUES ('released', '{"id":"released","status":"applied"}', 'main', '/fixture/workspace',
-        'create', 'applied', '2026-09-01', '2026-09-01', 'fixture-hash', 1);
-      INSERT INTO skill_workshop_collection_reviews VALUES (
-        'review', '/fixture/workspace', 'backup', 1, '[]', '[]', '[]'
-      );
       PRAGMA user_version = 15;
       UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
     `);
@@ -96,7 +77,7 @@ function reopen(options: Parameters<typeof openOpenClawStateDatabase>[0]) {
 
 describe("shared state schema publication", () => {
   it.each(["runtime open", "doctor repair"] as const)(
-    "%s applies v16 content while preserving the unfenced updater's v15 floor",
+    "%s applies current content while preserving the unfenced updater's v15 floor",
     (entry) => {
       const { options } = createV15Database();
       if (entry === "doctor repair") {
@@ -104,6 +85,9 @@ describe("shared state schema publication", () => {
       }
       const db = openOpenClawStateDatabase(options).db;
       expectVersion(db, 15);
+      expect(db.prepare("PRAGMA table_info(worker_environments)").all()).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "preparation_consumed_at_ms" })]),
+      );
       expect(
         db
           .prepare(
@@ -111,48 +95,21 @@ describe("shared state schema publication", () => {
           )
           .get(),
       ).toEqual({ value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) });
-      expect(
-        db
-          .prepare(
-            "SELECT owner_agent_id, backup_id FROM skill_workshop_collection_reviews WHERE review_id = 'review'",
-          )
-          .get(),
-      ).toEqual({ owner_agent_id: "main", backup_id: "backup" });
-      expect(
-        db
-          .prepare("SELECT status FROM skill_workshop_proposals WHERE proposal_id = 'released'")
-          .get(),
-      ).toEqual({ status: "stale" });
-      expect(db.prepare("PRAGMA table_info(skill_workshop_proposals)").all()).not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ name: "claim_released_time" })]),
-      );
     },
   );
 
-  it("preserves migrated Workshop rows and skips content on repeated deferred opens and repair", () => {
+  it("skips content on repeated deferred opens and repair", () => {
     const { options } = createV15Database();
-    const db = openOpenClawStateDatabase(options).db;
-    const proposal = db.prepare("SELECT * FROM skill_workshop_proposals").all();
-    db.exec(`INSERT INTO skill_workshop_collection_reviews VALUES (
-      'created-after-migration', 'other-agent', 'new-backup', 2, '[]', '[]', '[]'
-    )`);
-    const reviews = db
-      .prepare("SELECT * FROM skill_workshop_collection_reviews ORDER BY review_id")
-      .all();
+    openOpenClawStateDatabase(options);
     vi.setSystemTime(now + 60_000);
     expectVersion(reopen(options), 15);
     closeOpenClawStateDatabaseForTest();
     const repair = repairOpenClawStateDatabaseSchema(options);
     expect(repair.warnings).toEqual([]);
     expect(repair.changes).not.toContain(
-      "Moved Skill Workshop ownership to per-agent directories (v16)",
+      "Recorded prepared worker ownership and one-use lifecycle (v17)",
     );
-    const after = openOpenClawStateDatabase(options).db;
-    expectVersion(after, 15);
-    expect(after.prepare("SELECT * FROM skill_workshop_proposals").all()).toEqual(proposal);
-    expect(
-      after.prepare("SELECT * FROM skill_workshop_collection_reviews ORDER BY review_id").all(),
-    ).toEqual(reviews);
+    expectVersion(openOpenClawStateDatabase(options).db, 15);
   });
 
   it.each([
@@ -211,52 +168,27 @@ describe("shared state schema publication", () => {
     },
   );
 
-  it.each(["missing metadata", "invalid content"] as const)(
-    "retains the typed manual-update fallback and rolls back on %s",
-    (failure) => {
-      const { options, databasePath } = createV15Database();
-      const before = new DatabaseSync(databasePath);
-      try {
-        if (failure === "missing metadata") {
-          before.exec("DROP TABLE config_machine_state");
-        } else {
-          before.exec(
-            "UPDATE skill_workshop_proposals SET record_json = '{' WHERE proposal_id = 'released'",
-          );
-        }
-      } finally {
-        before.close();
-      }
-      expect(() => openOpenClawStateDatabase(options)).toThrow(
-        expect.objectContaining({
-          name: "UpdateSchemaRefusalError",
-        }),
-      );
-      const after = new DatabaseSync(databasePath, { readOnly: true });
-      try {
-        expectVersion(after, 15);
-        expect(
-          after.prepare("SELECT workspace_dir FROM skill_workshop_collection_reviews").get(),
-        ).toEqual({ workspace_dir: "/fixture/workspace" });
-        expect(
-          after.prepare("SELECT status, claim_released_time FROM skill_workshop_proposals").get(),
-        ).toEqual({ status: "applied", claim_released_time: 1 });
-        if (failure === "missing metadata") {
-          expect(
-            after.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'config_machine_state'").get(),
-          ).toBeUndefined();
-        } else {
-          expect(
-            after
-              .prepare(
-                "SELECT 1 FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-              )
-              .get(),
-          ).toBeUndefined();
-        }
-      } finally {
-        after.close();
-      }
-    },
-  );
+  it("retains the typed manual-update fallback and rolls back on missing metadata", () => {
+    const { options, databasePath } = createV15Database();
+    const before = new DatabaseSync(databasePath);
+    try {
+      before.exec("DROP TABLE config_machine_state");
+    } finally {
+      before.close();
+    }
+    expect(() => openOpenClawStateDatabase(options)).toThrow(
+      expect.objectContaining({
+        name: "UpdateSchemaRefusalError",
+      }),
+    );
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      expectVersion(after, 15);
+      expect(
+        after.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'config_machine_state'").get(),
+      ).toBeUndefined();
+    } finally {
+      after.close();
+    }
+  });
 });

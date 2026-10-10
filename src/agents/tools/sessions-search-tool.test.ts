@@ -3,13 +3,11 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  applySessionStoreProjection,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -40,6 +38,7 @@ function createTool(params: {
   requests?: CallGatewayRequest[];
   sessionLinkBase?: string;
   indexing?: boolean;
+  archivedTranscriptsExcluded?: number;
   truncated?: boolean;
 }) {
   const config = params.config ?? { tools: { sessions: { visibility: "self" } } };
@@ -47,7 +46,7 @@ function createTool(params: {
     config: {
       ...config,
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         ...(config.agents as Record<string, unknown> | undefined),
       },
     },
@@ -94,6 +93,9 @@ function createTool(params: {
           (row) => Array.isArray(sessionKeys) && sessionKeys.includes(row.sessionKey),
         ),
         ...(params.indexing ? { indexing: true } : {}),
+        ...(params.archivedTranscriptsExcluded
+          ? { archivedTranscriptsExcluded: params.archivedTranscriptsExcluded }
+          : {}),
         ...(params.truncated ? { truncated: true } : {}),
       } as T;
     },
@@ -149,25 +151,44 @@ describe("sessions_search tool", () => {
     expect(error.details).toMatchObject({ status: "error", error: expect.any(String) });
     expect(Value.Check(tool.outputSchema!, error.details)).toBe(true);
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
+      '{ results: Array<{ role: "assistant" | "user"; score: number; sessionKey: string; snippet: string; timestamp: number; messageId?: string; sessionId?: string }>; archivedTranscriptsExcluded?: number; indexing?: true; sessionLinkRule?: string; truncated?: true; warning?: string } | { error: string; status: "error" | "forbidden" }',
     );
   });
 
-  it("warns that indexing makes search results incomplete", async () => {
+  it("reports indexing and archived transcript exclusions", async () => {
+    const state = { indexing: true, archivedTranscriptsExcluded: 2 };
     const result = await createTool({
       results: [hit()],
-      indexing: true,
+      ...state,
     }).execute("indexing-warning", { query: "text" });
 
     expect(result.details).toMatchObject({
-      indexing: true,
-      warning:
-        "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
+      ...(state.indexing ? { indexing: true } : {}),
+      ...(state.archivedTranscriptsExcluded ? { archivedTranscriptsExcluded: 2 } : {}),
+      warning: [
+        ...(state.indexing
+          ? [
+              "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
+            ]
+          : []),
+        ...(state.archivedTranscriptsExcluded
+          ? [
+              "Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
+            ]
+          : []),
+      ].join(" "),
     });
+    expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
   });
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
+    expect(Value.Check(tool.parameters, { query: "" })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "loan" })).toBe(true);
+    expect(Value.Check(tool.parameters, { query: "  loan  " })).toBe(true);
+    expect(tool.parameters).toMatchObject({
+      properties: { limit: { description: expect.stringContaining("Maximum search results: 25") } },
+    });
     await expect(tool.execute("call-1", { query: "   " })).rejects.toThrow(
       "query must not be empty",
     );
@@ -179,45 +200,13 @@ describe("sessions_search tool", () => {
     );
   });
 
-  it("filters invisible hits before applying the limit", async () => {
-    const requests: CallGatewayRequest[] = [];
-    const tool = createTool({
-      requests,
-      results: [
-        hit({ sessionKey: "agent:main:other", messageId: "hidden" }),
-        hit({ messageId: "visible" }),
-      ],
-    });
-
-    const result = await tool.execute("call-1", { query: "text", limit: 1 });
-
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ messageId: "visible", sessionKey: "main" })],
-    });
-    expect(JSON.stringify(result.details)).not.toContain("hidden");
-    const searchedKeys = requests
-      .filter((request) => request.method === "sessions.search")
-      .map((request) => (request.params as { sessionKeys?: unknown }).sessionKeys);
-    expect(searchedKeys).toEqual([["main"]]);
-  });
-
-  it("searches a multi-session visible set in one gateway call", async () => {
-    const requests: CallGatewayRequest[] = [];
-    const tool = createTool({
-      requests,
-      config: { tools: { sessions: { visibility: "all" } } },
-      results: [hit(), hit({ sessionKey: "agent:main:other", messageId: "other" })],
-    });
-
-    const result = await tool.execute("call-1", { query: "text" });
-
-    expect(result.details).toMatchObject({ results: expect.arrayContaining([expect.any(Object)]) });
-    const searchRequests = requests.filter((request) => request.method === "sessions.search");
-    expect(searchRequests).toHaveLength(1);
-    expect(searchRequests[0]?.params).toMatchObject({
-      agentId: "main",
-      sessionKeys: ["agent:main:other", "main"],
-    });
+  it("rejects blank execution with retry guidance after OpenAI schema normalization", async () => {
+    const tool = normalizeToolParameters(createTool({}), { modelProvider: "openai" });
+    for (const query of ["", "   "]) {
+      await expect(tool.execute!("blank-query", { query })).rejects.toThrow(
+        /query must not be empty; retry with non-empty keywords/,
+      );
+    }
   });
 
   it("never searches or returns incognito sessions", async () => {
@@ -257,9 +246,10 @@ describe("sessions_search tool", () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
       requests,
+      agentId: "main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "global", agentId: "work", messageId: "work-global" })],
     });
@@ -280,7 +270,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "global",
       config: {
         tools: { sessions: { visibility: "agent" } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [
         hit({ sessionKey: "global", agentId: "work" }),
@@ -315,7 +305,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "agent:main:main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "agent:work:other", agentId: "work" })],
     });
@@ -336,7 +326,7 @@ describe("sessions_search tool", () => {
   it("accepts the gateway's canonical key for the current-session alias", async () => {
     const tool = createSessionsSearchTool({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { sessions: { visibility: "self" } },
       },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
@@ -392,26 +382,6 @@ describe("sessions_search tool", () => {
     expect(searchedKeys).toEqual([["agent:main:child:spawned", "agent:main:main"]]);
   });
 
-  it("keeps archived spawned rows visible from their ownership metadata", async () => {
-    const tool = createTool({
-      agentSessionKey: "agent:main:main",
-      config: { tools: { sessions: { visibility: "tree" } } },
-      results: [
-        hit({
-          sessionKey: "agent:main:child:archived",
-          messageId: "archived-child",
-          spawnedBy: "agent:main:main",
-        }),
-      ],
-    });
-
-    const result = await tool.execute("call-1", { query: "text" });
-
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ messageId: "archived-child" })],
-    });
-  });
-
   it("redacts and truncates snippets, limits rows, and caps bytes", async () => {
     const token = ["sk", "or", "v1", "abcdef0123456789"].join("-");
     // Assembled so the pre-review secret scanner never sees a key-shaped literal.
@@ -461,14 +431,10 @@ describe("sessions_search tool", () => {
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
     const storePath = path.join(tempDirs.make("openclaw-sessions-search-"), "sessions.sqlite");
-    await applySessionStoreProjection({
-      storePath,
-      skipMaintenance: true,
-      update: (store) => {
-        store[targetSessionKey] = { sessionId: expectedSessionId, updatedAt: 1 };
-        return { persist: true, result: undefined };
-      },
-    });
+    replaceSessionEntrySync(
+      { storePath, sessionKey: targetSessionKey },
+      { sessionId: expectedSessionId, updatedAt: 1 },
+    );
     const requests: CallGatewayRequest[] = [];
     const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
       if (

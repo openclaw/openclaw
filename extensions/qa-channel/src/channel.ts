@@ -1,10 +1,10 @@
-// Qa Channel plugin module implements channel behavior.
 import type { ChannelThreadingToolContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
@@ -20,8 +20,12 @@ import {
 import { qaChannelMessageActions } from "./channel-actions.js";
 import { createQaChannelPluginBase, QA_CHANNEL_ID, qaChannelRuntimeMeta } from "./channel-base.js";
 import { startQaGatewayAccount } from "./gateway.js";
-import { sendQaChannelMedia, sendQaChannelMediaBatch, sendQaChannelText } from "./outbound.js";
-import type { ChannelPlugin } from "./runtime-api.js";
+import {
+  collectQaMediaUrls,
+  sendQaChannelMedia,
+  sendQaChannelMediaBatch,
+  sendQaChannelText,
+} from "./outbound.js";
 import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
@@ -56,13 +60,10 @@ function createQaChannelMessageReceipt(
 
 async function sendQaChannelMessagePayload(ctx: QaChannelPayloadSendContext) {
   const text = ctx.payload.text ?? ctx.text;
-  const mediaUrls = Array.from(
-    new Set(
-      [ctx.mediaUrl, ctx.payload.mediaUrl, ...(ctx.payload.mediaUrls ?? [])].filter(
-        (mediaUrl): mediaUrl is string =>
-          typeof mediaUrl === "string" && mediaUrl.trim().length > 0,
-      ),
-    ),
+  const mediaUrls = collectQaMediaUrls(
+    ctx.mediaUrl,
+    ctx.payload.mediaUrl,
+    ...(ctx.payload.mediaUrls ?? []),
   );
   const params = {
     cfg: ctx.cfg as CoreConfig,
@@ -143,7 +144,7 @@ const qaChannelMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
-const qaChannelPluginBase = createQaChannelPluginBase(qaChannelRuntimeMeta);
+const qaChannelPluginBase = createQaChannelPluginBase();
 
 function matchesQaToolContextTarget(target: string, toolContext: ChannelThreadingToolContext) {
   // Native source identity wins when To describes a different conversation.
@@ -175,8 +176,7 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       normalizeTarget: normalizeQaTarget,
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
       targetResolver: {
-        looksLikeId: (raw) =>
-          /^((dm|channel|group):|thread:[^/]+\/)/i.test(raw.trim()) || raw.trim().length > 0,
+        looksLikeId: (raw) => raw.trim().length > 0,
         hint: "<dm:user|channel:room|group:room|thread:room/thread>",
       },
       resolveOutboundSessionRoute: ({
@@ -190,6 +190,10 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
       }) => {
         const resolved = resolveQaTargetThread({ target, threadId });
         const parsed = resolved.target;
+        const baseTarget = buildQaTarget({
+          chatType: parsed.chatType,
+          conversationId: parsed.conversationId,
+        });
         const baseRoute = buildChannelOutboundSessionRoute({
           cfg,
           agentId,
@@ -197,26 +201,17 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
           accountId,
           recipientSessionExact: true,
           peer: {
-            kind:
-              parsed.chatType === "direct"
-                ? "direct"
-                : parsed.chatType === "group"
-                  ? "group"
-                  : "channel",
-            id: buildQaTarget(parsed),
+            kind: parsed.chatType,
+            id: baseTarget,
           },
           chatType: parsed.chatType,
           from: `${QA_CHANNEL_ID}:${accountId ?? DEFAULT_ACCOUNT_ID}`,
-          to: buildQaTarget(parsed),
+          to: baseTarget,
         });
-        // An explicit thread target already owns the complete session identity;
-        // applying reply or current-thread metadata would append a second thread.
-        if (parsed.threadId !== undefined) {
-          return baseRoute;
-        }
         return buildThreadAwareOutboundSessionRoute({
           route: baseRoute,
-          replyToId,
+          // Structured thread identity is authoritative; reply metadata must not replace its thread.
+          replyToId: resolved.threadId === undefined ? replyToId : undefined,
           threadId: resolved.threadId,
           currentSessionKey,
           canRecoverCurrentThread: ({ route }) =>
@@ -238,11 +233,27 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     status: qaChannelStatus,
     gateway: {
-      startAccount: async (ctx) => {
-        await startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx);
-      },
+      startAccount: (ctx) => startQaGatewayAccount(QA_CHANNEL_ID, qaChannelRuntimeMeta.label, ctx),
     },
     threading: {
+      resolveReplyTransport: ({
+        currentMessageId,
+        replyToId,
+        replyToIsExplicit,
+        replyDelivery,
+      }) => {
+        if (
+          !currentMessageId ||
+          replyToId !== undefined ||
+          replyToIsExplicit ||
+          (replyDelivery && replyDelivery.replyToMode !== "all")
+        ) {
+          return null;
+        }
+        // Correlate queued replies like the inbound callback, without restoring
+        // references that an earlier first/off/batched policy may have removed.
+        return { replyToId: currentMessageId };
+      },
       matchesToolContextTarget: ({ target, toolContext }) =>
         matchesQaToolContextTarget(target, toolContext),
       resolveAutoThreadId: ({ to, toolContext }) =>
@@ -300,41 +311,15 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     attachedResults: {
       channel: QA_CHANNEL_ID,
-      sendText: async ({ cfg, to, text, accountId, threadId, replyToId }) =>
-        await sendQaChannelText({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          threadId,
-          replyToId,
-        }),
-      sendMedia: async ({
-        cfg,
-        to,
-        text,
-        mediaUrl,
-        accountId,
-        threadId,
-        replyToId,
-        mediaAccess,
-        mediaLocalRoots,
-        mediaReadFile,
-      }) => {
-        if (!mediaUrl) {
+      sendText: async (ctx) => await sendQaChannelText({ ...ctx, cfg: ctx.cfg as CoreConfig }),
+      sendMedia: async (ctx) => {
+        if (!ctx.mediaUrl) {
           throw new Error("QA channel media send requires mediaUrl");
         }
         return await sendQaChannelMedia({
-          cfg: cfg as CoreConfig,
-          accountId,
-          to,
-          text,
-          mediaUrl,
-          threadId,
-          replyToId,
-          mediaAccess,
-          mediaLocalRoots,
-          mediaReadFile,
+          ...ctx,
+          cfg: ctx.cfg as CoreConfig,
+          mediaUrl: ctx.mediaUrl,
         });
       },
     },

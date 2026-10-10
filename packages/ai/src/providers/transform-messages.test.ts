@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import type { ProviderMessage, ProviderModel } from "../provider-types.js";
-import type { Message, Model, ToolResultMessage } from "../types.js";
+import type { AssistantMessage, Message, Model, ToolResultMessage } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { transformMessages } from "./transform-messages.js";
+
+const EXPECTED_FAILURE_MARKER =
+  "[This turn failed before it completed. Do not redo its work without confirming with the user first.]";
+const NO_CONTENT_PLACEHOLDER = "[assistant turn failed before producing content]";
 
 const model: Model<"openai-completions"> = {
   id: "text-only-model",
@@ -17,6 +21,94 @@ const model: Model<"openai-completions"> = {
   contextWindow: 128_000,
   maxTokens: 4_096,
 };
+
+function makeAssistant(
+  content: AssistantMessage["content"],
+  stopReason: AssistantMessage["stopReason"],
+): AssistantMessage {
+  return {
+    role: "assistant",
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: createZeroUsage(),
+    timestamp: 2,
+    content,
+    stopReason,
+  };
+}
+
+describe.each(["error", "aborted"] as const)(
+  "%s assistant replay at the provider boundary",
+  (stopReason) => {
+    it("replaces partial text with one marker between unrelated user turns", () => {
+      const before: Message = { role: "user", content: "summarize the incident", timestamp: 1 };
+      const after: Message = { role: "user", content: "what is the weather?", timestamp: 3 };
+      const failed = makeAssistant(
+        [{ type: "text", text: "Starting the incident summary" }],
+        stopReason,
+      );
+
+      const transformed = transformMessages([before, failed, after], model);
+
+      expect(transformed).toEqual([
+        before,
+        { ...failed, content: [{ type: "text", text: EXPECTED_FAILURE_MARKER }] },
+        after,
+      ]);
+      expect(failed.content).toEqual([{ type: "text", text: "Starting the incident summary" }]);
+    });
+
+    it("drops a failed tool-call turn even when it also contains partial text", () => {
+      const user: Message = { role: "user", content: "run it", timestamp: 1 };
+      const failed = makeAssistant(
+        [
+          { type: "text", text: "Starting the lookup" },
+          { type: "toolCall", id: "call-1", name: "lookup", arguments: {} },
+        ],
+        stopReason,
+      );
+
+      expect(transformMessages([user, failed], model)).toEqual([user]);
+    });
+
+    it.each([
+      { name: "empty content", content: [] },
+      {
+        name: "hidden reasoning",
+        content: [{ type: "thinking", thinking: "hidden partial reasoning" }],
+      },
+      {
+        name: "the no-content placeholder",
+        content: [{ type: "text", text: NO_CONTENT_PLACEHOLDER }],
+      },
+      {
+        name: "the no-content placeholder with hidden reasoning",
+        content: [
+          { type: "text", text: NO_CONTENT_PLACEHOLDER },
+          { type: "thinking", thinking: "hidden partial reasoning" },
+        ],
+      },
+    ] satisfies Array<{ name: string; content: AssistantMessage["content"] }>)(
+      "drops $name across a model change without inventing a visible turn",
+      ({ content }) => {
+        const failed = { ...makeAssistant(content, stopReason), model: "source-model" };
+        const user: Message = { role: "user", content: "what is the weather?", timestamp: 3 };
+
+        expect(transformMessages([failed, user], model)).toEqual([user]);
+      },
+    );
+  },
+);
+
+it("preserves native same-model reasoning on a length stop", () => {
+  const assistant = makeAssistant(
+    [{ type: "thinking", thinking: "partial reasoning", thinkingSignature: "signed-reasoning" }],
+    "length",
+  );
+
+  expect(transformMessages([assistant], model)).toEqual([assistant]);
+});
 
 describe("transformMessages", () => {
   it("normalizes null or missing content before provider transforms", () => {

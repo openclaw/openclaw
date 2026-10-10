@@ -1,9 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { readResponsesOutputIndex } from "../transports/openai-responses-stream-slots-internal.js";
 
 export type ResponsesToolCallIdentity = { itemId?: string; callId?: string };
 
 export type ResponsesToolCallState = ResponsesToolCallIdentity & {
   argumentStreamReliable: boolean;
+  argumentsStreamed: boolean;
   outputIndex?: number;
 };
 
@@ -11,14 +13,6 @@ type ResponsesToolCallEvent = {
   output_index?: unknown;
   item_id?: unknown;
 };
-
-function readOutputIndex(event: ResponsesToolCallEvent): number | undefined {
-  return typeof event.output_index === "number" &&
-    Number.isInteger(event.output_index) &&
-    event.output_index >= 0
-    ? event.output_index
-    : undefined;
-}
 
 function readEventIdentity(event: ResponsesToolCallEvent): ResponsesToolCallIdentity {
   return { itemId: normalizeOptionalString(event.item_id) };
@@ -69,26 +63,20 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
     }
     const compatible = uniqueCandidates.filter((state) => !identitiesConflict(state, identity));
     const matches = compatible.filter((state) => sharesIdentity(state, identity));
-    const matched = matches.length === 1 ? matches.at(0) : undefined;
-    if (matched) {
-      return adoptIdentity(matched, identity);
-    }
-
     // Only a sole active call may adopt an identity it did not already know.
     // Parallel calls require a positive match so missing indices stay fail-closed.
-    const soleCompatible =
-      allowUnmatchedIdentity &&
-      uniqueCandidates.length === 1 &&
-      compatible.length === 1 &&
-      matches.length === 0
-        ? compatible.at(0)
-        : undefined;
-    return soleCompatible ? adoptIdentity(soleCompatible, identity) : undefined;
+    const matched =
+      matches.length === 1
+        ? matches.at(0)
+        : allowUnmatchedIdentity && uniqueCandidates.length === 1
+          ? compatible.at(0)
+          : undefined;
+    return matched ? adoptIdentity(matched, identity) : undefined;
   };
 
   return {
     register(event: ResponsesToolCallEvent, state: TState): void {
-      const outputIndex = readOutputIndex(event);
+      const outputIndex = readResponsesOutputIndex(event);
       if (outputIndex === undefined) {
         unindexedCalls.add(state);
         return;
@@ -105,7 +93,7 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
       identity: ResponsesToolCallIdentity = readEventIdentity(event),
       allowUnmatchedIdentity = true,
     ): TState | undefined {
-      const outputIndex = readOutputIndex(event);
+      const outputIndex = readResponsesOutputIndex(event);
       if (outputIndex !== undefined) {
         const indexed = indexedCalls.get(outputIndex);
         if (indexed) {
@@ -154,6 +142,10 @@ export function createResponsesToolCallTracker<TState extends ResponsesToolCallS
 
     hasActive(): boolean {
       return indexedCalls.size > 0 || unindexedCalls.size > 0;
+    },
+
+    values(): TState[] {
+      return [...new Set([...indexedCalls.values(), ...unindexedCalls])];
     },
 
     hasExactlyActive(expected: readonly TState[]): boolean {

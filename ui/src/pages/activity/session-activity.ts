@@ -1,5 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import {
   ACTIVITY_PERSON_PARAM,
@@ -9,9 +11,24 @@ import {
 } from "../../app-route-paths.ts";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
+import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
+import {
+  createSessionWriteObservation,
+  type createSessionRowProvenance,
+} from "../../lib/sessions/session-row-provenance.ts";
+import { matchesExistingSession } from "../../lib/sessions/session-row-reconcile.ts";
+import type { CurrentWorkChange } from "./current-work.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
+
+export const TIME_LABELS: Record<ActivityTimeFilter, string> = {
+  "24h": "activityFeed.time24h",
+  "7d": "activityFeed.time7d",
+  "30d": "activityFeed.time30d",
+  all: "activityFeed.timeAll",
+};
 
 export type SessionActivityFilters = {
   personId: string | null;
@@ -19,32 +36,7 @@ export type SessionActivityFilters = {
   time: ActivityTimeFilter;
 };
 
-type ActivityPerson = PresenceViewer & { count: number };
-
-type SessionActivityDay = {
-  key: string;
-  timestamp: number | null;
-  sessions: readonly GatewaySessionRow[];
-};
-
-type SessionActivityProjection = {
-  days: readonly SessionActivityDay[];
-  matchedCount: number;
-  people: readonly ActivityPerson[];
-  sessions: readonly GatewaySessionRow[];
-  timeCount: number;
-};
-
 const DEFAULT_ACTIVITY_TIME_FILTER: ActivityTimeFilter = "7d";
-
-function isActivityTimeFilter(value: string | null): value is ActivityTimeFilter {
-  return value === "24h" || value === "7d" || value === "30d" || value === "all";
-}
-
-function normalized(value: string | null | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 export function parseSessionActivityFilters(
   search: string,
@@ -53,9 +45,9 @@ export function parseSessionActivityFilters(
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
-    personId: pathPersonId ?? normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
+    personId: pathPersonId ?? normalizeOptionalString(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
-    time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
+    time: ACTIVITY_TIME_FILTERS.find((time) => time === rawTime) ?? DEFAULT_ACTIVITY_TIME_FILTER,
   };
 }
 
@@ -110,24 +102,110 @@ export function canonicalSessionActivityLocation(
     : { pathname, search, hash: location.hash };
 }
 
-export function sessionActivityTimestamp(row: GatewaySessionRow): number {
-  return row.lastActivityAt ?? row.updatedAt ?? row.createdAt ?? 0;
-}
-
 function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): number {
   const recency = sessionActivityTimestamp(b) - sessionActivityTimestamp(a);
   return recency || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 }
 
+type ActivityRowProvenance = ReturnType<typeof createSessionRowProvenance>;
+
+/** Reads own membership; field receipts preserve observations made while the read was pending. */
+export function reconcileSessionActivityRead(
+  incoming: SessionsListResult,
+  previous: SessionsListResult | undefined,
+  provenance: ActivityRowProvenance,
+  revision: number,
+): { result: SessionsListResult; requiresRefresh: boolean } {
+  const held = new Map(
+    (previous?.sessions ?? []).flatMap((row) => {
+      const identity = provenance.identity(row);
+      return identity ? [[identity, row] as const] : [];
+    }),
+  );
+  let orderChanged = false;
+  const sessions = incoming.sessions.map((row) => {
+    const identity = provenance.identity(row);
+    const existing = identity ? held.get(identity) : undefined;
+    provenance.observeReadRow(row, revision, row.agentId, existing ? [existing] : []);
+    if (identity) {
+      held.delete(identity);
+    }
+    const merged = existing ? provenance.mergeRow(existing, row, row.agentId) : row;
+    orderChanged ||= sessionActivityTimestamp(merged) !== sessionActivityTimestamp(row);
+    return merged;
+  });
+  return {
+    result: {
+      ...incoming,
+      sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
+    },
+    requiresRefresh: [...held.values()].some((row) => {
+      const sample = provenance.fieldObservation(row, "updatedAt").source.snapshotAt;
+      return (
+        (sample === undefined ? provenance.hasNewerFacts(row, revision) : sample > incoming.ts) &&
+        !incoming.sessions.some((replacement) =>
+          matchesExistingSession(replacement, row.key, provenance.owner(row)),
+        )
+      );
+    }),
+  };
+}
+
+/** Unfiltered Activity holds its admitted window; aggregate facets refresh separately. */
+export function reconcileSessionActivity(
+  result: SessionsListResult,
+  changes: Iterable<CurrentWorkChange>,
+  provenance: ActivityRowProvenance,
+  revision: number,
+): { result: SessionsListResult; requiresRefresh: boolean } {
+  let nextResult = result;
+  let requiresRefresh = false;
+  for (const change of changes) {
+    if (
+      !change.snapshot ||
+      !canApplySessionListSnapshot(
+        nextResult,
+        change.snapshot,
+        { archivedFilter: "all", limit: 100, excludeSubagents: true, excludeDock: true },
+        "activity",
+      )
+    ) {
+      requiresRefresh = true;
+      continue;
+    }
+    const next = reconcileSessionChanged(
+      nextResult,
+      change.snapshot,
+      { archivedFilter: "all" },
+      (row, existing, fields, info) => {
+        provenance.inheritRow(row, existing);
+        provenance.observeFields(
+          row,
+          (info.isAncestorReference ? provenance.fieldNames(existing) : fields).filter(
+            (field) => field !== "activitySummary" || info.hasActivitySummary,
+          ),
+          createSessionWriteObservation(revision, info.updatedAt, undefined, info.snapshotAt),
+          info.agentId,
+        );
+        return provenance.mergeRow(existing, row, info.agentId);
+      },
+    ).result;
+    if (next) {
+      nextResult = { ...next, sessions: next.sessions.toSorted(compareSessionActivity) };
+    }
+  }
+  return { result: nextResult, requiresRefresh };
+}
+
 export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
-  const agentId = normalized(row.agentId);
+  const agentId = normalizeOptionalString(row.agentId);
   const { resourceBasePath } = readAvatarGatewayContext();
   return {
-    id: normalized(actor?.id) ?? agentId ?? "system",
-    name: normalized(actor?.label) ?? agentId,
+    id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
+    name: normalizeOptionalString(actor?.label) ?? agentId,
     avatarUrl: actor
-      ? normalized(actor.avatarUrl)
+      ? normalizeOptionalString(actor.avatarUrl)
       : agentId
         ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
         : undefined,
@@ -142,14 +220,7 @@ function dayKey(timestamp: number): string {
   return `${date.getFullYear()}-${month}-${day}`;
 }
 
-function dayStart(timestamp: number): number {
-  const date = new Date(timestamp);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
-export function projectSessionActivity(
-  result: SessionsListResult | undefined,
-): SessionActivityProjection {
+export function projectSessionActivity(result: SessionsListResult | undefined) {
   const visible = result?.sessions ?? [];
   const people = (result?.people ?? []).map((person) => ({
     id: person.identity.id,
@@ -171,7 +242,10 @@ export function projectSessionActivity(
   }
   const days = [...grouped.entries()].map(([key, sessions]) => ({
     key,
-    timestamp: key === "unknown" ? null : dayStart(sessionActivityTimestamp(sessions[0]!)),
+    timestamp:
+      key === "unknown"
+        ? null
+        : new Date(sessionActivityTimestamp(sessions[0]!)).setHours(0, 0, 0, 0),
     sessions,
   }));
   return {

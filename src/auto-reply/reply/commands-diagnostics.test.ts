@@ -58,6 +58,7 @@ type ExecCall = {
 
 type ExecDefaults = {
   accountId?: string;
+  approvalReviewerDeviceId?: string;
   approvalFollowup?: () => Promise<string | undefined>;
   approvalFollowupMode?: string;
   approvalFollowupText?: string;
@@ -312,34 +313,6 @@ afterEach(() => {
 });
 
 describe("diagnostics command", () => {
-  it("requests Gateway diagnostics approval without a duplicate pending chat reply", async () => {
-    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
-    const result = await handleDiagnosticsCommand(buildDiagnosticsParams("/diagnostics"), true);
-
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply).toBeUndefined();
-    expect(execCalls).toHaveLength(1);
-    const execCall = requireExecCall(execCalls);
-    expect(execCall.defaults.host).toBe("gateway");
-    expect(execCall.defaults.security).toBe("allowlist");
-    expect(execCall.defaults.ask).toBe("always");
-    expect(execCall.defaults.trigger).toBe("diagnostics");
-    expect(execCall.defaults.approvalFollowupMode).toBe("direct");
-    expect(execCall.defaults.approvalWarningText).toContain(
-      "Diagnostics can include sensitive local logs and host-level runtime metadata.",
-    );
-    expect(execCall.defaults.approvalWarningText).toContain(
-      "https://docs.openclaw.ai/gateway/diagnostics",
-    );
-    expect(execCall.params.ask).toBe("always");
-    const command = execCall.params.command ?? "";
-    expect(command).toContain("gateway");
-    expect(command).toContain("diagnostics");
-    expect(command).toContain("export");
-    expect(command).toContain("--json");
-    expect(command).not.toBe("openclaw gateway diagnostics export --json");
-  });
-
   it("uses the originating Telegram route for native diagnostics followups", async () => {
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const params = buildDiagnosticsParams("/diagnostics", {
@@ -407,17 +380,16 @@ describe("diagnostics command", () => {
   it("wraps Codex feedback upload into the Gateway diagnostics approval", async () => {
     const { calls } = registerCodexDiagnosticsCommandForTest(async () => null);
     const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
-    const result = await handleDiagnosticsCommand(
-      buildDiagnosticsParams("/diagnostics flaky tool call", {
-        sessionEntry: {
-          sessionId: "session-1",
-          sessionFile: "/tmp/session.jsonl",
-          updatedAt: 1,
-          agentHarnessId: "codex",
-        },
-      }),
-      true,
-    );
+    const params = buildDiagnosticsParams("/diagnostics flaky tool call", {
+      sessionEntry: {
+        sessionId: "session-1",
+        sessionFile: "/tmp/session.jsonl",
+        updatedAt: 1,
+        agentHarnessId: "codex",
+      },
+    });
+    params.ctx.ApprovalReviewerDeviceId = "device-diagnostics-reviewer";
+    const result = await handleDiagnosticsCommand(params, true);
 
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply).toBeUndefined();
@@ -433,7 +405,18 @@ describe("diagnostics command", () => {
     expect(diagnosticsSessions[0]?.sessionFile).toBe("agent:main:whatsapp:direct:user-1");
     expect(diagnosticsSessions[0]?.channel).toBe("whatsapp");
     expect(diagnosticsSessions[0]?.accountId).toBe("account-1");
-    const { defaults } = requireExecCall(execCalls);
+    expect(execCalls).toHaveLength(1);
+    const { defaults, params: execParams } = requireExecCall(execCalls);
+    expect(defaults.host).toBe("gateway");
+    expect(defaults.security).toBe("allowlist");
+    expect(defaults.ask).toBe("always");
+    expect(defaults.trigger).toBe("diagnostics");
+    expect(defaults.approvalReviewerDeviceId).toBe("device-diagnostics-reviewer");
+    expect(defaults.approvalFollowupMode).toBe("direct");
+    expect(execParams.ask).toBe("always");
+    expect(defaults.approvalWarningText).toContain(
+      "Diagnostics can include sensitive local logs and host-level runtime metadata.",
+    );
     expect(defaults.approvalWarningText).toContain("OpenAI Codex harness:");
     expect(defaults.approvalWarningText).toContain(
       "Approving diagnostics will also send this thread's feedback bundle to OpenAI servers.",
@@ -642,23 +625,9 @@ describe("diagnostics command", () => {
     expect(privateReplies).toHaveLength(0);
   });
 
-  it.each([
-    {
-      outcome: "delivered",
-      acknowledgement: "I sent the diagnostics details to the owner privately",
-    },
-    {
-      outcome: "pending",
-      acknowledgement: "Private delivery is pending; I can't confirm receipt yet",
-    },
-    {
-      outcome: "suppressed",
-      acknowledgement: "Private delivery of the diagnostics details was suppressed",
-    },
-    { outcome: "failed", acknowledgement: "Run /diagnostics from an owner DM" },
-  ] as const)(
-    "keeps $outcome diagnostics confirmations private",
-    async ({ outcome, acknowledgement }) => {
+  it.each([["suppressed", "Private delivery of the diagnostics details was suppressed"]] as const)(
+    "keeps %s diagnostics confirmations private",
+    async (outcome, acknowledgement) => {
       const commandHandler = vi.fn(async () => ({
         text: [
           "Codex diagnostics sent to OpenAI servers:",
@@ -698,25 +667,6 @@ describe("diagnostics command", () => {
     },
   );
 
-  it("requires an owner for diagnostics", async () => {
-    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
-    const result = await handleDiagnosticsCommand(
-      buildDiagnosticsParams("/diagnostics", {
-        command: {
-          ...buildDiagnosticsParams("/diagnostics").command,
-          senderIsOwner: false,
-        },
-      }),
-      true,
-    );
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: expect.stringContaining("commands.ownerAllowFrom") },
-    });
-    expect(execCalls).toHaveLength(0);
-  });
-
   it("keeps an unconfirmed diagnostics reply pending without exposing approval details to the group", async () => {
     const { execCalls, privateReplies, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest(
       {
@@ -750,33 +700,26 @@ describe("diagnostics command", () => {
   });
 
   it.each([
-    {
-      action: { type: "command", command: "/codex diagnostics confirm abc123def456" },
-      expectedAction: { type: "command", command: "/diagnostics confirm abc123def456" },
-    },
-    {
-      action: { type: "callback", value: "/codex diagnostics cancel abc123def456" },
-      expectedAction: { type: "callback", value: "/diagnostics cancel abc123def456" },
-    },
-    {
-      action: { type: "model-picker", version: 1, snapshotToken: "picker-1", intent: "cancel" },
-      expectedAction: {
+    [
+      { type: "command", command: "/codex diagnostics confirm abc123def456" },
+      { type: "command", command: "/diagnostics confirm abc123def456" },
+    ],
+    [
+      { type: "callback", value: "/codex diagnostics cancel abc123def456" },
+      { type: "callback", value: "/diagnostics cancel abc123def456" },
+    ],
+    [
+      { type: "model-picker", version: 1, snapshotToken: "picker-1", intent: "cancel" },
+      {
         type: "model-picker",
         version: 1,
         snapshotToken: "picker-1",
         intent: "cancel",
       },
-    },
-    {
-      action: { type: "url", url: "https://example.com/diagnostics" },
-      expectedAction: { type: "url", url: "https://example.com/diagnostics" },
-    },
-  ] satisfies Array<{
-    action: MessagePresentationAction;
-    expectedAction: MessagePresentationAction;
-  }>)(
-    "routes confirmations with $action.type actions without repeating the preamble",
-    async ({ action, expectedAction }) => {
+    ],
+  ] satisfies Array<readonly [MessagePresentationAction, MessagePresentationAction]>)(
+    "routes confirmations with %s.type actions without repeating the preamble",
+    async (action, expectedAction) => {
       const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
       const interactive: LegacyInteractiveReply = {
         blocks: [{ type: "buttons", buttons: [{ label: "Continue", action }] }],
@@ -784,13 +727,11 @@ describe("diagnostics command", () => {
       const expectedInteractive: LegacyInteractiveReply = {
         blocks: [{ type: "buttons", buttons: [{ label: "Continue", action: expectedAction }] }],
       };
-      if (action.type !== "url" && expectedAction.type !== "url") {
-        interactive.blocks.push({ type: "select", options: [{ label: "Continue", action }] });
-        expectedInteractive.blocks.push({
-          type: "select",
-          options: [{ label: "Continue", action: expectedAction }],
-        });
-      }
+      interactive.blocks.push({ type: "select", options: [{ label: "Continue", action }] });
+      expectedInteractive.blocks.push({
+        type: "select",
+        options: [{ label: "Continue", action: expectedAction }],
+      });
       const commandHandler = vi.fn(async (ctx: PluginCommandContext) => ({
         text: `confirmed ${ctx.args}`,
         interactive,

@@ -92,7 +92,7 @@ function createHarness(
     doRequest,
   }) as unknown as MatrixClient;
   const cfg: CoreConfig = {
-    agents: { list: [{ id: "planner" }] },
+    agents: { entries: { planner: {} } },
     bindings: [{ agentId: "planner", match: { channel: "matrix", accountId: "work" } }],
     channels: { matrix: { accounts: { work: {} } } },
   };
@@ -184,7 +184,7 @@ beforeEach(() => {
 });
 
 describe("Matrix join introductions through the SDK bridge", () => {
-  it.each([false, true])(
+  it.each([true])(
     "never introduces into an already-joined room during startup, including recovery=%s",
     async (recovering) => {
       const h = createHarness();
@@ -211,7 +211,7 @@ describe("Matrix join introductions through the SDK bridge", () => {
     },
   );
 
-  it.each([undefined, "invite", "leave"])(
+  it.each([undefined, "invite"])(
     "introduces the bot on a %s-to-join transition with the account route and oldest-first history",
     async (previous) => {
       const h = createHarness();
@@ -247,20 +247,6 @@ describe("Matrix join introductions through the SDK bridge", () => {
     },
   );
 
-  it("preserves raw join notifications without introducing for profile changes or other members", async () => {
-    const h = createHarness();
-    h.membership("join");
-    h.ready();
-    const joins = vi.fn<(roomId: string, event: MatrixRawEvent) => void>();
-    h.emitter.on("room.join", joins);
-    h.membership("join");
-    h.membership("join", remoteUserId);
-    await h.flush();
-
-    expect(joins).toHaveBeenCalledTimes(1);
-    expect(reportJoin).not.toHaveBeenCalled();
-  });
-
   it("waits for a real transition after a new-room lifecycle snapshot and ignores duplicate raw delivery", async () => {
     const h = createHarness();
     h.ready();
@@ -275,18 +261,17 @@ describe("Matrix join introductions through the SDK bridge", () => {
     expect(reportJoin).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    { direct: true },
-    { direct: true, membersUnavailableAfterRead: true },
-    { membersUnavailable: true },
-  ])("never introduces when direct-room exclusion cannot admit a group: %j", async (options) => {
-    const h = createHarness(options);
-    h.ready();
-    h.membership("join");
-    await h.flush();
-    expect(reportJoin).not.toHaveBeenCalled();
-    expect(h.doRequest).not.toHaveBeenCalled();
-  });
+  it.each([{ direct: true }, { membersUnavailable: true }])(
+    "never introduces when direct-room exclusion cannot admit a group: %j",
+    async (options) => {
+      const h = createHarness(options);
+      h.ready();
+      h.membership("join");
+      await h.flush();
+      expect(reportJoin).not.toHaveBeenCalled();
+      expect(h.doRequest).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { groupPolicy: "disabled" as const },

@@ -1,40 +1,37 @@
-/**
- * Read-only subagent registry accessors.
- *
- * Combines persisted snapshots with in-memory live runs for UI, announce, control, and recovery paths.
- */
-import {
-  getAgentRunContext,
-  getAgentRunLifecycleGeneration,
-} from "../../../infra/agent-run-registry.js";
+import { listLiveAgentRunIds } from "../../../infra/agent-run-registry.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
-import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
-import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registry-memory.js";
+import { listSwarmRunReservationIds } from "../swarm/swarm-scheduler.js";
+import {
+  getSubagentRunsForChildSession,
+  getSubagentSessionReadLookup,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
-  countActiveDescendantRunsFromRuns,
   countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
+  getLatestSubagentRunForChild,
   getSubagentRunByChildSessionKeyFromRuns,
-  hasDescendantRunAwaitingSettleFromRuns,
-  isSubagentSessionRunActiveFromRuns,
-  listDescendantRunsForRequesterFromRuns,
   listRunsForControllerFromRuns,
   listRunsForRequesterFromRuns,
-  resolveRequesterForChildSessionFromRuns,
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
   type LatestSubagentRunReadIndex,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
-  getSubagentSessionListRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForChildSessions,
   getSubagentRunsSnapshotForChildSession,
-  getSubagentRunsSnapshotForController,
-  getSubagentRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForRead,
+  getSubagentSessionListRunsSnapshotForSessions,
+  withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
-import type { SubagentRunReadRecord, SubagentRunRecord } from "./subagent-registry.types.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
+import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
+export { isSubagentRunLive, isSubagentRunQueued } from "./subagent-run-liveness.js";
 
 export type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -45,93 +42,105 @@ export {
   resolveSubagentSessionStatus,
 } from "./subagent-session-metrics.js";
 
+/** Resolve live owners through the existing aliases without scanning retained history. */
+export function listActiveSubagentSessionKeys(): string[] {
+  const runIds = new Set([...listLiveAgentRunIds(), ...listSwarmRunReservationIds()]);
+  const sessionKeys = new Set<string>();
+  for (const runId of getSubagentSessionReadLookup(subagentRuns).selectRunIds(runIds)) {
+    const entry = subagentRuns.get(runId);
+    if (entry && (isSubagentRunLive(entry) || isSubagentRunQueued(entry))) {
+      sessionKeys.add(entry.childSessionKey);
+    }
+  }
+  return [...sessionKeys];
+}
+
 /** Builds the session-list index without hydrating full retained registry payloads. */
 export function buildSubagentSessionListReadIndex(
   now = Date.now(),
+  sessionKeys?: readonly string[],
+  preparedRuns?: Map<string, SubagentRunReadRecord>,
 ): SubagentRunReadIndex<SubagentRunReadRecord> {
+  const runs =
+    preparedRuns ??
+    (sessionKeys
+      ? getSubagentSessionListRunsSnapshotForSessions(subagentRuns, sessionKeys)
+      : getSubagentSessionListRunsSnapshotForRead(subagentRuns));
   return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentSessionListRunsSnapshotForRead(subagentRuns),
-    inMemoryRuns: subagentRuns.values(),
+    runs,
+    inMemoryRuns: sessionKeys
+      ? [...runs.keys()].flatMap((runId) => subagentRuns.get(runId) ?? [])
+      : subagentRuns.values(),
     now,
   });
 }
 
-/** Builds an O(1) latest-run lookup from one persisted and in-memory snapshot. */
-export function buildLatestSubagentRunReadIndex(): LatestSubagentRunReadIndex {
-  return buildLatestSubagentRunReadIndexFromRuns(getSubagentRunsSnapshotForRead(subagentRuns));
+/** Direct-child discovery needs only its controllers, without building global topology. */
+export function listSubagentSessionListRunsForControllers(
+  controllerSessionKeys: readonly string[],
+): SubagentRunReadRecord[] {
+  const runs = getSubagentSessionListRunsSnapshotForRead(subagentRuns, controllerSessionKeys);
+  return controllerSessionKeys.flatMap((key) => listRunsForControllerFromRuns(runs, key));
 }
 
-/** Builds a reusable index from the full readable registry snapshot. */
-export function buildSubagentRunReadIndex(now = Date.now()): SubagentRunReadIndex {
-  return buildSubagentRunReadIndexFromRuns({
-    runs: getSubagentRunsSnapshotForRead(subagentRuns),
-    now,
-  });
-}
-
-/** Lists runs controlled by a session key. */
-export function listSubagentRunsForController(
-  controllerSessionKey: string,
-  controllerAgentId?: string,
-): SubagentRunRecord[] {
-  return listRunsForControllerFromRuns(
-    getSubagentRunsSnapshotForController(subagentRuns, controllerSessionKey),
-    controllerSessionKey,
-    controllerAgentId,
+export function buildLatestSubagentSessionListReadIndex(
+  childSessionKeys: readonly string[],
+): LatestSubagentRunReadIndex<SubagentRunReadRecord> {
+  return buildLatestSubagentRunReadIndexFromRuns(
+    getSubagentSessionListRunsSnapshotForChildSessions(childSessionKeys),
   );
 }
 
-/** Counts active descendant runs for a requester/session tree. */
-export function countActiveDescendantRuns(
+/** Capacity reads retain active-first selection without hydrating child payloads. */
+export function getSubagentSessionListRunByChildSessionKey(
+  childSessionKey: string,
+): SubagentRunReadRecord | null {
+  return getSubagentRunByChildSessionKeyFromRuns(
+    getSubagentSessionListRunsSnapshotForChildSessions([childSessionKey]),
+    childSessionKey,
+    undefined,
+    subagentRuns,
+  );
+}
+
+export async function countPendingDescendantRuns(
   rootSessionKey: string,
-  requesterAgentId?: string,
-): number {
-  return countActiveDescendantRunsFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-    requesterAgentId,
+  assertCurrent: () => void,
+): Promise<number> {
+  assertCurrent();
+  const count = await withSubagentRunReadSnapshot(
+    subagentRuns,
+    (snapshot) => {
+      assertCurrent();
+      const sessionKeys = collectSubagentSessionReadKeys([rootSessionKey], snapshot.values());
+      return {
+        runIds: [...snapshot.values()]
+          .filter((entry) => sessionKeys.has(entry.childSessionKey.trim()))
+          .map((entry) => entry.runId),
+        sessionKeys: [],
+      };
+    },
+    (_selection, runs) => {
+      assertCurrent();
+      return countPendingDescendantRunsFromRuns(new Map(runs), rootSessionKey);
+    },
+    { sessionKeys: [rootSessionKey], descendants: true },
   );
+  assertCurrent();
+  return count;
 }
 
-/** Lists descendant runs under a requester/session tree. */
-export function listDescendantRunsForRequester(rootSessionKey: string): SubagentRunRecord[] {
-  return listDescendantRunsForRequesterFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-  );
-}
-
-/** Counts pending descendant runs below a requester/session tree. */
-export function countPendingDescendantRuns(rootSessionKey: string): number {
-  return countPendingDescendantRunsFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-  );
-}
-
-/** True when any descendant run still awaits terminal settle (suspended delivery counts as settled). */
-export function hasDescendantRunAwaitingSettle(
-  rootSessionKey: string,
-  excludeRunId?: string,
-  requesterAgentId?: string,
-): boolean {
-  return hasDescendantRunAwaitingSettleFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    rootSessionKey,
-    excludeRunId,
-    requesterAgentId,
-  );
-}
-
-/** Resolves the requester session and normalized origin for a child subagent session. */
-export function resolveRequesterForChildSession(childSessionKey: string): {
+export async function resolveRequesterForChildSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): Promise<{
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterOrigin?: DeliveryContext;
-} | null {
-  const resolved = resolveRequesterForChildSessionFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
-    childSessionKey,
+} | null> {
+  const resolved = getLatestSubagentRunForChild(
+    await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+    { childSessionKey, childAgentId },
   );
   if (!resolved) {
     return null;
@@ -143,103 +152,44 @@ export function resolveRequesterForChildSession(childSessionKey: string): {
   };
 }
 
-/** True when post-completion announce should be skipped for a child session. */
-export function shouldIgnorePostCompletionAnnounceForSession(childSessionKey: string): boolean {
+export async function shouldIgnorePostCompletionAnnounceForSession(
+  childSessionKey: string,
+  childAgentId?: string,
+): Promise<boolean> {
   return shouldIgnorePostCompletionAnnounceForSessionFromRuns(
-    getSubagentRunsSnapshotForRead(subagentRuns),
+    await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
     childSessionKey,
+    childAgentId,
   );
 }
 
 /** True when the process-local registry still owns an active run for the child session. */
-export function isSubagentSessionRunActive(childSessionKey: string): boolean {
+export function isSubagentSessionRunActive(
+  childSessionKey: string,
+  childAgentId?: string,
+): boolean {
   // Liveness is mutation ownership, so a persisted snapshot must not outvote the raw live map.
-  return isSubagentSessionRunActiveFromRuns(subagentRuns, childSessionKey);
+  return isSubagentRunLive(
+    getLatestSubagentRunForChild(subagentRuns, { childSessionKey, childAgentId }),
+  );
 }
 
-/** Lists process-local runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
-  options?: { requesterRunId?: string; requesterAgentId?: string },
+  options?: Parameters<typeof listRunsForRequesterFromRuns>[2],
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);
 }
 
-/** Returns whether a registry entry still has a live agent run context. */
-export function isSubagentRunLive(
-  entry:
-    | { runId: string; execution: Pick<SubagentRunRecord["execution"], "endedAt"> }
-    | null
-    | undefined,
-): boolean {
-  if (!entry || typeof entry.execution.endedAt === "number") {
-    return false;
-  }
-  const context = getAgentRunContext(entry.runId);
-  return context?.lifecycleGeneration === getAgentRunLifecycleGeneration();
-}
-
-/** Queued admission belongs to the exact current registration and scheduler reservation. */
-export function isSubagentRunQueued(entry: SubagentRunReadRecord | null | undefined): boolean {
-  const current = entry ? subagentRuns.get(entry.runId) : undefined;
-  return Boolean(
-    current &&
-    current === entry &&
-    current.collect &&
-    current.execution.status === "queued" &&
-    ownsSwarmRunReservation(current.schedulerSlotId ?? current.runId, current),
-  );
-}
-
-/** Returns the run to display for a child session, using live memory before snapshot state. */
-export function getSessionDisplaySubagentRunByChildSessionKey(
+export async function getLatestSubagentRunByChildSessionKey(
   childSessionKey: string,
-): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
-  const latestInMemory = getLatestSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsForChildSession(key),
-    key,
-  );
-  // Fresh in-memory terminal state is more accurate than an older active snapshot row.
+  childAgentId?: string,
+): Promise<SubagentRunRecord | null> {
   return (
-    latestInMemory ??
-    getSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-      key,
-    )
-  );
-}
-
-/** Returns the preferred child-session run from its scoped readable snapshot. */
-export function getSubagentRunByChildSessionKey(childSessionKey: string): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-  return getSubagentRunByChildSessionKeyFromRuns(
-    getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-    key,
-  );
-}
-
-/** Returns the most recently created run for a child session from readable registry state. */
-export function getLatestSubagentRunByChildSessionKey(
-  childSessionKey: string,
-): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
-  return (
-    getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsSnapshotForChildSession(subagentRuns, key),
-      key,
+    getLatestSubagentRunForChild(
+      await getSubagentRunsSnapshotForChildSession(subagentRuns, childSessionKey, childAgentId),
+      { childSessionKey, childAgentId },
     ) ?? null
   );
 }
@@ -253,17 +203,16 @@ export function getLatestSubagentRunByChildSessionKey(
 export function getLatestLiveSubagentRunByChildSessionKey(
   childSessionKey: string,
   matches?: (entry: SubagentRunRecord) => boolean,
+  childAgentId?: string,
 ): SubagentRunRecord | null {
   const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
   // Mutation ownership is process-local; persisted rows can be stale after a replacement.
   return (
     getLatestSubagentRunByChildSessionKeyFromRuns(
-      getSubagentRunsForChildSession(key),
+      getSubagentRunsForChildSession(key, childAgentId),
       key,
       matches,
+      childAgentId,
     ) ?? null
   );
 }

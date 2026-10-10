@@ -1,4 +1,3 @@
-// Slack plugin module implements channels behavior.
 import type { AllMiddlewareArgs, SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import {
@@ -11,14 +10,9 @@ import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runti
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
-import type { SlackEventScope } from "../event-scope.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle } from "../ingress.js";
-import type {
-  SlackChannelCreatedEvent,
-  SlackChannelIdChangedEvent,
-  SlackChannelRenamedEvent,
-} from "../types.js";
-import { resolveSlackListenerEventScope } from "./system-event-context.js";
+import type { SlackChannelIdChangedEvent, SlackChannelRenamedEvent } from "../types.js";
 
 export function registerSlackChannelEvents(params: {
   ctx: SlackMonitorContext;
@@ -26,89 +20,54 @@ export function registerSlackChannelEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const enqueueChannelSystemEvent = (paramsLocal: {
-    kind: "created" | "renamed";
-    channelId: string | undefined;
-    channelName: string | undefined;
-    eventId: string;
-    eventScope?: SlackEventScope;
-  }) => {
-    if (
-      !ctx.isChannelAllowed({
-        teamId: paramsLocal.eventScope?.teamId ?? ctx.teamId,
-        channelId: paramsLocal.channelId,
-        channelName: paramsLocal.channelName,
-        channelType: "channel",
-      })
-    ) {
-      return;
-    }
+  for (const [eventName, kind] of [
+    ["channel_created", "created"],
+    ["channel_rename", "renamed"],
+  ] as const) {
+    ctx.app.event(
+      eventName,
+      async (
+        args: SlackEventMiddlewareArgs<"channel_created" | "channel_rename"> & AllMiddlewareArgs,
+      ) => {
+        const { event, body, context, client } = args;
+        const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
+        if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
+          return;
+        }
+        trackEvent?.();
 
-    const label = resolveSlackChannelLabel({
-      channelId: paramsLocal.channelId,
-      channelName: paramsLocal.channelName,
-    });
-    const route = ctx.resolveSlackSystemEventRoute({
-      channelId: paramsLocal.channelId,
-      channelType: "channel",
-      eventScope: paramsLocal.eventScope,
-    });
-    enqueueRoutedSystemEvent(`Slack channel ${paramsLocal.kind}: ${label}.`, route, {
-      contextKey: `slack:channel:${paramsLocal.eventScope ? `${paramsLocal.eventScope.teamId}:` : ""}${paramsLocal.kind}:${paramsLocal.channelId ?? paramsLocal.channelName ?? "unknown"}:${paramsLocal.eventId}`,
-    });
-  };
+        const channel: SlackChannelRenamedEvent["channel"] = event.channel;
+        const channelId = channel?.id;
+        const channelName =
+          kind === "renamed" ? (channel?.name_normalized ?? channel?.name) : channel?.name;
+        const eventId = body.event_id;
+        const runtimeContext = await params.ctx.readRuntimeContext();
+        if (
+          !runtimeContext.isChannelAllowed({
+            teamId: eventScope?.teamId ?? runtimeContext.teamId,
+            channelId,
+            channelName,
+            channelType: "channel",
+          })
+        ) {
+          return;
+        }
 
-  ctx.app.event(
-    "channel_created",
-    async (args: SlackEventMiddlewareArgs<"channel_created"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      trackEvent?.();
-
-      const payload = event as SlackChannelCreatedEvent;
-      const channelId = payload.channel?.id;
-      const channelName = payload.channel?.name;
-      enqueueChannelSystemEvent({
-        kind: "created",
-        channelId,
-        channelName,
-        eventId: body.event_id,
-        eventScope,
-      });
-    },
-  );
-
-  ctx.app.event(
-    "channel_rename",
-    async (args: SlackEventMiddlewareArgs<"channel_rename"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
-      trackEvent?.();
-
-      const payload = event as SlackChannelRenamedEvent;
-      const channelId = payload.channel?.id;
-      const channelName = payload.channel?.name_normalized ?? payload.channel?.name;
-      enqueueChannelSystemEvent({
-        kind: "renamed",
-        channelId,
-        channelName,
-        eventId: body.event_id,
-        eventScope,
-      });
-    },
-  );
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName,
+        });
+        const route = runtimeContext.resolveSlackSystemEventRoute({
+          channelId,
+          channelType: "channel",
+          eventScope,
+        });
+        enqueueRoutedSystemEvent(`Slack channel ${kind}: ${label}.`, route, {
+          contextKey: `slack:channel:${eventScope ? `${eventScope.teamId}:` : ""}${kind}:${channelId ?? channelName ?? "unknown"}:${eventId}`,
+        });
+      },
+    );
+  }
 }
 
 export function registerSlackChannelIdChangedEvent(params: {
@@ -183,14 +142,7 @@ export function registerSlackChannelIdChangedEvent(params: {
               }),
           });
           if (persisted.result?.migrated) {
-            // Persistence owns the migration. Update this monitor's captured
-            // config only after the durable write succeeds.
-            migrateSlackChannelConfig({
-              cfg: ctx.cfg,
-              accountId: ctx.accountId,
-              oldChannelId,
-              newChannelId,
-            });
+            // The config write publishes the next snapshot; admitted turns retain the old one.
             ctx.runtime.log?.(warn("[slack] Channel config migrated and saved successfully."));
           }
         } else if (preview.skippedExisting) {

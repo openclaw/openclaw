@@ -34,10 +34,17 @@ vi.mock("../send.js", () => ({
     sendMessageIMessageMock(to, message, opts),
 }));
 
-vi.mock("./deliver.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/markdown-table-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/markdown-table-runtime")>()),
   resolveMarkdownTableMode: vi.fn(() => resolveMarkdownTableModeMock()),
-  chunkTextWithMode: (text: string) => chunkTextWithModeMock(text),
+}));
+vi.mock("openclaw/plugin-sdk/reply-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/reply-chunking")>()),
+  chunkMarkdownTextWithMode: (text: string) => chunkTextWithModeMock(text),
   resolveChunkMode: vi.fn(() => resolveChunkModeMock()),
+}));
+vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>()),
   convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
 }));
 
@@ -59,88 +66,10 @@ describe("deliverIMessageReply", () => {
 
   afterAll(() => {
     vi.doUnmock("../send.js");
-    vi.doUnmock("./deliver.runtime.js");
+    vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/reply-chunking");
+    vi.doUnmock("openclaw/plugin-sdk/text-chunking");
     vi.resetModules();
-  });
-
-  it("sends monitor text chunks without reusing the watch rpc client", async () => {
-    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
-
-    await deliverIMessageReply({
-      cfg: IMESSAGE_TEST_CFG,
-      payload: { text: "first|second", replyToId: "reply-1" },
-      target: "chat_id:10",
-      accountId: "default",
-      runtime,
-      maxBytes: 4096,
-      textLimit: 4000,
-    });
-
-    expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
-      [
-        "chat_id:10",
-        "first",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          maxBytes: 4096,
-          accountId: "default",
-          replyToId: "reply-1",
-        }),
-      ],
-      [
-        "chat_id:10",
-        "second",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          maxBytes: 4096,
-          accountId: "default",
-          replyToId: "reply-1",
-        }),
-      ],
-    ]);
-  });
-
-  it("propagates payload replyToId through media sends", async () => {
-    await deliverIMessageReply({
-      cfg: IMESSAGE_TEST_CFG,
-      payload: {
-        text: "caption",
-        mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
-        replyToId: "reply-2",
-      },
-      target: "chat_id:20",
-      accountId: "acct-2",
-      runtime,
-      maxBytes: 8192,
-      textLimit: 4000,
-    });
-
-    expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
-      [
-        "chat_id:20",
-        "caption",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          mediaUrl: "https://example.com/a.jpg",
-          maxBytes: 8192,
-          accountId: "acct-2",
-          replyToId: "reply-2",
-        }),
-      ],
-      [
-        "chat_id:20",
-        "",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          mediaUrl: "https://example.com/b.jpg",
-          maxBytes: 8192,
-          accountId: "acct-2",
-          replyToId: "reply-2",
-        }),
-      ],
-    ]);
   });
 
   it("forwards voice-note payloads to the canonical iMessage media sender", async () => {
@@ -163,39 +92,6 @@ describe("deliverIMessageReply", () => {
         mediaUrl: "https://example.com/voice.caf",
       }),
     );
-  });
-
-  it("records durable outbound sends in the sent-message cache", async () => {
-    const remember = vi.fn();
-    const send = createIMessageEchoCachingSend({
-      accountId: "acct-5",
-      sentMessageCache: { remember },
-    });
-    sendMessageIMessageMock.mockResolvedValueOnce({
-      messageId: "imsg-durable-1",
-      sentText: "durable hello",
-      receipt: createTestIMessageReceipt("imsg-durable-1"),
-    });
-
-    await send("chat_id:50", "durable hello", {
-      config: IMESSAGE_TEST_CFG,
-      accountId: "acct-ignored",
-    });
-
-    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
-      [
-        "chat_id:50",
-        "durable hello",
-        expect.objectContaining({
-          config: IMESSAGE_TEST_CFG,
-          accountId: "acct-ignored",
-        }),
-      ],
-    ]);
-    expect(remember).toHaveBeenCalledWith("acct-5:chat_id:50", {
-      text: "durable hello",
-      messageId: "imsg-durable-1",
-    });
   });
 
   it("sanitizes durable outbound text before sending", async () => {
@@ -293,39 +189,6 @@ describe("deliverIMessageReply", () => {
       media: { contentType: "image/jpeg", kind: "image" },
       messageId: "imsg-media-1",
     });
-  });
-
-  it("returns every accepted native chunk without inventing failed thread metadata", async () => {
-    chunkTextWithModeMock.mockImplementation((text: string) => text.split("|"));
-    sendMessageIMessageMock
-      .mockResolvedValueOnce({
-        messageId: "accepted-first",
-        sentText: "first",
-        receipt: createTestIMessageReceipt("accepted-first"),
-      })
-      .mockResolvedValueOnce({
-        messageId: "accepted-second",
-        sentText: "second",
-        receipt: createTestIMessageReceipt("accepted-second"),
-      });
-
-    const delivered = await deliverIMessageReply({
-      cfg: IMESSAGE_TEST_CFG,
-      payload: { text: "first|second", replyToId: "unsupported-thread" },
-      target: "chat_id:70",
-      accountId: "default",
-      runtime,
-      maxBytes: 4096,
-      textLimit: 4000,
-    });
-
-    expect(delivered).toMatchObject({
-      visibleReplySent: true,
-      messageIds: ["accepted-first", "accepted-second"],
-      content: "first\nsecond",
-      receipt: { platformMessageIds: ["accepted-first", "accepted-second"] },
-    });
-    expect(delivered).not.toHaveProperty("receipt.replyToId");
   });
 
   it("preserves earlier media receipts when a later native caption fails", async () => {

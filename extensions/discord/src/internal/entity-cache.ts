@@ -1,4 +1,3 @@
-// Discord plugin module implements entity cache behavior.
 import { GatewayDispatchEvents } from "discord-api-types/v10";
 import {
   asDateTimestampMs,
@@ -19,6 +18,18 @@ const DEFAULT_REST_CACHE_TTL_MS = 30_000;
 const DEFAULT_MAX_ENTRIES = 5_000;
 const DEFAULT_SWEEP_INTERVAL_MS = 30_000;
 
+const CACHE_KIND_BY_EVENT = new Map<string, "channel" | "guild" | "guild-emojis" | "member">([
+  [GatewayDispatchEvents.ChannelUpdate, "channel"],
+  [GatewayDispatchEvents.ChannelDelete, "channel"],
+  [GatewayDispatchEvents.ThreadUpdate, "channel"],
+  [GatewayDispatchEvents.ThreadDelete, "channel"],
+  [GatewayDispatchEvents.GuildUpdate, "guild"],
+  [GatewayDispatchEvents.GuildEmojisUpdate, "guild-emojis"],
+  [GatewayDispatchEvents.GuildMemberAdd, "member"],
+  [GatewayDispatchEvents.GuildMemberRemove, "member"],
+  [GatewayDispatchEvents.GuildMemberUpdate, "member"],
+]);
+
 export class DiscordEntityCache {
   private readonly entries = new Map<string, CacheEntry<unknown>>();
   private lastSweepAt = 0;
@@ -26,10 +37,7 @@ export class DiscordEntityCache {
   constructor(
     private readonly params: {
       client: StructureClient;
-      rest: RequestClient | (() => RequestClient);
-      ttlMs?: number;
-      maxEntries?: number;
-      sweepIntervalMs?: number;
+      rest: () => RequestClient;
     },
   ) {}
 
@@ -39,28 +47,28 @@ export class DiscordEntityCache {
 
   async fetchUser(id: string): Promise<User> {
     return await this.fetchCached(`user:${id}`, async () => {
-      const raw = await getUser(this.rest, id);
+      const raw = await getUser(this.params.rest(), id);
       return new User(this.params.client, raw);
     });
   }
 
   async fetchChannel(id: string) {
     return await this.fetchCached(`channel:${id}`, async () => {
-      const raw = await getChannel(this.rest, id);
+      const raw = await getChannel(this.params.rest(), id);
       return channelFactory(this.params.client, raw);
     });
   }
 
   async fetchGuild(id: string): Promise<Guild> {
     return await this.fetchCached(`guild:${id}`, async () => {
-      const raw = await getGuild(this.rest, id);
+      const raw = await getGuild(this.params.rest(), id);
       return new Guild(this.params.client, raw);
     });
   }
 
   async fetchMember(guildId: string, userId: string): Promise<GuildMember> {
     return await this.fetchCached(`member:${guildId}:${userId}`, async () => {
-      const raw = await getGuildMember(this.rest, guildId, userId);
+      const raw = await getGuildMember(this.params.rest(), guildId, userId);
       return new GuildMember(this.params.client, raw);
     });
   }
@@ -70,76 +78,54 @@ export class DiscordEntityCache {
   }
 
   invalidateForGatewayEvent(type: string, data: unknown): void {
+    const kind = CACHE_KIND_BY_EVENT.get(type);
+    if (!kind) {
+      return;
+    }
     const raw = data && typeof data === "object" ? (data as Record<string, unknown>) : {};
-    const channelUpdate: string = GatewayDispatchEvents.ChannelUpdate;
-    const channelDelete: string = GatewayDispatchEvents.ChannelDelete;
-    const threadUpdate: string = GatewayDispatchEvents.ThreadUpdate;
-    const threadDelete: string = GatewayDispatchEvents.ThreadDelete;
-    const guildUpdate: string = GatewayDispatchEvents.GuildUpdate;
-    const guildEmojisUpdate: string = GatewayDispatchEvents.GuildEmojisUpdate;
-    const guildMemberAdd: string = GatewayDispatchEvents.GuildMemberAdd;
-    const guildMemberRemove: string = GatewayDispatchEvents.GuildMemberRemove;
-    const guildMemberUpdate: string = GatewayDispatchEvents.GuildMemberUpdate;
-    if (
-      type === channelUpdate ||
-      type === channelDelete ||
-      type === threadUpdate ||
-      type === threadDelete
-    ) {
-      this.deleteId("channel", raw.id);
-    }
-    if (type === guildUpdate) {
-      this.deleteId("guild", raw.id);
-    }
-    if (type === guildEmojisUpdate) {
-      this.deleteId("guild-emojis", raw.guild_id);
-    }
-    if (type === guildMemberAdd || type === guildMemberRemove || type === guildMemberUpdate) {
+    if (kind === "member") {
       const guildId = raw.guild_id;
       const user = raw.user && typeof raw.user === "object" ? (raw.user as { id?: unknown }) : {};
       if (typeof guildId === "string" && typeof user.id === "string") {
         this.entries.delete(`member:${guildId}:${user.id}`);
         this.entries.delete(`user:${user.id}`);
       }
-    }
-  }
-
-  private deleteId(prefix: string, id: unknown): void {
-    if (typeof id === "string") {
-      this.entries.delete(`${prefix}:${id}`);
+    } else {
+      const id = kind === "guild-emojis" ? raw.guild_id : raw.id;
+      if (typeof id === "string") {
+        this.entries.delete(`${kind}:${id}`);
+      }
     }
   }
 
   private async fetchCached<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const ttl = this.params.ttlMs ?? DEFAULT_REST_CACHE_TTL_MS;
     const rawNow = Date.now();
     const now = asDateTimestampMs(rawNow);
-    if (ttl > 0) {
-      const cached = this.entries.get(key) as CacheEntry<T> | undefined;
-      if (cached && now !== undefined && cached.expiresAt > now) {
-        return cached.value;
-      }
-      if (cached) {
-        this.entries.delete(key);
-      }
+    const cached = this.entries.get(key) as CacheEntry<T> | undefined;
+    if (cached && now !== undefined && cached.expiresAt > now) {
+      return cached.value;
+    }
+    if (cached) {
+      this.entries.delete(key);
     }
     const value = await fetcher();
-    if (ttl > 0) {
-      const expiresAt = resolveExpiresAtMsFromDurationMs(ttl, { nowMs: rawNow });
-      if (expiresAt !== undefined) {
-        if (now !== undefined) {
-          this.maybeSweepExpired(now);
-        }
-        this.entries.set(key, { expiresAt, value });
-        this.enforceMaxEntries();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(DEFAULT_REST_CACHE_TTL_MS, {
+      nowMs: rawNow,
+    });
+    if (expiresAt !== undefined) {
+      if (now !== undefined) {
+        this.maybeSweepExpired(now);
+      }
+      this.entries.set(key, { expiresAt, value });
+      if (this.entries.size > DEFAULT_MAX_ENTRIES) {
+        this.entries.delete(this.entries.keys().next().value!);
       }
     }
     return value;
   }
 
   private maybeSweepExpired(now: number): void {
-    const interval = this.params.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
-    if (now - this.lastSweepAt < interval) {
+    if (now - this.lastSweepAt < DEFAULT_SWEEP_INTERVAL_MS) {
       return;
     }
     this.lastSweepAt = now;
@@ -148,25 +134,5 @@ export class DiscordEntityCache {
         this.entries.delete(key);
       }
     }
-  }
-
-  private enforceMaxEntries(): void {
-    const max = this.params.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    if (this.entries.size <= max) {
-      return;
-    }
-    const toRemove = this.entries.size - max;
-    let removed = 0;
-    for (const key of this.entries.keys()) {
-      if (removed >= toRemove) {
-        break;
-      }
-      this.entries.delete(key);
-      removed += 1;
-    }
-  }
-
-  private get rest(): RequestClient {
-    return typeof this.params.rest === "function" ? this.params.rest() : this.params.rest;
   }
 }

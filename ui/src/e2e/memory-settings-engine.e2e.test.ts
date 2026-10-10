@@ -53,7 +53,7 @@ const memoryPlugins = [
 ];
 
 suite.define(() => {
-  it("keeps the default engine first and drains Off before selecting it", async () => {
+  it("config.set keeps the default engine first and drains Off before selecting it", async () => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -102,7 +102,7 @@ suite.define(() => {
               path: path.join(uiProofArtifactDir, "00-off-write-draining.png"),
             });
         }
-        await gateway.resolveDeferred("config.set", { ok: true, hash: "mock-config-hash-1" });
+        await gateway.resolveDeferred("config.set");
         const enableRequest = await gateway.waitForRequest("plugins.setEnabled");
         expect(enableRequest.params).toEqual({ pluginId: "memory-core", enabled: true });
 

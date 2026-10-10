@@ -4,15 +4,17 @@ import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createQaPreparedRepoCliCommand } from "../../../helpers/qa-prepared-repo-cli.js";
 
 type JsonObject = Record<string, unknown>;
 
 const BOT_TOKEN = `424242:${"A".repeat(35)}`;
 const CHAT_ID = -1001234;
 const SENDER_ID = 777;
-const FAILURE_TEXT =
-  "⚠️ mock-openai/gpt-5.6-luna-alt request failed (provider internal error, HTTP 500). This is usually temporary — try again shortly.";
+const FAILURE_TEXT = "⚠️ The AI service is having trouble. Please try again in a moment.";
 const RAW_ERROR_CANARY = "untrusted-provider-detail-qa-canary";
+const RAW_ERROR_DETAIL = `provider returned HTTP 500 ${RAW_ERROR_CANARY}`;
+const RAW_RETRY_ERROR_DETAIL = `${RAW_ERROR_DETAIL}; Retry-After: 120 seconds`;
 const REQUEST_TEXT =
   "Please investigate this request. This turn should visibly settle even if the agent fails.";
 
@@ -59,7 +61,7 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
       const retryHint =
         !isModelRequest || providerBodies.length > 1 ? "; Retry-After: 120 seconds" : "";
       writeJson(res, 500, {
-        error: { message: `provider returned HTTP 500 ${RAW_ERROR_CANARY}${retryHint}` },
+        error: { message: `${RAW_ERROR_DETAIL}${retryHint}` },
       });
       return;
     }
@@ -113,9 +115,9 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
         const gatewayOwner = createQaGatewayChild();
         try {
           const repoRoot = path.resolve(import.meta.dirname, "../../../..");
-          await gatewayOwner.start({
+          const gateway = await gatewayOwner.start({
             repoRoot,
-            useRepoCli: true,
+            command: createQaPreparedRepoCliCommand(repoRoot),
             providerBaseUrl: `${apiRoot}/v1`,
             transportBaseUrl: apiRoot,
             transport: {
@@ -186,7 +188,10 @@ test("visibly settles a message-tool-only Telegram turn after a provider failure
           expect(providerBodies[1]?.model).toBe(providerBodies[0]?.model);
           expect(JSON.stringify(providerBodies[1]?.input)).toContain(REQUEST_TEXT);
           expect(providerBodies[1]?.input).not.toEqual(providerBodies[0]?.input);
-          expect(telegramSends.map((send) => send.text).join("\n")).not.toContain(RAW_ERROR_CANARY);
+          expect(gateway.logs()).toContain(RAW_RETRY_ERROR_DETAIL);
+          const publicReplies = telegramSends.map((send) => send.text).join("\n");
+          expect(publicReplies).not.toContain(RAW_ERROR_DETAIL);
+          expect(publicReplies).not.toContain(RAW_ERROR_CANARY);
         } finally {
           await stopQaGatewayFixture(gatewayOwner);
           for (const poll of pendingPolls) {

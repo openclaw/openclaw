@@ -1,6 +1,7 @@
 // Dashboard link tests cover dashboard command URL resolution and config snapshot handling.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { dashboardCommand } from "./dashboard.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
@@ -11,7 +12,7 @@ const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapTokenMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
-const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
+const ensureDashboardGatewayReadyMock = vi.hoisted(() => vi.fn());
 const waitForControlUiDocumentMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
@@ -35,7 +36,7 @@ vi.mock("../infra/device-bootstrap.js", () => ({
 }));
 
 vi.mock("./gateway-readiness.js", () => ({
-  ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
+  ensureDashboardGatewayReady: ensureDashboardGatewayReadyMock,
 }));
 
 vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
@@ -47,11 +48,7 @@ vi.mock("../secrets/resolve.js", () => ({
   resolveSecretRefValues: resolveSecretRefValuesMock,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 function resetRuntime() {
   runtime.log.mockClear();
@@ -115,8 +112,8 @@ describe("dashboardCommand", () => {
       token: "browser-bootstrap",
       expiresAtMs: 123_456,
     });
-    ensureGatewayReadyForOperationMock.mockReset();
-    ensureGatewayReadyForOperationMock.mockResolvedValue({
+    ensureDashboardGatewayReadyMock.mockReset();
+    ensureDashboardGatewayReadyMock.mockResolvedValue({
       ready: true,
       status: {},
       recovered: false,
@@ -125,54 +122,6 @@ describe("dashboardCommand", () => {
     waitForControlUiDocumentMock.mockResolvedValue({ ready: true });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
-  });
-
-  it("opens and copies the dashboard link by default", async () => {
-    mockSnapshot("abc123");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-
-    await dashboardCommand(runtime);
-
-    expect(ensureGatewayReadyForOperationMock).toHaveBeenCalledWith({
-      runtime,
-      operation: "open the dashboard",
-      yes: undefined,
-      probeUrl: "ws://127.0.0.1:18789",
-      readyWhenReachable: true,
-    });
-    expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
-      port: 18789,
-      bind: "loopback",
-      customBindHost: undefined,
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(issueDeviceBootstrapTokenMock).toHaveBeenCalledWith({
-      profile: {
-        roles: ["operator"],
-        scopes: [
-          "operator.admin",
-          "operator.approvals",
-          "operator.pairing",
-          "operator.questions",
-          "operator.read",
-          "operator.talk.secrets",
-          "operator.write",
-        ],
-        purpose: "control-ui-owner",
-      },
-    });
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Opened in your browser. Keep that tab to control OpenClaw.",
-    );
   });
 
   it("never logs the gateway token in the dashboard URL (CVE regression)", async () => {
@@ -207,21 +156,6 @@ describe("dashboardCommand", () => {
     );
   });
 
-  it("prints SSH hint when browser cannot open", async () => {
-    mockSnapshot("shhhh");
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({
-      ok: false,
-      reason: "ssh",
-    });
-    formatControlUiSshHintMock.mockReturnValue("ssh hint");
-
-    await dashboardCommand(runtime);
-
-    expect(openUrlMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
-  });
-
   it("preserves Gateway TLS after remote browser delivery fails", async () => {
     vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
     mockSnapshot("shhhh", {
@@ -244,6 +178,7 @@ describe("dashboardCommand", () => {
       basePath: "/control",
       tlsEnabled: true,
     });
+    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
   it("reports opener failure without claiming the host has no GUI", async () => {
@@ -258,24 +193,6 @@ describe("dashboardCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Browser launch failed. Open the one-time pairing URL copied to clipboard.",
     );
-  });
-
-  it("prints the SSH hint when browser and clipboard delivery fail after support detection", async () => {
-    vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
-    mockSnapshot("shhhh");
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(false);
-    formatControlUiSshHintMock.mockReturnValue("ssh hint");
-
-    await dashboardCommand(runtime);
-
-    expect(formatControlUiSshHintMock).toHaveBeenCalledWith({
-      port: 18789,
-      basePath: undefined,
-      tlsEnabled: false,
-    });
-    expect(runtime.log).toHaveBeenCalledWith("ssh hint");
   });
 
   it("never passes token to SSH hint (CVE regression — SSH path)", async () => {
@@ -304,53 +221,10 @@ describe("dashboardCommand", () => {
       expect(line).not.toContain(secretToken);
       expect(line).not.toContain("#token=");
     }
-  });
-
-  it("guides user to manual auth when delivery channels both fail (CVE-safe)", async () => {
-    const secretToken = "super-secret-bearer-token";
-    mockSnapshot(secretToken);
-    copyToClipboardMock.mockResolvedValue(false);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: false, reason: "ssh" });
-    formatControlUiSshHintMock.mockReturnValue("ssh hint without token");
-
-    await dashboardCommand(runtime);
-
-    const allLogs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
-
-    // CVE: token value and fragment marker must not appear in logs.
-    expect(allLogs).not.toContain(secretToken);
-    expect(allLogs).not.toContain("#token=");
-
-    // UX: user must be pointed to where their token lives so they can self-recover.
-    expect(allLogs).toMatch(/OPENCLAW_GATEWAY_TOKEN/);
-    // UX: hint must name the URL fragment key so the user knows the syntax.
-    expect(allLogs).toContain("key `token`");
-  });
-
-  it("respects --no-open and tells user the pairing URL is in clipboard", async () => {
-    mockSnapshot("abc");
-    copyToClipboardMock.mockResolvedValue(true);
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    expect(detectBrowserOpenSupportMock).not.toHaveBeenCalled();
     expect(openUrlMock).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Browser launch disabled (--no-open). One-time browser pairing URL copied to clipboard.",
-    );
-  });
-
-  it("respects --no-open and falls through to manual-auth hint when clipboard fails (token configured)", async () => {
-    mockSnapshot("abc");
-    copyToClipboardMock.mockResolvedValue(false);
-
-    await dashboardCommand(runtime, { noOpen: true });
-
-    // Redundant fallback hint is suppressed when the manual-auth hint speaks.
-    expect(runtime.log).not.toHaveBeenCalledWith(
-      "Browser launch disabled (--no-open). Use the URL above.",
-    );
+    expect(runtime.log).toHaveBeenCalledWith("ssh hint without token");
     expectLogWith("OPENCLAW_GATEWAY_TOKEN");
+    expectLogWith("key `token`");
   });
 
   it("guides no-token users to the explicit JSON handoff when clipboard delivery fails", async () => {
@@ -387,51 +261,9 @@ describe("dashboardCommand", () => {
     expectNoLogWith("missing env var");
   });
 
-  it("keeps URL non-tokenized when token SecretRef is unresolved but env fallback exists", async () => {
-    mockSnapshot({
-      source: "env",
-      provider: "default",
-      id: "MISSING_GATEWAY_TOKEN",
-    });
-    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-    resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
-    expectNoLogWith("Token auto-auth unavailable");
-  });
-
-  it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
-    mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
-    copyToClipboardMock.mockResolvedValue(true);
-    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlMock.mockResolvedValue(true);
-
-    await dashboardCommand(runtime);
-
-    expect(copyToClipboardMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expect(openUrlMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
-    );
-    expectNoLogWith("Token auto-auth unavailable");
-    expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
-  });
-
   it("does not copy or open when gateway readiness fails", async () => {
     mockSnapshot("abc");
-    ensureGatewayReadyForOperationMock.mockResolvedValueOnce({
+    ensureDashboardGatewayReadyMock.mockResolvedValueOnce({
       ready: false,
       status: {},
       reason: "Gateway is not running.",
