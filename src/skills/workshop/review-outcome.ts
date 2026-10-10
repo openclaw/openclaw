@@ -57,17 +57,16 @@ function formatWorkshopChangeNotice(
   runId: string,
   changes: readonly WorkshopChange[],
 ) {
-  const bySkill = new Map<string, WorkshopChange>();
-  const firstBySkill = new Map<string, WorkshopChange>();
+  const bySkill = new Map<string, { first: WorkshopChange; notice: WorkshopChange }>();
   for (const change of changes.toSorted((a, b) => a.createdAtMs - b.createdAtMs)) {
-    if (!firstBySkill.has(change.skillName)) {
-      firstBySkill.set(change.skillName, change);
-    }
-    if (bySkill.get(change.skillName)?.action !== "create") {
-      bySkill.set(change.skillName, change);
+    const group = bySkill.get(change.skillName);
+    if (!group) {
+      bySkill.set(change.skillName, { first: change, notice: change });
+    } else if (group.notice.action !== "create") {
+      group.notice = change;
     }
   }
-  const skills = [...bySkill.values()].map((change) => {
+  const skills = [...bySkill.values()].map(({ notice: change }) => {
     const skill: SkillWorkshopChangeNoticeSkill = {
       name: change.skillName,
       action: ACTION_VERB[change.action],
@@ -83,7 +82,7 @@ function formatWorkshopChangeNotice(
   );
   const text = `💾 Learned: ${parts.join("; ")}. Say "undo" to revert this skill change.`;
   // No prior version means the review created the skill, so undo archives it.
-  const reverts = [...firstBySkill.values()].map(({ skillName, versionId }) =>
+  const reverts = [...bySkill.values()].map(({ first: { skillName, versionId } }) =>
     versionId
       ? `skill_workshop action=restore name=${skillName} version=${versionId}`
       : `skill_workshop action=archive name=${skillName} reason="undo"`,

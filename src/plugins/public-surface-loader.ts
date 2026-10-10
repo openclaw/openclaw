@@ -7,6 +7,10 @@ import {
 } from "../plugin-sdk/facade-loader.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  getCachedPluginModuleLoader,
+  loadPluginPublicSurfaceModuleSync,
+} from "./plugin-module-loader-cache.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
   resolvePluginRootPublicSurfacePath,
@@ -19,18 +23,34 @@ export function loadValidatedPublicSurfaceModule(params: {
   surfaceLabel: string;
   origin: PluginOrigin;
   pluginId?: string;
+  /** The caller already owns this immutable module generation, independently of runtime registries. */
+  capturedSource?: true;
 }): object {
+  const boundary = {
+    boundaryLabel: "plugin root",
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: params.boundaryRoot,
+    }),
+  };
+  if (params.capturedSource) {
+    return loadPluginPublicSurfaceModuleSync({
+      ...params,
+      ...boundary,
+      loadModule: (modulePath) =>
+        getCachedPluginModuleLoader({
+          modulePath,
+          importerUrl: import.meta.url,
+          preferBuiltDist: true,
+          loaderFilename: import.meta.url,
+        })(modulePath),
+    });
+  }
   return loadFacadeModuleAtLocationSync({
     location: params,
     surfaceLabel: params.surfaceLabel,
     pluginId: params.pluginId,
-    boundary: {
-      boundaryLabel: "plugin root",
-      rejectHardlinks: shouldRejectHardlinkedPluginFiles({
-        origin: params.origin,
-        rootDir: params.boundaryRoot,
-      }),
-    },
+    boundary,
   });
 }
 

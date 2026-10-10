@@ -246,6 +246,7 @@ export type ChatItem =
       kind: "stream";
       key: string;
       text: string;
+      thinking?: string;
       startedAt: number;
       isStreaming: boolean;
       replyToSender?: SenderIdentity;

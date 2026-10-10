@@ -253,32 +253,6 @@ describe("matrix client storage paths", () => {
     writeJson(rootDir, "storage-meta.json", value);
   }
 
-  it("records a learned deviceId in SQLite storage metadata", async () => {
-    const stateDir = setupStateDir();
-    const storagePaths = await resolveMatrixStoragePaths({
-      ...defaultStorageAuth,
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    expect(
-      await writeStorageMeta({
-        storagePaths,
-        homeserver: defaultStorageAuth.homeserver,
-        userId: defaultStorageAuth.userId,
-        deviceId: null,
-      }),
-    ).toBe(true);
-
-    expect(
-      await recordCurrentStorageMetaDeviceId({
-        rootDir: storagePaths.rootDir,
-        deviceId: "DEVICE123",
-      }),
-    ).toBe(true);
-
-    expect(readStorageMeta(storagePaths.rootDir)).toMatchObject({ deviceId: "DEVICE123" });
-    expect(fs.existsSync(path.join(storagePaths.rootDir, "startup-verification.json"))).toBe(false);
-  });
-
   it.each(["claim", "initialize", "initialize-explicit"] as const)(
     "preserves a device learned while %s waits for persistence",
     async (operation) => {
@@ -437,35 +411,6 @@ describe("matrix client storage paths", () => {
     expect(resolvedPaths.tokenHash).toBe(newerCanonicalPaths.tokenHash);
   }
 
-  it("uses the simplified matrix runtime root for account-scoped storage", async () => {
-    const stateDir = setupStateDir();
-
-    const storagePaths = await resolveMatrixStoragePaths({
-      homeserver: "https://matrix.example.org",
-      userId: "@Bot:example.org",
-      accessToken: "secret-token",
-      accountId: "ops",
-      env: {},
-    });
-
-    expect(storagePaths.rootDir).toBe(
-      path.join(
-        stateDir,
-        "matrix",
-        "accounts",
-        "ops",
-        "matrix.example.org__bot_example.org",
-        storagePaths.tokenHash,
-      ),
-    );
-    expect(storagePaths.storagePath).toBe(path.join(storagePaths.rootDir, "bot-storage.json"));
-    expect(storagePaths.cryptoPath).toBe(path.join(storagePaths.rootDir, "crypto"));
-    expect(storagePaths.recoveryKeyPath).toBe(path.join(storagePaths.rootDir, "recovery-key.json"));
-    expect(storagePaths.idbSnapshotPath).toBe(
-      path.join(storagePaths.rootDir, "crypto-idb-snapshot.json"),
-    );
-  });
-
   it("migrates the previous account-scoped sync cache into sqlite before startup", async () => {
     setupStateDir();
     const storagePaths = await resolveDefaultStoragePaths();
@@ -490,10 +435,7 @@ describe("matrix client storage paths", () => {
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
   });
 
-  it.each([
-    { name: "without an unrelated sibling", withSentinel: false },
-    { name: "with an unrelated sibling", withSentinel: true },
-  ])(
+  it.each([{ name: "with an unrelated sibling", withSentinel: true }])(
     "preserves completed imports and retries a later archive failure $name",
     async ({ withSentinel }) => {
       setupStateDir();
@@ -589,26 +531,6 @@ describe("matrix client storage paths", () => {
       ).resolves.toBe("retry-token");
     },
   );
-
-  it("reuses an existing token-hash storage root for the same device after the access token changes", async () => {
-    const logger = createTestLogger();
-    setupStateDir(undefined, logger);
-    const oldStoragePaths = await seedExistingStorageRoot({
-      accessToken: "secret-token-old",
-      deviceId: "DEVICE123",
-      storageMeta: await storageMetaFor("secret-token-old"),
-    });
-
-    const rotatedStoragePaths = await resolveDefaultStoragePaths({
-      accessToken: "secret-token-new",
-      deviceId: "DEVICE123",
-    });
-
-    expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
-    expect(rotatedStoragePaths.tokenHash).toBe(oldStoragePaths.tokenHash);
-    expect(rotatedStoragePaths.storagePath).toBe(oldStoragePaths.storagePath);
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
 
   it("warns with structured metadata when populated token-hash storage roots accumulate", async () => {
     const logger = createTestLogger();

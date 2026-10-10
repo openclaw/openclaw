@@ -144,7 +144,7 @@ extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
 extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/shared-client.ts	2
-extensions/codex/src/app-server/side-question.ts	2
+extensions/codex/src/app-server/side-question.ts	1
 extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
@@ -673,7 +673,7 @@ extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	8
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
-extensions/qa-lab/src/crabline-transport.ts	5
+extensions/qa-lab/src/crabline-transport.ts	4
 extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
@@ -741,7 +741,7 @@ extensions/qa-lab/src/providers/mock-openai/server.ts	4
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
-extensions/qa-lab/src/runtime-tool-fixture.ts	2
+extensions/qa-lab/src/runtime-tool-fixture.ts	1
 extensions/qa-lab/src/scenario-catalog.ts	1
 extensions/qa-lab/src/scenario-flow-runner.ts	5
 extensions/qa-lab/src/self-check-scenario.ts	2
@@ -778,7 +778,6 @@ extensions/reef/src/doctor-durable-state.ts	2
 extensions/reef/src/legacy-key-guard.ts	1
 extensions/reef/src/registration-state.ts	3
 extensions/reef/src/setup.ts	3
-extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
@@ -2455,7 +2454,6 @@ src/plugins/registry-registrars-host.ts	1
 src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-registrars-tools-hooks.ts	1
 src/plugins/registry-runtime-binding.ts	1
-src/plugins/registry-runtime.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1
 src/plugins/runtime-state.ts	1
@@ -2674,7 +2672,7 @@ ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1
 ui/src/components/agent-select.ts	2
 ui/src/components/app-sidebar-agent-menu.ts	2
-ui/src/components/app-sidebar-nav-menus.ts	2
+ui/src/components/app-sidebar-nav-menus.ts	1
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
@@ -2691,11 +2689,11 @@ ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
-ui/src/components/config-form-collection-draft.ts	5
+ui/src/components/config-form-collection-draft.ts	4
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form-structured-draft.ts	2
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/config-form.node.scalar.ts	4
+ui/src/components/config-form.node.scalar.ts	2
 ui/src/components/config-form.node.shared.ts	2
 ui/src/components/config-form.render.ts	1
 ui/src/components/confirm-dialog.ts	1
@@ -2850,7 +2848,7 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	3
-ui/src/pages/sessions/view.ts	7
+ui/src/pages/sessions/view.ts	6
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2

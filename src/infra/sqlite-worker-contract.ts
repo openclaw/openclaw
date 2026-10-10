@@ -143,6 +143,20 @@ export const SqliteWorkerOpenRefusedError = resolveGlobalSingleton(
     },
 );
 
+export const SqliteWorkerAdmissionTimeoutError = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerAdmissionTimeoutError"),
+  () =>
+    class AdmissionTimeoutError extends Error {
+      // Broker overload certifies non-execution; a timeout rolls back only its current transaction.
+      readonly code = "admission-timeout";
+
+      constructor() {
+        super("SQLite host admission timed out; retry after transaction rollback");
+        this.name = "SqliteWorkerAdmissionTimeoutError";
+      }
+    },
+);
+
 export class SqliteWorkerError extends Error {
   constructor(
     message: string,

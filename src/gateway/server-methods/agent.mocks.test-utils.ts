@@ -19,7 +19,10 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { createAgentTestUserTurnRecorder } from "./agent.user-turn-recorder.test-support.js";
+import {
+  createAgentTestUserTurnRecorder,
+  getAgentTestStorePath,
+} from "./agent.user-turn-recorder.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
@@ -610,7 +613,7 @@ export function resetSessionAccessorMocks() {
               agentId: scope.agentId ?? "main",
               sessionId: scope.sessionId,
               sessionKey: scope.sessionKey,
-              storePath: scope.storePath ?? "/tmp/sessions.json",
+              storePath: scope.storePath ?? getAgentTestStorePath(),
               generation: "test-generation",
               entryId: "test-user-turn",
               rawSeq: 1,

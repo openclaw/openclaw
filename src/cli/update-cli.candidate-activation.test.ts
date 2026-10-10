@@ -711,6 +711,7 @@ describe("update-cli", () => {
           recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
           verification: { serviceRunning: false, readyz: false, settled: false },
           steps: [
+            expect.objectContaining({ name: "updater-runtime-retention", exitCode: 0 }),
             expect.objectContaining({ exitCode: 1, stderrTail: formatErrorMessage(failure) }),
             expect.objectContaining({ name: "post-stop-checks", exitCode: 0 }),
             recoveryVerificationStep([

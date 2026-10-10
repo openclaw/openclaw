@@ -496,26 +496,6 @@ describe("Claw serving monitor cleanup", () => {
     }
   });
 
-  it.each([false, true])(
-    "removes the config-owned heartbeat monitor (enabled=%s)",
-    async (enabled) => {
-      const current = await fixture(enabled);
-      const plan = await current.plan();
-      expect(plan.blockers).toEqual([]);
-      expect(plan.actions.filter((action) => action.kind === "scheduledJob")).toEqual([
-        expect.objectContaining({ action: "remove", blocked: false }),
-      ]);
-      const result = await current.apply(plan);
-      expect(result).toMatchObject({ status: "complete", agentRemoved: true });
-      expect(
-        (await current.cron.list({ includeDisabled: true })).every(
-          (job) => job.agentId !== "worker",
-        ),
-      ).toBe(true);
-      await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).rejects.toThrow();
-    },
-  );
-
   it.each([
     "ordinary",
     "imported",

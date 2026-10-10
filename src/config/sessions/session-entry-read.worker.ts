@@ -287,6 +287,11 @@ export function readExactSessionEntriesWithLifecycle(
     const read = readDatabase(
       (database) => {
         source = captureSessionEntryReadSource(database, request.expectedIdentity);
+        if (request.projection === "worktree" && !request.manualCompact) {
+          return {
+            entries: readSessionWorktreeOwnerFactsInDatabase(database, request.sessionKeys),
+          };
+        }
         using sourceGuard = prepareSessionColdSourceGuard(
           { ...request.database, env: request.env },
           request.manualCompact?.sources,
