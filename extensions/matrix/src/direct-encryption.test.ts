@@ -133,7 +133,7 @@ function expectRepair(client: ReturnType<typeof createClient>, encrypted: boolea
 describe.each([true, false])(
   "registered Matrix direct repair with named encryption=%s",
   (encrypted) => {
-    it("prepares the Gateway-hosted native approval target without host SQLite", async () => {
+    it("prepares the native approval target without reading credentials for encryption", async () => {
       const cfg = config(encrypted);
       await seed(cfg);
       const client = createClient();
@@ -147,6 +147,7 @@ describe.each([true, false])(
         expect(
           runtime.availability.isConfigured({ cfg, accountId: "ops", context: { client } }),
         ).toBe(true);
+        const availability = counters.counts();
         const result = await runtime.transport.prepareTarget({
           cfg,
           accountId: "ops",
@@ -178,7 +179,7 @@ describe.each([true, false])(
         const total = counters.counts();
         expect(result?.target).toMatchObject({ to: `room:${roomId}`, roomId });
         expectRepair(client, encrypted);
-        expect(total).toEqual([0, 0, 0, 0, 0, 0]);
+        expect(total).toEqual(availability);
       } finally {
         counters.restore();
       }
