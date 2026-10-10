@@ -32,6 +32,7 @@ import {
   schemaAdmission,
   type SqliteSchemaFacts,
 } from "./sqlite-schema-admission.js";
+import { observeSchemaLifetime } from "./sqlite-schema-lifetime.js";
 import { canPreserveTransactionSnapshot } from "./sqlite-schema-mutation.js";
 import {
   bindSqliteSchemaScope as bindScope,
@@ -662,53 +663,6 @@ export function adoptSqliteSchemaFacts(database: DatabaseSync, facts: SqliteSche
     current.schemaVersion === facts.schemaVersion &&
     current.userVersion === facts.userVersion
   );
-}
-
-function observeSchemaLifetime(
-  database: DatabaseSync,
-  owner: SchemaOwner,
-  snapshot: object | undefined,
-): boolean {
-  if (owner.snapshot && owner.snapshot !== snapshot) {
-    invalidate(owner);
-    owner.snapshot = undefined;
-    owner.qualifiedSnapshot = undefined;
-  }
-  const scope = bindScope(database, owner);
-  const processRevision = getSqliteDatabaseSchemaRevision(database);
-  const scopeChanged =
-    owner.scopeRevision !== scope.revision ||
-    (owner.processRevision !== undefined && owner.processRevision !== processRevision);
-  if (
-    scopeChanged &&
-    owner.facts &&
-    !owner.transactionalSchema &&
-    ((database.isTransaction && owner.transactionCatalogBound) ||
-      (snapshot && owner.qualifiedSnapshot === snapshot))
-  ) {
-    // An active SQLite snapshot keeps the catalog it admitted, even after a sibling publishes DDL.
-    owner.transactionalFacts ||= database.isTransaction;
-    owner.snapshot = snapshot;
-    return false;
-  }
-  owner.processRevision = processRevision;
-  if (scopeChanged) {
-    invalidate(owner);
-    owner.scopeRevision = scope.revision;
-  }
-  if (
-    (owner.transactionalSchema || owner.transactionalTempSchema || owner.transactionalFacts) &&
-    !database.isTransaction
-  ) {
-    if (owner.transactionalSchema) {
-      publishSchemaChange(database, owner);
-    }
-    invalidate(owner);
-    owner.transactionalSchema = false;
-    owner.transactionalTempSchema = false;
-    owner.transactionalFacts = false;
-  }
-  return scopeChanged;
 }
 
 /** Consume the physical database's admitted facts and owner-published schema changes. */

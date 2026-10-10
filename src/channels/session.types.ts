@@ -25,4 +25,5 @@ export type RecordInboundSession = (params: {
   updateLastRoute?: InboundLastRouteUpdate;
   onRecordError: (err: unknown) => void | Promise<void>;
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
+  assertAuthority?: () => void;
 }) => Promise<void>;

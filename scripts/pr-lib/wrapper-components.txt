@@ -1063,6 +1063,7 @@ src/infra/sqlite-schema-ensure.ts
 src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
+src/infra/sqlite-schema-lifetime.ts
 src/infra/sqlite-schema-mutation.ts
 src/infra/sqlite-schema-scope.ts
 src/infra/sqlite-schema-sql.ts
@@ -1406,6 +1407,8 @@ src/plugins/plugin-instance-disposal.ts
 src/plugins/plugin-instance-error.ts
 src/plugins/plugin-instance-invocation.ts
 src/plugins/plugin-instance-module-loader.ts
+src/plugins/plugin-state-operation-module-loader.ts
+src/plugins/plugin-state-operation-source.ts
 src/plugins/plugin-instance-owned-values.ts
 src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
