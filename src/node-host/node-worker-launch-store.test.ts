@@ -213,7 +213,7 @@ describe("node worker launch admitted schema", () => {
     }
   });
 
-  it("observes foreign companion commits after the current snapshot without inventing certificates", () => {
+  it("observes foreign companion row commits after the current snapshot without inventing certificates", () => {
     const { db, path, kernel, admission } = kernelFixture();
     // Native connection bypasses in-process schema publications, like a separate worker.
     const foreign = new (requireNodeSqlite().DatabaseSync)(path);
@@ -226,12 +226,12 @@ describe("node worker launch admitted schema", () => {
         nowMs: NOW_MS,
       });
       expect(legacy.workerDescendantsReaped).toBeUndefined();
+      db.exec(
+        extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_launch_process_scopes"),
+      );
       db.exec("BEGIN");
       try {
         expect(readNodeWorkerLaunchReceipt(db, legacy.launchId)).toEqual(legacy);
-        foreign.exec(
-          extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_launch_process_scopes"),
-        );
         foreign
           .prepare(
             "INSERT INTO node_worker_launch_process_scopes (launch_id, scope_kind, descendants_reaped) VALUES (?, 'linux-subreaper', NULL)",

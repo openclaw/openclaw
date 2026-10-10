@@ -21,6 +21,25 @@ function sourceLabel(source: string): string {
   );
 }
 
+function sharedUnavailableMessage(
+  reason: NonNullable<GitHubPublicationView["options"]>["sharedUnavailableReason"],
+): string {
+  switch (reason) {
+    case "unavailable":
+      return t("githubPublication.sharedUnavailable.unavailable");
+    case "changed":
+      return t("githubPublication.sharedUnavailable.changed");
+    case "rate_limited":
+      return t("githubPublication.sharedUnavailable.rate_limited");
+    case "unverified":
+      return t("githubPublication.sharedUnavailable.unverified");
+    case "unsupported_workspace":
+      return t("githubPublication.sharedUnavailable.unsupported_workspace");
+    default:
+      return t("githubPublication.sharedUnavailable.unknown");
+  }
+}
+
 export function renderGitHubPublicationAction(publication: GitHubPublicationView) {
   if (publication.result?.status === "published") {
     return html`<a
@@ -277,6 +296,7 @@ export function renderGitHubPublicationDetails(
   const refresh =
     !busy &&
     (error ||
+      noAccount ||
       result?.status === "failed" ||
       (result?.status === "needs_confirmation" && !publication.onConfirm));
   const more =
@@ -311,7 +331,14 @@ export function renderGitHubPublicationDetails(
           : nothing
     }
     ${refresh ? renderPublicationRefresh(publication) : nothing}
-    ${noAccount ? html`<span class="chat-pr__publication-note">${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
+    ${
+      noAccount
+        ? html`<span class="chat-pr__publication-note"
+            >${sharedUnavailableMessage(options.sharedUnavailableReason)}
+            ${options.personal === null ? t("githubPublication.unidentified") : nothing}</span
+          >`
+        : nothing
+    }
     ${
       confirmation
         ? html`<div class="chat-pr__publication-note">

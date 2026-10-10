@@ -5,12 +5,10 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { tableExists } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { loadMemorySourceFileState } from "./manager-source-state.js";
-import {
-  memoryTableExists,
-  resolvePersistedMemoryVectorIndexState,
-} from "./manager-vector-rebuild-state.js";
+import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
 
 export const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
 
@@ -37,7 +35,7 @@ export function readMemoryRetrievalIndexState(db: DatabaseSync) {
     db.prepare("SELECT 1 FROM memory_index_chunks LIMIT 1").get() !== undefined;
   const hasFtsContent =
     !hasIndexedChunks &&
-    memoryTableExists(db, MEMORY_INDEX_FTS_TABLE) &&
+    tableExists(db, MEMORY_INDEX_FTS_TABLE) &&
     db.prepare(`SELECT 1 FROM ${MEMORY_INDEX_FTS_TABLE} LIMIT 1`).get() !== undefined;
   const vectorState =
     meta && meta.provider !== "none"
