@@ -67,7 +67,7 @@ describe("Inworld response-owned audio truncation", () => {
         type: "conversation.item.truncate",
         item_id: "playing-item",
         content_index: 0,
-        audio_end_ms: 250,
+        audio_end_ms: 83,
       },
     ]);
   });
@@ -127,13 +127,13 @@ describe("Inworld response-owned audio truncation", () => {
           type: "conversation.item.truncate",
           item_id: "shared",
           content_index: 0,
-          audio_end_ms: 1000,
+          audio_end_ms: bytesPerMs === 8 ? 333 : 1000,
         },
         {
           type: "conversation.item.truncate",
           item_id: "shared",
           content_index: 0,
-          audio_end_ms: 2000,
+          audio_end_ms: bytesPerMs === 8 ? 666 : 2000,
         },
       ]);
     },
@@ -169,7 +169,7 @@ describe("Inworld response-owned audio truncation", () => {
     bridge.handleBargeIn?.({ audioPlaybackActive: true });
     expect(
       parseSent(socket).find((event) => event.type === "conversation.item.truncate")?.audio_end_ms,
-    ).toBe(2000);
+    ).toBe(666);
   });
 
   it("does not inherit prior bytes before the reused successor item produces audio", async () => {
@@ -271,7 +271,7 @@ describe("Inworld response-owned audio truncation", () => {
         response_id: fingerprint("private-response"),
         item_id: fingerprint("private-item"),
         counted_bytes: 8000,
-        audio_end_ms: 1000,
+        audio_end_ms: 333,
         audioFormat: { encoding: "g711_ulaw", sampleRateHz: 8000, channels: 1 },
         negotiated_output_format: reported ? { type: "audio/pcm", rate: 24000 } : null,
       });

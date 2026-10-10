@@ -481,13 +481,13 @@ describe("buildInworldRealtimeVoiceProvider", () => {
           type: "conversation.item.truncate",
           item_id: "older-item",
           content_index: 0,
-          audio_end_ms: 1000,
+          audio_end_ms: bytesPerMs === 8 ? 333 : 1000,
         },
         {
           type: "conversation.item.truncate",
           item_id: "current-item",
           content_index: 0,
-          audio_end_ms: 2619,
+          audio_end_ms: bytesPerMs === 8 ? 873 : 2619,
         },
       ]);
     },
@@ -507,7 +507,7 @@ describe("buildInworldRealtimeVoiceProvider", () => {
         type: "conversation.item.truncate",
         item_id: "reused-item",
         content_index: 0,
-        audio_end_ms: 2619,
+        audio_end_ms: 873,
       },
     ]);
   });

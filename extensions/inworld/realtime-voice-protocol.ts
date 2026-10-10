@@ -136,6 +136,15 @@ export abstract class InworldRealtimeVoiceProtocol {
     return Math.min(producedAudioMs, playbackAudioMs);
   }
 
+  private inworldTruncateMs(realAudioMs: number): number {
+    // Live PCMU errors report duration as bytes/24, despite mono 8 kHz output.
+    // Inworld's truncate timebase is 24 kHz: convert real ms after the byte clamp.
+    // PCM16 retains its ordinary millisecond contract.
+    return this.audioFormat.encoding === "g711_ulaw" && this.audioFormat.sampleRateHz === 8000
+      ? Math.floor(realAudioMs / 3)
+      : realAudioMs;
+  }
+
   protected beginAudioResponse(responseId: string | undefined): void {
     this.audioResponseId = responseId;
     // Preserve distinct completed items still queued in the sink, but a new
@@ -241,15 +250,19 @@ export abstract class InworldRealtimeVoiceProtocol {
           itemId,
           responseId: produced?.responseId,
           countedBytes: produced?.bytes ?? 0,
-          audioEndMs: this.config.getPlaybackState
-            ? Math.max(
-                0,
-                Math.min(
-                  Number.isFinite(audioEndMs) ? Math.floor(audioEndMs) : 0,
-                  Math.floor(realtimeVoiceAudioDurationMs(this.audioFormat, produced?.bytes ?? 0)),
-                ),
-              )
-            : audioEndMs,
+          audioEndMs: this.inworldTruncateMs(
+            this.config.getPlaybackState
+              ? Math.max(
+                  0,
+                  Math.min(
+                    Number.isFinite(audioEndMs) ? Math.floor(audioEndMs) : 0,
+                    Math.floor(
+                      realtimeVoiceAudioDurationMs(this.audioFormat, produced?.bytes ?? 0),
+                    ),
+                  ),
+                )
+              : audioEndMs,
+          ),
         };
       });
       const cancelResponse =
