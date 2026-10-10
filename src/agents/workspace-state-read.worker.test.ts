@@ -247,7 +247,14 @@ it("joins a granted workspace mutation before closing its database", async () =>
       { setupCompletedAt: "2026-07-16T02:00:00.000Z" },
       2_000,
     ),
-  ).rejects.toThrow("read admission is closed");
+  ).rejects.toMatchObject({
+    message: "SQLite committed facts publication failed",
+    code: "outcome-unknown",
+    cause: {
+      message: "OpenClaw state database read admission is closed",
+      code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+    },
+  });
   expect(close).toBeDefined();
   await close;
   spy.mockRestore();

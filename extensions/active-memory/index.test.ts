@@ -40,6 +40,7 @@ import {
   setMinimumTimeoutMsForTests,
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
+import { registerActiveMemoryDiagnosticTests } from "./index.diagnostics.test-support.js";
 import plugin from "./index.js";
 import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
 import * as recallRun from "./recall-run.js";
@@ -633,6 +634,17 @@ describe("active-memory plugin", () => {
     setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
+
+  registerActiveMemoryDiagnosticTests({
+    logger: api.logger,
+    getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
+    runPromptBuild,
+    runActiveMemoryCommand,
+    configure: (logging, remember = true) => {
+      syncRuntimePluginConfig({ agents: ["sandbox"], mode: "off", logging });
+      configFile = { ...configFile, session: { dmScope: remember ? "main" : "per-peer" } };
+    },
+  });
 
   registerActiveMemoryProviderTests({
     memoryCapability: hoisted.memoryCapability,
@@ -1468,7 +1480,7 @@ describe("active-memory plugin", () => {
       args: "status",
     });
 
-    expect(statusResult.text).toBe("Active Memory: off for this session.");
+    expect(statusResult.text).toContain("Active Memory: off for this session.");
 
     const disabledResult = await runPromptBuild(
       { prompt: "what wings should i order? active memory toggle" },
@@ -1497,20 +1509,6 @@ describe("active-memory plugin", () => {
     );
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports session status off when the current agent is outside the active-memory allowlist (#78986)", async () => {
-    registerPluginConfig({
-      agents: ["sandbox"],
-      logging: true,
-    });
-
-    const statusResult = await runActiveMemoryCommand({
-      sessionKey: "agent:main:main",
-      args: "status",
-    });
-
-    expect(statusResult.text).toBe("Active Memory: off for this session.");
   });
 
   it.each([

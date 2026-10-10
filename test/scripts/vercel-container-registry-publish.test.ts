@@ -759,12 +759,12 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.1.0" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.2.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-FuW5MhOfkOxPhyL+tQbAFmx+M4FpmTvqGSDsD2rP9FWYJt7GG2JKIsIbHOfYR5t/fqQqZrVQC3O2ODhwInEGVA==",
-      version: "62.1.0",
+        "sha512-hwet6qXoOfZEc6waIx1VgI2nLl83wwuZZnFqKSsKJ47UFi9waEezPmAV7uNOx8Fq+6JTJIi+lRnxFXr9YFW3Eg==",
+      version: "62.2.0",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
       bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },

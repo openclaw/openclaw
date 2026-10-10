@@ -534,7 +534,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
         plan.dockerE2e.matrix.include.find(
           (entry: MatrixEntry) => entry.chunk_id === "package-update-restart-auth",
         ),
-      ).toMatchObject({ timeout_minutes: 55 });
+      ).toMatchObject({ timeout_minutes: 75 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );

@@ -9,7 +9,10 @@ import {
   observeHostDataSql,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  SqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -840,68 +843,80 @@ it.each(["lost reply", "callback failure", "unknown settlement with callback fai
   },
 );
 
-it("preserves an unknown native outcome when releasing its prepared source also fails", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const replyFailure = new Error("commit reply lost");
-    const cleanupFailure = new Error("prepared source release failed");
-    let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (callback, attachment) => {
-        const owned = createAdmission((request, grant) => {
-          if (request.stage === "commit") {
-            nativeAdmission = owned;
-          }
-          callback(request, grant);
-        }, attachment);
-        return owned;
-      },
-    );
-    const loseCommitResult = vi.fn(() => {
-      expect(nativeAdmission?.committed?.facts).toMatchObject({
-        kind: "session-entry-patch-committed",
+it.each(["unknown", "mismatched receipt", "unknown failure"] as const)(
+  "preserves %s native outcome when releasing its prepared source also fails",
+  async (fault) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const replyFailure =
+        fault === "unknown failure"
+          ? new SqliteWorkerError("commit outcome lost", "outcome-unknown")
+          : new Error("commit reply lost");
+      const cleanupFailure = new Error("prepared source release failed");
+      let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
+      const createAdmission = admission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
+        (callback, attachment) => {
+          const owned = createAdmission((request, grant) => {
+            if (request.stage === "commit") {
+              nativeAdmission = owned;
+            }
+            callback(request, grant);
+          }, attachment);
+          return owned;
+        },
+      );
+      const loseCommitResult = vi.fn(() => {
+        expect(nativeAdmission?.committed?.facts).toMatchObject({
+          kind: "session-entry-patch-committed",
+        });
+        if (!nativeAdmission) {
+          throw new Error("Patch did not reach native commit admission");
+        }
+        // The write committed, but its reply and trustworthy native receipt are unavailable.
+        vi.spyOn(nativeAdmission, "committed", "get").mockReturnValue(
+          fault === "mismatched receipt"
+            ? { facts: { kind: "session-entry-patch-committed", transferId: -1 } }
+            : undefined,
+        );
+        if (fault === "unknown") {
+          vi.spyOn(nativeAdmission, "settlement", "get").mockReturnValue({ kind: "unknown" });
+        }
+        throw replyFailure;
       });
-      if (!nativeAdmission) {
-        throw new Error("Patch did not reach native commit admission");
-      }
-      // The real write has committed; neither reply nor native receipt reaches settlement.
-      vi.spyOn(nativeAdmission, "committed", "get").mockReturnValue(undefined);
-      vi.spyOn(nativeAdmission, "settlement", "get").mockReturnValue({ kind: "unknown" });
-      throw replyFailure;
-    });
-    delivery.afterCommit = loseCommitResult;
-    const releaseFirst = vi.fn();
-    const releaseLast = vi.fn(() => {
-      throw cleanupFailure;
-    });
-    const update = vi.fn(() => ({ label: "committed once" }));
-    const failure: unknown = await patchSessionEntryCore(f.scope, update, {
-      workerGuard: {
-        source: composeSessionSourceAssertion(
-          [releaseFirst, releaseLast].map((release) =>
-            Object.assign(() => {}, {
-              prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-            }),
+      delivery.afterCommit = loseCommitResult;
+      const releaseFirst = vi.fn();
+      const releaseLast = vi.fn(() => {
+        throw cleanupFailure;
+      });
+      const update = vi.fn(() => ({ label: "committed once" }));
+      const failure: unknown = await patchSessionEntryCore(f.scope, update, {
+        workerGuard: {
+          source: composeSessionSourceAssertion(
+            [releaseFirst, releaseLast].map((release) =>
+              Object.assign(() => {}, {
+                prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
+              }),
+            ),
           ),
-        ),
-      },
-    }).catch((error: unknown) => error);
+        },
+      }).catch((error: unknown) => error);
 
-    expect(failure).toBeInstanceOf(AggregateError);
-    expect(failure).toMatchObject({
-      code: "outcome-unknown",
-      cause: { code: "outcome-unknown", cause: replyFailure },
-      errors: expect.arrayContaining([cleanupFailure]),
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({
+        code: "outcome-unknown",
+        cause: { code: "outcome-unknown", cause: replyFailure },
+        errors: expect.arrayContaining([cleanupFailure]),
+      });
+      expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
+      expect(update).toHaveBeenCalledOnce();
+      expect(loseCommitResult).toHaveBeenCalledOnce();
+      expect(releaseFirst).toHaveBeenCalledOnce();
+      expect(releaseLast).toHaveBeenCalledOnce();
+      expect(f.read()?.label).toBe("committed once");
     });
-    expect(hasSqliteWorkerOutcomeUnknown(failure)).toBe(true);
-    expect(update).toHaveBeenCalledOnce();
-    expect(loseCommitResult).toHaveBeenCalledOnce();
-    expect(releaseFirst).toHaveBeenCalledOnce();
-    expect(releaseLast).toHaveBeenCalledOnce();
-    expect(f.read()?.label).toBe("committed once");
-  });
-});
+  },
+);
 
 it.each([false, true])(
   "releases prepared source custody when writer acquisition fails (cleanup failure: %s)",
