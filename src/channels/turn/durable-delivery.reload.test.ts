@@ -114,6 +114,7 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
     agentId: "main",
     payload: { text: "Saved final answer" },
     info: { kind: "final" },
+    retryAmbiguousFinalText: true,
     ctxPayload: {
       CommandAuthorized: true,
       CommandTurn: { kind: "normal", source: "message", authorized: false },
@@ -240,6 +241,17 @@ describe("final delivery after plugin replacement", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
     const fixture = await replacementFixture({ sameGeneration: true });
     fixture.sendText.mockRejectedValue(new Error("Network request failed for sendMessage"));
+    await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
+    expect(fixture.sendText).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not replay when the channel has not opted in", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.request.retryAmbiguousFinalText = undefined;
+    fixture.sendText.mockRejectedValue(
+      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+    );
     await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
     expect(fixture.sendText).toHaveBeenCalledTimes(1);
   });
