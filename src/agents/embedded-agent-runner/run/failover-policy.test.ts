@@ -172,6 +172,19 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("does not rotate harness-owned assistant timeouts", () => {
+    // Harness-owned transports already implement their own retry envelope;
+    // core failover should not double-rotate on those synthetic timeouts.
+    expect(
+      resolveAssistantDecision({
+        terminal: { kind: "timeout", phase: "prompt", source: "runtime", aborted: true },
+        harnessOwnsTransport: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
+    });
+  });
+
   it("does not rotate harness-owned assistant errors classified as timeout", () => {
     expect(
       resolveAssistantDecision({
@@ -216,6 +229,20 @@ describe("resolveRunFailoverDecision", () => {
         signalOwnedInterruption: true,
       }),
     ).toEqual({ action: "surface_error", reason: null });
+  });
+
+  it("surfaces harness-owned prompt timeouts instead of falling back", () => {
+    expect(
+      resolveRunFailoverDecision({
+        ...promptFailure,
+        failoverReason: "timeout",
+        harnessOwnsTransport: true,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "surface_error",
+      reason: "timeout",
+    });
   });
 
   it("falls back on fallback-safe harness-owned prompt timeouts", () => {

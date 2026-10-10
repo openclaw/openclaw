@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
+  createRealtimeVoiceAudioQueue,
   RealtimeVoiceSessionLifecycle,
   type RealtimeVoiceBrowserSessionCreateRequest,
   type RealtimeVoiceGatewayControl,
@@ -274,5 +275,40 @@ describe("RealtimeVoiceSessionLifecycle", () => {
       lifecycle.enqueuePendingAudio(Buffer.from([index % 256]));
     }
     expect(onPendingAudioOverflow).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("createRealtimeVoiceAudioQueue", () => {
+  it("releases byte budget as queued audio is consumed", () => {
+    const queue = createRealtimeVoiceAudioQueue("reject-newest");
+    const first = Buffer.alloc(512 * 1024, 0x01);
+    const second = Buffer.alloc(512 * 1024, 0x02);
+
+    expect(queue.enqueue(first)).toBe(true);
+    expect(queue.enqueue(second)).toBe(true);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(false);
+    expect(queue.dequeue()?.equals(first), "dequeued first chunk").toBe(true);
+    expect(queue.enqueue(Buffer.from([0x03]))).toBe(true);
+    const drained = queue.drain();
+    expect(drained).toHaveLength(2);
+    expect(drained[0]?.equals(second), "remaining second chunk").toBe(true);
+    expect(drained[1]).toEqual(Buffer.from([0x03]));
+  });
+
+  it("drops the oldest audio and resets accounting on clear", () => {
+    const queue = createRealtimeVoiceAudioQueue("drop-oldest");
+    for (let index = 0; index < 322; index += 1) {
+      expect(queue.enqueue(Buffer.from([index & 0xff]))).toBe(true);
+    }
+
+    const drained = queue.drain();
+    expect(drained).toHaveLength(320);
+    expect(drained[0]).toEqual(Buffer.from([2]));
+    expect(drained.at(-1)).toEqual(Buffer.from([65]));
+
+    expect(queue.enqueue(Buffer.alloc(1024 * 1024, 0x04))).toBe(true);
+    queue.clear();
+    expect(queue.enqueue(Buffer.from([0x05]))).toBe(true);
+    expect(queue.drain()).toEqual([Buffer.from([0x05])]);
   });
 });

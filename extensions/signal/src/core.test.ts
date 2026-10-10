@@ -1039,4 +1039,3 @@ describe("signal setup parsing", () => {
     expect(next.channels?.signal?.accounts?.work?.allowFrom).toEqual(["+15555550123", "*"]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

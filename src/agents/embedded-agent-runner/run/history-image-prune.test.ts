@@ -88,6 +88,46 @@ describe("pruneProcessedHistoryImages", () => {
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
   const userText = () => castAgentMessage({ role: "user", content: "more" });
 
+  it("redacts factless legacy attachment text while pruning old image blocks", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "old image",
+              "[media attached: media://inbound/old.png]",
+              "[media attached 1/2: /tmp/old photo.jpeg (image/jpeg) | https://example.test/img]",
+              "[Image: source: /Users/me/Pictures/old.jpg]",
+            ].join("\n"),
+          },
+          { ...image },
+        ],
+      }),
+      ...oldEnoughTail(),
+    ];
+
+    const pruned = expectPrunedMessages(messages);
+
+    const content = expectArrayMessageContent(pruned[0], "expected user array content");
+    expect(content[0]?.text).toBe(
+      [
+        "old image",
+        PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
+        PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
+        PRUNED_HISTORY_MEDIA_REFERENCE_MARKER,
+      ].join("\n"),
+    );
+    expectContentBlock(content[1], { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
+    const originalContent = expectArrayMessageContent(
+      messages[0],
+      "expected original user content",
+    );
+    expect(originalContent[0]?.text).toContain("[media attached: media://inbound/old.png]");
+    expectContentBlock(originalContent[1], { type: "image", data: "abc" });
+  });
+
   it("prunes fact-owned and factless late-media projections", () => {
     const fields = { role: "user" as const };
     const markedString = castAgentMessage({
@@ -192,6 +232,21 @@ describe("pruneProcessedHistoryImages", () => {
     });
     expect(JSON.stringify(nextTurn.slice(2))).toBe(JSON.stringify(messages.slice(2)));
     expect(JSON.stringify(messages.slice(0, retainedLength))).toBe(retainedBytes);
+  });
+
+  it("redacts bare old inbound media URIs from factless tool results", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({
+        role: "toolResult",
+        toolName: "memory_search",
+        content: "previous media://inbound/stale-screenshot.png result",
+      }),
+      ...oldEnoughTail(),
+    ];
+
+    const pruned = expectPrunedMessages(messages);
+    const toolResult = pruned[0] as Extract<AgentMessage, { role: "toolResult" }> | undefined;
+    expect(toolResult?.content).toBe(`previous ${PRUNED_HISTORY_MEDIA_REFERENCE_MARKER} result`);
   });
 
   it("prunes image blocks from toolResult messages older than 3 completed turns", () => {

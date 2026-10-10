@@ -163,6 +163,20 @@ describe("scoped session access providers", () => {
     });
   });
 
+  it("gives the canonical main session agent-wide access under tree visibility", () => {
+    const checker = createSessionVisibilityRowChecker({
+      action: "history",
+      requesterSessionKey: "agent:main:work",
+      mainSessionKey: "agent:main:work",
+      visibility: "tree",
+      a2aPolicy: createAgentToAgentPolicy({}),
+    });
+
+    expect(checker.check({ key: "agent:main:telegram:group:unspawned" })).toEqual({
+      allowed: true,
+    });
+  });
+
   it("keeps exact and current self aliases available without a configured default", () => {
     const checker = createSessionVisibilityChecker({
       action: "history",

@@ -138,47 +138,53 @@ describe("repository publication checkpoint capture", () => {
     expect(f.git("rev-parse", "HEAD")).toBe(f.base);
   });
 
-  it("preserves staged path inventory and index bytes in a worktree-scoped checkout", async () => {
-    const f = await fixture("linked-config");
-    await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "staged\r\n");
-    f.git("add", "-f", "ignored-added.txt");
-    await fs.writeFile(path.join(f.cwd, "ignored-intent.txt"), "intent\r\n");
-    f.git("add", "-N", "-f", "ignored-intent.txt");
-    f.git("rm", "--cached", "ignored-removed.txt");
-    await fs.writeFile(path.join(f.cwd, "counter.txt"), "staged counter\r\n");
-    f.git("add", "counter.txt");
-    await fs.writeFile(path.join(f.cwd, "counter.txt"), "latest counter\r\n");
-    await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "latest\r\n");
-    const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
-    const index = await fs.readFile(indexPath);
-    const digest = f.capture();
-    const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
-    expect(await fs.readFile(indexPath)).toEqual(index);
-    expect(snapshot.entries).toEqual(
-      expect.arrayContaining([
-        { path: "ignored-removed.txt", mode: "100644", sha: null },
-        expect.objectContaining({ path: "ignored-added.txt", mode: "100644" }),
-        expect.objectContaining({ path: "ignored-intent.txt", mode: "100644" }),
-      ]),
-    );
-    const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
-    expect(await fs.readFile(indexPath)).toEqual(index);
-    expect(local.workspaceTree).toBe(snapshot.workspaceTree);
-    expect(f.git("show", `${local.sourceIndexTree}:ignored-added.txt`)).toBe("staged");
-    for (const [name, content] of [
-      ["ignored-added.txt", "latest\n"],
-      ["ignored-intent.txt", "intent\n"],
-      ["counter.txt", "latest counter\n"],
-    ] as const) {
-      const entry = snapshot.entries.find((candidate) => candidate.path === name)!;
-      expect(await readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).toEqual(
-        Buffer.from(content),
+  it.each(["split", "linked-config"] as const)(
+    "preserves staged path inventory and index bytes while staging workspace changes (%s index)",
+    async (format) => {
+      const f = await fixture(format === "linked-config" ? format : false);
+      await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "staged\r\n");
+      f.git("add", "-f", "ignored-added.txt");
+      await fs.writeFile(path.join(f.cwd, "ignored-intent.txt"), "intent\r\n");
+      f.git("add", "-N", "-f", "ignored-intent.txt");
+      f.git("rm", "--cached", "ignored-removed.txt");
+      await fs.writeFile(path.join(f.cwd, "counter.txt"), "staged counter\r\n");
+      f.git("add", "counter.txt");
+      await fs.writeFile(path.join(f.cwd, "counter.txt"), "latest counter\r\n");
+      await fs.writeFile(path.join(f.cwd, "ignored-added.txt"), "latest\r\n");
+      if (format === "split") {
+        f.git("update-index", "--split-index");
+      }
+      const indexPath = path.resolve(f.cwd, f.git("rev-parse", "--git-path", "index"));
+      const index = await fs.readFile(indexPath);
+      const digest = f.capture();
+      const { snapshot } = await readGitHubRepositoryPublicationMetadata(f.output, digest);
+      expect(await fs.readFile(indexPath)).toEqual(index);
+      expect(snapshot.entries).toEqual(
+        expect.arrayContaining([
+          { path: "ignored-removed.txt", mode: "100644", sha: null },
+          expect.objectContaining({ path: "ignored-added.txt", mode: "100644" }),
+          expect.objectContaining({ path: "ignored-intent.txt", mode: "100644" }),
+        ]),
       );
-    }
-    expect(await fs.readFile(path.join(f.cwd, "ignored-removed.txt"), "utf8")).toBe(
-      "private generated fixture\n",
-    );
-  });
+      const local = await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd });
+      expect(await fs.readFile(indexPath)).toEqual(index);
+      expect(local.workspaceTree).toBe(snapshot.workspaceTree);
+      expect(f.git("show", `${local.sourceIndexTree}:ignored-added.txt`)).toBe("staged");
+      for (const [name, content] of [
+        ["ignored-added.txt", "latest\n"],
+        ["ignored-intent.txt", "intent\n"],
+        ["counter.txt", "latest counter\n"],
+      ] as const) {
+        const entry = snapshot.entries.find((candidate) => candidate.path === name)!;
+        expect(await readGitHubRepositoryPublicationBlob(f.output, entry.sha!)).toEqual(
+          Buffer.from(content),
+        );
+      }
+      expect(await fs.readFile(path.join(f.cwd, "ignored-removed.txt"), "utf8")).toBe(
+        "private generated fixture\n",
+      );
+    },
+  );
 
   it("restores accepted publication paths as unstaged without running hooks or filters", async () => {
     const f = await fixture();

@@ -284,6 +284,50 @@ describe("completion-runtime", () => {
     });
   });
 
+  it.skipIf(process.platform === "win32")(
+    "preserves a symlinked profile while replacing its target atomically",
+    async () => {
+      await withBashCompletionHome(async ({ homeDir }) => {
+        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+        const targetDir = tempDirs.make("openclaw-completion-profile-target-");
+        const targetPath = path.join(targetDir, "zshrc");
+        const profilePath = path.join(homeDir, ".zshrc");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.writeFile(cachePath, "# completion\n", "utf8");
+        await fs.writeFile(targetPath, "export IMPORTANT=keep\n", "utf8");
+        await fs.symlink(targetPath, profilePath);
+
+        await installCompletion("zsh", true, "openclaw");
+
+        expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain("export IMPORTANT=keep\n");
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain(cachePath);
+      });
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "preserves a dangling relative profile symlink while creating its target",
+    async () => {
+      await withBashCompletionHome(async ({ homeDir }) => {
+        const cachePath = resolveCompletionCachePath("zsh", "openclaw");
+        const managedDir = path.join(homeDir, "managed");
+        const targetPath = path.join(managedDir, "zshrc");
+        const profilePath = path.join(homeDir, ".zshrc");
+        await fs.mkdir(path.dirname(cachePath), { recursive: true });
+        await fs.mkdir(managedDir, { recursive: true });
+        await fs.writeFile(cachePath, "# completion\n", "utf8");
+        await fs.symlink(path.join("managed", "zshrc"), profilePath);
+
+        await installCompletion("zsh", true, "openclaw");
+
+        expect((await fs.lstat(profilePath)).isSymbolicLink()).toBe(true);
+        expect(await fs.readlink(profilePath)).toBe(path.join("managed", "zshrc"));
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toContain("# OpenClaw Completion");
+      });
+    },
+  );
+
   it("recognizes an installed profile when its completion cache has been removed", async () => {
     await withBashCompletionHome(async ({ homeDir }) => {
       const cachePath = resolveCompletionCachePath("bash", "openclaw");

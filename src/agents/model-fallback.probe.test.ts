@@ -359,6 +359,22 @@ describe("runWithModelFallback probe logic", () => {
     expect(probeThrottleInternals.lastProbeAttempt.has("key-0")).toBe(true);
   });
 
+  it("scopes probe throttling by agentDir to avoid cross-agent suppression", () => {
+    const agentAKey = probeThrottleInternals.resolveProbeThrottleKey("openai", "/tmp/agent-a");
+    const agentBKey = probeThrottleInternals.resolveProbeThrottleKey("openai", "/tmp/agent-b");
+    probeThrottleInternals.lastProbeAttempt.set(agentAKey, NOW - 10_000);
+    const params = { reason: "rate_limit" as const, soonest: NOW + 30 * 1000 };
+    expect(cooldownDecision({ ...params, throttleKey: agentAKey })).toEqual({
+      type: "suspend_session",
+      reason: "rate_limit",
+    });
+    expect(cooldownDecision({ ...params, throttleKey: agentBKey })).toEqual({
+      type: "attempt",
+      reason: "rate_limit",
+      markProbe: true,
+    });
+  });
+
   it("does not suspend the session when fallback candidates remain", async () => {
     getExpiry.mockReturnValue(NOW + 30 * 60 * 1000);
     unavailableReason.mockReturnValue("billing");

@@ -163,6 +163,23 @@ describe("incomplete-turn recovery policy", () => {
     },
   );
 
+  it("does not retry an empty turn after side effects", () => {
+    const assistant = emptyAssistant({ stopReason: "stop", model: "gpt-5.4" });
+    const attempt = emptyAttempt(assistant);
+    attempt.replayMetadata = { hadPotentialSideEffects: true, replaySafe: false };
+
+    expect(
+      resolveEmptyResponseRetryInstruction({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
+  });
+
   it("returns the reasoning continuation for Kimi Anthropic reasoning-only output", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       api: "anthropic-messages",

@@ -125,6 +125,18 @@ describe("plugin package update policy reconciliation", () => {
     });
   });
 
+  it("fails closed when the replacement package has no authoritative child rows", () => {
+    const before = index("/packages/pack-v1", [record("pack/one", "/packages/pack-v1")]);
+    const snapshot = captureSnapshot(before);
+    const result = reconcilePluginPackageUpdateConfig({
+      config: { plugins: { entries: { "pack/one": { enabled: true } } } },
+      beforeIndex: before,
+      afterIndex: index("/packages/pack-v2", []),
+      snapshot,
+    });
+    expect(result).toMatchObject({ ok: false });
+  });
+
   it("skips an exact tombstone while reconciling another package update", () => {
     const orphanRecord = {
       source: "path",
