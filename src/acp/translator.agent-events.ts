@@ -27,10 +27,6 @@ export class AcpTranslatorAgentEvents {
     private readonly sessionUpdates: AcpTranslatorSessionUpdates,
     private readonly pendingPrompts: Map<string, AcpPendingPrompt>,
     private readonly approvalRelays: Map<string, AcpPendingApprovalRelay>,
-    private readonly getPendingPrompt: (
-      sessionId: string,
-      runId: string,
-    ) => AcpPendingPrompt | undefined,
     private readonly findPendingBySessionKey: (
       sessionKey: string,
       runId?: string,
@@ -59,63 +55,97 @@ export class AcpTranslatorAgentEvents {
       return;
     }
 
-    if (stream !== "tool") {
+    if (stream !== "tool" && (stream !== "item" || data.kind !== "preamble")) {
       return;
     }
-    const phase = data.phase as string | undefined;
-    const name = data.name as string | undefined;
-    const toolCallId = data.toolCallId as string | undefined;
-    if (!toolCallId) {
-      return;
-    }
-
     const pending = this.findPendingBySessionKey(sessionKey, runId);
     if (!pending) {
       return;
     }
 
     let update: SessionUpdate;
-    if (phase === "start") {
-      if (!pending.toolCalls) {
-        pending.toolCalls = new Map();
-      }
-      if (pending.toolCalls.has(toolCallId)) {
+    if (stream === "item") {
+      const text = typeof data.progressText === "string" ? data.progressText.trimEnd() : "";
+      if (!text) {
         return;
       }
-      const args = data.args as Record<string, unknown> | undefined;
-      const title = formatToolTitle(name, args);
-      const kind = inferToolKind(name);
-      const locations = extractToolCallLocations(args);
-      pending.toolCalls.set(toolCallId, {
-        title,
-        kind,
-        locations,
-      });
-      update = {
-        sessionUpdate: "tool_call",
-        toolCallId,
-        title,
-        status: "in_progress",
-        rawInput: args,
-        kind,
-        locations,
-      };
-    } else if (phase === "update" || phase === "result") {
-      const toolState = pending.toolCalls?.get(toolCallId);
-      const result = phase === "update" ? data.partialResult : data.result;
-      if (phase === "result") {
-        pending.toolCalls?.delete(toolCallId);
+      const itemId = normalizeOptionalString(data.itemId) ?? "";
+      const preambles = (pending.sentPreambles ??= new Map());
+      let sent = preambles.get(itemId) ?? "";
+      const replacement = pending.textReplacement;
+      // The Gateway projects a reclassification before its preamble with the same sequence.
+      // Ordinary final retirement has no paired preamble and must keep its answer baseline.
+      if (replacement && replacement.seq === payload.seq) {
+        const retired = replacement.sentText.startsWith(replacement.text)
+          ? replacement.sentText.slice(replacement.text.length).replace(/^\n+/, "")
+          : "";
+        if (
+          (text.startsWith(retired) || retired.startsWith(text)) &&
+          retired.length > sent.length
+        ) {
+          sent = retired;
+        }
+        pending.sentText = replacement.text;
+        pending.textReplacement = undefined;
       }
+      if (sent.startsWith(text)) {
+        preambles.set(itemId, sent);
+        return;
+      }
+      preambles.set(itemId, text);
       update = {
-        sessionUpdate: "tool_call_update",
-        toolCallId,
-        status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
-        rawOutput: result,
-        content: extractToolCallContent(result),
-        locations: extractToolCallLocations(toolState?.locations, result),
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: text.startsWith(sent) ? text.slice(sent.length) : text },
       };
     } else {
-      return;
+      const phase = data.phase as string | undefined;
+      const name = data.name as string | undefined;
+      const toolCallId = data.toolCallId as string | undefined;
+      if (!toolCallId) {
+        return;
+      }
+
+      if (phase === "start") {
+        pending.sentPreambles?.delete("");
+        pending.toolCalls ??= new Map();
+        if (pending.toolCalls.has(toolCallId)) {
+          return;
+        }
+        const args = data.args as Record<string, unknown> | undefined;
+        const title = formatToolTitle(name, args);
+        const kind = inferToolKind(name);
+        const locations = extractToolCallLocations(args);
+        pending.toolCalls.set(toolCallId, {
+          title,
+          kind,
+          locations,
+        });
+        update = {
+          sessionUpdate: "tool_call",
+          toolCallId,
+          title,
+          status: "in_progress",
+          rawInput: args,
+          kind,
+          locations,
+        };
+      } else if (phase === "update" || phase === "result") {
+        const toolState = pending.toolCalls?.get(toolCallId);
+        const result = phase === "update" ? data.partialResult : data.result;
+        if (phase === "result") {
+          pending.toolCalls?.delete(toolCallId);
+        }
+        update = {
+          sessionUpdate: "tool_call_update",
+          toolCallId,
+          status: phase === "update" ? "in_progress" : data.isError ? "failed" : "completed",
+          rawOutput: result,
+          content: extractToolCallContent(result),
+          locations: extractToolCallLocations(toolState?.locations, result),
+        };
+      } else {
+        return;
+      }
     }
     await this.sessionUpdates.emit({
       sessionId: pending.sessionId,
@@ -313,7 +343,7 @@ export class AcpTranslatorAgentEvents {
     return (
       this.approvalRelays.get(relay.approvalId) === relay &&
       relay.state === "active" &&
-      this.getPendingPrompt(relay.sessionId, relay.runId) !== undefined
+      this.pendingPrompts.get(relay.sessionId)?.idempotencyKey === relay.runId
     );
   }
 }

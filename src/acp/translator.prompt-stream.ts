@@ -89,7 +89,6 @@ export class AcpTranslatorPromptStream {
       sessionUpdates,
       this.pendingPrompts,
       this.approvalRelays,
-      (sessionId, runId) => this.getPendingPrompt(sessionId, runId),
       (sessionKey, runId) => this.findPendingBySessionKey(sessionKey, runId),
       log,
     );
@@ -468,7 +467,13 @@ export class AcpTranslatorPromptStream {
     if (isRecord(messageData) && (state === "delta" || state === "final")) {
       pending.streamMessage = messageData;
       // Consume the terminal snapshot before settling the append-only ACP stream.
-      const ownsSnapshot = await this.handleDeltaEvent(pending, messageData);
+      const ownsSnapshot = await this.handleDeltaEvent(
+        pending,
+        messageData,
+        state === "delta" && payload.replace === true && typeof payload.seq === "number"
+          ? payload.seq
+          : undefined,
+      );
       if (
         !ownsSnapshot ||
         this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending ||
@@ -500,22 +505,32 @@ export class AcpTranslatorPromptStream {
   private async handleDeltaEvent(
     pending: AcpPendingPrompt,
     messageData: Record<string, unknown>,
+    replacementSeq?: number,
   ): Promise<boolean> {
     const content = messageData.content as GatewayChatContentBlock[] | undefined;
     const sessionId = pending.sessionId;
     if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
       return false;
     }
+    const readText = (type: string, field: "text" | "thinking") =>
+      content
+        ?.filter((block) => block?.type === type)
+        .map((block) => block[field] ?? "")
+        .join("\n")
+        .trimEnd() ?? "";
+    if (replacementSeq !== undefined) {
+      pending.textReplacement = {
+        seq: replacementSeq,
+        sentText: pending.sentText ?? "",
+        text: readText("text", "text"),
+      };
+    }
 
     for (const [blockType, field, sentField, kind] of [
       ["thinking", "thinking", "sentThought", "agent_thought_chunk"],
       ["text", "text", "sentText", "agent_message_chunk"],
     ] as const) {
-      const fullText = content
-        ?.filter((block) => block?.type === blockType)
-        .map((block) => block[field] ?? "")
-        .join("\n")
-        .trimEnd();
+      const fullText = readText(blockType, field);
       const sentSoFar = pending[sentField]?.length ?? 0;
       if (!fullText || fullText.length <= sentSoFar) {
         continue;
