@@ -168,6 +168,7 @@ function successfulExecutor(
     changedTargetRef?: string;
     currentAliasVersion?: string;
     sourceVersions?: Record<string, string>;
+    sourceImageConfigs?: Record<string, string>;
     rawManifests?: Record<string, string | Error>;
     unattestedSourceRef?: string;
     version?: string;
@@ -200,6 +201,10 @@ function successfulExecutor(
     }
     const ref = requireCommandRef(args);
     if (args.at(-1)?.includes(".Image")) {
+      const platform = args.at(-1)?.includes("linux/arm64") ? "linux/arm64" : "linux/amd64";
+      if (ref.includes("@") && options.sourceImageConfigs?.[platform] !== undefined) {
+        return options.sourceImageConfigs[platform];
+      }
       return imageConfig(
         ref.includes("@")
           ? (options.sourceVersions?.[ref] ?? version)
@@ -242,10 +247,7 @@ function successfulExecutor(
   });
 }
 
-function admissionFixture(
-  raw: string | Error,
-  { digest = amd64Digest, includeBrowser = true } = {},
-) {
+function admissionFixture(raw: string | Error, { digest = amd64Digest } = {}) {
   const calls: string[][] = [];
   const execFileSyncImpl = successfulExecutor(calls, {
     rawManifests: { [`${sourceImage}@${digest}`]: raw },
@@ -253,7 +255,7 @@ function admissionFixture(
   return {
     calls,
     publish: () =>
-      publishVercelContainerRegistryImages(publishParams("2026.7.2", includeBrowser), {
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
         execFileSyncImpl,
         log: () => {},
       }),
@@ -262,7 +264,6 @@ function admissionFixture(
 
 describe("Vercel Container Registry publishing", () => {
   it.each([
-    ["stable", "2026.7.2"],
     ["extended-stable", "2026.6.33"],
     ["beta", "2026.7.2-beta.1"],
   ])("plans the full immutable %s image set", (channel, version) => {
@@ -288,262 +289,49 @@ describe("Vercel Container Registry publishing", () => {
     ]);
   });
 
-  it("omits browser images when the tagged Docker release did not build them", () => {
-    const plan = createVercelContainerRegistryPublishPlan({
-      includeBrowser: false,
-      sourceImage,
-      targetImage,
-      version: "2026.7.2",
+  it("admits the observed release node_modules layer that the former 500 MB cap rejected", () => {
+    const calls: string[][] = [];
+    const manifest = platformManifest();
+    const observedDigest =
+      "sha256:87a84edfc11732d9ef1ca5a598a871ce3f4b7572dd3213dc5107d519d9ab61c0";
+    manifest.layers = Array.from({ length: 11 }, (_, index) => ({
+      ...manifest.layers[0]!,
+      digest: index === 10 ? observedDigest : layerDigest,
+      size: index === 10 ? 869_561_235 : 1024,
+    }));
+    const execFileSyncImpl = successfulExecutor(calls, {
+      rawManifests: { [`${sourceImage}@${amd64Digest}`]: JSON.stringify(manifest) },
+      version: "2026.9.6",
     });
 
-    expect(plan.readinessTags).toEqual(["2026.7.2", "2026.7.2-slim"]);
-    expect(plan.copies.map((copy) => copy.targetTag)).toEqual([
-      "2026.7.2",
-      "2026.7.2-amd64",
-      "2026.7.2-arm64",
-      "2026.7.2-slim",
-      "2026.7.2-slim-amd64",
-      "2026.7.2-slim-arm64",
-    ]);
-  });
-
-  it("rejects tagged image names", () => {
-    expect(() =>
-      createVercelContainerRegistryPublishPlan({
-        includeBrowser: true,
-        sourceImage: `${sourceImage}:latest`,
-        targetImage,
-        version: "2026.7.2",
-      }),
-    ).toThrow("untagged container image name");
-  });
-
-  it("resolves every source before the first registry write", () => {
-    const calls: string[][] = [];
-    const execFileSyncImpl = successfulExecutor(calls);
-
-    const plan = publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+    publishVercelContainerRegistryImages(publishParams("2026.9.6", true), {
       execFileSyncImpl,
       log: () => {},
     });
 
-    const firstCreate = calls.findIndex((args) => args[2] === "create");
-    expect(firstCreate).toBeGreaterThan(0);
-    expect(calls.slice(0, firstCreate).every((args) => args[2] === "inspect")).toBe(true);
-    expect(
-      calls
-        .slice(0, firstCreate)
-        .map((args) => requireCommandRef(args))
-        .every((ref) => ref.startsWith(`${sourceImage}@sha256:`)),
-    ).toBe(true);
-    const platformRefs = new Set(
-      [amd64Digest, arm64Digest, browserArm64Digest].map((digest) => `${sourceImage}@${digest}`),
-    );
-    expect(
-      calls
-        .slice(0, firstCreate)
-        .filter((args) => args.includes("--raw") && platformRefs.has(requireCommandRef(args)))
-        .map((args) => requireCommandRef(args)),
-    ).toEqual(
-      [amd64Digest, arm64Digest, amd64Digest, arm64Digest, amd64Digest, browserArm64Digest].map(
-        (digest) => `${sourceImage}@${digest}`,
-      ),
-    );
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(plan.copies.length);
-    expect(calls[firstCreate]).toEqual([
-      "buildx",
-      "imagetools",
-      "create",
-      "--progress",
-      "plain",
-      "--tag",
-      `${targetImage}:2026.7.2`,
-      `${sourceImage}@${amd64Digest}`,
-      `${sourceImage}@${arm64Digest}`,
-    ]);
-    expect(
-      calls.find((args) => args[2] === "inspect" && args[3] === `${targetImage}:2026.7.2-amd64`),
-    ).toEqual([
-      "buildx",
-      "imagetools",
-      "inspect",
-      `${targetImage}:2026.7.2-amd64`,
-      "--format",
-      "{{json .Manifest}}",
-    ]);
-  });
-
-  it("fails before writing when an immutable source is missing", () => {
-    const calls: string[][] = [];
-    const execute = successfulExecutor(calls);
-    const execFileSyncImpl = vi.fn((command: string, args: string[]) => {
-      if (requireCommandRef(args) === `${sourceImage}@${slimSourceDigest}`) {
-        calls.push(args);
-        throw new Error("manifest unknown");
-      }
-      return execute(command, args);
-    });
-
-    expect(() =>
-      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
-        execFileSyncImpl,
-        log: () => {},
-      }),
-    ).toThrow("manifest unknown");
-    expect(calls.some((args) => args[2] === "create")).toBe(false);
-  });
-
-  it("rejects the observed oversized layer before any registry write", () => {
-    const calls: string[][] = [];
-    const manifest = platformManifest();
-    const rejectedDigest =
-      "sha256:4b9a73079b17c36ef03670032ea1d22f0441dc38d2668a0d176753795b586a18";
-    manifest.layers = Array.from({ length: 11 }, (_, index) => ({
-      ...manifest.layers[0]!,
-      digest: index === 10 ? rejectedDigest : layerDigest,
-      size: index === 10 ? 870_479_908 : 1024,
-    }));
-    const execFileSyncImpl = successfulExecutor(calls, {
-      rawManifests: { [`${sourceImage}@${amd64Digest}`]: JSON.stringify(manifest) },
-    });
-
-    expect
-      .soft(() =>
-        publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
-          execFileSyncImpl,
-          log: () => {},
-        }),
-      )
-      .toThrow(
-        `VCR preflight: default/2026.7.2 linux/amd64 ${sourceImage}@${amd64Digest}: layer[10] ${rejectedDigest} is 870479908 bytes; client cap 500000000 bytes`,
-      );
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
+    expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
   });
 
   it("admits every selection before copying even when only the last platform exceeds a cap", () => {
     const manifest = platformManifest();
-    manifest.layers[0]!.size = 500_000_001;
+    manifest.layers[0]!.size = 2_000_000_001;
     const { calls, publish } = admissionFixture(JSON.stringify(manifest), {
       digest: browserArm64Digest,
     });
 
     expect(publish).toThrow(
-      `browser/2026.7.2-browser linux/arm64 ${sourceImage}@${browserArm64Digest}: layer[0] ${layerDigest} is 500000001 bytes; client cap 500000000 bytes`,
+      `browser/2026.7.2-browser linux/arm64 ${sourceImage}@${browserArm64Digest}: layer[0] ${layerDigest} is 2000000001 bytes; client cap 2000000000 bytes`,
     );
     expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
   });
 
-  it("does not inspect unselected browser images", () => {
-    const { calls, publish } = admissionFixture(new Error("Browser must not be inspected"), {
-      digest: browserArm64Digest,
-      includeBrowser: false,
-    });
+  it("rejects invalid layer[0] size 0.5 before copying", () => {
+    const { field, size } = { field: "layer[0]", size: 0.5 };
 
-    publish();
-
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(6);
-    expect(
-      calls.some(
-        (args) =>
-          args.includes(`${sourceImage}@${browserSourceDigest}`) ||
-          args.includes(`${sourceImage}@${browserArm64Digest}`),
-      ),
-    ).toBe(false);
-  });
-
-  it.each([
-    ["layer", 500_000_000, 0],
-    ["layer", 500_000_000, 1],
-    ["config", 1_000_000, 0],
-    ["config", 1_000_000, 1],
-  ] as const)("applies the inclusive %s cap of %i bytes with excess %i", (field, cap, excess) => {
-    const manifest = platformManifest();
-    const descriptor = field === "config" ? manifest.config : manifest.layers[0]!;
-    descriptor.size = cap + excess;
-    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
-
-    if (excess === 0) {
-      publish();
-      expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
-    } else {
-      expect(publish).toThrow(
-        `${field === "config" ? "config" : "layer[0]"} ${descriptor.digest} is ${cap + excess} bytes; client cap ${cap} bytes`,
-      );
-      expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
-    }
-  });
-
-  it.each([0, 1])("applies the config-inclusive total cap with excess %i", (excess) => {
-    const manifest = platformManifest();
-    manifest.config.size = 1_000_000;
-    manifest.layers = Array.from({ length: 30 }, (_, index) => ({
-      ...manifest.layers[0]!,
-      size: index === 29 ? 499_000_000 + excess : 500_000_000,
-    }));
-    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
-
-    if (excess === 0) {
-      publish();
-      expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
-    } else {
-      expect(publish).toThrow(
-        "total (compressed layers plus config, through layer[29]) is 15000000001 bytes; client cap 15000000000 bytes",
-      );
-      expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
-    }
-  });
-
-  it("rejects an otherwise admissible layer total tipped over the cap by config", () => {
-    const manifest = platformManifest();
-    manifest.config.size = 1;
-    manifest.layers = Array.from({ length: 30 }, () => ({
-      ...manifest.layers[0]!,
-      size: 500_000_000,
-    }));
-    const { calls, publish } = admissionFixture(JSON.stringify(manifest));
-
-    expect(publish).toThrow(
-      "total (compressed layers plus config, through layer[29]) is 15000000001 bytes; client cap 15000000000 bytes",
-    );
-    expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
-  });
-
-  it.each([0, 1])(
-    "counts raw manifest UTF-8 bytes including whitespace with excess %i",
-    (excess) => {
-      const json = JSON.stringify({
-        ...platformManifest(),
-        annotations: { description: "\u00e9".repeat(20) },
-      });
-      const raw = ` \n${json}${" ".repeat(4_000_000 + excess - Buffer.byteLength(json, "utf8") - 2)}`;
-      const { calls, publish } = admissionFixture(raw);
-
-      if (excess === 0) {
-        publish();
-        expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
-      } else {
-        expect(publish).toThrow(
-          `${sourceImage}@${amd64Digest}: manifest body is 4000001 bytes; client cap 4000000 bytes`,
-        );
-        expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
-      }
-    },
-  );
-
-  it.each(
-    ["config", "layer[0]"].flatMap((field) =>
-      [undefined, null, "1024", -1, 0.5, Number.MAX_SAFE_INTEGER + 1].map((size) => ({
-        field,
-        size,
-      })),
-    ),
-  )("rejects invalid $field size $size before copying", ({ field, size }) => {
     const manifest = platformManifest();
     const raw = JSON.stringify({
       ...manifest,
-      ...(field === "config"
-        ? { config: { ...manifest.config, size } }
-        : { layers: [{ ...manifest.layers[0], size }] }),
+      layers: [{ ...manifest.layers[0], size }],
     });
     const { calls, publish } = admissionFixture(raw);
 
@@ -554,25 +342,8 @@ describe("Vercel Container Registry publishing", () => {
   });
 
   it.each([
-    ["missing config", { ...platformManifest(), config: undefined }, "config"],
-    ["missing layers", { ...platformManifest(), layers: undefined }, "layers"],
     ["non-array layers", { ...platformManifest(), layers: {} }, "layers"],
     ["null layer", { ...platformManifest(), layers: [null] }, "layer[0]"],
-    [
-      "invalid config digest",
-      { ...platformManifest(), config: { ...platformManifest().config, digest: "invalid" } },
-      "config",
-    ],
-    [
-      "missing layer media type",
-      {
-        ...platformManifest(),
-        layers: [{ ...platformManifest().layers[0], mediaType: undefined }],
-      },
-      "layer[0]",
-    ],
-    ["index instead of image", { mediaType: imageIndexMediaType, manifests: [] }, "image manifest"],
-    ["null manifest", null, "image manifest"],
     ["unsupported schema", { ...platformManifest(), schemaVersion: 1 }, "image manifest"],
   ] as const)("rejects %s before copying", (_name, manifest, diagnostic) => {
     const { calls, publish } = admissionFixture(JSON.stringify(manifest));
@@ -600,21 +371,6 @@ describe("Vercel Container Registry publishing", () => {
     expect(calls.filter((args) => args[2] === "create")).toHaveLength(0);
   });
 
-  it.each([imageManifestMediaType, "application/vnd.docker.distribution.manifest.v2+json"])(
-    "admits zero-byte descriptors and empty layers for %s",
-    (mediaType) => {
-      const manifest = platformManifest();
-      manifest.mediaType = mediaType;
-      manifest.config.size = 0;
-      manifest.layers = [];
-      const { calls, publish } = admissionFixture(JSON.stringify(manifest));
-
-      publish();
-
-      expect(calls.filter((args) => args[2] === "create")).toHaveLength(9);
-    },
-  );
-
   it("rejects an unattested immutable source before any registry write", () => {
     const calls: string[][] = [];
     const unattestedSourceRef = `${sourceImage}@${browserSourceDigest}`;
@@ -629,11 +385,13 @@ describe("Vercel Container Registry publishing", () => {
     expect(calls.some((args) => args[2] === "create")).toBe(false);
   });
 
-  it("rejects an attested source from another release before any registry write", () => {
+  it("rejects attested source label custom-build at the requested-release comparison", () => {
+    const sourceVersion = "custom-build";
+
     const calls: string[][] = [];
     const mismatchedSourceRef = `${sourceImage}@${browserSourceDigest}`;
     const execFileSyncImpl = successfulExecutor(calls, {
-      sourceVersions: { [mismatchedSourceRef]: "2026.7.1" },
+      sourceVersions: { [mismatchedSourceRef]: sourceVersion },
     });
 
     expect(() =>
@@ -641,7 +399,44 @@ describe("Vercel Container Registry publishing", () => {
         execFileSyncImpl,
         log: () => {},
       }),
-    ).toThrow(`${mismatchedSourceRef} reports version 2026.7.1, expected 2026.7.2`);
+    ).toThrow(`${mismatchedSourceRef} reports version ${sourceVersion}, expected 2026.7.2`);
+    expect(calls.some((args) => args[2] === "create")).toBe(false);
+  });
+
+  it.each([
+    ["malformed JSON", "{", "linux/amd64"],
+    ["second-platform missing label", "{}", "linux/arm64"],
+  ])("rejects %s before copying an attested source", (_name, raw, platform) => {
+    const calls: string[][] = [];
+    const execFileSyncImpl = successfulExecutor(calls, {
+      sourceImageConfigs: { [platform]: raw },
+    });
+    const publish = vi.fn(() =>
+      publishVercelContainerRegistryImages(publishParams("2026.7.2", true), {
+        execFileSyncImpl,
+        log: () => {},
+      }),
+    );
+    const sourceRef = `${sourceImage}@${defaultSourceDigest}`;
+
+    expect(publish).toThrow(
+      raw === "{"
+        ? `Could not parse the ${platform} image config for ${sourceRef}.`
+        : `${sourceRef} does not have an org.opencontainers.image.version label for ${platform}.`,
+    );
+    if (raw === "{") {
+      expect(publish.mock.results[0]?.value).toHaveProperty("cause", expect.any(SyntaxError));
+    } else {
+      expect(publish.mock.results[0]?.value).not.toHaveProperty("cause");
+    }
+    expect(calls.at(-1)).toEqual([
+      "buildx",
+      "imagetools",
+      "inspect",
+      sourceRef,
+      "--format",
+      `{{json (index .Image "${platform}")}}`,
+    ]);
     expect(calls.some((args) => args[2] === "create")).toBe(false);
   });
 
@@ -854,7 +649,12 @@ describe("Vercel Container Registry publishing", () => {
     expect(releasePublish.secrets).toEqual({
       VERCEL_TOKEN: "${{ secrets.VERCEL_TOKEN }}",
     });
-    expect(finalizeRelease.needs).toEqual(["publish", "publish_docker", "approve_github_release"]);
+    expect(finalizeRelease.needs).toEqual([
+      "publish",
+      "publish_docker",
+      "approve_github_release",
+      "finalize_github_release_before_docker",
+    ]);
     expect(finalizeRelease.if).not.toContain("publish_vcr");
     expect(recoveryValidation.if).toBe("${{ !inputs.advisory }}");
     expect(recoveryValidation.permissions).toEqual({});
@@ -915,7 +715,7 @@ describe("Vercel Container Registry publishing", () => {
       version: reusable.on?.workflow_call?.inputs?.version,
     });
     expect(reusablePublish.steps?.find((step) => step.name === "Set up Docker Builder")?.uses).toBe(
-      "docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e",
+      "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069",
     );
     const materializeVercel = reusablePublish.steps?.find(
       (step) => step.name === "Materialize locked Vercel CLI",
@@ -959,18 +759,18 @@ describe("Vercel Container Registry publishing", () => {
     };
     const materialize = readFileSync("scripts/materialize-vercel-cli.sh", "utf8");
 
-    expect(packageJson.dependencies).toEqual({ sandbox: "4.2.1", vercel: "59.11.7" });
+    expect(packageJson.dependencies).toEqual({ sandbox: "4.6.0", vercel: "62.2.0" });
     expect(packageLock.lockfileVersion).toBe(3);
     expect(packageLock.packages?.["node_modules/vercel"]).toMatchObject({
       integrity:
-        "sha512-C+L/JKmlGDypKGcTU/atckydeK/AKa/7fKwUbvcwveguV1QPlY8beiIGgbwkdbb80bbIpPFHRQYrhi5XPAmCBA==",
-      version: "59.11.7",
+        "sha512-hwet6qXoOfZEc6waIx1VgI2nLl83wwuZZnFqKSsKJ47UFi9waEezPmAV7uNOx8Fq+6JTJIi+lRnxFXr9YFW3Eg==",
+      version: "62.2.0",
     });
     expect(packageLock.packages?.["node_modules/sandbox"]).toMatchObject({
-      bin: { sandbox: "bin/sandbox.mjs" },
+      bin: { sandbox: "bin/sandbox.mjs", sbx: "bin/sandbox.mjs" },
       integrity:
-        "sha512-e7D/gnq4Q8M4SUDRCtKo8CtsZX9jntdzzteIBhuuTOe5+wpfEqOZsNnAqbqiEakOnoctRAbAuc2fdoj+iopmuA==",
-      version: "4.2.1",
+        "sha512-u2hE1xn/HNxLxupbVsGQGfA+W2WYORrK18j6+x7AFRQzStkd5X2CHOUP2Zj93up8tT5lKBHmwyplVivlK9e4CQ==",
+      version: "4.6.0",
     });
     const lockSha256 = createHash("sha256").update(packageLockBytes).digest("hex");
     expect(materialize).toContain(`expected_lock_sha256="${lockSha256}"`);

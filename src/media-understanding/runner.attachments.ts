@@ -5,7 +5,7 @@ import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy"
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
-import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
+import { getSessionSafeDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { normalizeMediaFacts } from "../media/media-facts.js";
 import {
   MediaAttachmentCache,
@@ -41,7 +41,11 @@ export function resolveMediaAttachmentLocalRoots(params: {
     fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
   );
   return mergeInboundPathRoots(
-    getDefaultMediaLocalRoots(),
+    // Session-safe defaults: the shared sandboxes parent (and sibling sandboxes) never becomes an
+    // attachment-read root just because the process default list contains it, and the shared
+    // workspace parent is dropped whenever the caller's session workspace lives elsewhere
+    // (e.g. an active sandbox).
+    getSessionSafeDefaultMediaLocalRoots(params.workspaceDir),
     workspaceDirs,
     params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),

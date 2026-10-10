@@ -20,6 +20,8 @@ These tool-visibility and exec rules describe OpenClaw-managed tools. Native har
 
 Required workspace roots and sandbox restrictions still constrain file tools in `full` mode. Memory-flush runs expose only `read` and append-only `write`.
 
+Control UI file previews follow this filesystem boundary; opening files outside the session root also requires current permission to start a turn in that session.
+
 In `workspace` mode, an exec reviewer denial returns a reason to the agent without creating a human approval card. The agent must choose a materially safer alternative or ask the user; it must not work around the denial. Reviewer `ask` verdicts and review failures request human approval. Three consecutive gateway reviewer denials also escalate to a human. Existing command-binding checks and explicit human-approval requirements remain in force; see [Exec modes](/tools/exec#modes).
 
 Gateway approval-backed commands bind every resolved command-segment executable before review and re-check it before launch: protected executables use resolved real-path identity only, while writable executables also use a content hash. Node identity checks cover local policy evaluation through dispatch, with a [remote shell-wrapper approval limitation](/tools/exec-approvals-advanced#interpreter%2Fruntime-commands). POSIX login or interactive shell wrappers skip auto-review and require human approval when binding succeeds; existing binding rejections remain denied. Their implicit startup files are outside operand binding.
@@ -46,8 +48,11 @@ When a regular agent delegates a persistent change through its `openclaw` tool,
 the host applies the requesting run's effective permission policy to the exact
 proposed operation. Full Access applies it automatically without an approval
 prompt, including when Full Access comes from the configured default rather than
-an explicit session mode. Restricted runs still require human approval in the
-OpenClaw operator UI; conversational claims of approval never authorize the change.
+an explicit session mode. Restricted runs from messaging channels ask the
+requesting chat for approval: native approval cards where the channel supports
+them, otherwise a `/approve <id> allow-once|deny` reply. Webchat and terminal runs
+decide in the Control UI or apps, which can also decide any chat's approval.
+Free-text replies such as "yes" never authorize the change.
 The requesting tool waits for the human decision and application outcome. Stopping
 the run cancels its pending approval; approving later cannot revive that run.
 
@@ -59,7 +64,7 @@ handoffs still need a direct operator session. See
 
 ## Change permissions during a task
 
-Choose a mode from the chat composer's **Permissions** menu. The picker immediately shows the selected mode's icon and label while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until the next session update rather than restoring a potentially stale mode.
+Choose a mode from the chat composer's **Execution permissions** menu. The icon-only picker immediately shows the selected mode's icon while the change settles, and temporarily blocks another selection for that session. Other clients see the mode after the Gateway publishes the updated session. If the change fails, the picker reconciles with the authoritative session state and shows an error; if that state cannot be refreshed yet, it keeps the optimistic selection until a fresh permission read or update for that session confirms the saved mode.
 
 - **Codex:** OpenClaw interrupts the active native turn and stops its background terminals, then continues in the same conversation with the new permissions and an internal **Permission change** notice. It does not reset the conversation or replay the original request.
 - **OpenClaw native runtime:** OpenClaw refreshes the active tool policy without restarting the conversation. Subsequent tool calls use the updated permissions.

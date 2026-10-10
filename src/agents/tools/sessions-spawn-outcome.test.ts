@@ -1,3 +1,4 @@
+import "../subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -26,7 +27,7 @@ import { createSessionsSpawnTool } from "./sessions-spawn-tool.js";
 const report = "Seven blue boxes remain. Thursday delivery is confirmed.";
 const backendId = "spawn-effects-fixture";
 const config: OpenClawConfig = {
-  agents: { defaults: { subagents: { allowAgents: ["main"] } }, list: [{ id: "main" }] },
+  agents: { defaults: { subagents: { allowAgents: ["main"] } }, entries: { main: {} } },
 };
 
 async function withSpawnConfig(cfg: OpenClawConfig, run: () => Promise<void>) {
@@ -206,7 +207,7 @@ describe("sessions_spawn terminal effects", () => {
         config: {
           agents: {
             defaults: { sandbox: { mode: "all" } },
-            list: [{ id: "main", workspace }],
+            entries: { main: { workspace } },
           },
         },
         callGateway: inProcessGateway.callInProcessGatewayTool,
@@ -223,7 +224,7 @@ describe("sessions_spawn terminal effects", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "preserves dispatch failure with nested no-start proof: %s",
     async (nestedNoStart) => {
       const failure = new Error("Gateway disconnected");

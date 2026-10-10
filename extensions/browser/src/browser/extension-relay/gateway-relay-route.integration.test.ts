@@ -19,6 +19,7 @@ import {
   stopBrowserControlService,
 } from "../../control-service.js";
 import { buildBrowserExtensionPairing } from "../extension-pairing.js";
+import { getGatewayExtensionRelayModule } from "../extension-relay.runtime.js";
 import { runExtensionRelayDaemon } from "../relay-daemon.js";
 import { getFreePort } from "../test-port.js";
 import {
@@ -33,7 +34,6 @@ import {
   BROWSER_RELAY_AUTH_CHALLENGE_PATH,
   BROWSER_RELAY_AUTH_COMPLETE_PATH,
 } from "./auth-v2.js";
-import { handleGatewayExtensionUpgrade } from "./gateway-relay-route.js";
 import { RawHttpConnection } from "./relay-http.test-support.js";
 
 const getPluginRuntimeGatewayRequestScopeMock = vi.hoisted(() => vi.fn());
@@ -238,6 +238,7 @@ describe("local Gateway extension relay wakeup", { concurrent: false }, () => {
             };
             const coalesced =
               legacy === "head" ? encodeUpgradeHead([EXTENSION_HELLO, inventory]) : undefined;
+            const { handleGatewayExtensionUpgrade } = await getGatewayExtensionRelayModule();
             const gatewayServer = http.createServer((_req, res) => {
               res.writeHead(426);
               res.end();

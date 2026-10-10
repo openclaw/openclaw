@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
@@ -79,14 +81,13 @@ type ConcurrencyWorkerMessage =
   | { phase: "ready"; requestId: number; value: unknown }
   | { phase: "result"; requestId: number; value: unknown };
 
-// Cold tsx/module loading competes with other CI shards. Pay that cost once
-// with a process-start budget, while keeping each concurrency handshake tight.
+// Module compilation belongs to invocation preparation; retain native startup and handshake guards.
 const WORKER_BOOT_TIMEOUT_MS = 30_000;
 const SCENARIO_TIMEOUT_MS = 10_000;
 const SESSION_KEY = "agent:main:main";
 const AGENT_ID = "main";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-// Preserve the OS-process boundary while paying tsx/module startup once per file.
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-reply-init-");
+// Preserve one OS-process boundary per file.
 // Every request still uses an isolated store path.
 let concurrencyWorker: ReturnType<typeof spawn> | undefined;
 let nextRequestId = 0;
@@ -114,7 +115,7 @@ function waitForProceed(requestId) {
 }
 
 async function runReplyInit(request) {
-  const snapshot = loadReplySessionInitializationSnapshot({
+  const snapshot = await loadReplySessionInitializationSnapshot({
     agentId: AGENT_ID,
     sessionKey: SESSION_KEY,
     storePath: request.storePath,
@@ -306,17 +307,14 @@ async function getConcurrencyWorker(): Promise<ReturnType<typeof spawn>> {
   if (concurrencyWorker) {
     return concurrencyWorker;
   }
-  const sessionAccessorUrl = pathToFileURL(
-    path.resolve("src/config/sessions/session-accessor.ts"),
-  ).href;
+  const sessionAccessorUrl = resolveRuntimeWorkerUrl(sessionNativeProcessEntrypoints.accessor);
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(sessionAccessorUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
-      createConcurrencyWorkerScript(sessionAccessorUrl),
+      createConcurrencyWorkerScript(sessionAccessorUrl.href),
     ],
     { stdio: ["ignore", "pipe", "pipe", "ipc"] },
   );
@@ -459,62 +457,58 @@ describe("session accessor cross-process concurrency", () => {
   });
 
   it("commits after same-session activity from another process", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-reply-init-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
-    try {
-      await upsertSessionEntryCore(
-        { sessionKey: SESSION_KEY, storePath },
-        {
-          sessionId: "existing-session",
-          updatedAt: Date.now(),
-        },
-      );
-      const initialUpdatedAt = loadSessionEntry({
-        readConsistency: "latest",
-        sessionKey: SESSION_KEY,
-        storePath,
-      })?.updatedAt;
-      if (typeof initialUpdatedAt !== "number") {
-        throw new Error("initial session timestamp was not persisted");
-      }
-      const activeTurnUpdatedAt = initialUpdatedAt + 20;
-      const preparedUpdatedAt = initialUpdatedAt + 30;
+    await upsertSessionEntryCore(
+      { sessionKey: SESSION_KEY, storePath },
+      {
+        sessionId: "existing-session",
+        updatedAt: Date.now(),
+      },
+    );
+    const initialUpdatedAt = loadSessionEntry({
+      readConsistency: "latest",
+      sessionKey: SESSION_KEY,
+      storePath,
+    })?.updatedAt;
+    if (typeof initialUpdatedAt !== "number") {
+      throw new Error("initial session timestamp was not persisted");
+    }
+    const activeTurnUpdatedAt = initialUpdatedAt + 20;
+    const preparedUpdatedAt = initialUpdatedAt + 30;
 
-      const result = await runConcurrencyScenario(
-        {
-          kind: "reply-init",
-          preparedUpdatedAt,
-          storePath,
-        },
-        async (snapshot) => {
-          expect(snapshot.revision).toBe(JSON.stringify({ sessionId: "existing-session" }));
-          await updateSessionEntry(
-            { sessionKey: SESSION_KEY, storePath },
-            () => ({ updatedAt: activeTurnUpdatedAt }),
-            { skipMaintenance: true },
-          );
-        },
-      );
-      expect(result).toMatchObject({
-        ok: true,
-        sessionEntry: {
-          sessionId: "existing-session",
-          updatedAt: preparedUpdatedAt,
-        },
-      });
-      expect(
-        loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
-      ).toMatchObject({
+    const result = await runConcurrencyScenario(
+      {
+        kind: "reply-init",
+        preparedUpdatedAt,
+        storePath,
+      },
+      async (snapshot) => {
+        expect(snapshot.revision).toBe(JSON.stringify({ sessionId: "existing-session" }));
+        await updateSessionEntry(
+          { sessionKey: SESSION_KEY, storePath },
+          () => ({ updatedAt: activeTurnUpdatedAt }),
+          { skipMaintenance: true },
+        );
+      },
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      sessionEntry: {
         sessionId: "existing-session",
         updatedAt: preparedUpdatedAt,
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+      },
+    });
+    expect(
+      loadSessionEntry({ readConsistency: "latest", sessionKey: SESSION_KEY, storePath }),
+    ).toMatchObject({
+      sessionId: "existing-session",
+      updatedAt: preparedUpdatedAt,
+    });
   }, 15_000);
 
   it("rejects a transcript rewrite after another process commits an append", async () => {
-    const tempDir = tempDirs.make("openclaw-transcript-rewrite-");
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "cross-process-transcript";
     const scope = {
@@ -523,100 +517,64 @@ describe("session accessor cross-process concurrency", () => {
       sessionKey: SESSION_KEY,
       storePath,
     };
-    try {
-      await upsertSessionEntryCore(scope, {
-        sessionId,
-        updatedAt: Date.now(),
-      });
-      await replaceTranscriptEvents(scope, [
-        { type: "session", version: 3, id: sessionId },
-        {
-          type: "message",
-          id: "rewrite-target",
-          parentId: null,
-          message: { role: "assistant", content: "original content" },
-        },
-      ]);
-
-      const result = await runConcurrencyScenario(
-        {
-          kind: "transcript-rewrite",
-          rewriteMode: "read-then-replace",
-          sessionId,
-          storePath,
-        },
-        async (ready) => {
-          expect(ready).toEqual({ eventCount: 2 });
-          await appendTranscriptMessage(scope, {
-            cwd: tempDir,
-            message: {
-              role: "user",
-              content: "committed concurrent append",
-              timestamp: Date.now(),
-            },
-          });
-        },
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        name: "SqliteTranscriptMutationConflictError",
-        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
-      });
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        { type: "session", version: 3, id: sessionId },
-        {
-          type: "message",
-          id: "rewrite-target",
-          parentId: null,
-          message: { role: "assistant", content: "original content" },
-        },
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({
-            role: "user",
-            content: "committed concurrent append",
-          }),
-        }),
-      ]);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  }, 15_000);
-
-  it("preserves locked replaceEvents without a prior readEvents call", async () => {
-    const tempDir = tempDirs.make("openclaw-transcript-replace-");
-    const storePath = path.join(tempDir, "sessions.json");
-    const sessionId = "replace-without-read";
-    const scope = {
-      agentId: AGENT_ID,
+    await upsertSessionEntryCore(scope, {
       sessionId,
-      sessionKey: SESSION_KEY,
-      storePath,
-    };
-    const replacement = [
+      updatedAt: Date.now(),
+    });
+    await replaceTranscriptEvents(scope, [
       { type: "session", version: 3, id: sessionId },
       {
         type: "message",
-        id: "replacement",
+        id: "rewrite-target",
         parentId: null,
-        message: { role: "assistant", content: "replacement content" },
+        message: { role: "assistant", content: "original content" },
       },
-    ];
+    ]);
 
-    try {
-      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-      await withTranscriptWriteLock(scope, async (transcript) => {
-        await transcript.replaceEvents(replacement);
-      });
-
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual(replacement);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
+    const result = await runConcurrencyScenario(
+      {
+        kind: "transcript-rewrite",
+        rewriteMode: "read-then-replace",
+        sessionId,
+        storePath,
+      },
+      async (ready) => {
+        expect(ready).toEqual({ eventCount: 2 });
+        await appendTranscriptMessage(scope, {
+          cwd: tempDir,
+          message: {
+            role: "user",
+            content: "committed concurrent append",
+            timestamp: Date.now(),
+          },
+        });
+      },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      name: "SqliteTranscriptMutationConflictError",
+      message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "rewrite-target",
+        parentId: null,
+        message: { role: "assistant", content: "original content" },
+      },
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "user",
+          content: "committed concurrent append",
+        }),
+      }),
+    ]);
+  }, 15_000);
 
   it("guards a second replace after replacing without a prior read", async () => {
-    const tempDir = tempDirs.make("openclaw-transcript-double-replace-");
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "double-replace-without-read";
     const scope = {
@@ -634,49 +592,45 @@ describe("session accessor cross-process concurrency", () => {
         message: { role: "assistant", content: "first replacement" },
       },
     ];
-    try {
-      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-      const result = await runConcurrencyScenario(
-        {
-          kind: "transcript-rewrite",
-          rewriteMode: "replace-twice",
-          sessionId,
-          storePath,
-        },
-        async (ready) => {
-          expect(ready).toEqual({ eventCount: 2 });
-          await appendTranscriptMessage(scope, {
-            cwd: tempDir,
-            eventId: "concurrent-append",
-            message: { role: "user", content: "concurrent append" },
-            parentId: "first-replacement",
-          });
-        },
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        name: "SqliteTranscriptMutationConflictError",
-        message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
-      });
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        ...firstReplacement,
-        expect.objectContaining({
-          type: "message",
-          id: "concurrent-append",
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+    const result = await runConcurrencyScenario(
+      {
+        kind: "transcript-rewrite",
+        rewriteMode: "replace-twice",
+        sessionId,
+        storePath,
+      },
+      async (ready) => {
+        expect(ready).toEqual({ eventCount: 2 });
+        await appendTranscriptMessage(scope, {
+          cwd: tempDir,
+          eventId: "concurrent-append",
+          message: { role: "user", content: "concurrent append" },
           parentId: "first-replacement",
-          message: expect.objectContaining({
-            role: "user",
-            content: "concurrent append",
-          }),
+        });
+      },
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      name: "SqliteTranscriptMutationConflictError",
+      message: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
+    });
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      ...firstReplacement,
+      expect.objectContaining({
+        type: "message",
+        id: "concurrent-append",
+        parentId: "first-replacement",
+        message: expect.objectContaining({
+          role: "user",
+          content: "concurrent append",
         }),
-      ]);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+      }),
+    ]);
   }, 15_000);
 
   it("refreshes a read snapshot after an append in the same locked callback", async () => {
-    const tempDir = tempDirs.make("openclaw-transcript-self-append-");
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionId = "rewrite-after-own-append";
     const scope = {
@@ -686,60 +640,56 @@ describe("session accessor cross-process concurrency", () => {
       storePath,
     };
 
-    try {
-      await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
-      await replaceTranscriptEvents(scope, [
-        { type: "session", version: 3, id: sessionId },
-        {
-          type: "message",
-          id: "rewrite-target",
-          parentId: null,
-          message: { role: "assistant", content: "original content" },
-        },
-      ]);
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+    await replaceTranscriptEvents(scope, [
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "rewrite-target",
+        parentId: null,
+        message: { role: "assistant", content: "original content" },
+      },
+    ]);
 
-      await withTranscriptWriteLock(scope, async (transcript) => {
-        await transcript.readEvents();
-        await transcript.appendMessage({
-          cwd: tempDir,
-          eventId: "owned-append",
-          message: { role: "user", content: "owned append" },
-          parentId: "rewrite-target",
-        });
-        const currentEvents = await loadTranscriptEvents(scope);
-        const rewrittenEvents = currentEvents.map((event) => {
-          if (
-            typeof event !== "object" ||
-            event === null ||
-            Array.isArray(event) ||
-            (event as { id?: unknown }).id !== "rewrite-target"
-          ) {
-            return event;
-          }
-          return Object.assign({}, event, {
-            message: { role: "assistant", content: "rewritten content" },
-          });
-        });
-        await transcript.replaceEvents(rewrittenEvents);
+    await withTranscriptWriteLock(scope, async (transcript) => {
+      await transcript.readEvents();
+      await transcript.appendMessage({
+        cwd: tempDir,
+        eventId: "owned-append",
+        message: { role: "user", content: "owned append" },
+        parentId: "rewrite-target",
       });
-
-      await expect(loadTranscriptEvents(scope)).resolves.toEqual([
-        { type: "session", version: 3, id: sessionId },
-        {
-          type: "message",
-          id: "rewrite-target",
-          parentId: null,
+      const currentEvents = await loadTranscriptEvents(scope);
+      const rewrittenEvents = currentEvents.map((event) => {
+        if (
+          typeof event !== "object" ||
+          event === null ||
+          Array.isArray(event) ||
+          (event as { id?: unknown }).id !== "rewrite-target"
+        ) {
+          return event;
+        }
+        return Object.assign({}, event, {
           message: { role: "assistant", content: "rewritten content" },
-        },
-        expect.objectContaining({
-          type: "message",
-          id: "owned-append",
-          parentId: "rewrite-target",
-          message: { role: "user", content: "owned append" },
-        }),
-      ]);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+        });
+      });
+      await transcript.replaceEvents(rewrittenEvents);
+    });
+
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      { type: "session", version: 3, id: sessionId },
+      {
+        type: "message",
+        id: "rewrite-target",
+        parentId: null,
+        message: { role: "assistant", content: "rewritten content" },
+      },
+      expect.objectContaining({
+        type: "message",
+        id: "owned-append",
+        parentId: "rewrite-target",
+        message: { role: "user", content: "owned append" },
+      }),
+    ]);
   });
 });

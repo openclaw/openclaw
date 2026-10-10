@@ -23,7 +23,7 @@ export type PluginSourceCacheRecord = {
 
 type PluginPublicSurfaceBoundary = { boundaryLabel: string; rejectHardlinks: boolean };
 
-type PluginRootArtifactCache = {
+export type PluginRootArtifactCache = {
   publicSurfaceBoundary?: PluginPublicSurfaceBoundary;
   artifactLoadsInProgress: Set<string>;
   artifacts: Map<string, PluginArtifactLocation | null>;
@@ -40,26 +40,9 @@ type PluginRootArtifactCache = {
   entryPaths: Map<string, { path: string } | { error: Error }>;
 };
 
-export function createPluginCacheArtifacts(): {
+export type PluginCacheArtifacts = {
   moduleLoaders: Map<string, PluginModuleLoader>;
   sources: Map<string, PluginSourceCacheRecord>;
   sourceAliases: Map<string, string>;
   runtimeRecordRoots: WeakMap<object, { rootDir: string; resolvedRootDir: string; prefix: string }>;
-} {
-  return {
-    moduleLoaders: new Map(),
-    sources: new Map(),
-    sourceAliases: new Map(),
-    runtimeRecordRoots: new WeakMap(),
-  };
-}
-
-export function createPluginRootArtifacts(): PluginRootArtifactCache {
-  return {
-    artifactLoadsInProgress: new Set<string>(),
-    artifacts: new Map<string, PluginArtifactLocation | null>(),
-    runtimeArtifacts: new Map(),
-    entryBoundaries: new Map(),
-    entryPaths: new Map(),
-  };
-}
+};

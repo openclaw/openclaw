@@ -3,18 +3,19 @@
  *
  * Resolves platform shell commands and sanitizes binary output.
  */
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
+import { resolveExecutableFromPathEnv } from "../infra/executable-path.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getBinDir } from "./config.js";
 
 type ShellConfig = {
   shell: string;
   args: string[];
-} & ({ commandTransport: "argv" } | { commandTransport: "stdin" });
+  commandTransport: "argv" | "stdin";
+};
 
 type ShellCommandInvocation =
   | { argv: [string, ...string[]]; input?: undefined; stdin: "ignore" }
@@ -200,25 +201,14 @@ export function getShellConfig(customShellPath?: string): ShellConfig {
   }
 
   const rawEnvShell = process.env.SHELL?.trim();
-  const envShell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
-  const shellName = envShell ? path.basename(envShell) : "";
+  let shell = rawEnvShell && !isNonInteractiveShell(rawEnvShell) ? rawEnvShell : undefined;
   // Fish rejects common bashisms used by tools, so prefer bash when detected.
-  if (shellName === "fish") {
-    const bash = resolveShellFromPath("bash");
-    if (bash) {
-      return createArgvShellConfig(bash, getPosixShellArgs(bash));
-    }
-    const sh = resolveShellFromPath("sh");
-    if (sh) {
-      return createArgvShellConfig(sh, getPosixShellArgs(sh));
-    }
-  }
-  if (envShell) {
-    return createArgvShellConfig(envShell, getPosixShellArgs(envShell));
+  if (shell && path.basename(shell) === "fish") {
+    shell = resolveShellFromPath("bash") ?? resolveShellFromPath("sh") ?? shell;
   }
   // Placeholder SHELL (or unset): prefer a resolved sh/bash on PATH so we do not
   // re-invoke the placeholder and get a spurious exitCode=1.
-  const shell = resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
+  shell ??= resolveShellFromPath("sh") ?? resolveShellFromPath("bash") ?? "sh";
   return createArgvShellConfig(shell, getPosixShellArgs(shell));
 }
 
@@ -242,12 +232,19 @@ export function getBashShellConfig(customShellPath?: string): ShellConfig {
     return resolveBashCommandConfig("/bin/bash");
   }
 
-  const shell =
-    resolveShellFromPath("bash") ??
-    resolveShellFromWhich("bash") ??
-    resolveShellFromPath("sh") ??
-    "sh";
-  return resolveBashCommandConfig(shell);
+  let shell = resolveShellFromPath("bash");
+  if (!shell) {
+    try {
+      // The which fallback also searched cwd for empty PATH entries.
+      shell = resolveExecutableFromPathEnv("bash", process.env.PATH ?? "", process.env, {
+        cwd: process.cwd(),
+        useCache: false,
+      });
+    } catch {
+      // An unavailable cwd must not prevent the remaining sh fallback.
+    }
+  }
+  return resolveBashCommandConfig(shell ?? resolveShellFromPath("sh") ?? "sh");
 }
 
 function resolveShellFromPath(
@@ -273,26 +270,6 @@ function resolveShellFromPath(
     }
   }
   return undefined;
-}
-
-function resolveShellFromWhich(name: string): string | undefined {
-  if (process.platform === "win32") {
-    return undefined;
-  }
-  try {
-    const result = spawnSync("which", [name], {
-      encoding: "utf8",
-      timeout: 5_000,
-      windowsHide: true,
-    });
-    if (result.status !== 0 || !result.stdout) {
-      return undefined;
-    }
-    const firstMatch = result.stdout.trim().split(/\r?\n/)[0]?.trim();
-    return firstMatch || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function normalizeShellName(value: string): string {
@@ -375,9 +352,6 @@ export function createStreamingBinaryOutputSanitizer(
 
 function sanitizeStrippedBinaryOutput(text: string): string {
   const scrubbed = text.replace(/[\p{Format}\p{Surrogate}]/gu, "");
-  if (!scrubbed) {
-    return scrubbed;
-  }
   return scrubbed.replace(/\p{Cc}/gu, (control) =>
     control === "\t" || control === "\n" || control === "\r"
       ? control

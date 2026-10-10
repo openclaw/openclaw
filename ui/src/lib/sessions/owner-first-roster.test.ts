@@ -7,7 +7,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
+const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 describe("owner-first session roster plan", () => {
   it("retains owner and appended shared pages when an event replaces the list", async () => {

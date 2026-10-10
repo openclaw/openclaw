@@ -1,10 +1,12 @@
+// Keep transient network policy aligned across retries and process-level handling.
+// Release harness scripts reach this via src/infra/clawhub-retry.ts from release-target cwds
+// without tsconfig paths or built workspace dist; keep these imports source-relative.
 import {
   collectNestedErrorCandidates,
   extractErrorCodeOrErrno,
   readErrorName,
-} from "@openclaw/normalization-core/error-coercion";
-// Keep transient network policy aligned across retries and process-level handling.
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+} from "../../../normalization-core/src/error-coercion.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../normalization-core/src/string-coerce.js";
 
 export const WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE = "ERR_WEBSOCKET_NON_RETRYABLE_CLOSE";
 
@@ -64,13 +66,9 @@ const RETRYABLE_CONNECTION_ERROR_CODE_RE =
   /\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EHOSTUNREACH|ENETUNREACH|EAI_AGAIN|UND_ERR_SOCKET)\b/i;
 
 function isWrappedFetchFailedMessage(message: string): boolean {
-  if (message === "fetch failed") {
-    return true;
-  }
-
   // Keep wrapped variants (for example "...: fetch failed") while avoiding broad
   // matches like "Web fetch failed (404): ..." that are not transport failures.
-  return /:\s*fetch failed$/.test(message);
+  return message === "fetch failed" || /:\s*fetch failed$/.test(message);
 }
 
 export function hasRetryableConnectionErrorCode(message: string): boolean {
@@ -110,13 +108,11 @@ export function isTransientNetworkError(err: unknown): boolean {
     if (!message) {
       continue;
     }
-    if (TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message)) {
-      return true;
-    }
-    if (isWrappedFetchFailedMessage(message)) {
-      return true;
-    }
-    if (TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
+    if (
+      TRANSIENT_NETWORK_MESSAGE_CODE_RE.test(message) ||
+      isWrappedFetchFailedMessage(message) ||
+      TRANSIENT_NETWORK_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))
+    ) {
       return true;
     }
   }

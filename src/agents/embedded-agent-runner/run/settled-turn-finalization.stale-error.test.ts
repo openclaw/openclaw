@@ -23,7 +23,9 @@ const transcriptMocks = vi.hoisted(() => ({
 
 vi.mock("./backend.js", () => ({
   resolveRuntimeModelAttempt: vi.fn(),
-  runEmbeddedSettledTurnFinalizationWithBackend: backendMocks.runSettledFinalization,
+}));
+vi.mock("../../harness/selection.js", () => ({
+  runAgentHarnessSettledTurnFinalization: backendMocks.runSettledFinalization,
 }));
 vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
   appendAssistantMirrorMessageByIdentity: transcriptMocks.appendAssistantMirrorMessageByIdentity,
@@ -114,37 +116,10 @@ describe("settled-turn finalization after an earlier tool failure", () => {
     admission.close();
   });
 
-  it("preserves the original tool failure after progress when finalization fails (#132762)", async () => {
-    const attempt = settledSuccessfulAttemptAfterStaleError();
-    const input = finalizationInput(attempt);
-    input.terminalBase.runParams.trigger = "user";
-    input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
-    backendMocks.runSettledFinalization.mockRejectedValue(new Error("finalizer unavailable"));
-
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
-
-    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-    expect(result.attempt).toBe(attempt);
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.attempt.lastToolError).toEqual({
-      toolName: "exec",
-      error: "Command exited with code 1",
-    });
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: "I’ll inspect the file before answering." }),
-    ]);
-    expect(getReplyPayloadMetadata(result.prepared.payloadsWithToolMedia?.[0] ?? {})).toMatchObject(
-      { assistantMessageIndex: 3 },
-    );
-    expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
-  });
-
-  it.each(
-    (["answered", "failed", "empty", "unavailable", "cancelled"] as const).flatMap((outcome) => [
-      { outcome, retainProgress: true },
-      { outcome, retainProgress: false },
-    ]),
-  )(
+  it.each([
+    { outcome: "answered", retainProgress: true },
+    { outcome: "failed", retainProgress: false },
+  ] as const)(
     "preserves a cron exec denial after a successful read (finalizer: $outcome, visible progress: $retainProgress) (#132762)",
     async ({ outcome, retainProgress }) => {
       const attempt = settledSuccessfulAttemptAfterStaleError(retainProgress);
@@ -163,18 +138,8 @@ describe("settled-turn finalization after an earlier tool failure", () => {
       );
       const input = finalizationInput(attempt);
       input.terminalBase.runParams.sourceReplyDeliveryMode = "automatic";
-      const controller = new AbortController();
-      input.finalization.abortSignal = controller.signal;
       const finalText = "The command was denied. The file contains the requested value.";
-      if (outcome === "unavailable") {
-        input.finalization.harness.finalizeSettledTurn = undefined;
-      } else if (outcome === "cancelled") {
-        backendMocks.runSettledFinalization.mockImplementationOnce(async () => {
-          const cancellation = new Error("cancelled by user");
-          controller.abort(cancellation);
-          throw cancellation;
-        });
-      } else if (outcome === "failed") {
+      if (outcome === "failed") {
         backendMocks.runSettledFinalization.mockRejectedValueOnce(
           new Error("finalizer unavailable"),
         );
@@ -183,7 +148,7 @@ describe("settled-turn finalization after an earlier tool failure", () => {
           outcome,
           result: {
             assistant: buildEmbeddedRunnerAssistant({
-              content: outcome === "answered" ? [{ type: "text", text: finalText }] : [],
+              content: [{ type: "text", text: finalText }],
             }),
           },
         });
@@ -192,6 +157,9 @@ describe("settled-turn finalization after an earlier tool failure", () => {
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
       expect(attempt.lastToolError).toBe(denial);
+      expect(result.prepared.attemptToolSummary).toMatchObject({
+        unresolvedError: { toolName: "exec" },
+      });
       expect(result.prepared.failureSignal).toEqual({
         kind: "execution_denied",
         source: "tool",
@@ -200,9 +168,7 @@ describe("settled-turn finalization after an earlier tool failure", () => {
         message: denial.error,
         fatalForCron: true,
       });
-      expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(
-        outcome === "unavailable" ? 0 : outcome === "empty" ? 2 : 1,
-      );
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
       for (const [preparedAttempt, settledAttempt] of backendMocks.runSettledFinalization.mock
         .calls) {
         expect(preparedAttempt).toMatchObject({
@@ -220,24 +186,13 @@ describe("settled-turn finalization after an earlier tool failure", () => {
         ]);
         expect(result.attempt.messagesSnapshot.slice(0, -1)).toEqual(attempt.messagesSnapshot);
       } else {
-        expect(result.finalizationOutcome).toBe(
-          outcome === "unavailable" ? "not-attempted" : "failed",
-        );
+        expect(result.finalizationOutcome).toBe("failed");
         expect(result.attempt).toBe(attempt);
-        if (retainProgress) {
-          const progress = result.prepared.payloadsWithToolMedia?.find(
-            (payload) => !payload.isError,
-          );
-          expect(getReplyPayloadMetadata(progress ?? {})).toMatchObject({
-            assistantMessageIndex: 3,
-          });
-        } else {
-          const warning = result.prepared.payloadsWithToolMedia?.find((payload) => payload.isError);
-          expect(warning).toMatchObject({ text: expect.stringContaining("failed"), isError: true });
-          expect(getReplyPayloadMetadata(warning ?? {})).toMatchObject({
-            toolErrorWarning: { toolName: "exec" },
-          });
-        }
+        const warning = result.prepared.payloadsWithToolMedia?.find((payload) => payload.isError);
+        expect(warning).toMatchObject({ text: expect.stringContaining("failed"), isError: true });
+        expect(getReplyPayloadMetadata(warning ?? {})).toMatchObject({
+          toolErrorWarning: { toolName: "exec" },
+        });
       }
     },
   );

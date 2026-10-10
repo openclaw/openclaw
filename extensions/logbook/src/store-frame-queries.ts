@@ -2,7 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   prepareSqliteQuerySync,
   type getNodeSqliteKysely,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { MAX_FRAMES_PER_CALL } from "./analyze.js";
 import type { LogbookDatabase, toFrame } from "./store-schema.js";
 

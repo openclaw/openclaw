@@ -192,6 +192,54 @@ describe("runMessageAction plugin dispatch", () => {
       expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
     });
 
+    it("cancels caller receipts when the final local handoff rejects before Gateway dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat rejected handoff test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      const receipt = {
+        sessionId: "session-1",
+        sessionKey: "agent:main:gatewaychat:direct:user-123",
+        sourceTurnId: "source-turn-1",
+        storePath: "/tmp/sessions.json",
+        toolCallId: "message-call-1",
+      };
+      let actionCurrent = true;
+      mocks.beginTerminalSourceReplyDelivery.mockImplementation(async () => {
+        actionCurrent = false;
+        return receipt;
+      });
+
+      await expect(
+        runMessageAction({
+          cfg: createEnabledMessageActionConfig("gatewaychat"),
+          action: "send",
+          params: { channel: "gatewaychat", target: "user-123", message: "terminal answer" },
+          sourceReplyFinal: true,
+          sourceReplyToolCallId: receipt.toolCallId,
+          gateway: {
+            terminalSourceReplyReceiptOwner: "caller",
+            clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
+          },
+          assertDirectAdapterHandoff: () => {
+            if (!actionCurrent) {
+              throw Object.assign(new Error("current action canceled"), { name: "AbortError" });
+            }
+          },
+          dryRun: false,
+        }),
+      ).rejects.toMatchObject({ name: "PlatformMessageNotDispatchedError" });
+      expect(mocks.cancelTerminalSourceReplyDelivery).toHaveBeenCalledWith(receipt);
+      expect(mocks.callGatewayLeastPrivilege).not.toHaveBeenCalled();
+      expect(mocks.reconcileTerminalSourceReplyDelivery).not.toHaveBeenCalled();
+    });
+
     it("cancels caller receipts after confirmed gateway request rejection", async () => {
       const gatewayPlugin = createGatewayActionPlugin({
         pluginId: "gatewaychat",

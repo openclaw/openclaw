@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import type { AdmissionOperations } from "../infra/sqlite-database-admission.worker.test-support.js";
+import { SqliteWorkerBroker } from "../infra/sqlite-worker-broker.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -6,8 +9,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
+import { readOpenVoiceSessions } from "./client-voice-session-lookup.worker.js";
 import {
   parseStoredVoiceSessionRecord,
+  readVoiceSessionFacts,
   readVoiceSessionRecordInTransaction,
   VOICE_SESSION_RECORD_VERSION,
   writeVoiceSessionRecordInTransaction,
@@ -73,6 +78,139 @@ describe("client voice session store", () => {
         ...original,
         updatedAt: 3,
       });
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await home.restore();
+    }
+  });
+
+  it("filters open lookup candidates in SQL before decoding payloads", async () => {
+    const home = await createTempHomeEnv("openclaw-voice-lookups-");
+    try {
+      const options = { agentId: "main" };
+      const database = openOpenClawAgentDatabase(options);
+      const base = JSON.parse(storedRecord([]));
+      const rows = [
+        { voiceSessionId: "selected" },
+        { voiceSessionId: "closed", status: "closed" },
+        { voiceSessionId: "other", sessionKey: "agent:main:other" },
+        { voiceSessionId: "relay", origin: "relay" },
+        { voiceSessionId: "foreign", agentId: "other" },
+        { voiceSessionId: "recent", sessionKey: "agent:main:recent", updatedAt: 10 },
+        { voiceSessionId: "excluded", sessionKey: "agent:main:excluded" },
+        { voiceSessionId: "invalid", version: 2 },
+      ].map((patch) => Object.assign({}, base, patch));
+      const insert = database.db.prepare(
+        "INSERT INTO cache_entries(scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)",
+      );
+      for (const row of rows) {
+        insert.run(
+          "talk-client-voice-sessions",
+          row.voiceSessionId,
+          JSON.stringify(row),
+          row.updatedAt,
+        );
+      }
+      insert.run("talk-client-voice-sessions", "malformed", "{broken", 1);
+      insert.run("unrelated-cache", "other", "not JSON", 1);
+      const parse = vi.spyOn(JSON, "parse");
+      try {
+        expect(
+          readOpenVoiceSessions(options, {
+            kind: "legacy",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+          }).matches,
+        ).toEqual([{ voiceSessionId: "selected", sessionKey: "agent:main:main" }]);
+        const decoded = () =>
+          parse.mock.calls
+            .map(([value]) => value)
+            .filter((value) => value.includes('"voiceSessionId"'));
+        expect(decoded()).toEqual(
+          expect.arrayContaining([JSON.stringify(rows[0]), JSON.stringify(rows[7])]),
+        );
+        expect(decoded()).toHaveLength(2);
+        parse.mockClear();
+        expect(
+          readOpenVoiceSessions(options, {
+            kind: "stale",
+            agentId: "main",
+            updatedBefore: 1,
+            excludeVoiceSessionId: "excluded",
+          })
+            .matches.map((row) => row.voiceSessionId)
+            .toSorted(),
+        ).toEqual(["foreign", "other", "relay", "selected"]);
+        expect(decoded()).toHaveLength(5);
+        for (const row of [rows[1], rows[5], rows[6]]) {
+          expect(decoded()).not.toContain(JSON.stringify(row));
+        }
+      } finally {
+        parse.mockRestore();
+      }
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await home.restore();
+    }
+  });
+
+  it("refreshes tool facts after local writes, rollback, and worker commits without freshness probes", async () => {
+    const home = await createTempHomeEnv("openclaw-voice-facts-");
+    try {
+      const options = { agentId: "main" };
+      const database = openOpenClawAgentDatabase(options);
+      const original = parseStoredVoiceSessionRecord(storedRecord([]))!;
+      const write = (patch: Partial<typeof original>) =>
+        runOpenClawAgentWriteTransaction(
+          (owner) => writeVoiceSessionRecordInTransaction(owner, { ...original, ...patch }),
+          options,
+        );
+      write({});
+      const probes = trackSqliteStatementExecutions(database.db, ["freshness"], (sql) =>
+        /data_version/iu.test(sql) ? "freshness" : null,
+      );
+      const first = readVoiceSessionFacts("main", "voice-1");
+      expect(first).toMatchObject({ status: "open" });
+      expect(() =>
+        runOpenClawAgentWriteTransaction((owner) => {
+          writeVoiceSessionRecordInTransaction(owner, { ...original, status: "closed" });
+          throw new Error("synthetic rollback");
+        }, options),
+      ).toThrow("synthetic rollback");
+      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ status: "open" });
+      write({ transcriptCapable: true });
+      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({ transcriptCapable: true });
+      const broker = new SqliteWorkerBroker();
+      try {
+        const store = await broker.open<AdmissionOperations>({
+          moduleUrl: new URL(
+            "../infra/sqlite-database-admission.worker.test-support.ts",
+            import.meta.url,
+          ),
+          databasePath: database.path,
+          input: undefined,
+        });
+        await broker.runOperation(store!, (scope) =>
+          scope.execute({
+            type: "writeRows",
+            input: {
+              sql: `UPDATE cache_entries
+            SET value_json = json_set(value_json, '$.status', 'closed', '$.hasUserTranscript', json('true'))
+            WHERE scope = 'talk-client-voice-sessions' AND key = 'voice-1'`,
+            },
+          }),
+        );
+      } finally {
+        await broker.close();
+      }
+      expect(readVoiceSessionFacts("main", "voice-1")).toMatchObject({
+        status: "closed",
+        hasUserTranscript: true,
+      });
+      expect(probes.counts).toEqual({ freshness: 0 });
+      probes.restore();
     } finally {
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();

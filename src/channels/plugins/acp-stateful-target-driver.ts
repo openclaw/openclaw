@@ -1,42 +1,28 @@
 import { resolveAcpSessionTarget } from "../../acp/control-plane/manager.utils.js";
-/**
- * ACP stateful target driver for configured bindings.
- *
- * Ensures ACP-backed bound sessions exist, are ready, and can be reset by Gateway.
- */
-import {
-  ensureConfiguredAcpBindingReadyCore,
-  ensureConfiguredAcpBindingSession,
-} from "../../acp/persistent-bindings.lifecycle.js";
+import { ensureConfiguredAcpBindingSession } from "../../acp/persistent-bindings.lifecycle.js";
 import { resolveConfiguredAcpBindingSpecBySessionKey } from "../../acp/persistent-bindings.resolve.js";
 import { resolveConfiguredAcpBindingSpecFromRecord } from "../../acp/persistent-bindings.types.js";
-import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
-import { resolveSessionEntryAccessTarget } from "../../config/sessions/session-accessor.js";
+import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { performGatewaySessionReset } from "../../gateway/session-reset-service.js";
 import { isAcpSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type {
   ConfiguredBindingResolution,
   StatefulBindingTargetDescriptor,
-} from "./binding-types.js";
-import type {
-  StatefulBindingTargetDriver,
   StatefulBindingTargetResetResult,
-  StatefulBindingTargetReadyResult,
-  StatefulBindingTargetSessionResult,
-} from "./stateful-target-drivers.js";
+} from "./binding-types.js";
 
-function toAcpStatefulBindingTargetDescriptor(params: {
+export async function resolveAcpBindingTargetBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-}): StatefulBindingTargetDescriptor | null {
+}): Promise<StatefulBindingTargetDescriptor | null> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;
   }
-  const target = resolveAcpSessionTarget(params);
-  const stored = readAcpSessionEntry({ cfg: params.cfg, ...target });
+  const target = resolveAcpSessionTarget({ ...params, sessionKey });
+  const stored = await readAcpSessionEntryAsync({ cfg: params.cfg, ...target });
   if (stored?.acp) {
     return {
       kind: "stateful",
@@ -71,10 +57,11 @@ function toAcpStatefulBindingTargetDescriptor(params: {
   };
 }
 
-async function ensureAcpTargetReady(params: {
+export async function ensureConfiguredAcpBindingTargetReady(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
-}): Promise<StatefulBindingTargetReadyResult> {
+}): Promise<{ ok: true } | { ok: false; error: string }> {
   const configuredBinding = resolveConfiguredAcpBindingSpecFromRecord(
     params.bindingResolution.record,
   );
@@ -84,47 +71,30 @@ async function ensureAcpTargetReady(params: {
       error: "Configured ACP binding unavailable",
     };
   }
-  return await ensureConfiguredAcpBindingReadyCore({
+  const result = await ensureConfiguredAcpBindingSession({
+    ...(params.assertActive ? { assertActive: params.assertActive } : {}),
     cfg: params.cfg,
-    configuredBinding: {
-      spec: configuredBinding,
-      record: params.bindingResolution.record,
-    },
+    spec: configuredBinding,
   });
+  return result.ok ? { ok: true } : { ok: false, error: result.error ?? "unknown error" };
 }
 
-async function ensureAcpTargetSession(params: {
-  cfg: OpenClawConfig;
-  bindingResolution: ConfiguredBindingResolution;
-}): Promise<StatefulBindingTargetSessionResult> {
-  const spec = resolveConfiguredAcpBindingSpecFromRecord(params.bindingResolution.record);
-  if (!spec) {
-    return {
-      ok: false,
-      sessionKey: params.bindingResolution.statefulTarget.sessionKey,
-      error: "Configured ACP binding unavailable",
-    };
-  }
-  return await ensureConfiguredAcpBindingSession({
-    cfg: params.cfg,
-    spec,
-  });
-}
-
-async function resetAcpTargetInPlace(params: {
+export async function resetConfiguredAcpBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   bindingTarget: StatefulBindingTargetDescriptor;
   reason: "new" | "reset";
   commandSource?: string;
 }): Promise<StatefulBindingTargetResetResult> {
-  if (
-    resolveSessionEntryAccessTarget({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.bindingTarget.agentId,
-    }).entry?.incognito === true
-  ) {
+  const stored = await readAcpSessionEntryAsync({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.bindingTarget.agentId,
+  });
+  if (stored?.storeReadFailed) {
+    return { ok: false, error: "Session metadata is unavailable; retry after storage is ready." };
+  }
+  if (stored?.entry?.incognito === true) {
     return { ok: false, error: "Incognito sessions cannot reset in place." };
   }
   const result = await performGatewaySessionReset({
@@ -143,6 +113,7 @@ async function resetAcpTargetInPlace(params: {
       ok: true,
       sessionKey: result.key,
       sessionId: result.entry.sessionId,
+      lifecycleRevision: result.entry.lifecycleRevision,
       storePath: result.storePath,
     };
   }
@@ -151,11 +122,3 @@ async function resetAcpTargetInPlace(params: {
     error: result.error.message,
   };
 }
-
-export const acpStatefulBindingTargetDriver: StatefulBindingTargetDriver = {
-  id: "acp",
-  ensureReady: ensureAcpTargetReady,
-  ensureSession: ensureAcpTargetSession,
-  resolveTargetBySessionKey: toAcpStatefulBindingTargetDescriptor,
-  resetInPlace: resetAcpTargetInPlace,
-};

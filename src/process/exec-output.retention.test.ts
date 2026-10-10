@@ -1,16 +1,16 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { execOutputRetentionEntrypoint } from "./retention-runtime.test-support.js";
 
 it("releases discarded backing buffers while capped commands are still running", async ({
   signal,
 }) => {
   const result = await runNodeScript(
-    [
+    (workerArgv) => [
       "--expose-gc",
-      "--import",
-      "tsx",
-      fileURLToPath(new URL("./exec-output.retention.test-support.ts", import.meta.url)),
+      ...workerArgv(resolveRuntimeWorkerUrl(execOutputRetentionEntrypoint)),
     ],
     { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
     15_000,

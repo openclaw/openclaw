@@ -1,5 +1,4 @@
 import { vi } from "vitest";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
@@ -69,9 +68,9 @@ export function gatewayContext(
     basePath,
     gateway: {
       connection: { gatewayUrl: "" },
-      snapshot: { client },
+      snapshot: { client, phase: "connected" },
     },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 export async function settleCells(view: OpenClawBoardView): Promise<OpenClawBoardWidgetCell[]> {
@@ -91,7 +90,7 @@ export async function mount(
     activeTabId?: string;
     callbacks?: BoardViewCallbacks;
     widgetFrameUrl?: (name: string, revision: number) => string;
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     canMutate?: boolean;
     canGrant?: boolean;
   } = {},

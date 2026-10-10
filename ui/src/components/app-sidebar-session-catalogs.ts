@@ -9,7 +9,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
-import { repoName } from "../lib/session-display.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
@@ -79,11 +79,11 @@ export function findCatalogSessionHovercardRow(params: {
             ? branch || session.pullRequest
               ? {
                   kind: "project",
-                  name: repoName(cwd),
+                  name: pathDisplayName(cwd),
                   path: cwd,
                   ...(branch ? { branch } : {}),
                 }
-              : { kind: "workspace", name: repoName(cwd), path: cwd }
+              : { kind: "workspace", name: pathDisplayName(cwd), path: cwd }
             : params.liveRow?.workContext,
         };
       }
@@ -108,18 +108,6 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   return keys;
 }
 
-/** Catalogs the sidebar actually renders. Adopted-key exclusion must read this
-    same projection: excluding a key whose catalog is hidden (or whose section
-    the archived filter suppresses) deletes the session from the entire sidebar
-    with no row anywhere. */
-export function visibleSessionCatalogProjection(
-  catalogs: readonly SessionCatalog[],
-  hiddenCatalogIds: ReadonlySet<string>,
-  archivedFilter: boolean,
-): SessionCatalog[] {
-  return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
-}
-
 export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   const messages = new Set<string>();
   const add = (error: SessionCatalog["error"]) => {
@@ -140,50 +128,45 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
 
 export type SidebarSessionCatalog = SessionCatalog & { visibleHosts: SessionCatalogHost[] };
 
+type SessionVisibilityRow = Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">;
+
 /** Section peers and rendering share the same nonempty, owner-filtered catalogs. */
 export function projectSidebarSessionCatalogs(
   catalogs: readonly SessionCatalog[],
   ownerId: string | null,
   liveRows: readonly GatewaySessionRow[],
+  isSessionHidden?: (row: SessionVisibilityRow) => boolean,
 ): SidebarSessionCatalog[] {
   // The current list wins over cached agent lists, including an unset live owner.
-  const liveOwners = new Map(liveRows.toReversed().map(({ key, owner }) => [key, owner?.actor.id]));
+  const liveRowsByKey = new Map(liveRows.toReversed().map((row) => [row.key, row]));
   return catalogs.flatMap((catalog) => {
-    const visibleHosts = visibleCatalogHosts(catalog.hosts, ownerId, liveOwners);
+    const visibleHosts: SessionCatalogHost[] = [];
+    for (const host of catalog.hosts) {
+      const sessions = host.sessions.filter((session) => {
+        const adoptedRow = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
+        // A committed archive can leave the loaded roster before the catalog refreshes.
+        // Its adopted key still belongs to the canonical session lifecycle owner.
+        if (session.sessionKey && isSessionHidden?.(adoptedRow ?? { key: session.sessionKey })) {
+          return false;
+        }
+        if (!ownerId) {
+          return true;
+        }
+        const effectiveOwnerId = adoptedRow ? adoptedRow.owner?.actor.id : session.createdActor?.id;
+        return effectiveOwnerId === ownerId;
+      });
+      if (sessions.length > 0) {
+        visibleHosts.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
+      }
+    }
     return visibleHosts.length > 0 ? [{ ...catalog, visibleHosts }] : [];
   });
 }
 
-function visibleCatalogHosts(
-  hosts: readonly SessionCatalogHost[],
-  ownerId?: string | null,
-  liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),
-): SessionCatalogHost[] {
-  const visible: SessionCatalogHost[] = [];
-  for (const host of hosts) {
-    const sessions = host.sessions.filter((session) => {
-      if (!ownerId) {
-        return true;
-      }
-      const sessionKey = session.sessionKey;
-      const adopted = Boolean(sessionKey && liveOwnerIdBySessionKey.has(sessionKey));
-      const effectiveOwnerId =
-        adopted && sessionKey ? liveOwnerIdBySessionKey.get(sessionKey) : session.createdActor?.id;
-      return effectiveOwnerId === ownerId;
-    });
-    if (sessions.length > 0) {
-      visible.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
-    }
-  }
-  return visible;
-}
-
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenuOpen: boolean;
   catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (element: Element | undefined) => void;
-  subtitle?: string;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 
@@ -195,6 +178,7 @@ export type CatalogSessionMenuRequest = {
   canOpenTerminal: boolean;
   canDelete: boolean;
   name: string;
+  displayName?: string;
   meta: string;
 };
 

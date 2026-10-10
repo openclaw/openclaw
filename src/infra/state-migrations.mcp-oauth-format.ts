@@ -6,6 +6,7 @@ import {
   OpenIdProviderDiscoveryMetadataSchema,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 
 const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 const STORE_KEYS = new Set([
@@ -25,24 +26,12 @@ const DISCOVERY_KEYS = new Set([
   "resourceMetadataUrl",
 ]);
 
-function assertOnlyKeys(
-  value: Record<string, unknown>,
-  allowed: ReadonlySet<string>,
-  label: string,
-): void {
-  if (Object.keys(value).some((key) => !allowed.has(key))) {
-    throw new Error(`${label} has an unexpected field`);
-  }
-}
-
 function parseSafeUrl(value: unknown, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`${label} is not a string`);
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(value);
-  } catch {
+  const parsed = URL.parse(value);
+  if (!parsed) {
     throw new Error(`${label} is not a valid URL`);
   }
   if (["javascript:", "data:", "vbscript:"].includes(parsed.protocol)) {
@@ -55,7 +44,9 @@ function parseDiscoveryState(value: unknown): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error("legacy MCP OAuth discovery state is not an object");
   }
-  assertOnlyKeys(value, DISCOVERY_KEYS, "legacy MCP OAuth discovery state");
+  assertAllowedJsonFields(value, DISCOVERY_KEYS, "legacy MCP OAuth discovery state", {
+    reportField: false,
+  });
   const result: Record<string, unknown> = {
     authorizationServerUrl: parseSafeUrl(
       value.authorizationServerUrl,
@@ -92,21 +83,18 @@ export function parseLegacyMcpOAuthStore(value: unknown): Record<string, unknown
   if (!isRecord(value)) {
     throw new Error("legacy MCP OAuth store is not an object");
   }
-  assertOnlyKeys(value, STORE_KEYS, "legacy MCP OAuth store");
+  assertAllowedJsonFields(value, STORE_KEYS, "legacy MCP OAuth store", { reportField: false });
   const result: Record<string, unknown> = {};
-  if (value.clientInformation !== undefined) {
-    const parsed = OAuthClientInformationSchema.safeParse(value.clientInformation);
-    if (!parsed.success) {
-      throw new Error("legacy MCP OAuth client information is invalid");
+  for (const [key, schema, message] of [
+    ["clientInformation", OAuthClientInformationSchema, "client information is invalid"],
+    ["tokens", OAuthTokensSchema, "tokens are invalid"],
+  ] as const) {
+    if (value[key] !== undefined) {
+      if (!schema.safeParse(value[key]).success) {
+        throw new Error(`legacy MCP OAuth ${message}`);
+      }
+      result[key] = value[key];
     }
-    result.clientInformation = value.clientInformation;
-  }
-  if (value.tokens !== undefined) {
-    const parsed = OAuthTokensSchema.safeParse(value.tokens);
-    if (!parsed.success) {
-      throw new Error("legacy MCP OAuth tokens are invalid");
-    }
-    result.tokens = value.tokens;
   }
   if (value.tokenExpiresAt !== undefined) {
     if (
@@ -130,14 +118,13 @@ export function parseLegacyMcpOAuthStore(value: unknown): Record<string, unknown
   if (value.discoveryState !== undefined) {
     result.discoveryState = parseDiscoveryState(value.discoveryState);
   }
-  if (value.lastAuthorizationUrl !== undefined) {
-    result.lastAuthorizationUrl = parseSafeUrl(
-      value.lastAuthorizationUrl,
-      "legacy MCP OAuth authorization URL",
-    );
-  }
-  if (value.redirectUrl !== undefined) {
-    result.redirectUrl = parseSafeUrl(value.redirectUrl, "legacy MCP OAuth redirect URL");
+  for (const [key, label] of [
+    ["lastAuthorizationUrl", "authorization URL"],
+    ["redirectUrl", "redirect URL"],
+  ] as const) {
+    if (value[key] !== undefined) {
+      result[key] = parseSafeUrl(value[key], `legacy MCP OAuth ${label}`);
+    }
   }
   // `state` was persisted but never read. Doctor deliberately leaves it retired.
   return result;

@@ -4,6 +4,7 @@ import type { Route } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -13,7 +14,6 @@ let artifactDir: string;
 beforeEach(() => {
   artifactDir = createControlUiE2eArtifactDir("plugin-bundled-view-recovery");
 });
-const bundledChunk = /\/assets\/logbook-view-[^/]+\.js(?:\?.*)?$/;
 
 const suite = createControlUiE2eSuite({
   name: "Control UI bundled plugin lazy-view recovery",
@@ -83,13 +83,17 @@ suite.define(() => {
         await documentReachable;
         await route.fulfill({ status: 200 });
       });
-      await page.route(bundledChunk, failBundledChunkTwice);
+      await page.route(
+        controlUiE2eBuiltModuleRequest("ui/src/pages/plugin/logbook-view.ts"),
+        failBundledChunkTwice,
+      );
       await page.getByRole("link", { name: "Logbook", exact: true }).click();
       await expect.poll(() => failedRequests).toBe(1);
 
       const alert = page.getByRole("alert");
       await alert.waitFor();
-      expect(await alert.textContent()).toContain("A new version is available");
+      expect(await alert.textContent()).toContain("This view could not load");
+      expect(await alert.textContent()).not.toContain("updated in the background");
       expect(await alert.textContent()).toContain("Failed to fetch dynamically imported module");
       await alert.getByRole("button", { name: "Reload" }).waitFor();
       await page.screenshot({

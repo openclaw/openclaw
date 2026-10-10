@@ -1,16 +1,19 @@
+import { ConnectErrorDetailCodes } from "@openclaw/gateway-client/browser";
 import type { UsersMentionableParams, UsersMentionableResult } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
-import type { GatewayBrowserClient } from "../../../api/gateway.ts";
+import {
+  GatewayRequestError,
+  resolveGatewayErrorDetailCode,
+  type GatewayBrowserClient,
+} from "../../../api/gateway.ts";
 import {
   handleComposerMenuKeydown,
   renderComposerMenu,
   renderComposerMenuOption,
 } from "../../../components/composer-menu.ts";
-import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
-import "../../../styles/chat/reply-preview.css";
 import "../../../styles/chat/mention-menu.css";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
@@ -29,7 +32,18 @@ export type HumanMentionMenuHost = {
   commitDraft: (value: string, mentions: readonly HumanMention[]) => void;
 };
 
-type MentionTarget = { start: number; end: number; query: string };
+const MENTION_RESULTS_FRESH_MS = 5 * 60_000;
+const MENTION_RESULTS_MAX_AGE_MS = 30 * 60_000;
+const MENTION_REFRESH_RETRY_MS = 30_000;
+const MENTION_REQUEST_TIMEOUT_MS = 15_000;
+const MAX_CACHED_MENTION_QUERIES = 16;
+
+type MentionTarget = { start: number; end: number; query: string; value: string };
+type MentionResultSnapshot = {
+  result: UsersMentionableResult;
+  fetchedAt: number;
+  refreshAfter: number;
+};
 type MentionSearch =
   | { kind: "loading" }
   | { kind: "ready"; result: UsersMentionableResult }
@@ -49,23 +63,20 @@ function findMentionTarget(value: string, caret: number): MentionTarget | null {
   ) {
     return null;
   }
-  const match = /(?:^|[\s([{])@([\p{L}\p{N}\p{M}_.-]{0,64})$/u.exec(beforeCaret);
+  // Spaces can separate name parts, but a space immediately after @ ends the
+  // invocation so literal at-signs cannot turn the rest of a prompt into a query.
+  const match = /(?:^|[\s([{])@(?! )([\p{L}\p{N}\p{M}_. -]{0,128})$/u.exec(beforeCaret);
   if (!match) {
     return null;
   }
   const query = match[1] ?? "";
   const start = caret - query.length - 1;
   let end = caret;
+  // Replace the rest of the current word, not later words that may be ordinary prose.
   while (end < value.length && /[\p{L}\p{N}\p{M}_.-]/u.test(value[end] ?? "")) {
     end += 1;
   }
-  return { start, end, query };
-}
-
-function canFilterMentionText(value: string): boolean {
-  // Browser and Gateway locales are independent. ASCII without capital I has
-  // invariant lowercase; leave locale-sensitive and Unicode matching to the server.
-  return /^[\x20-\x7e]*$/u.test(value) && !value.includes("I");
+  return { start, end, query, value };
 }
 
 /** One bounded suggestion lifecycle shared by existing- and new-session composers. */
@@ -76,7 +87,10 @@ export class HumanMentionMenu {
   private target: MentionTarget | null = null;
   private search: MentionSearch | null = null;
   private index = 0;
-  private results = new Map<string, UsersMentionableResult>();
+  private selectedProfileId: string | undefined;
+  private readonly selectedAvatars = new Map<string, string>();
+  private readonly results = new Map<string, MentionResultSnapshot>();
+  private readonly requests = new Map<string, Promise<UsersMentionableResult>>();
 
   get open(): boolean {
     return this.target !== null;
@@ -93,117 +107,179 @@ export class HumanMentionMenu {
       return;
     }
     this.close();
-    this.directory = directory;
+    this.results.clear();
+    this.requests.clear();
+    this.selectedAvatars.clear();
+    // Each lifetime owns a fresh descriptor, even if a caller reuses A after A → B → A.
+    // Old requests must never become current again or retire a replacement query.
+    this.directory = directory ? { ...directory } : undefined;
   }
 
   private cancelSearch() {
     this.generation += 1;
     clearTimeout(this.timer);
     this.timer = undefined;
-    this.index = 0;
   }
 
   close() {
     this.cancelSearch();
-    this.results.clear();
     this.target = null;
     this.search = null;
+    this.index = 0;
+    this.selectedProfileId = undefined;
   }
 
   dispose() {
-    this.close();
-    this.directory = undefined;
+    this.syncDirectory(undefined);
   }
 
-  private cachedResult(query: string): UsersMentionableResult | undefined {
-    const exact = this.results.get(query);
-    if (exact) {
-      return exact;
-    }
-    if (!canFilterMentionText(query)) {
-      return undefined;
-    }
-    const normalizedQuery = query.toLowerCase();
-    for (const [prefix, result] of this.results) {
-      // Gateway matches names before adding duplicate-name ID suffixes. Opaque matches
-      // (for example a server-only ID lookup) and ambiguous labels must refetch;
-      // exact queries keep the server response unchanged, including truncated results.
-      if (
-        !result.truncated &&
-        query.startsWith(prefix) &&
-        result.users.every(
-          (person) =>
-            canFilterMentionText(person.displayName) &&
-            person.displayName.toLowerCase().includes(prefix.toLowerCase()) &&
-            !person.displayName.endsWith(` (${person.profileId.slice(0, 8)})`),
-        )
-      ) {
-        return {
-          users: result.users.filter((person) =>
-            person.displayName.toLowerCase().includes(normalizedQuery),
-          ),
-          truncated: false,
-        };
-      }
-    }
-    return undefined;
-  }
-
-  update(value: string, caret: number, requestUpdate: () => void, typedAtSign = false) {
+  update(
+    input: Pick<HTMLTextAreaElement, "value" | "selectionStart" | "selectionEnd">,
+    requestUpdate: () => void,
+    intent: "input" | "trigger" | "selection" = "selection",
+  ) {
+    const { value, selectionStart: caret, selectionEnd } = input;
     const target = this.directory ? findMentionTarget(value, caret) : null;
-    if (!target || (!this.open && !typedAtSign)) {
+    // Only typing may extend a full-name query. Moving into untouched prose or
+    // another @ must retire the current invocation, not start a different search.
+    const leftTarget =
+      intent === "selection" &&
+      this.target !== null &&
+      (value !== this.target.value ||
+        target?.start !== this.target.start ||
+        selectionEnd > this.target.end);
+    if (!target || leftTarget || (!this.open && intent !== "trigger")) {
       if (this.open) {
         this.close();
         requestUpdate();
       }
       return;
     }
-    if (this.target?.start === target.start && this.target.query === target.query) {
+    const previous = this.target;
+    if (previous?.start === target.start && intent !== "trigger") {
+      // Keep later name parts in the replacement range when navigating or editing
+      // an earlier part. Input shifts that range; selection never changes its extent.
+      target.end = Math.max(target.end, previous.end + value.length - previous.value.length);
+    }
+    if (previous?.start !== target.start) {
+      this.selectedProfileId = undefined;
+    }
+    this.target = target;
+    if (previous?.start === target.start && previous.query === target.query) {
       return;
     }
-    if (this.target?.start !== target.start) {
-      this.results.clear();
+    this.searchPeople(requestUpdate);
+  }
+
+  private showResults(result: UsersMentionableResult) {
+    this.index = Math.max(
+      0,
+      result.users.findIndex((user) => user.profileId === this.selectedProfileId),
+    );
+    this.selectedProfileId = result.users[this.index]?.profileId;
+    this.search = { kind: "ready", result };
+  }
+
+  private searchPeople(requestUpdate: () => void) {
+    const target = this.target;
+    const directory = this.directory;
+    if (!target || !directory) {
+      return;
     }
     this.cancelSearch();
-    this.target = target;
     const query = target.query;
-    const cached = this.cachedResult(query);
-    if (cached) {
-      this.search = { kind: "ready", result: cached };
-      requestUpdate();
-      return;
+    // Only the Gateway knows every searchable identity field and its matching rules.
+    // Reuse exact snapshots; display-name filtering would lose verified-login matches.
+    let cached = this.results.get(query);
+    if (cached && Date.now() - cached.fetchedAt >= MENTION_RESULTS_MAX_AGE_MS) {
+      this.results.delete(query);
+      cached = undefined;
     }
-    this.search = { kind: "loading" };
-    const directory = this.directory;
-    if (!directory) {
-      return;
+    if (cached) {
+      this.showResults(cached.result);
+      if (Date.now() < cached.refreshAfter && !this.requests.has(query)) {
+        requestUpdate();
+        return;
+      }
+    } else {
+      this.search = { kind: "loading" };
     }
     const generation = this.generation;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void directory.client
-        .request<UsersMentionableResult>("users.mentionable", {
-          ...directory.params,
-          query: target.query,
-        })
-        .then(
-          (result) => {
-            if (generation === this.generation) {
-              if (this.results.size === 16) {
+      const refreshed = this.results.get(query);
+      if (refreshed && refreshed !== cached && Date.now() < refreshed.refreshAfter) {
+        this.showResults(refreshed.result);
+        requestUpdate();
+        return;
+      }
+      let request = this.requests.get(query);
+      if (!request) {
+        // Failed refreshes do not extend data lifetime or retry on every reopen.
+        if (cached) {
+          cached.refreshAfter = Date.now() + MENTION_REFRESH_RETRY_MS;
+        }
+        request = directory.client
+          .request<UsersMentionableResult>(
+            "users.mentionable",
+            { ...directory.params, query },
+            // A hung read must release the shared slot so reopening can retry.
+            { timeoutMs: MENTION_REQUEST_TIMEOUT_MS },
+          )
+          .then((result) => {
+            // Closing or typing ahead retires presentation, not useful query snapshots.
+            // A replaced directory must never inherit the previous owner's response.
+            if (this.directory === directory) {
+              this.results.delete(query);
+              if (this.results.size === MAX_CACHED_MENTION_QUERIES) {
                 this.results.delete(this.results.keys().next().value!);
               }
-              this.results.set(query, result);
-              this.search = { kind: "ready", result };
-              requestUpdate();
+              const fetchedAt = Date.now();
+              this.results.set(query, {
+                result,
+                fetchedAt,
+                refreshAfter: fetchedAt + MENTION_RESULTS_FRESH_MS,
+              });
             }
-          },
-          () => {
-            if (generation === this.generation) {
+            return result;
+          })
+          .finally(() => {
+            if (this.directory === directory) {
+              this.requests.delete(query);
+            }
+          });
+        this.requests.set(query, request);
+      }
+      void request.then(
+        (result) => {
+          if (generation === this.generation) {
+            this.showResults(result);
+            requestUpdate();
+          }
+        },
+        (error: unknown) => {
+          // Transient outages keep stale suggestions usable. An authoritative
+          // rejection (including lost access) evicts this directory instead.
+          const rejected =
+            error instanceof GatewayRequestError &&
+            (error.gatewayCode !== "UNAVAILABLE" ||
+              resolveGatewayErrorDetailCode(error) ===
+                ConnectErrorDetailCodes.AUTHENTICATED_PROFILE_UNAVAILABLE);
+          if (this.directory === directory && rejected) {
+            this.results.clear();
+            this.requests.clear();
+            this.directory = { ...directory };
+            this.cancelSearch();
+            if (this.open) {
               this.search = { kind: "error" };
               requestUpdate();
             }
-          },
-        );
+          } else if (generation === this.generation && !cached) {
+            this.search = { kind: "error" };
+            requestUpdate();
+          }
+        },
+      );
     }, 150);
     requestUpdate();
   }
@@ -224,6 +300,9 @@ export class HumanMentionMenu {
     if (!this.open || event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return false;
     }
+    if (this.search?.kind === "error" && event.key === "Tab") {
+      return false;
+    }
     const users = this.search?.kind === "ready" ? this.search.result.users : [];
     return handleComposerMenuKeydown(event, {
       count: users.length,
@@ -235,6 +314,7 @@ export class HumanMentionMenu {
       },
       move: (index) => {
         this.index = index;
+        this.selectedProfileId = users[index]?.profileId;
         requestUpdate();
         return this.activeId(host.paneId);
       },
@@ -249,7 +329,11 @@ export class HumanMentionMenu {
   ) {
     const textarea = host.getTextarea();
     const current = textarea?.value ?? host.getDraft();
-    const target = findMentionTarget(current, textarea?.selectionStart ?? current.length);
+    this.update(
+      textarea ?? { value: current, selectionStart: current.length, selectionEnd: current.length },
+      requestUpdate,
+    );
+    const target = this.target;
     if (!target || host.getMentions().length >= MAX_HUMAN_MENTIONS) {
       return;
     }
@@ -265,6 +349,18 @@ export class HumanMentionMenu {
       }),
       { profileId: person.profileId, start: target.start, end: target.start + label.length },
     ].toSorted((a, b) => a.start - b.start);
+    // Preserve only selected presentation URLs, so the shared loader reuses the
+    // exact image already requested by the picker. Recipient metadata stays unchanged.
+    for (const profileId of this.selectedAvatars.keys()) {
+      if (!mentions.some((mention) => mention.profileId === profileId)) {
+        this.selectedAvatars.delete(profileId);
+      }
+    }
+    if (person.avatarUrl) {
+      this.selectedAvatars.set(person.profileId, person.avatarUrl);
+    } else {
+      this.selectedAvatars.delete(person.profileId);
+    }
     host.commitDraft(next, mentions);
     this.close();
     requestUpdate();
@@ -276,6 +372,10 @@ export class HumanMentionMenu {
         target.start + replacement.length,
       );
     });
+  }
+
+  get selectedAvatarUrls(): ReadonlyMap<string, string> {
+    return this.selectedAvatars;
   }
 
   render(host: HumanMentionMenuHost, requestUpdate: () => void) {
@@ -297,20 +397,37 @@ export class HumanMentionMenu {
       className: "mention-menu",
       label: t("chat.mentions.menu"),
       trackScroll: false,
+      activeId: this.activeId(host.paneId),
       content: html` <div class="slash-menu-group" aria-busy=${loading}>
         <div class="slash-menu-group__label" role="status">
           ${message ?? t("chat.mentions.menu")}
         </div>
         ${
+          this.search?.kind === "error" && !limited
+            ? html`<button
+                type="button"
+                class="btn btn--sm mention-menu__retry"
+                @click=${() => {
+                  this.searchPeople(requestUpdate);
+                  host.getTextarea()?.focus({ preventScroll: true });
+                }}
+              >
+                ${t("common.retry")}
+              </button>`
+            : nothing
+        }
+        ${
           message
             ? nothing
             : loading
-              ? html`<div class="slash-menu-item mention-menu__loading" aria-hidden="true">
-                  <span class="slash-menu-icon"
-                    ><span class="skeleton mention-menu__avatar"></span
-                  ></span>
-                  <span class="skeleton skeleton-line skeleton-line--medium"></span>
-                </div>`
+              ? [0, 1, 2].map(
+                  () => html`<div class="slash-menu-item mention-menu__loading" aria-hidden="true">
+                    <span class="slash-menu-icon"
+                      ><span class="skeleton mention-menu__avatar"></span
+                    ></span>
+                    <span class="skeleton skeleton-line skeleton-line--medium"></span>
+                  </div>`,
+                )
               : result?.users.map((person, index) =>
                   renderComposerMenuOption({
                     id: paneDomId(host.paneId, `mention-option-${index}`),
@@ -318,6 +435,7 @@ export class HumanMentionMenu {
                     select: () => this.select(person, host, requestUpdate),
                     hover: () => {
                       this.index = index;
+                      this.selectedProfileId = person.profileId;
                       requestUpdate();
                     },
                     icon: renderChatAuthorAvatar({
@@ -340,27 +458,4 @@ export class HumanMentionMenu {
       </div>`,
     });
   }
-}
-
-export function renderSelectedHumanMentions(
-  text: string,
-  mentions: readonly HumanMention[] | undefined,
-  onRemove: () => void,
-) {
-  if (!mentions?.length) {
-    return nothing;
-  }
-  const names = mentions.map((mention) => text.slice(mention.start, mention.end)).join(", ");
-  return html`<div class="chat-reply-preview" role="status">
-    <span class="chat-reply-preview__icon" aria-hidden="true">${icons.users}</span>
-    <span class="chat-reply-preview__text">${t("chat.mentions.selected", { names })}</span>
-    <button
-      type="button"
-      class="chat-reply-preview__dismiss"
-      aria-label=${t("chat.mentions.remove")}
-      @click=${onRemove}
-    >
-      ${icons.x}
-    </button>
-  </div>`;
 }

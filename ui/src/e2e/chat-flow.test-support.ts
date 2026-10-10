@@ -1,9 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { Page } from "playwright";
 import { expect } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 import {
   controlUiSessionPath,
@@ -187,11 +187,11 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
 }
 
 export async function scrollChatThreadToTop(page: Page): Promise<void> {
-  await page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
-    const thread = element as HTMLElement;
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+  // Reader input retires pending end-follow; a raw offset write can be maintenance.
+  await thread.hover();
+  await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+  await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
 }
 
 export async function captureSessionAccessibilityProof(

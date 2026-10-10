@@ -8,6 +8,7 @@ import { root as createFsSafeRoot } from "../infra/fs-safe.js";
 import * as eventStore from "../memory-host-sdk/event-store.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { clearMemoryPluginState } from "../plugins/memory-state.test-fixtures.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { listMemoryHostPublicArtifacts } from "./memory-host-core.js";
 import {
@@ -17,8 +18,9 @@ import {
 import { appendMemoryHostEvent } from "./memory-host-events.js";
 
 describe("memory host event export recovery", () => {
-  afterEach(() => {
+  afterEach(async () => {
     clearMemoryPluginState();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
@@ -32,7 +34,7 @@ describe("memory host event export recovery", () => {
         prefix: "memory-host-delayed-export-",
       });
       const { workspaceDir } = state;
-      const cfg = { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } };
+      const cfg = { agents: { entries: { main: { workspace: workspaceDir } } } };
       const event = {
         type: "memory.recall.recorded" as const,
         timestamp: "2026-09-10T12:00:00.000Z",
@@ -214,7 +216,7 @@ describe("memory host event export recovery", () => {
       );
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(true);
@@ -278,7 +280,7 @@ describe("memory host event export recovery", () => {
       );
 
       const listed = await listMemoryHostPublicArtifacts({
-        cfg: { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
       });
 
       expect(listed.some((artifact) => artifact.kind === "event-log")).toBe(false);

@@ -745,6 +745,7 @@ suite.define(() => {
         path.join(artifactDir, "disclosure-geometry.json"),
         `${JSON.stringify(traces, null, 2)}\n`,
       );
+      await middleWorkSummary.focus();
       await captureDisclosureThemes(artifactDir, "disclosure-geometry", middleWorkSummary);
     }
     await context.close();
@@ -874,7 +875,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps message and JSON disclosures anchored in a long transcript", async () => {
+  it("keeps message disclosures and shared JSON controls anchored in a long transcript", async () => {
     const context = await suite.browser.newContext({
       reducedMotion: "reduce",
       viewport: { height: 600, width: 900 },
@@ -935,21 +936,49 @@ suite.define(() => {
       .locator(".chat-message-disclosure")
       .filter({ hasText: "User disclosure anchor marker" })
       .locator(".chat-message-disclosure__toggle");
-    const jsonSummary = page
-      .locator(".chat-json-collapse")
-      .filter({ hasText: "json-disclosure-anchor-marker" })
-      .locator("summary");
+    const jsonBlock = page
+      .locator(".code-block-wrapper--json")
+      .filter({ hasText: "json-disclosure-anchor-marker" });
+    const jsonRoot = jsonBlock.locator(".code-block-json-tree > details");
+    const jsonSummary = jsonRoot.locator(":scope > summary");
+    const jsonRows = jsonRoot.locator(
+      ":scope > .code-block-json-children > .code-block-json-row > details",
+    );
+    const rowsSummary = jsonRows.locator(":scope > summary");
     await userToggle.waitFor();
-    await jsonSummary.waitFor();
-    const wrapToggle = page.locator(".code-block-wrap");
+    await jsonSummary.waitFor({ state: "attached" });
+    expect(await jsonRoot.getAttribute("open")).not.toBeNull();
+    expect(await jsonRows.getAttribute("open")).not.toBeNull();
+    const wrapToggle = page
+      .locator(".code-block-wrapper")
+      .filter({ hasText: "A wide transcript code line that must wrap" })
+      .locator(".code-block-wrap");
     await wrapToggle.waitFor({ state: "visible" });
     const traces: Record<string, DisclosureFrame[]> = {};
-    traces.userMessageExpand = await toggleDisclosureWithFrameTrace(page, userToggle);
-    traces.userMessageCollapse = await toggleDisclosureWithFrameTrace(page, userToggle);
-    traces.jsonExpand = await toggleDisclosureWithFrameTrace(page, jsonSummary);
-    traces.jsonCollapse = await toggleDisclosureWithFrameTrace(page, jsonSummary);
-    traces.codeWrap = await toggleDisclosureWithFrameTrace(page, wrapToggle);
-    traces.codeUnwrap = await toggleDisclosureWithFrameTrace(page, wrapToggle);
+    const traceVisibleControl = async (control: Locator, actionSelector?: string) => {
+      // JSON now opens as a tree, so earlier controls can start outside the viewport.
+      // Reveal only as far as needed: centering a tall prompt's footer would put
+      // its entire collapsed row above the reader, where resize compensation is correct.
+      await control.evaluate((element) =>
+        element.scrollIntoView({ block: "nearest", inline: "nearest" }),
+      );
+      await waitForChatScrollIdle(page);
+      return toggleDisclosureWithFrameTrace(page, control, actionSelector);
+    };
+    traces.userMessageExpand = await traceVisibleControl(userToggle);
+    traces.userMessageCollapse = await traceVisibleControl(userToggle);
+    traces.jsonCollapse = await traceVisibleControl(jsonSummary);
+    traces.jsonExpand = await traceVisibleControl(jsonSummary);
+    traces.jsonRowsCollapse = await traceVisibleControl(rowsSummary);
+    traces.jsonRowsExpand = await traceVisibleControl(rowsSummary);
+    const rawMode = jsonBlock.locator('[data-json-mode="raw"]');
+    traces.jsonRaw = await traceVisibleControl(rawMode);
+    traces.jsonTree = await traceVisibleControl(
+      rawMode,
+      '.code-block-json-mode[data-json-mode="tree"]',
+    );
+    traces.codeWrap = await traceVisibleControl(wrapToggle);
+    traces.codeUnwrap = await traceVisibleControl(wrapToggle);
     await context.close();
     for (const [label, frames] of Object.entries(traces)) {
       expectStableDisclosureFrames(frames, label);

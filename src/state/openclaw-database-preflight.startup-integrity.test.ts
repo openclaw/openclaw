@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -5,13 +6,16 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
-import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
+import {
+  clearOpenClawAgentIntegrityVerification,
+  readOpenClawAgentIntegrityVerification,
+} from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -19,6 +23,38 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("reuses a clean closed-WAL receipt without copying the agent database", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-clean-startup-") };
+  const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env });
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  expect(readOpenClawAgentIntegrityVerification(agentPath, env)?.clean_close).toBe(1);
+  expect(fs.existsSync(`${agentPath}-wal`)).toBe(false);
+  expect(fs.existsSync(`${agentPath}-shm`)).toBe(false);
+  const before = fs.readFileSync(agentPath);
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
+    if (pathname === agentPath) {
+      throw new Error("No space for a full agent database snapshot");
+    }
+    return prepare(pathname, options);
+  });
+  const onAgentInspection = vi.fn();
+  await expect(
+    assertOpenClawDatabasesReady({
+      env,
+      operation: "gateway-startup",
+      config: {},
+      onAgentInspection,
+    }),
+  ).resolves.toBeUndefined();
+  expect(onAgentInspection).toHaveBeenLastCalledWith(
+    expect.objectContaining({ schemaSnapshotCount: 0 }),
+  );
+  expect(fs.readFileSync(agentPath)).toEqual(before);
+  expect(readOpenClawAgentIntegrityVerification(agentPath, env)?.clean_close).toBe(1);
 });
 
 it.each(["DELETE", "WAL", "closed WAL"])(
@@ -30,6 +66,8 @@ it.each(["DELETE", "WAL", "closed WAL"])(
     openOpenClawAgentDatabase({ agentId: "main", path: agentPath, env });
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
+    // These raw writers model unclean external mutation, outside the lease owner.
+    clearOpenClawAgentIntegrityVerification(agentPath, env);
     const { DatabaseSync } = requireNodeSqlite();
     const writer = mode === "closed WAL" ? undefined : new DatabaseSync(agentPath);
     writer?.exec(`PRAGMA journal_mode=${mode}; PRAGMA wal_autocheckpoint=0;`);
@@ -113,30 +151,17 @@ it("isolates a corrupt foreign secondary before reporting its integrity failure"
       assertOpenClawDatabasesReady({
         env,
         operation: "gateway-startup",
-        config: { agents: { list: [{ id: "main", default: true }, { id: "worker" }] } },
+        config: {
+          agents: {
+            entries: { main: {}, worker: {} },
+            defaults: { systemAgent: { agentId: "main" } },
+          },
+        },
       }),
     ).resolves.toBeUndefined();
     expect(readAgentDatabaseAdmissionRefusal("worker", { env })).toMatchObject({
       embeddedOwnerId: "foreign",
     });
-  } finally {
-    writer.close();
-  }
-});
-
-it("preserves the startup maintenance-required error class across the direct child", async () => {
-  const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-startup-legacy-") };
-  const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  const writer = new (requireNodeSqlite().DatabaseSync)(agentPath);
-  try {
-    writer.exec(
-      "PRAGMA journal_mode=DELETE; PRAGMA user_version=1; UPDATE schema_meta SET schema_version=1;",
-    );
-    await expect(
-      assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: {} }),
-    ).rejects.toBeInstanceOf(OpenClawAgentDatabaseMediaMigrationRequiredError);
   } finally {
     writer.close();
   }

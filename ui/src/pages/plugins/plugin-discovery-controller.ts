@@ -1,5 +1,6 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
 import type { ReactiveControllerHost } from "lit";
+import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type {
@@ -11,63 +12,54 @@ import type { PluginDiscoveryIntent } from "./catalog-results.ts";
 
 const CATALOG_PAGE_SIZE = 100;
 const CATALOG_SECTION_SIZE = 8;
-const NO_CATALOG_CLIENT: GatewayBrowserClient | null = null;
-const NO_CATALOG_CURSOR: string | null = null;
 
-type CatalogPageLoad = {
-  items: PluginDiscoveryEntry[];
+type CatalogPageArgs = readonly [
+  client: GatewayBrowserClient | null,
+  intent: PluginDiscoveryIntent,
+  category: string | null,
+  query: string,
+];
+
+type CatalogPageLoad = PluginDiscoveryResult & {
   overview: boolean;
-  categories?: PluginDiscoveryCategory[];
-  nextCursor?: string;
-  remoteError?: string;
+  selection: {
+    intent: PluginDiscoveryIntent;
+    category: string | null;
+    query: string;
+  };
 };
 
 type PluginDiscoveryGateway = {
   getClient: () => GatewayBrowserClient | null;
   isConnected: () => boolean;
-  onEntriesChanged?: () => void;
 };
-
-function compareOfficialDownloads(left: PluginDiscoveryEntry, right: PluginDiscoveryEntry): number {
-  if (left.catalog.official !== right.catalog.official) {
-    return left.catalog.official ? -1 : 1;
-  }
-  const downloadOrder = (right.catalog.downloads ?? 0) - (left.catalog.downloads ?? 0);
-  return downloadOrder || left.catalog.name.localeCompare(right.catalog.name);
-}
 
 function rankedOverviewShelf(
   items: readonly PluginDiscoveryEntry[],
   membership: "featured" | "trending",
-  rank: "featuredRank" | "trendingRank",
 ): PluginDiscoveryEntry[] {
+  const rank = `${membership}Rank` as const;
   return items
     .filter((item) => item.catalog[membership])
     .toSorted(
       (left, right) =>
         (left.catalog[rank] ?? Number.MAX_SAFE_INTEGER) -
         (right.catalog[rank] ?? Number.MAX_SAFE_INTEGER),
-    );
-}
-
-function appendUniqueEntries(
-  existing: readonly PluginDiscoveryEntry[],
-  incoming: readonly PluginDiscoveryEntry[],
-): PluginDiscoveryEntry[] {
-  const entries = new Map(existing.map((item) => [item.id, item]));
-  for (const item of incoming) {
-    // Cursor pages contain remote catalog projections, so they replace any first-page local
-    // placeholder while carrying forward the Gateway's latest authoritative local state.
-    entries.set(item.id, item);
-  }
-  return [...entries.values()];
+    )
+    .slice(0, CATALOG_SECTION_SIZE);
 }
 
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
+  private overview: CatalogPageLoad | null = null;
+  private resultSelection: CatalogPageLoad["selection"] | null = null;
   error: string | null = null;
   remoteError: string | null = null;
   categories: PluginDiscoveryCategory[] = [];
+  categoriesError: string | null = null;
+  private categoriesReady = false;
+  private categoriesStarted = false;
+  private readonly categoriesTask: Task;
   featured: PluginDiscoveryEntry[] = [];
   trending: PluginDiscoveryEntry[] = [];
   loadMoreError: string | null = null;
@@ -84,53 +76,48 @@ export class PluginDiscoveryController {
     private readonly host: ReactiveControllerHost,
     private readonly gateway: PluginDiscoveryGateway,
   ) {
+    this.categoriesTask = new Task(host, {
+      autoRun: false,
+      task: ([client]: readonly [GatewayBrowserClient | null], { signal }) =>
+        client
+          ? client.request<{ categories: PluginDiscoveryCategory[] }>(
+              "plugins.catalog.categories",
+              {},
+              { signal },
+            )
+          : initialState,
+      onComplete: ({ categories }) => {
+        this.categories = categories;
+        this.categoriesReady = true;
+        this.categoriesError = null;
+      },
+      onError: (error) => {
+        this.categoriesError = formatUiError(error);
+      },
+    });
     this.browseTask = new Task(host, {
       autoRun: false,
-      args: () =>
-        [
-          this.gateway.isConnected() ? this.gateway.getClient() : null,
-          this.intent,
-          this.category,
-          this.committedQuery,
-        ] as const,
-      task: ([client, intent, category, query], { signal }) =>
+      task: (
+        [client, intent, category, query, manual]: readonly [...CatalogPageArgs, manual: boolean],
+        { signal },
+      ) =>
         client
-          ? this.fetchAvailablePage({ client, intent, category, query, signal })
+          ? this.fetchAvailablePage({ client, intent, category, query, manual, signal })
           : initialState, // Lit returns to INITIAL without invoking onComplete.
-      onComplete: (page) => {
-        this.result = {
-          items: page.items,
-          ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
-        };
-        this.remoteError = page.remoteError ?? null;
-        if (page.overview) {
-          this.categories = page.categories ?? [];
-          this.featured = rankedOverviewShelf(page.items, "featured", "featuredRank").slice(
-            0,
-            CATALOG_SECTION_SIZE,
-          );
-          this.trending = rankedOverviewShelf(page.items, "trending", "trendingRank").slice(
-            0,
-            CATALOG_SECTION_SIZE,
-          );
-        }
-        this.gateway.onEntriesChanged?.();
-      },
+      onComplete: (page) => this.applyPage(page),
       onError: (error) => {
         this.error = formatUiError(error);
       },
     });
     this.loadMoreTask = new Task(host, {
       autoRun: false,
-      args: () =>
-        [
-          NO_CATALOG_CLIENT,
-          this.intent,
-          this.category,
-          this.committedQuery,
-          NO_CATALOG_CURSOR,
-        ] as const,
-      task: ([client, intent, category, query, cursor], { signal }) =>
+      task: (
+        [client, intent, category, query, cursor]: readonly [
+          ...CatalogPageArgs,
+          cursor: string | null,
+        ],
+        { signal },
+      ) =>
         client && cursor
           ? this.fetchAvailablePage({ client, intent, category, query, cursor, signal })
           : initialState,
@@ -138,16 +125,22 @@ export class PluginDiscoveryController {
         if (!this.result || this.result.nextCursor !== page.requestedCursor) {
           return;
         }
-        const items = appendUniqueEntries(this.result.items, page.items);
+        const entries = new Map(this.result.items.map((item) => [item.id, item]));
+        for (const item of page.items) {
+          // Cursor projections replace first-page placeholders with current Gateway local state.
+          entries.set(item.id, item);
+        }
+        const items = [...entries.values()];
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery
-              ? items.toSorted(compareOfficialDownloads)
+              ? items.toSorted((left, right) =>
+                  comparePluginCatalogEntries(left, right, this.category),
+                )
               : items,
           ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         };
         this.loadMoreError = page.remoteError ?? null;
-        this.gateway.onEntriesChanged?.();
       },
       onError: (error) => {
         this.loadMoreError = formatUiError(error);
@@ -155,16 +148,65 @@ export class PluginDiscoveryController {
     });
   }
 
+  private applyPage(page: CatalogPageLoad): void {
+    this.result = {
+      items: page.items,
+      ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
+    };
+    this.resultSelection = page.selection;
+    this.remoteError = page.remoteError ?? null;
+    if (page.overview) {
+      this.overview = page.remoteError ? null : page;
+      // The overview is already fetched for cards. Use its canonical categories
+      // if it beats the lightweight read (including older ClawHub servers that
+      // cannot serve that endpoint), and retire the slower request.
+      if (page.categories) {
+        void this.categoriesTask.run([null]);
+        this.categories = page.categories;
+        this.categoriesReady = true;
+        this.categoriesError = null;
+      }
+      this.featured = rankedOverviewShelf(page.items, "featured");
+      this.trending = rankedOverviewShelf(page.items, "trending");
+    }
+  }
+
   get loading(): boolean {
-    return this.gateway.isConnected() && this.browseTask.status === TaskStatus.PENDING;
+    // Keep keyed cards and their open controls during a same-selection refresh.
+    // New filters must wait for their own result instead of showing the old selection.
+    return (
+      this.gateway.isConnected() &&
+      (this.query.trim() !== this.committedQuery ||
+        (this.browseTask.status === TaskStatus.PENDING &&
+          (!this.result ||
+            this.resultSelection?.intent !== this.intent ||
+            this.resultSelection.category !== this.category ||
+            this.resultSelection.query !== this.committedQuery)))
+    );
   }
 
-  get featuredLoading(): boolean {
-    return this.isGroupedOverview() && this.loading;
+  get categoriesLoading(): boolean {
+    return (
+      this.gateway.isConnected() &&
+      this.categoriesStarted &&
+      !this.categoriesReady &&
+      this.categoriesTask.status === TaskStatus.PENDING
+    );
   }
 
-  get trendingLoading(): boolean {
-    return this.isGroupedOverview() && this.loading;
+  async ensureCategories(retry = false): Promise<void> {
+    const client = this.gateway.getClient();
+    if (
+      !client ||
+      !this.gateway.isConnected() ||
+      this.categoriesReady ||
+      (this.categoriesStarted && (this.categoriesTask.status === TaskStatus.PENDING || !retry))
+    ) {
+      return;
+    }
+    this.categoriesError = null;
+    this.categoriesStarted = true;
+    await this.categoriesTask.run([client]);
   }
 
   get loadingMore(): boolean {
@@ -176,8 +218,9 @@ export class PluginDiscoveryController {
     intent: PluginDiscoveryIntent;
     category: string | null;
     query: string;
+    manual?: boolean;
     cursor?: string;
-    signal?: AbortSignal;
+    signal: AbortSignal;
   }): Promise<CatalogPageLoad & { requestedCursor?: string }> {
     const overview =
       !params.cursor && this.isGroupedOverview(params.intent, params.category, params.query);
@@ -187,18 +230,22 @@ export class PluginDiscoveryController {
         intent: params.intent,
         ...(params.category ? { category: params.category } : {}),
         ...(params.query ? { query: params.query } : {}),
+        ...(params.manual ? { searchSource: "openclaw-control-ui" } : {}),
         ...(params.cursor ? { cursor: params.cursor } : {}),
         pageSize: CATALOG_PAGE_SIZE,
       },
-      params.signal ? { signal: params.signal } : undefined,
+      { signal: params.signal },
     );
     const items =
       params.intent === "all" && !params.query
-        ? page.items.toSorted(compareOfficialDownloads)
+        ? page.items.toSorted((left, right) =>
+            comparePluginCatalogEntries(left, right, params.category),
+          )
         : page.items;
     return {
       items,
       overview,
+      selection: { intent: params.intent, category: params.category, query: params.query },
       ...(page.categories ? { categories: page.categories } : {}),
       ...(page.nextCursor && !params.query ? { nextCursor: page.nextCursor } : {}),
       ...(page.remoteError ? { remoteError: page.remoteError } : {}),
@@ -214,27 +261,27 @@ export class PluginDiscoveryController {
     return intent === "all" && category === null && !query;
   }
 
-  ensureInitial(): void {
-    if (!this.gateway.isConnected() || !this.gateway.getClient()) {
-      return;
-    }
-    if (this.browseTask.status === TaskStatus.INITIAL && !this.result && !this.error) {
-      void this.refresh();
-    }
-  }
-
   invalidate(): void {
-    void this.browseTask.run([null, this.intent, this.category, this.committedQuery]);
+    // Reconnects reload the latest input without replaying its manual observation.
+    this.disconnect();
+    this.committedQuery = this.query.trim();
     this.result = null;
+    this.resultSelection = null;
+    this.categories = [];
+    this.categoriesReady = false;
+    this.categoriesError = null;
     this.error = null;
     this.remoteError = null;
     this.featured = [];
     this.trending = [];
     this.loadMoreError = null;
-    void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
   }
 
   disconnect(): void {
+    this.overview = null;
+    void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
+    this.categoriesStarted = false;
+    void this.categoriesTask.run([null]);
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
       this.searchTimer = null;
@@ -243,6 +290,12 @@ export class PluginDiscoveryController {
   }
 
   async refresh(): Promise<void> {
+    // Inventory publication and explicit refresh retire cached local installation facts.
+    this.overview = null;
+    await this.loadSelection();
+  }
+
+  private async loadSelection(manual = false): Promise<void> {
     const client = this.gateway.getClient();
     if (!client || !this.gateway.isConnected()) {
       return;
@@ -251,7 +304,14 @@ export class PluginDiscoveryController {
     this.remoteError = null;
     this.loadMoreError = null;
     void this.loadMoreTask.run([null, this.intent, this.category, this.committedQuery, null]);
-    await this.browseTask.run([client, this.intent, this.category, this.committedQuery]);
+    if (this.isGroupedOverview() && this.overview) {
+      // Retire the search before restoring the overview; late results belong to the old intent.
+      void this.browseTask.run([null, this.intent, this.category, this.committedQuery, false]);
+      this.applyPage(this.overview);
+      this.host.requestUpdate();
+      return;
+    }
+    await this.browseTask.run([client, this.intent, this.category, this.committedQuery, manual]);
   }
 
   async loadMore(): Promise<void> {
@@ -273,29 +333,50 @@ export class PluginDiscoveryController {
   selectIntent(intent: PluginDiscoveryIntent): void {
     this.intent = intent;
     this.category = null;
-    void this.refresh();
+    void this.loadSelection();
   }
 
   selectCategory(category: string | null): void {
     this.intent = "all";
     this.category = category;
-    void this.refresh();
+    void this.loadSelection();
   }
 
   updateQuery(query: string): void {
+    const previousQuery = this.query.trim();
+    const nextQuery = query.trim();
+    const resetFilters = Boolean(nextQuery) && (this.intent !== "all" || this.category !== null);
     this.query = query;
-    if (query.trim()) {
+    if (nextQuery) {
       this.intent = "all";
       this.category = null;
     }
     this.host.requestUpdate();
     if (this.searchTimer) {
       clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+    // Canceling a debounce can leave reset filters whose results still need loading.
+    if (
+      nextQuery === this.committedQuery &&
+      !resetFilters &&
+      (nextQuery === previousQuery ||
+        (this.resultSelection?.intent === this.intent &&
+          this.resultSelection.category === this.category))
+    ) {
+      return;
+    }
+    if (!nextQuery) {
+      this.committedQuery = "";
+      void this.loadSelection();
+      return;
     }
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
-      this.committedQuery = query.trim();
-      void this.refresh();
+      // Only a newly settled query records a manual search.
+      const manual = nextQuery !== this.committedQuery && nextQuery.length >= 2;
+      this.committedQuery = nextQuery;
+      void this.loadSelection(manual);
     }, 250);
   }
 }

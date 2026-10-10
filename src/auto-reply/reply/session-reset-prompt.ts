@@ -1,4 +1,3 @@
-// Builds reset prompts that preserve session context and bootstrap mode.
 import { resolveBootstrapMode, type BootstrapMode } from "../../agents/bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
@@ -51,22 +50,19 @@ export async function resolveBareResetBootstrapFileAccess(params: {
   if (!cfg) {
     return false;
   }
-  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+  const runtimeModelParams = {
     cfg,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-  });
+  };
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext(runtimeModelParams);
   try {
-    return acquired.run((runtimeModelContext) => {
-      const inventory = resolveEffectiveToolInventory({
-        cfg,
-        agentId: params.agentId,
+    return await acquired.run(async (runtimeModelContext) => {
+      const inventory = await resolveEffectiveToolInventory({
+        ...runtimeModelParams,
         sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
       });
@@ -107,28 +103,16 @@ export async function resolveBareSessionResetPromptState(params: {
   });
   return {
     bootstrapMode,
-    prompt: buildBareSessionResetPrompt(params.cfg, params.nowMs, bootstrapMode),
+    // Reset turns need today's date to select the daily memory files.
+    prompt: appendCronStyleCurrentTimeLine(
+      bootstrapMode === "full"
+        ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING
+        : bootstrapMode === "limited"
+          ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
+          : BARE_SESSION_RESET_PROMPT_BASE,
+      params.cfg ?? {},
+      params.nowMs ?? Date.now(),
+    ),
     shouldPrependStartupContext: bootstrapMode === "none",
   };
-}
-
-/**
- * Build the bare session reset prompt, appending the current date/time so agents
- * know which daily memory files to read during their Session Startup sequence.
- * Without this, agents on /new or /reset guess the date from their training cutoff.
- */
-function buildBareSessionResetPrompt(
-  cfg?: OpenClawConfig,
-  nowMs?: number,
-  bootstrapMode?: BootstrapMode,
-): string {
-  return appendCronStyleCurrentTimeLine(
-    bootstrapMode === "full"
-      ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_PENDING
-      : bootstrapMode === "limited"
-        ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
-        : BARE_SESSION_RESET_PROMPT_BASE,
-    cfg ?? {},
-    nowMs ?? Date.now(),
-  );
 }

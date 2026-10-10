@@ -1,4 +1,3 @@
-// Matrix plugin module implements actions behavior.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,
@@ -8,7 +7,11 @@ import type {
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { Type } from "typebox";
 import { requiresExplicitMatrixDefaultAccount } from "./account-selection.js";
-import { resolveDefaultMatrixAccountId, resolveMatrixAccount } from "./matrix/accounts.js";
+import {
+  resolveDefaultMatrixAccountId,
+  resolveMatrixAccount,
+  resolveMatrixAccountAsync,
+} from "./matrix/accounts.js";
 import type { CoreConfig } from "./types.js";
 
 const MATRIX_PLUGIN_HANDLED_ACTIONS = new Set<ChannelMessageActionName>([
@@ -62,31 +65,21 @@ function createMatrixExposedActions(params: {
   senderIsOwner?: boolean;
 }) {
   const actions = new Set<ChannelMessageActionName>(["poll", "poll-vote"]);
-  if (params.gate("messages")) {
-    actions.add("send");
-    actions.add("read");
-    actions.add("edit");
-    actions.add("delete");
-  }
-  if (params.gate("reactions")) {
-    actions.add("react");
-    actions.add("reactions");
-    actions.add("emoji-list");
-  }
-  if (params.gate("pins")) {
-    actions.add("pin");
-    actions.add("unpin");
-    actions.add("list-pins");
-  }
+  const addGatedActions = (gate: string, ...names: ChannelMessageActionName[]) => {
+    if (params.gate(gate)) {
+      for (const name of names) {
+        actions.add(name);
+      }
+    }
+  };
+  addGatedActions("messages", "send", "read", "edit", "delete");
+  addGatedActions("reactions", "react", "reactions", "emoji-list");
+  addGatedActions("pins", "pin", "unpin", "list-pins");
   if (params.gate("profile") && params.senderIsOwner === true) {
     actions.add("set-profile");
   }
-  if (params.gate("memberInfo")) {
-    actions.add("member-info");
-  }
-  if (params.gate("channelInfo")) {
-    actions.add("channel-info");
-  }
+  addGatedActions("memberInfo", "member-info");
+  addGatedActions("channelInfo", "channel-info");
   if (params.encryptionEnabled && params.gate("verification") && params.senderIsOwner === true) {
     actions.add("permissions");
   }
@@ -175,18 +168,23 @@ export const matrixMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  prepareSendPayload: ({ ctx, payload }) => {
+  prepareSendPayload: async ({ ctx, payload }) => {
     if (ctx.action !== "send") {
       return null;
     }
-    const account = resolveMatrixActionAccount({
-      cfg: ctx.cfg as CoreConfig,
-      accountId: ctx.accountId,
-    });
-    return account && createActionGate(account.config.actions)("messages") ? payload : null;
+    const cfg = ctx.cfg as CoreConfig;
+    if (!ctx.accountId && requiresExplicitMatrixDefaultAccount(cfg)) {
+      return null;
+    }
+    const account = await resolveMatrixAccountAsync({ cfg, accountId: ctx.accountId });
+    return account.enabled &&
+      account.configured &&
+      createActionGate(account.config.actions)("messages")
+      ? payload
+      : null;
   },
   handleAction: async (ctx) => {
-    const { handleMatrixAction } = await import("./tool-actions.runtime.js");
+    const { handleMatrixAction } = await import("./tool-actions.js");
     return await handleMatrixAction(ctx);
   },
 };

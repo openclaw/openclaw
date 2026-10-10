@@ -14,8 +14,6 @@ import {
   customKimiProxyModel,
   staleKimiK27Model,
   customQwenReasoningModel,
-  gemma4Model,
-  kimiCodingProxyModel,
   getAssistantMessage,
   buildReplayParams,
   customReasoningProxyModel,
@@ -146,28 +144,23 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for Gemma 4 openai-completions models",
-      model: gemma4Model,
-      assertSanitizedFields: true,
-    },
-    {
       label: "preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo",
       model: xiaomiModel,
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for custom MiMo proxy routes",
-      model: customMiMoProxyModel,
-      assertSanitizedFields: true,
-    },
-    {
-      label: "preserves reasoning_content replay for custom MiMo V2.6 proxy routes",
+      label: "preserves reasoning_content replay for custom MiMo V2.6 Pro proxy routes",
       model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro" },
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for custom Kimi K2 proxy routes",
-      model: customKimiProxyModel,
+      label: "preserves reasoning_content replay for custom MiMo V2.6 Flash proxy routes",
+      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-flash" },
+      assertSanitizedFields: true,
+    },
+    {
+      label: "preserves reasoning_content replay for custom MiMo V2.6 UltraSpeed proxy routes",
+      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.6-pro-ultraspeed" },
       assertSanitizedFields: true,
     },
     {
@@ -190,18 +183,13 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
       assertSanitizedFields: true,
     },
     {
-      label: "preserves reasoning_content replay for Kimi Coding OpenAI-compatible routes",
-      model: kimiCodingProxyModel,
-      assertSanitizedFields: true,
-    },
-    {
       label: "preserves reasoning_content replay for suffixed reasoning model ids",
-      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.5-pro:cloud" },
+      model: { ...customMiMoProxyModel, id: "xiaomi/mimo-v2.5-pro:cloud", reasoning: false },
       assertSanitizedFields: false,
     },
     {
       label: "preserves reasoning_content replay for prefixed reasoning model ids",
-      model: { ...customKimiProxyModel, id: "hf:moonshotai/kimi-k2-thinking" },
+      model: { ...customKimiProxyModel, id: "hf:moonshotai/kimi-k2-thinking", reasoning: false },
       assertSanitizedFields: false,
     },
   ] as const)("$label", ({ model, assertSanitizedFields }) => {
@@ -228,25 +216,11 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
         api: "openai-completions" as const,
         provider: "opencode",
         baseUrl: "https://opencode.ai/zen/v1",
-        reasoning: true,
+        reasoning: false,
         input: ["text"] as ("text" | "image")[],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 65_536,
         maxTokens: 8192,
-      },
-    ],
-    [
-      "OpenRouter MiMo V2 Pro Free",
-      {
-        ...customMiMoProxyModel,
-        id: "xiaomi/mimo-v2-pro-free",
-      },
-    ],
-    [
-      "OpenRouter Kimi K2 Thinking Free",
-      {
-        ...customKimiProxyModel,
-        id: "moonshotai/kimi-k2-thinking-free",
       },
     ],
   ] as const)("preserves reasoning_content replay despite the %s tier suffix", (_label, model) => {

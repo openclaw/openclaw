@@ -42,6 +42,8 @@ Quick rule:
 | Client filesystem methods (`fs/read_text_file`, `fs/write_text_file`) | Unsupported | The bridge does not call ACP client filesystem methods.                                                                                                                                                                               |
 | Client terminal methods (`terminal/*`)                                | Unsupported | The bridge does not create ACP client terminals or stream terminal ids through tool calls.                                                                                                                                            |
 
+Assistant narration appears as `agent_message_chunk` updates before the related tool calls. When the Gateway reclassifies streamed text as commentary, the bridge preserves that narration once and tracks the final answer separately, so tool use does not truncate the answer or replay the narration.
+
 ## Known limitations
 
 - `loadSession` replays complete ACP event-ledger history only for bridge-created sessions. Older/no-ledger sessions use transcript fallback and do not reconstruct historic tool calls or system notices. Replay history is bounded by session, event, and retained-content limits; the default byte budget is 16 MiB of UTF-8 text plus row overhead. Truncated history also uses transcript fallback. See [ACP replay accounting](/reference/database-schemas#acp-replay-accounting).
@@ -77,7 +79,7 @@ openclaw acp --session agent:main:main --reset-session
 
 Use the built-in ACP client to sanity-check the bridge without an IDE. It spawns the ACP bridge and lets you type prompts interactively.
 
-After a session is established, an unexpected server signal exit makes the client exit with status `1`. An explicit `exit` or `quit` remains successful when it stops the server by signal. Numeric server exit codes are propagated, including a nonzero code returned during an explicit quit.
+After a session is established, an unexpected server signal exit makes the client exit with status `1`. An explicit `exit` or `quit` remains successful when it stops the server by signal. Numeric server exit codes are propagated, including a nonzero code returned during an explicit quit. Closing interactive input, including Ctrl-D at an empty prompt, uses the same client-owned shutdown path; it does not wait for an in-flight response to finish.
 
 ```bash
 openclaw acp client

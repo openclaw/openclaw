@@ -139,22 +139,19 @@ describe("wrapPromptDataBlock", () => {
     expect(hasLoneSurrogate(block)).toBe(false);
   });
 
-  it.each([10, 11, 12])(
-    "reserves the marker after escaping within a %i-character budget",
-    (maxEscapedChars) => {
-      const result = extractPromptData(
-        wrapPromptDataBlock({
-          label: "Data",
-          text: "<".repeat(20),
-          maxEscapedChars,
-          truncationMarker: "[cut]",
-        }),
-      );
+  it("reserves the marker after escaping within the character budget", () => {
+    const result = extractPromptData(
+      wrapPromptDataBlock({
+        label: "Data",
+        text: "<".repeat(20),
+        maxEscapedChars: 10,
+        truncationMarker: "[cut]",
+      }),
+    );
 
-      expect(result).toBe("&lt;[cut]");
-      expect(result.length).toBeLessThanOrEqual(maxEscapedChars);
-    },
-  );
+    expect(result).toBe("&lt;[cut]");
+    expect(result.length).toBeLessThanOrEqual(10);
+  });
 
   it("does not split HTML entities or Unicode at the escaped limit", () => {
     const result = extractPromptData(

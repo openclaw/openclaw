@@ -51,6 +51,9 @@ export function writePluginInspectFixture(
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
+if (process.env.OPENCLAW_TEST_OPENCLAW_ARGV_LOG) {
+  fs.appendFileSync(process.env.OPENCLAW_TEST_OPENCLAW_ARGV_LOG, args.join(" ") + "\\n");
+}
 if (args.join(" ") === "plugins install --help") {
   console.log("  --accept-capabilities  Accept capabilities");
 } else if (args.length === 4 && args[0] === "plugins" && args[1] === "inspect" && args[3] === "--json") {

@@ -11,7 +11,7 @@ import {
 } from "../chat/components/chat-composer-controls.ts";
 import { ComposerDictationController } from "../chat/composer-dictation.ts";
 import { ComposerMicrophonePicker } from "../chat/composer-microphone-picker.ts";
-import type { NewSessionComposerTextareaController } from "./composer.ts";
+import type { NewSessionComposerTextareaController } from "./composer-controller.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -110,8 +110,7 @@ export class NewSessionDictationControl {
     return html`
       ${renderComposerVoiceButton({
         connected,
-        sending: false,
-        isBusy: !enabled,
+        disabled: !enabled,
         dictation,
         idleLabel: t("newSession.dictate"),
         microphonePicker: renderMicrophonePicker({

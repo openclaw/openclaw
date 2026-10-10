@@ -25,7 +25,6 @@ import {
   parseReleaseVersion,
 } from "./lib/release-version.mjs";
 import {
-  resolveReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
   verifyReleaseWorkflowRun,
 } from "./release-tooling-identity.mjs";
@@ -37,6 +36,8 @@ const METADATA_LIMIT = 1024 * 1024;
 const BUNDLE_LIMIT = 2 * 1024 * 1024 * 1024;
 const SHA = /^[0-9a-f]{40}$/u;
 const DIGEST = /^[0-9a-f]{64}$/u;
+let commandOverride;
+let reportOverride;
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -57,6 +58,9 @@ function fileDigest(path) {
 }
 
 function command(binary, args, timeout = 60_000) {
+  if (commandOverride) {
+    return commandOverride(binary, args, timeout);
+  }
   return execFileSync(binary, args, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
@@ -72,29 +76,21 @@ function command(binary, args, timeout = 60_000) {
   });
 }
 
+function report(message) {
+  (reportOverride ?? console.error)(message);
+}
+
 function authorizeWrite(mode, options) {
-  const alphaBranch =
-    mode === "finalize-core" && options["workflow-ref"].startsWith("tideclaw/alpha/");
-  if (alphaBranch) {
-    assert(
-      options.latest === "false" && parseReleaseVersion(options.tag.slice(1))?.channel === "alpha",
-      "Tideclaw branch finalization requires an alpha tag and explicit non-latest intent",
-    );
-    // Reuse the release owner's exact direct-branch grammar before allowing
-    // the validator's live branch/SHA and publisher-attempt checks.
-    resolveReleaseToolingIdentity({
-      workflowContract: "2",
-      workflowRef: options["workflow-ref"],
-      workflowFullRef: options["workflow-full-ref"],
-      workflowSha: options["tooling-sha"],
-    });
+  const runGh = commandOverride ? (args) => command("gh", args) : undefined;
+  if (options.tag.includes("-alpha.") || options["workflow-ref"].includes("tideclaw/alpha/")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
   verifyReleaseToolingIdentity({
-    allowPrevalidatedRef: alphaBranch,
     repository: REPOSITORY,
     workflowRef: options["workflow-ref"],
     workflowFullRef: options["workflow-full-ref"],
     workflowSha: options["tooling-sha"],
+    ...(runGh ? { runGh } : {}),
     ...(mode === "publish"
       ? {}
       : {
@@ -153,6 +149,7 @@ function authorizeWrite(mode, options) {
         : ".github/workflows/linux-app-release.yml",
     workflowEvent: mode === "publish" ? "workflow_run" : "workflow_dispatch",
     runStatePolicy: "active",
+    ...(runGh ? { runGh } : {}),
   });
 }
 
@@ -301,6 +298,9 @@ class GitHub {
         "--disable",
         "--fail",
         "--location",
+        // Revalidate cached redirects and bytes after replacing mutable manifests.
+        "--header",
+        "Cache-Control: no-cache",
         "--silent",
         "--show-error",
         "--proto",
@@ -324,7 +324,12 @@ class GitHub {
     return path;
   }
 
-  publicAsset(release, entry, limit = METADATA_LIMIT) {
+  publicAsset(
+    release,
+    entry,
+    limit = METADATA_LIMIT,
+    { expectedHash, url = entry.browser_download_url } = {},
+  ) {
     assert(
       Number.isSafeInteger(entry.id) &&
         entry.id > 0 &&
@@ -334,14 +339,48 @@ class GitHub {
         entry.state === "uploaded",
       `Invalid asset identity: ${entry.name}`,
     );
-    const url = assetUrl(release.tag_name, entry.name);
-    assert.equal(entry.browser_download_url, url, "Unexpected public asset URL");
-    const path = this.download(url, limit);
-    assert.equal(lstatSync(path).size, entry.size, "Public asset size mismatch");
-    if (entry.digest != null) {
-      assert.equal(entry.digest, `sha256:${fileDigest(path)}`, "Public asset digest mismatch");
+    assert.equal(
+      entry.browser_download_url,
+      assetUrl(release.tag_name, entry.name),
+      "Unexpected public asset URL",
+    );
+    if (expectedHash && entry.digest != null) {
+      assert.equal(
+        entry.digest,
+        `sha256:${expectedHash}`,
+        `Uploaded asset digest mismatch: asset=${entry.id} expected=${expectedHash} observed=${entry.digest}`,
+      );
     }
-    return path;
+    assert(
+      entry.digest == null || /^sha256:[0-9a-f]{64}$/u.test(entry.digest),
+      "Invalid asset digest",
+    );
+    const expected = expectedHash ?? entry.digest?.slice(7);
+    // Only API-confirmed mutable metadata gets a convergence window. Immutable
+    // bundles and uncertain uploads remain fail-fast; these reads never repeat a write.
+    const converging = entry.digest != null && limit === METADATA_LIMIT;
+    const delays = converging ? [0, 2, 5, 10] : [0];
+    let observed;
+    for (const delay of delays) {
+      if (delay) {
+        command("sleep", [String(delay)]);
+      }
+      const path = this.download(url, limit);
+      observed = fileDigest(path);
+      if (converging) {
+        assert.deepEqual(
+          assetIdentity(this.api(`releases/assets/${entry.id}`)),
+          assetIdentity(entry),
+          "Asset changed during public readback",
+        );
+      }
+      if (lstatSync(path).size === entry.size && (!expected || observed === expected)) {
+        return path;
+      }
+    }
+    throw new Error(
+      `Public asset digest mismatch: ${url} asset=${entry.id} expected=${expected} observed=${observed}. Retry readback, not upload or rebuild.`,
+    );
   }
 
   metadata(release, name) {
@@ -360,9 +399,9 @@ class GitHub {
     const bytesHash = fileDigest(path);
     const previous = asset(release, name);
     if (previous) {
-      const old = this.publicAsset(release, previous, BUNDLE_LIMIT);
+      const old = this.publicAsset(release, previous, mutable ? METADATA_LIMIT : BUNDLE_LIMIT);
       if (fileDigest(old) === bytesHash) {
-        return;
+        return previous;
       }
       assert(mutable, `Immutable asset conflict: ${name}`);
     }
@@ -396,11 +435,11 @@ class GitHub {
     const published = this.unchanged(release, source);
     const uploaded = asset(published, name);
     assert(uploaded, `Upload missing from release: ${name}`);
-    assert.equal(
-      fileDigest(this.publicAsset(published, uploaded, BUNDLE_LIMIT)),
-      bytesHash,
-      `Public upload readback failed: ${name}`,
-    );
+    assert.equal(uploaded.size, lstatSync(path).size, `Uploaded asset size mismatch: ${name}`);
+    this.publicAsset(published, uploaded, mutable ? METADATA_LIMIT : BUNDLE_LIMIT, {
+      expectedHash: bytesHash,
+    });
+    return uploaded;
   }
 }
 
@@ -676,7 +715,7 @@ function mirror(github, publicKey, target) {
   beforeWrite();
   const path = github.temp("latest.json");
   writeFileSync(path, selected.bytes, { flag: "wx" });
-  github.upload(latest, source, "latest.json", path, true, beforeWrite);
+  const mirrored = github.upload(latest, source, "latest.json", path, true, beforeWrite);
   assert.deepEqual(identity(github.latest()), identity(latest), "Core latest changed after mirror");
   assert.deepEqual(
     canonical(github, publicKey).bytes,
@@ -689,11 +728,10 @@ function mirror(github, publicKey, target) {
     selected.manifest.linuxPublication.channelSha,
     selected.manifest.version,
   );
-  const publicPath = github.download(
-    `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`,
-    METADATA_LIMIT,
-  );
-  assert.deepEqual(readFileSync(publicPath), selected.bytes, "Legacy endpoint readback failed");
+  github.publicAsset(latest, mirrored, METADATA_LIMIT, {
+    expectedHash: digest(selected.bytes),
+    url: `https://github.com/${REPOSITORY}/releases/latest/download/latest.json`,
+  });
   assert.deepEqual(
     identity(github.latest()),
     identity(latest),
@@ -717,13 +755,19 @@ function mirror(github, publicKey, target) {
 function finalizeCore(github, options) {
   const version = options.tag.slice(1);
   const parsed = parseReleaseVersion(version);
+  if (parsed?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
+  const train = parsed && classifyReleaseTrain(parsed);
   assert(
-    parsed &&
-      parsed.version === version &&
-      ["stable", "alpha", "beta"].includes(classifyReleaseTrain(parsed)),
+    parsed && parsed.version === version && ["stable", "beta", "extended-stable"].includes(train),
     "Unsupported core GitHub release train",
   );
   assert(["true", "false"].includes(options.latest), "Expected explicit core latest intent");
+  assert(
+    train !== "extended-stable" || options.latest === "false",
+    "Extended-stable releases cannot become core latest",
+  );
   const prerelease = parsed.channel !== "stable";
   assert(!prerelease || options.latest === "false", "Prereleases cannot become core latest");
   github.authorize();
@@ -979,14 +1023,9 @@ function publish(github, options, publicKey) {
   const publicKeyPath = github.temp("updater.pub");
   writeFileSync(signaturePath, Buffer.from(signature, "base64"), { flag: "wx" });
   writeFileSync(publicKeyPath, Buffer.from(publicKey, "base64"), { flag: "wx" });
-  command("minisign", [
-    "-Vm",
-    join(directory, names.appimage),
-    "-x",
-    signaturePath,
-    "-p",
-    publicKeyPath,
-  ]);
+  const verifySignature = (name) =>
+    command("minisign", ["-Vm", join(directory, name), "-x", signaturePath, "-p", publicKeyPath]);
+  verifySignature(names.appimage);
 
   // Detect every immutable conflict before uploading any missing file.
   for (const entry of inputs) {
@@ -1074,14 +1113,7 @@ function publish(github, options, publicKey) {
       signaturePath,
       Buffer.from(retained.platforms["linux-x86_64"].signature, "base64"),
     );
-    command("minisign", [
-      "-Vm",
-      join(directory, names.appimage),
-      "-x",
-      signaturePath,
-      "-p",
-      publicKeyPath,
-    ]);
+    verifySignature(names.appimage);
   } else {
     assert(
       typeof published.published_at === "string" &&
@@ -1101,14 +1133,7 @@ function publish(github, options, publicKey) {
             signaturePath,
             Buffer.from(legacy.platforms["linux-x86_64"].signature, "base64"),
           );
-          command("minisign", [
-            "-Vm",
-            join(directory, names.appimage),
-            "-x",
-            signaturePath,
-            "-p",
-            publicKeyPath,
-          ]);
+          verifySignature(names.appimage);
         }
       }
     }
@@ -1153,7 +1178,7 @@ function publish(github, options, publicKey) {
   if (comparison >= 0) {
     const path = github.temp("canonical-linux.json");
     writeFileSync(path, bytes, { flag: "wx" });
-    console.error(
+    report(
       JSON.stringify({
         state: "canonical-publication-intent",
         version,
@@ -1202,14 +1227,7 @@ function publish(github, options, publicKey) {
           "Invalid retained desktop signature",
         );
         writeFileSync(signaturePath, Buffer.from(previousSignature, "base64"));
-        command("minisign", [
-          "-Vm",
-          join(directory, name),
-          "-x",
-          signaturePath,
-          "-p",
-          publicKeyPath,
-        ]);
+        verifySignature(name);
       }
       // Keep the previously published date/notes on an identical bundle replay.
       writeFileSync(desktopPath, previous);
@@ -1232,8 +1250,9 @@ function publish(github, options, publicKey) {
   };
 }
 
-function main() {
+function main(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({
+    args,
     allowPositionals: true,
     options: Object.fromEntries(
       [
@@ -1323,15 +1342,31 @@ function main() {
         : mode === "publish"
           ? publish(github, values, publicKey)
           : mirror(github, publicKey, { tag: values.tag, source: values["source-sha"] });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result;
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
+export function runLinuxAppChannel(args, options = {}) {
+  // The workflow uses the default process boundaries. Tests inject synchronous
+  // command/report adapters so fault-heavy cases do not launch hundreds of
+  // short-lived Node processes.
+  const previousCommandOverride = commandOverride;
+  const previousReportOverride = reportOverride;
+  commandOverride = options.runCommand;
+  reportOverride = options.report;
+  try {
+    return main(args);
+  } finally {
+    commandOverride = previousCommandOverride;
+    reportOverride = previousReportOverride;
+  }
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    main();
+    process.stdout.write(`${JSON.stringify(runLinuxAppChannel(process.argv.slice(2)), null, 2)}\n`);
   } catch (error) {
     console.error(`Release publication incomplete; reconcile before retry: ${error.message}`);
     process.exitCode = 1;

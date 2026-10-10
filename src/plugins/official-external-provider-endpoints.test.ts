@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 import rootPackageJson from "../../package.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { listOfficialExternalProviderEndpointManifests } from "./official-external-provider-endpoints.js";
 
 const repoRoot = fileURLToPath(new URL("../..", import.meta.url));
 
@@ -118,23 +117,5 @@ describe("official external provider endpoint catalog mirror", () => {
         `catalog providerEndpoints for plugin "${pluginId}" must mirror extensions/${local.dirName}/openclaw.plugin.json`,
       ).toEqual(local.manifest.providerEndpoints);
     }
-  });
-
-  it("exposes endpoint metadata for externalized providers", () => {
-    const endpointClasses = listOfficialExternalProviderEndpointManifests().flatMap((manifest) =>
-      Array.isArray(manifest.providerEndpoints)
-        ? manifest.providerEndpoints.flatMap((endpoint) =>
-            isRecord(endpoint) && typeof endpoint.endpointClass === "string"
-              ? [endpoint.endpointClass]
-              : [],
-          )
-        : [],
-    );
-    expect(endpointClasses).toContain("modelstudio-native");
-    expect(endpointClasses).toContain("moonshot-native");
-    expect(endpointClasses).toContain("meta-native");
-    expect(endpointClasses).toContain("novita-native");
-    expect(endpointClasses).toContain("xiaomi-native");
-    expect(endpointClasses).toContain("zai-native");
   });
 });

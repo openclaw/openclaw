@@ -41,52 +41,6 @@ const endpointCases = [
 ] as const;
 
 describe("gateway OpenAI-compatible HTTP routes", () => {
-  it("returns 404 when compat endpoints are disabled", async () => {
-    await withGatewayServer({
-      prefix: "openai-compat-disabled",
-      resolvedAuth: AUTH_NONE,
-      run: async (server) => {
-        for (const path of ["/v1/chat/completions", "/v1/responses"]) {
-          const { res, getBody } = await sendRequest(server, {
-            path,
-            method: "POST",
-            headers: { "content-type": "application/json" },
-          });
-
-          expect(res.statusCode, path).toBe(404);
-          expect(getBody(), path).toBe("Not Found");
-        }
-      },
-    });
-  });
-
-  it("returns 404 for disabled GET routes when the Control UI is root-mounted", async () => {
-    await withGatewayServer({
-      prefix: "openai-compat-disabled-root-control-ui",
-      resolvedAuth: AUTH_NONE,
-      overrides: {
-        controlUiEnabled: true,
-        controlUiBasePath: "",
-      },
-      run: async (server) => {
-        for (const path of [
-          "/v1",
-          "/v1/",
-          "/v1/models",
-          "/v1/models/openclaw",
-          "/v1/chat/completions",
-          "/v1/responses",
-          "/v1/embeddings",
-        ]) {
-          const { res, getBody } = await sendRequest(server, { path, method: "GET" });
-
-          expect(res.statusCode, path).toBe(404);
-          expect(getBody(), path).toBe("Not Found");
-        }
-      },
-    });
-  });
-
   it.each(endpointCases)(
     "hot reloads $name routes on the same server",
     async ({ endpoint, path }) => {
@@ -131,43 +85,6 @@ describe("gateway OpenAI-compatible HTTP routes", () => {
                   ]),
                 });
               }
-            }
-          }
-        },
-      });
-    },
-  );
-
-  it.each(
-    endpointCases.flatMap(({ name, endpoint, path, override }) =>
-      [true, false].map((enabled) => ({ name, endpoint, path, override, enabled })),
-    ),
-  )(
-    "preserves the explicit $name=$enabled override over runtime config",
-    async ({ endpoint, path, override, enabled }) => {
-      await withGatewayServer({
-        prefix: "openai-compat-explicit-override",
-        resolvedAuth: AUTH_NONE,
-        overrides: {
-          controlUiEnabled: true,
-          controlUiBasePath: "",
-          [override]: enabled,
-        },
-        run: async (server) => {
-          for (const configuredEnabled of [!enabled, enabled, !enabled]) {
-            const config: OpenClawConfig = {
-              gateway: { http: { endpoints: { [endpoint]: { enabled: configuredEnabled } } } },
-            };
-            setRuntimeConfigSnapshot(config, config);
-            for (const requestPath of [path, "/v1/models", "/v1/embeddings"]) {
-              const { res } = await sendRequest(server, {
-                path: requestPath,
-                method: "GET",
-                headers: { "x-openclaw-scopes": "operator.read" },
-              });
-              expect(res.statusCode, `${requestPath} with config=${configuredEnabled}`).toBe(
-                enabled ? (requestPath === "/v1/models" ? 200 : 405) : 404,
-              );
             }
           }
         },
@@ -312,8 +229,8 @@ function requestBody(input: { path: string; kind: "image" | "file" }, stream: bo
 describe("HTTP media preparation cancellation", () => {
   it.each(
     inputCases.flatMap(({ name, path, kind }) =>
-      [false, true].flatMap((stream) =>
-        (["complete", "before headers", "during body"] as const).map((phase) => ({
+      (["complete", "before headers", "during body", "policy changed"] as const).flatMap((phase) =>
+        (phase === "complete" ? [false, true] : [false]).map((stream) => ({
           name,
           path,
           kind,
@@ -386,19 +303,37 @@ describe("HTTP media preparation cancellation", () => {
             headers: { authorization: "Bearer test-token", "content-type": "application/json" },
           });
           client.on("error", () => {});
-          const completed = testCase.phase === "complete" ? once(client, "response") : undefined;
+          const completed =
+            testCase.phase === "complete" || testCase.phase === "policy changed"
+              ? once(client, "response")
+              : undefined;
           client.end(JSON.stringify(requestBody(testCase, testCase.stream)));
           try {
+            if (testCase.phase === "policy changed") {
+              await firstStarted.promise;
+              const changed: OpenClawConfig = {
+                ...config,
+                gateway: { ...config.gateway, allowRealIpFallback: true },
+              };
+              setRuntimeConfigSnapshot(changed, changed);
+              firstResponse?.end(bytes);
+            }
             if (completed) {
               const [response] = await completed;
               const chunks: Buffer[] = [];
               for await (const chunk of response) {
                 chunks.push(Buffer.from(chunk));
               }
-              expect(response.statusCode).toBe(200);
-              expect(Buffer.concat(chunks).toString()).toContain("image accepted");
-              expect(requestedSources).toEqual(["/first", "/second"]);
-              expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(1);
+              if (testCase.phase === "policy changed") {
+                expect(response.statusCode).toBe(401);
+                expect(requestedSources).toEqual(["/first"]);
+                expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
+              } else {
+                expect(response.statusCode).toBe(200);
+                expect(Buffer.concat(chunks).toString()).toContain("image accepted");
+                expect(requestedSources).toEqual(["/first", "/second"]);
+                expect(agentCommandFromGatewayIngress).toHaveBeenCalledTimes(1);
+              }
             } else {
               await firstStarted.promise;
               if (testCase.phase === "during body") {

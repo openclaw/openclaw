@@ -13,7 +13,6 @@ export type BundledPluginBuildEntryParams = {
   includeRootPackageExcludedDirs?: boolean;
 };
 
-export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS: Set<string>;
 export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV: string;
 export function parseDockerSelectedPluginBuildIdFilter(env?: NodeJS.ProcessEnv): Set<string> | null;
 export function collectPluginSourceEntries(packageJson: unknown): string[];
@@ -28,7 +27,4 @@ export function collectRootPackageExcludedExtensionDirs(
 export function collectBundledPluginBuildEntries(
   params?: BundledPluginBuildEntryParams,
 ): BundledPluginBuildEntry[];
-export function listBundledPluginBuildEntries(
-  params?: BundledPluginBuildEntryParams,
-): Record<string, string>;
 export function listBundledPluginPackArtifacts(params?: BundledPluginBuildEntryParams): string[];

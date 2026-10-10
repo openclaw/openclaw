@@ -24,7 +24,9 @@ and AI chat. Detected connections and supported providers share the same picker;
 failure or cancellation never automatically selects another provider. In local
 onboarding, **Skip for now** prepares the named agent's workspace and local Gateway
 configuration, then exits without starting either. Interrupted baseline setup
-resumes on the next run.
+resumes on the next run. The **Local setup** summary confirms workspace and Gateway
+configuration, not a working AI connection; **Inference ready** appears only after
+the selected connection passes verification.
 
 The classic wizard remains available for remote Gateway setup, channel pairing,
 daemon controls, skills, and imports. Run it explicitly
@@ -219,7 +221,7 @@ directly instead of showing a menu that could discard the requested import.
     - Workspace default (or existing workspace)
     - Gateway port **18789**
     - Gateway auth **Token** (auto-generated, even on loopback)
-    - Tool policy: `tools.profile: "coding"` for new setups (an existing explicit profile is preserved)
+    - Tool policy: `tools.profile: "full"` when no profile is configured; explicit profiles and other policies are preserved. Execution permissions remain separate. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
     - DM sessions: onboarding preserves an explicit `session.dmScope` and otherwise leaves it unset, so the `"main"` default keeps all direct messages across channels in the agent's rolling main session—the personal-agent default. For shared or multi-user inboxes, use `"per-channel-peer"`; `openclaw security audit` recommends isolation when it detects multi-user DM traffic. Details: [CLI setup reference](/start/wizard-cli-reference#outputs-and-internals)
     - Tailscale exposure **Off**
     - Telegram and WhatsApp DMs default to **allowlist**: Telegram asks for a numeric Telegram user ID, WhatsApp asks for a phone number
@@ -289,7 +291,9 @@ Local mode (default) walks through these steps:
    install with guidance. If both `gateway.auth.token` and
    `gateway.auth.password` are set while `gateway.auth.mode` is unset, install
    is blocked until you set the mode explicitly.
-8. **Health check** - starts the Gateway and verifies it is reachable.
+8. **Health check** - waits for a managed or temporary session Gateway startup and verifies it is reachable.
+   If onboarding did not start a Gateway, it checks current reachability and explains
+   how to start one without waiting for a service that onboarding did not start.
 
 <Note>
 Re-running onboarding does **not** wipe anything unless you pass `--reset`.

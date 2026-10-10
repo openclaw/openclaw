@@ -2,6 +2,7 @@
 // lifecycle hooks.
 import { describe, expect, it, vi } from "vitest";
 import {
+  getSandboxBackendCapabilities,
   getSandboxBackendFactory,
   getSandboxBackendManager,
   getSandboxBackendWorkdirResolver,
@@ -78,6 +79,25 @@ describe("sandbox backend registry", () => {
     expect(getSandboxBackendWorkdirResolver("podman")).not.toBeNull();
   });
 
+  it("advertises read-only resource projection only for supporting backends", () => {
+    expect(getSandboxBackendCapabilities("docker")?.readOnlyResourceMounts).toBe(true);
+    expect(getSandboxBackendCapabilities("podman")?.readOnlyResourceMounts).toBe(true);
+    expect(getSandboxBackendCapabilities("ssh")?.readOnlyResourceMounts).not.toBe(true);
+
+    const restore = registerSandboxBackend("test-capabilities", {
+      factory: async () => {
+        throw new Error("not used");
+      },
+      capabilities: { readOnlyResourceMounts: true },
+    });
+    try {
+      expect(getSandboxBackendCapabilities("test-capabilities")?.readOnlyResourceMounts).toBe(true);
+    } finally {
+      restore();
+    }
+    expect(getSandboxBackendCapabilities("test-capabilities")).toBeUndefined();
+  });
+
   it.each(["docker", "podman", "ssh"] as const)(
     "preserves %s overrides through repeated module reloads and restores its defaults",
     async (backendId) => {
@@ -145,53 +165,6 @@ describe("sandbox backend registry", () => {
     } finally {
       restore();
     }
-  });
-
-  it("registers and restores backend factories", () => {
-    // Tests and optional backends install process-local factories; restore must
-    // remove them so later suites see the default registry.
-    const factory = async () => {
-      throw new Error("not used");
-    };
-    const restore = registerSandboxBackend("test-backend", factory);
-    expect(getSandboxBackendFactory("test-backend")).toBe(factory);
-    restore();
-    expect(getSandboxBackendFactory("test-backend")).toBeNull();
-  });
-
-  it("registers backend managers alongside factories", () => {
-    const factory = async () => {
-      throw new Error("not used");
-    };
-    const manager = {
-      describeRuntime: async () => ({
-        running: true,
-        configLabelMatch: true,
-      }),
-      removeRuntime: async () => {},
-    };
-    const restore = registerSandboxBackend("test-managed", {
-      factory,
-      manager,
-    });
-    expect(getSandboxBackendFactory("test-managed")).toBe(factory);
-    expect(getSandboxBackendManager("test-managed")).toBe(manager);
-    restore();
-    expect(getSandboxBackendManager("test-managed")).toBeNull();
-  });
-
-  it("registers backend workdir resolvers alongside factories", () => {
-    const factory = async () => {
-      throw new Error("not used");
-    };
-    const resolveWorkdir = () => "/runtime/workspace";
-    const restore = registerSandboxBackend("test-workdir", {
-      factory,
-      resolveWorkdir,
-    });
-    expect(getSandboxBackendWorkdirResolver("test-workdir")).toBe(resolveWorkdir);
-    restore();
-    expect(getSandboxBackendWorkdirResolver("test-workdir")).toBeNull();
   });
 
   it.each([

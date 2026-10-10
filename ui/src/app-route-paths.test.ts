@@ -27,6 +27,7 @@ import {
   type MemoryRouteTab,
 } from "./app-route-paths.ts";
 import { createApplicationRouter, startApplicationRouter } from "./app-routes.ts";
+import { createAgentSelectionCapability } from "./app/agent-selection.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import type { AgentsPanel } from "./lib/agents/panels.ts";
 import { createApplicationGateway } from "./test-helpers/application-context.ts";
@@ -164,7 +165,17 @@ function createStartupContext(basePath = ""): ApplicationContext {
     lastError: null,
     lastErrorCode: null,
   });
-  return { basePath, gateway } as unknown as ApplicationContext;
+  return {
+    basePath,
+    gateway,
+    settingsAgentSelection: createAgentSelectionCapability(
+      gateway,
+      { state: { agentsList: null }, subscribe: () => () => {} },
+      undefined,
+      undefined,
+      { requireConfiguredAgent: true },
+    ),
+  } as unknown as ApplicationContext;
 }
 
 describe("Dynamic route startup bridge", () => {
@@ -661,8 +672,7 @@ describe("Agent panel route paths", () => {
       agents: [{ id: "main" }],
     };
     const context = {
-      basePath: "",
-      gateway: createStartupContext().gateway,
+      ...createStartupContext(),
       agents: {
         state: { agentsList, agentsError: null },
         ensureList: () => Promise.resolve(agentsList),

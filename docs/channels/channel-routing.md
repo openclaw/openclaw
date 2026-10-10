@@ -28,6 +28,11 @@ Explicit outbound targets may include a provider prefix, such as `telegram:123` 
 
 Target-kind and service prefixes such as `channel:<id>`, `user:<id>`, `room:<id>`, `thread:<id>`, `imessage:<handle>`, and `sms:<number>` stay inside the selected channel's grammar. They do not select the provider by themselves.
 
+Plugin send receipts that report failure, suppression, or dry run leave the
+conversation's stored route and delivery transcript unchanged. Confirmed partial
+sends can establish a route, but requested content is not mirrored as fully
+delivered.
+
 ## Session key shapes (examples)
 
 Direct messages collapse to the agent's **main** session by default:
@@ -98,7 +103,7 @@ Ordinary routing picks **one agent** for each inbound message:
 8. **Channel match** (any account on that channel, `accountId: "*"`).
 9. **Fallback owner**: an owner supplied by the caller, otherwise the sole configured agent or a retained legacy owner. Multiple agents without an owner require a matching binding; routing does not pick the first roster entry.
 
-Raw legacy default markers and the `main` fallback for raw configurations without an agent roster remain supported for compatibility.
+Run `openclaw doctor --fix` to migrate legacy default markers before startup. Fresh configurations without an agent roster receive the single `main` agent.
 
 When a binding includes multiple match fields (`peer`, `guildId`, `teamId`, `roles`), **all provided fields must match** for that binding to apply.
 
@@ -152,7 +157,6 @@ Example:
   agents: {
     entries: {
       support: {
-        default: true,
         name: "Support",
         workspace: "~/.openclaw/workspace-support",
       },
@@ -205,6 +209,18 @@ session entries.
 WebChat attaches to the **selected agent** and defaults to the agent's main
 session. Because of this, WebChat lets you see cross-channel context for that
 agent in one place.
+
+A WebChat turn and its background completions stay in WebChat unless an external
+route is explicitly selected. The session's saved external route is retained for
+callers that intentionally use it; it does not override the current turn's origin.
+Internally triggered media tasks can use a WebChat channel sentinel without an
+interactive WebChat origin; their media admission still pins the saved external
+route.
+
+An outbound `send` request can set `sessionKey` to mirror delivered output into
+a different transcript. This does not rebind that transcript's delivery route:
+the resolved destination conversation owns the saved route, including when
+channel routing intentionally selects a shared main session.
 
 ## Reply context
 

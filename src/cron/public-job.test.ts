@@ -65,36 +65,58 @@ describe("toPublicCronJob", () => {
     });
   });
 
-  it("strips private tool-cap provenance without mutating the stored job", () => {
-    const job: CronStoredJob = {
-      ...makeCronJob({}),
-      toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
-      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
-      toolsAllowExecTargetRequirement: {
-        version: 1,
-        target: { version: 1, host: "gateway", ask: "always" },
-        grantIndex: 0,
-      },
-    };
+  it.each(["final-executable-surface", "authenticated-requester"] as const)(
+    "strips private %s provenance without mutating the stored job",
+    (source) => {
+      const channelRequester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "123456789012345678",
+      };
+      const toolsAllowProvenance =
+        source === "final-executable-surface"
+          ? {
+              version: 1 as const,
+              source,
+              callerOrigin: { kind: "unknown" as const },
+              channelRequester,
+            }
+          : { version: 1 as const, source, channelRequester };
+      const job: CronStoredJob = {
+        ...makeCronJob({}),
+        toolsAllowProvenance,
+        toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+        toolsAllowExecTargetRequirement: {
+          version: 1,
+          target: { version: 1, host: "gateway", ask: "always" },
+          grantIndex: 0,
+        },
+      };
 
-    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
-    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTarget");
-    expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTargetRequirement");
-    expect(job.toolsAllowProvenance).toEqual({
-      version: 1,
-      source: "final-executable-surface",
-    });
-    expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
-  });
+      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowProvenance");
+      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTarget");
+      expect(toPublicCronJob(job)).not.toHaveProperty("toolsAllowExecTargetRequirement");
+      expect(job.toolsAllowProvenance).toEqual(toolsAllowProvenance);
+      expect(job.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway", ask: "always" });
+    },
+  );
 
   it("strips private creator provenance without mutating the stored job", () => {
     const job: CronStoredJob = {
       ...makeCronJob({}),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
+      sourceConversation: {
+        sessionKey: "agent:main:conversation",
+        sessionId: "creating-session",
+        lifecycleRevision: "generation-1",
+      },
     };
 
     expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
+    expect(toPublicCronJob(job)).not.toHaveProperty("sourceConversation");
     expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
+    expect(job.sourceConversation?.lifecycleRevision).toBe("generation-1");
   });
 
   it("strips private runtime authority without mutating the stored job", () => {

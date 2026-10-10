@@ -9,12 +9,42 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { validatePluginSdkApiReleaseEvidence } from "../../scripts/plugin-sdk-api-release-evidence.mjs";
-import { withTestTimeout } from "../helpers/promise.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  expandPluginSdkApiDiffSet,
+  selectPluginSdkApiReleaseEvidence,
+  validatePluginSdkApiReleaseEvidence,
+} from "../../scripts/plugin-sdk-api-release-evidence.mjs";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
+import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const pendingChildCompletions = new Set<Promise<unknown>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Timed-out bodies can still be joining installers and deleting worktrees in finally.
+    await Promise.allSettled(pendingChildCompletions);
+    cleanup();
+  }),
+);
+
+function ownChildCompletion<T>(completion: Promise<T>): Promise<T> {
+  const owned = completion.finally(() => {
+    pendingChildCompletions.delete(owned);
+  });
+  pendingChildCompletions.add(owned);
+  return owned;
+}
 const emptyDiff = {
   entrypointsAdded: [],
   entrypointsRemoved: [],
@@ -47,7 +77,12 @@ function commit(repo: string, message: string): string {
 function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]) {
   return spawnSync(
     process.execPath,
-    ["--import", import.meta.resolve("tsx"), resolve("scripts/plugin-sdk-api-diff.mts"), ...args],
+    [
+      ...resolveRuntimeWorkerArgv(
+        resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+      ),
+      ...args,
+    ],
     {
       cwd: repo,
       encoding: "utf8",
@@ -63,19 +98,198 @@ function runCli(repo: string, runnerTemp: string, binDir: string, args: string[]
   );
 }
 
-async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!check()) {
-    if (Date.now() >= deadline) {
-      throw new Error("timed out waiting for Plugin SDK API diff child");
-    }
-    await new Promise((resolveWait) => {
-      setTimeout(resolveWait, 25);
-    });
-  }
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function writeInstallReceipt(binDir: string): string {
+  const receiptPath = join(binDir, "install-receipt.mjs");
+  writeFileSync(
+    receiptPath,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(process.argv[2], "ready");
+// This reporter is a short-lived shell child: retain the socket until its write drains.
+fixtureReceiptSocket.ref();
+fixtureReceiptSocket.end();
+`,
+  );
+  return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${receiptPath.replace(/'/gu, `'\\''`)}'`;
+}
+
+async function installBeforeSettlement(
+  marker: string,
+  close: PromiseLike<unknown>,
+  label = "Plugin SDK API diff child",
+): Promise<void> {
+  // The fixture writes its marker before reporting; socket delivery may follow CLI close.
+  await Promise.race([
+    receipts.waitFor(marker, "ready"),
+    Promise.resolve(close).then(() => {
+      if (!existsSync(marker)) {
+        throw new Error(`timed out waiting for ${label}`);
+      }
+    }),
+  ]);
 }
 
 describe("Plugin SDK API diff CLI", () => {
+  it("finishes every revision install before starting declaration rendering", async ({
+    signal,
+  }) => {
+    const repo = tempDirs.make("plugin-sdk-install-order-repo-");
+    const runnerTemp = tempDirs.make("plugin-sdk-install-order-temp-");
+    const binDir = tempDirs.make("plugin-sdk-install-order-bin-");
+    const installClaim = join(binDir, "install-claim");
+    const blockedMarker = join(binDir, "install-blocked");
+    const releaseMarker = join(binDir, "install-release");
+    const renderDuringInstall = join(binDir, "render-during-install");
+    const renderStarted = join(binDir, "render-started");
+    git(repo, ["init", "--quiet", "--initial-branch=main"]);
+    mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
+    mkdirSync(join(repo, "scripts/lib"), { recursive: true });
+    writeFileSync(join(repo, ".gitignore"), "node_modules\n");
+    writeFileSync(
+      join(repo, "package.json"),
+      JSON.stringify({ version: "2026.8.2", type: "module" }),
+    );
+    writeFileSync(
+      join(repo, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          target: "ESNext",
+          types: [],
+          skipLibCheck: true,
+        },
+      }),
+    );
+    writeFileSync(join(repo, "scripts/lib/plugin-sdk-entrypoints.json"), '["fixture"]');
+    writeFileSync(join(repo, "scripts/lib/plugin-sdk-private-local-only-subpaths.json"), "[]");
+    const source = join(repo, "src/plugin-sdk/fixture.ts");
+    writeFileSync(source, "export type Fixture = string;\n");
+    const baseSha = commit(repo, "base");
+    writeFileSync(source, "export type Fixture = number;\n");
+    commit(repo, "head");
+    symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
+
+    const fakePnpm = join(binDir, "pnpm");
+    writeFileSync(
+      fakePnpm,
+      `#!/bin/sh
+if mkdir "$PNPM_MARKER" 2>/dev/null; then
+  while [ ! -e "$PNPM_BLOCKED" ]; do sleep 0.05; done
+  exit 0
+fi
+: > "$PNPM_BLOCKED"
+${writeInstallReceipt(binDir)} "$PNPM_BLOCKED"
+while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
+`,
+    );
+    chmodSync(fakePnpm, 0o755);
+    const renderProbe = join(binDir, "render-probe.cjs");
+    writeFileSync(
+      renderProbe,
+      `const childProcess = require("node:child_process");
+const fs = require("node:fs");
+const { syncBuiltinESMExports } = require("node:module");
+const os = require("node:os");
+os.availableParallelism = () => 8;
+os.totalmem = () => 32 * 1024 ** 3;
+process.constrainedMemory = () => 32 * 1024 ** 3;
+const originalSpawn = childProcess.spawn;
+let activeInstalls = 0;
+let installCount = 0;
+childProcess.spawn = function (command, args, options) {
+  const child = originalSpawn.call(this, command, args, options);
+  if (command === "pnpm") {
+    activeInstalls += 1;
+    installCount += 1;
+    child.once("close", () => {
+      activeInstalls -= 1;
+      setImmediate(() => fs.writeFileSync(process.env.PNPM_RELEASE, "release\\n"));
+    });
+  }
+  if (args?.includes("--render-root") && (installCount < 2 || activeInstalls > 0)) {
+    fs.writeFileSync(process.env.RENDER_DURING_INSTALL, "started early\\n");
+  }
+  return child;
+};
+syncBuiltinESMExports();
+if (process.argv.includes("--render-root")) {
+  fs.writeFileSync(process.env.RENDER_STARTED, "started\\n");
+}
+`,
+    );
+    const child = spawn(
+      process.execPath,
+      [
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
+        "--base",
+        baseSha,
+        "--head",
+        "HEAD",
+      ],
+      {
+        cwd: repo,
+        env: {
+          ...withRuntimePreload(process.env, renderProbe),
+          PATH: `${binDir}${delimiter}${process.env.PATH ?? ""}`,
+          PNPM_MARKER: installClaim,
+          PNPM_BLOCKED: blockedMarker,
+          PNPM_RELEASE: releaseMarker,
+          RENDER_DURING_INSTALL: renderDuringInstall,
+          RENDER_STARTED: renderStarted,
+          RUNNER_TEMP: runnerTemp,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
+        },
+        stdio: ["ignore", "ignore", "pipe"],
+      },
+    );
+    const close = ownChildCompletion(
+      new Promise<number | null>((resolveClose) => {
+        child.once("close", resolveClose);
+      }),
+    );
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+
+    let exitCode: number | null = null;
+    try {
+      await withinTest(
+        installBeforeSettlement(blockedMarker, close, "second revision install"),
+        signal,
+      );
+      exitCode = await withinTest(close, signal);
+    } finally {
+      writeFileSync(releaseMarker, "release\n");
+      if (child.exitCode === null) {
+        child.kill();
+      }
+      await close;
+    }
+    const progressLines = stderr.trim().split("\n");
+    expect(progressLines).toHaveLength(8);
+    for (const line of progressLines) {
+      expect(line).toMatch(
+        /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
+      );
+    }
+    expect(exitCode).toBe(0);
+    expect(existsSync(blockedMarker)).toBe(true);
+    expect(existsSync(renderStarted)).toBe(true);
+    expect(existsSync(renderDuringInstall)).toBe(false);
+  }, 50_000);
+
   it("reports identical commit aliases without installing or changing a dirty caller", () => {
     const repo = tempDirs.make("plugin-sdk-identical-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-identical-temp-");
@@ -166,7 +380,7 @@ describe("Plugin SDK API diff CLI", () => {
     35_000,
   );
 
-  it("interrupts a running child and removes its registered worktree", async () => {
+  it("interrupts a running child and removes its registered worktree", async ({ signal }) => {
     // Keep revision checkout bounded so startup reaches the child this test cancels.
     const repo = tempDirs.make("plugin-sdk-api-diff-repo-");
     const runnerTemp = tempDirs.make("plugin-sdk-api-diff-temp-");
@@ -186,16 +400,16 @@ describe("Plugin SDK API diff CLI", () => {
     const fakePnpm = join(binDir, "pnpm");
     writeFileSync(
       fakePnpm,
-      "#!/bin/sh\n: > \"$PNPM_MARKER\"\ntrap 'exit 143' INT TERM\nwhile :; do sleep 1; done\n",
+      `#!/bin/sh\ntrap 'exit 143' INT TERM\n: > "$PNPM_MARKER"\n${writeInstallReceipt(binDir)} "$PNPM_MARKER"\nwhile :; do sleep 1; done\n`,
     );
     chmodSync(fakePnpm, 0o755);
 
     const child = spawn(
       process.execPath,
       [
-        "--import",
-        import.meta.resolve("tsx"),
-        resolve("scripts/plugin-sdk-api-diff.mts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptModuleEntrypoints.pluginSdkApiDiff),
+        ),
         "--base",
         baseSha,
         "--head",
@@ -216,19 +430,22 @@ describe("Plugin SDK API diff CLI", () => {
     );
 
     let closed = false;
+    const close = ownChildCompletion(
+      new Promise<number | null>((resolveClose) => {
+        child.once("close", (code) => {
+          closed = true;
+          resolveClose(code);
+        });
+      }),
+    );
     let stderr = "";
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       stderr += chunk;
     });
-    const close = new Promise<number | null>((resolveClose) => {
-      child.once("close", (code) => {
-        closed = true;
-        resolveClose(code);
-      });
-    });
+
     try {
-      await waitFor(() => existsSync(pnpmMarker) || closed, 10_000);
+      await withinTest(installBeforeSettlement(pnpmMarker, close), signal);
       expect(closed, stderr).toBe(false);
       const revisionRoot = git(repo, ["worktree", "list", "--porcelain", "-z"])
         .split("\0")
@@ -240,7 +457,7 @@ describe("Plugin SDK API diff CLI", () => {
       expect(existsSync(temporaryRoot)).toBe(true);
       const interruptedAt = Date.now();
       child.kill("SIGTERM");
-      const exitCode = await withTestTimeout(close, 5_000, "Plugin SDK API diff ignored SIGTERM");
+      const exitCode = await withinTest(close, signal);
 
       expect(exitCode).toBe(143);
       expect(Date.now() - interruptedAt).toBeLessThan(5_000);
@@ -251,7 +468,8 @@ describe("Plugin SDK API diff CLI", () => {
       expect(readFileSync(runnerSentinel, "utf8")).toBe("preserve\n");
     } finally {
       if (!closed) {
-        child.kill("SIGKILL");
+        // Let the CLI join its installer and remove revision worktrees on test cancellation.
+        child.kill("SIGTERM");
         await close;
       }
     }
@@ -270,6 +488,7 @@ describe("Plugin SDK API diff CLI", () => {
       const binDir = tempDirs.make("plugin-sdk-selector-bin-");
       const installLog = join(binDir, "installs");
       const evidencePath = join(binDir, "evidence.json");
+      const jsonPath = join(binDir, "diff.json");
       git(repo, ["init", "--quiet", "--initial-branch=main"]);
       mkdirSync(join(repo, "src/plugin-sdk"), { recursive: true });
       mkdirSync(join(repo, "scripts/lib"), { recursive: true });
@@ -315,6 +534,8 @@ describe("Plugin SDK API diff CLI", () => {
         "HEAD",
         "--evidence",
         evidencePath,
+        "--json",
+        jsonPath,
       ]);
       expect(child.status, child.stderr).toBe(0);
       const installed = existsSync(installLog)
@@ -330,9 +551,14 @@ describe("Plugin SDK API diff CLI", () => {
         ).toSorted(),
       );
       const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
-      expect(bundle.schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v1");
+      expect(bundle.schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
+      const reports = expandPluginSdkApiDiffSet(JSON.parse(readFileSync(jsonPath, "utf8")));
       for (const [selector, ref] of Object.entries(bases)) {
-        const evidence = bundle.selectors[selector];
+        const evidence = selectPluginSdkApiReleaseEvidence({
+          evidence: bundle,
+          npmDistTag: selector,
+        });
+        expect(reports[selector]).toEqual(evidence.diff);
         const baseSha = git(repo, ["rev-parse", `${ref}^{commit}`]).trim();
         const changed = baseSha !== headSha;
         expect(evidence).toMatchObject({ baseRef: ref, baseSha, headSha, workflowSha: headSha });

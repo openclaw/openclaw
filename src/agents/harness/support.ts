@@ -9,7 +9,6 @@ import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   ProviderModelRouteRuntimePolicy,
-  ProviderResolveModelRoutesContext,
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
@@ -24,6 +23,7 @@ import { canonicalizeProviderModelId } from "../provider-model-route.js";
 import type { PreparedAgentRuntimeAuthAttempt } from "../runtime-plan/prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveAgentHarnessAutoSelectionHint } from "./auto-selection.js";
+import { AgentHarnessPreflightError } from "./errors.js";
 import { listRegisteredAgentHarnesses } from "./registry.js";
 import type {
   AgentHarness,
@@ -124,6 +124,22 @@ export function buildAgentHarnessSupportContext(
         canonicalizeProviderModelId(params.provider, configuredModelId),
       )
     : undefined;
+  const authoredProviderConfig = resolveMergedModelProviderConfig(authoredConfig, params.provider);
+  const authoredModelConfig = modelId
+    ? findConfiguredProviderModel(authoredProviderConfig, params.provider, modelId, (id) =>
+        canonicalizeProviderModelId(params.provider, id),
+      )
+    : undefined;
+  const endpointOverrides: ProviderRouteOverridePresence =
+    params.modelProvider?.endpointOverrides ??
+    ([
+      authoredProviderConfig?.api,
+      authoredProviderConfig?.baseUrl,
+      authoredModelConfig?.api,
+      authoredModelConfig?.baseUrl,
+    ].some((value) => readStringParam(value) !== undefined)
+      ? "present"
+      : "none");
   const agentId = resolveAgentRuntimePolicyAgentId(params);
   const hasConfiguredProviderRequestParams = hasAuthoredProviderRequestParams({
     config: params.config,
@@ -153,28 +169,27 @@ export function buildAgentHarnessSupportContext(
     hasConfiguredProviderRequestParams
       ? "present"
       : "none";
-  const modelProviderFacts =
-    params.modelProvider || configuredModelProvider || hasConfiguredProviderRequestParams
-      ? {
-          api: params.modelProvider?.api ?? configuredModelProvider?.api,
-          baseUrl: params.modelProvider?.baseUrl ?? configuredModelProvider?.baseUrl,
-          azureApiVersion:
-            params.modelProvider?.azureApiVersion ?? configuredModelProvider?.azureApiVersion,
-          request: params.modelProvider?.request ?? configuredModelProvider?.request,
-          preparedAuth: params.modelProvider?.preparedAuth,
-          requestTransportOverrides,
-        }
-      : undefined;
+  const modelProviderFacts = {
+    api: params.modelProvider?.api ?? configuredModelProvider?.api,
+    baseUrl: params.modelProvider?.baseUrl ?? configuredModelProvider?.baseUrl,
+    azureApiVersion:
+      params.modelProvider?.azureApiVersion ?? configuredModelProvider?.azureApiVersion,
+    request: params.modelProvider?.request ?? configuredModelProvider?.request,
+    preparedAuth: params.modelProvider?.preparedAuth,
+    requestTransportOverrides,
+    endpointOverrides,
+  };
   // Finalized routes carry the owner decision. Earlier selection resolves the same provider
   // artifact once so an indeterminate route cannot regain provider-id-only native support.
-  const routeRuntimeContract = params.modelProvider?.runtimePolicy
-    ? { owned: true, policy: params.modelProvider.runtimePolicy }
+  const runtimePolicy = params.modelProvider?.runtimePolicy
+    ? params.modelProvider.runtimePolicy
     : params.preparedModelProvider
-      ? { owned: true }
+      ? undefined
       : resolveHarnessRouteRuntimePolicy({
           provider: params.provider,
           modelId: params.modelId,
-          modelProvider: modelProviderFacts,
+          api: modelProviderFacts.api as ModelApi | undefined,
+          baseUrl: modelProviderFacts.baseUrl,
           config: params.config,
           routeIntent: resolveModelRouteIntent({
             config: params.config,
@@ -190,14 +205,12 @@ export function buildAgentHarnessSupportContext(
                 })
               : undefined,
           }),
+          requestTransportOverrides: modelProviderFacts.requestTransportOverrides,
         });
-  const modelProvider =
-    modelProviderFacts || routeRuntimeContract.owned
-      ? {
-          ...modelProviderFacts,
-          runtimePolicy: params.modelProvider?.runtimePolicy ?? routeRuntimeContract.policy,
-        }
-      : undefined;
+  const modelProvider = {
+    ...modelProviderFacts,
+    runtimePolicy,
+  };
   return {
     provider: params.provider,
     modelId: params.modelId,
@@ -213,42 +226,23 @@ export function buildAgentHarnessSupportContext(
   };
 }
 
-function resolveHarnessRouteRuntimePolicy(params: {
-  provider: string;
-  modelId?: string;
-  modelProvider?: AgentHarnessSupportContext["modelProvider"];
-  config?: OpenClawConfig;
-  routeIntent?: ProviderResolveModelRoutesContext["routeIntent"];
-}): { owned: boolean; policy?: ProviderModelRouteRuntimePolicy } {
-  const resolution = resolveProviderModelRoutes({
-    provider: params.provider,
-    modelId: params.modelId,
-    api: params.modelProvider?.api as ModelApi | undefined,
-    baseUrl: params.modelProvider?.baseUrl,
-    config: params.config,
-    routeIntent: params.routeIntent,
-    requestTransportOverrides: params.modelProvider?.requestTransportOverrides,
-  });
-  if (!resolution) {
-    return { owned: false };
-  }
-  if (resolution.kind !== "routes") {
-    return { owned: true };
+function resolveHarnessRouteRuntimePolicy(
+  params: Parameters<typeof resolveProviderModelRoutes>[0],
+): ProviderModelRouteRuntimePolicy | undefined {
+  const resolution = resolveProviderModelRoutes(params);
+  if (resolution?.kind !== "routes") {
+    return undefined;
   }
   const policies = resolution.routes.map((route) => route.runtimePolicy);
   const first = policies[0];
   if (!first || policies.some((policy) => !policy)) {
-    return { owned: true };
+    return undefined;
   }
   return {
-    owned: true,
-    policy: {
-      compatibleIds: first.compatibleIds.filter(
-        (id, index, ids) =>
-          ids.indexOf(id) === index &&
-          policies.every((policy) => policy?.compatibleIds.includes(id)),
-      ),
-    },
+    compatibleIds: first.compatibleIds.filter(
+      (id, index, ids) =>
+        ids.indexOf(id) === index && policies.every((policy) => policy?.compatibleIds.includes(id)),
+    ),
   };
 }
 
@@ -262,36 +256,32 @@ export function resolveAutoAgentHarnessId(
     preparedModelProvider?: boolean;
   } & AgentRuntimePolicyScope,
 ): string | undefined {
-  const registeredHarnesses = listRegisteredAgentHarnesses();
-  if (registeredHarnesses.length === 0) {
-    return undefined;
-  }
-  const candidates = registeredHarnesses.map(({ harness }) => ({
-    harness,
-    support: resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }),
-  }));
-  if (candidates.every((entry) => entry.support !== undefined)) {
-    return undefined;
-  }
-  const supportContext = buildAgentHarnessSupportContext({
-    ...params,
-    requestedRuntime: "auto",
-  });
-  return candidates
-    .map(({ harness, support }) => ({
-      harness,
-      support: support ?? harness.supports(supportContext),
-    }))
-    .filter(isSupportedHarness)
-    .toSorted(compareHarnessSupport)[0]?.harness.id;
+  return resolveAutoAgentHarnessSelection(
+    listRegisteredAgentHarnesses().map(({ harness }) => harness),
+    params.provider,
+    () => buildAgentHarnessSupportContext({ ...params, requestedRuntime: "auto" }),
+  ).selected?.id;
 }
 
-export function compareHarnessSupport(
-  left: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-  right: { harness: AgentHarness; support: AgentHarnessSupport & { supported: true } },
-): number {
-  const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);
-  return priorityDelta !== 0 ? priorityDelta : left.harness.id.localeCompare(right.harness.id);
+export function resolveAutoAgentHarnessSelection(
+  harnesses: readonly AgentHarness[],
+  provider: string,
+  createSupportContext: () => AgentHarnessSupportContext,
+) {
+  const hintedCandidates = harnesses.map((harness) => ({
+    harness,
+    support: resolveAgentHarnessAutoSelectionHint({ harness, provider }),
+  }));
+  let supportContext: AgentHarnessSupportContext | undefined;
+  const candidates = hintedCandidates.map(({ harness, support }) => ({
+    harness,
+    support: support ?? harness.supports((supportContext ??= createSupportContext())),
+  }));
+  const selected = candidates.filter(isSupportedHarness).toSorted((left, right) => {
+    const priorityDelta = (right.support.priority ?? 0) - (left.support.priority ?? 0);
+    return priorityDelta !== 0 ? priorityDelta : left.harness.id.localeCompare(right.harness.id);
+  })[0]?.harness;
+  return { candidates, selected };
 }
 
 function isSupportedHarness(entry: {
@@ -302,4 +292,23 @@ function isSupportedHarness(entry: {
   support: AgentHarnessSupport & { supported: true };
 } {
   return entry.support.supported;
+}
+
+export function assertPluginHarnessConversationToolPolicySupport(
+  harness: AgentHarness,
+  restricted: boolean,
+): void {
+  if (
+    harness.id !== "openclaw" &&
+    restricted &&
+    harness.conversationToolPolicySupport !== "exact"
+  ) {
+    throw new AgentHarnessPreflightError(
+      `${harness.label} cannot enforce this conversation's tool policy. Use the embedded runtime or ask in the main conversation.`,
+      {
+        scope: "harness",
+        userMessage: `${harness.label} cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.`,
+      },
+    );
+  }
 }

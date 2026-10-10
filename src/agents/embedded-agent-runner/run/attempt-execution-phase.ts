@@ -1,8 +1,8 @@
-/** Prepares the guarded stream runtime before prompt execution and settlement. */
 import {
   bindOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
+import { withGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import {
@@ -12,6 +12,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
@@ -44,6 +45,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     throw new Error("embedded attempt requires an active admitted run");
   }
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
@@ -71,13 +73,14 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory(input);
+    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
   } catch (error) {
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,
       session: activeSession,
       sessionManager: sessionRuntime.sessionManager,
       aborted: attempt.abortSignal?.aborted,
+      abortSignal: attempt.abortSignal,
     });
     throw error;
   }
@@ -119,25 +122,28 @@ export async function runEmbeddedAttemptExecutionPhase(
       if (input.runAbortController.signal.aborted) {
         return abortable(Promise.resolve());
       }
-      return abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options)));
+      const runPrompt = () => activeSession.prompt(prompt, options);
+      return abortable(
+        trackPromptSettlePromise(
+          input.sessionLock.assertCronRootCurrent
+            ? withGuardedFetchRequestAuthority(input.sessionLock.assertCronRootCurrent, runPrompt)
+            : runPrompt(),
+        ),
+      );
     });
-  const onBlockReply = attempt.onBlockReply
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReply,
-      )
-    : undefined;
-  const onBlockReplyFlush = attempt.onBlockReplyFlush
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReplyFlush,
-      )
-    : undefined;
+  const bindTranscriptCallback = <TArgs extends unknown[], TResult>(
+    callback: ((...args: TArgs) => TResult) | undefined,
+  ) =>
+    callback
+      ? bindOwnedSessionTranscriptWrites(input.sessionLock.ownedTranscriptWriteContext, callback)
+      : undefined;
+  const onBlockReply = bindTranscriptCallback(attempt.onBlockReply);
+  const onBlockReplyFlush = bindTranscriptCallback(attempt.onBlockReplyFlush);
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
+    agentSession: sessionRuntime.agentSession,
     onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
-    activeSession,
     runAbortController: input.runAbortController,
     abortRun,
     markExternalAbort: () => mergeTerminal({ kind: "aborted", source: "external" }),
@@ -153,21 +159,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     onBlockReply,
     onBlockReplyFlush,
     runtimeChannel: systemPrompt.runtimeChannel,
-    hookRunner: sessionRuntime.agentSession.hookRunner,
     hookAgentId: input.setup.sessionAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
-    clientToolCallSlots: sessionRuntime.agentSession.clientToolCallSlots,
-    nestedToolActivities: toolBase.nestedToolActivities,
+    nestedToolActivityState: toolBase.nestedToolActivityState,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
-    hasDeliveredSourceReply: sessionRuntime.agentSession.hasDeliveredSourceReply,
-    markSourceReplyDelivered: sessionRuntime.agentSession.markSourceReplyDelivered,
-    sandboxSessionKey: input.setup.sandboxSessionKey,
-    builtinToolNames: sessionRuntime.agentSession.builtinToolNames,
-    coreBuiltinToolNames: sessionRuntime.agentSession.coreBuiltinToolNames,
-    trustedLocalMediaToolNames: sessionRuntime.agentSession.trustedLocalMediaToolNames,
-    replaySafeToolNames: sessionRuntime.agentSession.replaySafeToolNames,
-    codeModeExecToolNames: sessionRuntime.agentSession.codeModeExecToolNames,
-    sideEffectToolOwners: sessionRuntime.agentSession.sideEffectToolOwners,
     diagnosticOwner,
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });

@@ -14,7 +14,6 @@ import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
 import java.io.ByteArrayOutputStream
 import java.time.Instant
 import kotlin.math.max
@@ -26,14 +25,12 @@ private const val DEFAULT_PHOTOS_QUALITY = 0.85
 private const val MAX_TOTAL_BASE64_CHARS = 340 * 1024
 private const val MAX_PER_PHOTO_BASE64_CHARS = 300 * 1024
 
-/** Request shape for photos.latest after defaults and bounds are applied. */
 internal data class PhotosLatestRequest(
   val limit: Int,
   val maxWidth: Int,
   val quality: Double,
 )
 
-/** Encoded photo payload returned to the gateway. */
 @Serializable
 internal data class EncodedPhotoPayload(
   val format: String,
@@ -44,23 +41,18 @@ internal data class EncodedPhotoPayload(
   val createdAt: String? = null,
 )
 
-/** Photo access seam for Android MediaStore and tests. */
 internal interface PhotosDataSource {
-  fun hasPermission(context: Context): Boolean
+  fun hasPermission(): Boolean
 
-  fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload>
+  fun latest(request: PhotosLatestRequest): List<EncodedPhotoPayload>
 }
 
-private object SystemPhotosDataSource : PhotosDataSource {
-  override fun hasPermission(context: Context): Boolean = hasPhotoReadPermission(context)
+private class SystemPhotosDataSource(
+  private val context: Context,
+) : PhotosDataSource {
+  override fun hasPermission(): Boolean = hasPhotoReadPermission(context)
 
-  override fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload> {
+  override fun latest(request: PhotosLatestRequest): List<EncodedPhotoPayload> {
     val resolver = context.contentResolver
     val rows = queryLatestRows(resolver, request.limit)
     if (rows.isEmpty()) return emptyList()
@@ -73,18 +65,11 @@ private object SystemPhotosDataSource : PhotosDataSource {
       try {
         // Enforce both per-photo and total payload budgets before returning
         // base64 data through the gateway invoke response.
-        val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS)
+        val encoded = encodeJpegUnderBudget(bitmap, request.quality)
         if (encoded == null) continue
         if (encoded.base64.length > remainingBudget) break
         remainingBudget -= encoded.base64.length
-        out +=
-          EncodedPhotoPayload(
-            format = "jpeg",
-            base64 = encoded.base64,
-            width = encoded.width,
-            height = encoded.height,
-            createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() },
-          )
+        out += encoded.copy(createdAt = row.createdAtMs?.let { Instant.ofEpochMilli(it).toString() })
       } finally {
         bitmap.recycle()
       }
@@ -95,12 +80,6 @@ private object SystemPhotosDataSource : PhotosDataSource {
   private data class PhotoRow(
     val uri: Uri,
     val createdAtMs: Long?,
-  )
-
-  private data class EncodedJpeg(
-    val base64: String,
-    val width: Int,
-    val height: Int,
   )
 
   private fun queryLatestRows(
@@ -167,8 +146,13 @@ private object SystemPhotosDataSource : PhotosDataSource {
       } else {
         bounds.outWidth
       }
-    val inSampleSize = computeInSampleSize(sourceWidth, maxWidth)
-    val decodeOptions = BitmapFactory.Options().apply { this.inSampleSize = inSampleSize }
+    val decodeOptions =
+      BitmapFactory.Options().apply {
+        inSampleSize = 1
+        while (sourceWidth / inSampleSize / 2 >= maxWidth) {
+          inSampleSize *= 2
+        }
+      }
     val decoded =
       resolver.openInputStream(uri).use { input ->
         if (input == null) return null
@@ -187,33 +171,22 @@ private object SystemPhotosDataSource : PhotosDataSource {
     }
   }
 
-  private fun computeInSampleSize(
-    width: Int,
-    maxWidth: Int,
-  ): Int {
-    var sample = 1
-    while (width / sample / 2 >= maxWidth) {
-      sample *= 2
-    }
-    return sample
-  }
-
   private fun encodeJpegUnderBudget(
     bitmap: Bitmap,
     quality: Double,
-    maxBase64Chars: Int,
-  ): EncodedJpeg? {
+  ): EncodedPhotoPayload? {
     var working = bitmap
     try {
-      var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
+      var jpegQuality = (quality * 100.0).roundToInt()
       repeat(10) {
         val out = ByteArrayOutputStream()
         val ok = working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
         if (!ok) return null
         val bytes = out.toByteArray()
         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-        if (base64.length <= maxBase64Chars) {
-          return EncodedJpeg(
+        if (base64.length <= MAX_PER_PHOTO_BASE64_CHARS) {
+          return EncodedPhotoPayload(
+            format = "jpeg",
             base64 = base64,
             width = working.width,
             height = working.height,
@@ -238,54 +211,29 @@ private object SystemPhotosDataSource : PhotosDataSource {
   }
 }
 
-/** Handles photos.latest by querying MediaStore and returning bounded JPEG payloads. */
 class PhotosHandler internal constructor(
-  private val appContext: Context,
-  private val dataSource: PhotosDataSource = SystemPhotosDataSource,
+  appContext: Context,
+  private val dataSource: PhotosDataSource = SystemPhotosDataSource(appContext),
 ) {
-  /** Returns the newest accessible photos as gateway-sized base64 JPEGs. */
   fun handlePhotosLatest(paramsJson: String?): GatewaySession.InvokeResult {
-    if (!dataSource.hasPermission(appContext)) {
-      return GatewaySession.InvokeResult.error(
-        code = "PHOTOS_PERMISSION_REQUIRED",
-        message = "PHOTOS_PERMISSION_REQUIRED: grant Photos permission",
-      )
+    if (!dataSource.hasPermission()) {
+      return nodeInvokeError("PHOTOS_PERMISSION_REQUIRED", "grant Photos permission")
     }
     val request =
       parseRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object",
-        )
-    return try {
-      val photos = dataSource.latest(appContext, request)
-      GatewaySession.InvokeResult.ok(Json.encodeToString(mapOf("photos" to photos)))
-    } catch (err: Throwable) {
-      GatewaySession.InvokeResult.error(
-        code = "PHOTOS_UNAVAILABLE",
-        message = "PHOTOS_UNAVAILABLE: ${err.message ?: "photo fetch failed"}",
-      )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object")
+    return nodeInvokeJson("PHOTOS_UNAVAILABLE", "photo fetch failed") {
+      Json.encodeToString(mapOf("photos" to dataSource.latest(request)))
     }
   }
 
   private fun parseRequest(paramsJson: String?): PhotosLatestRequest? {
-    if (paramsJson.isNullOrBlank()) {
-      return PhotosLatestRequest(
-        limit = DEFAULT_PHOTOS_LIMIT,
-        maxWidth = DEFAULT_PHOTOS_MAX_WIDTH,
-        quality = DEFAULT_PHOTOS_QUALITY,
-      )
-    }
-    val params = parseJsonParamsObject(paramsJson) ?: return null
-
-    val limitRaw = (params["limit"] as? JsonPrimitive)?.content?.toIntOrNull()
-    val maxWidthRaw = (params["maxWidth"] as? JsonPrimitive)?.content?.toIntOrNull()
-    val qualityRaw = (params["quality"] as? JsonPrimitive)?.content?.toDoubleOrNull()
-
+    val params = if (paramsJson.isNullOrBlank()) null else parseJsonParamsObject(paramsJson) ?: return null
     // Clamp model-supplied values to protect memory and response-size limits.
-    val limit = (limitRaw ?: DEFAULT_PHOTOS_LIMIT).coerceIn(1, 20)
-    val maxWidth = (maxWidthRaw ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096)
-    val quality = (qualityRaw ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0)
-    return PhotosLatestRequest(limit = limit, maxWidth = maxWidth, quality = quality)
+    return PhotosLatestRequest(
+      limit = (parseJsonInt(params, "limit") ?: DEFAULT_PHOTOS_LIMIT).coerceIn(1, 20),
+      maxWidth = (parseJsonInt(params, "maxWidth") ?: DEFAULT_PHOTOS_MAX_WIDTH).coerceIn(240, 4096),
+      quality = (parseJsonDouble(params, "quality") ?: DEFAULT_PHOTOS_QUALITY).coerceIn(0.1, 1.0),
+    )
   }
 }

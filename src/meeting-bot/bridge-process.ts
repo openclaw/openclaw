@@ -1,4 +1,46 @@
-type MeetingBridgeProcess = {
+import type { Writable } from "node:stream";
+import { formatErrorMessage } from "../infra/errors.js";
+
+export type MeetingOutputWriteWaiter<TProcess> = {
+  process: TProcess;
+  release: () => void;
+};
+
+export function writeMeetingOutputChunk<TProcess>(
+  waiters: Set<MeetingOutputWriteWaiter<TProcess>>,
+  process: TProcess,
+  stdin: Writable,
+  audio: Buffer,
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      waiters.delete(waiter);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const waiter: MeetingOutputWriteWaiter<TProcess> = { process, release: () => finish() };
+    waiters.add(waiter);
+    try {
+      stdin.write(audio, (error) => finish(error ?? undefined));
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(formatErrorMessage(error)));
+      return;
+    }
+    if (stdin.destroyed || stdin.writableEnded) {
+      finish(new Error("audio output stream is closed"));
+    }
+  });
+}
+
+export type MeetingBridgeProcess = {
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   kill(signal?: NodeJS.Signals): boolean;
@@ -14,7 +56,6 @@ type MeetingBridgeProcess = {
 
 type TerminateMeetingBridgeProcessOptions = {
   graceMs: number;
-  forceKillWaitMs?: number;
   initialSignal?: NodeJS.Signals;
 };
 
@@ -63,9 +104,8 @@ export async function terminateMeetingBridgeProcess(
   } catch {
     return;
   }
-  const forceKillWaitMs = options.forceKillWaitMs ?? 1_000;
   if (initialSignal === "SIGKILL") {
-    await waitForExit(proc, forceKillWaitMs);
+    await waitForExit(proc, 1_000);
     return;
   }
   if (await waitForExit(proc, options.graceMs)) {
@@ -78,5 +118,5 @@ export async function terminateMeetingBridgeProcess(
   } catch {
     return;
   }
-  await waitForExit(proc, forceKillWaitMs);
+  await waitForExit(proc, 1_000);
 }

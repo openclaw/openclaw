@@ -119,8 +119,8 @@ suite.define(() => {
 
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.waitForRequest("chat.startup");
-        await page.getByRole("button", { name: "Cloud · syncing files" }).waitFor();
-        await page.getByText("Safely applying cloud edits", { exact: false }).waitFor();
+        await page.getByRole("button", { name: "Worker · syncing files" }).waitFor();
+        await page.getByText("Finalizing worker workspace", { exact: false }).waitFor();
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await expect.poll(() => composer.isEnabled()).toBe(true);
         await page.getByText("your message starts automatically", { exact: false }).waitFor();
@@ -149,6 +149,7 @@ suite.define(() => {
           sessionInfo: queued,
         };
         await gateway.setMethodResponse("chat.history", queuedHistory);
+        await gateway.setMethodResponse("chat.startup", queuedHistory);
         await gateway.setSessionsListResponse(chatSessionListResponse([queued]));
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
@@ -168,6 +169,13 @@ suite.define(() => {
         }
 
         const active = session("active");
+        // The persisted event and later history reads describe the same reply.
+        const resumedReplyId = "automatic-follow-up-result";
+        const resumedReply = {
+          role: "assistant",
+          content: "The queued follow-up started automatically.",
+          __openclaw: { id: resumedReplyId, seq: 3, runId },
+        };
         const activeHistory = {
           inFlightRun: null,
           messages: [
@@ -176,6 +184,7 @@ suite.define(() => {
               ...pendingInput.message,
               __openclaw: { id: "persisted-follow-up", idempotencyKey: `${runId}:user` },
             },
+            resumedReply,
           ],
           pendingInputs: { items: [], total: 0 },
           sessionId: active.sessionId,
@@ -183,6 +192,7 @@ suite.define(() => {
           thinkingLevel: null,
         };
         await gateway.setMethodResponse("chat.history", activeHistory);
+        await gateway.setMethodResponse("chat.startup", activeHistory);
         await gateway.setSessionsListResponse(chatSessionListResponse([active]));
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
@@ -192,9 +202,10 @@ suite.define(() => {
         await gateway.emitGatewayEvent("session.message", {
           activeRunIds: [],
           hasActiveRun: false,
-          message: { role: "assistant", content: "The queued follow-up started automatically." },
-          messageId: "automatic-follow-up-result",
-          messageSeq: 3,
+          message: resumedReply,
+          messageId: resumedReplyId,
+          messageSeq: resumedReply["__openclaw"].seq,
+          runId,
           session: active,
           sessionKey,
         });
@@ -233,7 +244,9 @@ suite.define(() => {
 
         const failed = session("failed");
         expect(completedUpdatedAt).toBeLessThanOrEqual(failed.updatedAt);
-        await gateway.setMethodResponse("chat.history", { ...activeHistory, sessionInfo: failed });
+        const failedHistory = { ...activeHistory, sessionInfo: failed };
+        await gateway.setMethodResponse("chat.history", failedHistory);
+        await gateway.setMethodResponse("chat.startup", failedHistory);
         await gateway.setSessionsListResponse(chatSessionListResponse([failed]));
         await gateway.emitGatewayEvent("sessions.changed", {
           agentId: "main",
@@ -241,9 +254,18 @@ suite.define(() => {
           sessionKey,
         });
         await page.getByText("Runner failed", { exact: true }).waitFor();
-        await page
-          .getByText("Workspace reconciliation failed: local worktree is locked.", { exact: false })
+        const failure = page.locator(".chat-error").filter({
+          hasText: "Workspace reconciliation failed: local worktree is locked.",
+        });
+        await failure
+          .locator("summary strong")
+          .getByText("Couldn't finish this reply. Check the conversation before trying again.")
           .waitFor();
+        await failure.locator("summary").click();
+        await failure.getByLabel("Error details", { exact: true }).waitFor();
+        expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
+          "Workspace reconciliation failed: local worktree is locked.",
+        );
         if (captureUiProofEnabled) {
           await page.screenshot({
             fullPage: true,

@@ -1,7 +1,6 @@
 // Public web-search registration helpers for provider plugins.
 
-import type {
-  WebSearchCredentialResolutionSource,
+export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
@@ -42,12 +41,9 @@ export {
 } from "../agents/tools/web-search-provider-common.js";
 export {
   getScopedCredentialValue,
-  getTopLevelCredentialValue,
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
-  setScopedCredentialValue,
   setProviderWebSearchPluginConfigValue,
-  setTopLevelCredentialValue,
 } from "../agents/tools/web-search-provider-config.js";
 export type { SearchConfigRecord } from "../agents/tools/web-search-provider-common.js";
 export { resolveWebSearchProviderCredential } from "../agents/tools/web-search-provider-credentials.js";
@@ -55,13 +51,9 @@ export {
   withSelfHostedWebToolsEndpoint,
   withTrustedWebToolsEndpoint,
 } from "../agents/tools/web-guarded-fetch.js";
-export {
-  markdownToText,
-  truncateWebFetchText as truncateText,
-} from "../agents/tools/web-fetch-utils.js";
+export { truncateWebFetchText as truncateText } from "../agents/tools/web-fetch-utils.js";
 export {
   DEFAULT_CACHE_TTL_MINUTES,
-  DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
   readCache,
   readResponseText,
@@ -73,10 +65,3 @@ export {
 export { enablePluginInConfig } from "../plugins/enable.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { wrapWebContent } from "../security/external-content.js";
-export type {
-  WebSearchCredentialResolutionSource,
-  WebSearchProviderSetupContext,
-  WebSearchProviderPlugin,
-  WebSearchProviderToolDefinition,
-  WebSearchProviderToolExecutionContext,
-};

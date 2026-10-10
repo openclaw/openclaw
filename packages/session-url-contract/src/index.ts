@@ -7,7 +7,7 @@ import {
   normalizeControlUiBasePath,
   parseShortSessionRef,
 } from "./grammar.js";
-import { parseAgentSessionKeyParts } from "./session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKeyParts } from "./session-key.js";
 
 export { controlUiSessionSlug, normalizeControlUiBasePath };
 export {
@@ -98,8 +98,9 @@ export function buildControlUiSessionPath(params: BuildControlUiSessionPathParam
   if (segments.some((segment) => !segment)) {
     return null;
   }
+  // Incognito is excluded from discovery, so its URLs must retain the exact key.
   // Qualified global keys are literal sessions, distinct from the unqualified home sentinel.
-  if (params.exactKey || normalizedRest === "global") {
+  if (params.exactKey || isIncognitoSessionKey(rawKey) || normalizedRest === "global") {
     const segment = segments[0] ?? "";
     return segments.length === 1 &&
       (isReservedSessionRest(segment, params.mainKey) || parseShortSessionRef(segment))

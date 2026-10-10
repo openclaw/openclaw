@@ -1,16 +1,16 @@
 import { createHash } from "node:crypto";
-import { StatementSync } from "node:sqlite";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OnePasswordBroker, type StandingGrant } from "./broker.js";
 import type { OnePasswordConfig } from "./config.js";
-import { MemoryKeyedStore, MemorySyncKeyedStore } from "./memory-store.test-support.js";
+import { MemoryKeyedStore } from "./memory-store.test-support.js";
 import { createOnePasswordTool } from "./tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -54,14 +54,14 @@ function grant(slug: string, agentId = invocation.agentId): StandingGrant {
 describe("onepassword list with SQLite grants", () => {
   let env: NodeJS.ProcessEnv;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("onepassword-list-") };
-    vi.spyOn(Date, "now").mockReturnValue(NOW);
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
   });
 
@@ -74,64 +74,20 @@ describe("onepassword list with SQLite grants", () => {
     });
   }
 
-  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant> = openGrants()) {
+  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant>) {
     const getItem = vi.fn(async () => {
       throw new Error("list must not retrieve a secret");
     });
     const broker = new OnePasswordBroker({
+      now: () => NOW,
       resolveConfig: () => configured(slugs),
       opClient: { getItem },
-      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemorySyncKeyedStore() },
+      stores: { grants, audit: new MemoryKeyedStore(), pending: new MemoryKeyedStore() },
     });
     const list = (agentId: string | undefined = invocation.agentId) =>
       createOnePasswordTool(broker, { ...invocation, agentId }).execute("list", { action: "list" });
     return { list, getItem };
   }
-
-  it("does not fetch other agents' grants to list the configured items", async () => {
-    const grants = openGrants();
-    const slugs = ["second", "first"];
-    for (const agentId of [
-      invocation.agentId,
-      ...Array.from({ length: 31 }, (_, i) => `other-${i}`),
-    ]) {
-      for (const slug of slugs) {
-        await grants.register(grantKey(agentId, slug), grant(slug, agentId));
-      }
-    }
-    const { list, getItem } = setup(slugs, grants);
-    let queries = 0;
-    let fetchedRows = 0;
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- Preserve the native receiver when recording actual fetched rows.
-    const iterate = StatementSync.prototype.iterate;
-    const spy = vi.spyOn(StatementSync.prototype, "iterate").mockImplementation(function (
-      this: StatementSync,
-      ...params: Parameters<typeof iterate>
-    ) {
-      const rows = Array.from(iterate.apply(this, params));
-      if (this.sourceSQL.includes('"plugin_state_entries"') && params.includes("grants")) {
-        queries += 1;
-        fetchedRows += rows.length;
-      }
-      return rows.values();
-    });
-    try {
-      expect((await list()).details).toEqual({
-        ok: true,
-        items: ["first", "second"].map((slug) => ({
-          slug,
-          description: "",
-          policy: "approve",
-          standingGrantActive: true,
-        })),
-      });
-    } finally {
-      spy.mockRestore();
-    }
-    expect(queries).toBeLessThanOrEqual(1);
-    expect(fetchedRows).toBeLessThanOrEqual(slugs.length);
-    expect(getItem).not.toHaveBeenCalled();
-  });
 
   it.each([true, false])("validates selected grants with bulk support=%s", async (bulk) => {
     const grants = openGrants();

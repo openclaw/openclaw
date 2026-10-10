@@ -238,18 +238,18 @@ struct DashboardNativeBrowserContractTests {
     @MainActor
     @Test func `new windows route HTTP reading links and ignore blank popups`() throws {
         let url = try #require(URL(string: "https://example.test/new"))
-        #expect(DashboardWindowController.newWindowAction(
+        #expect(ControlUIDocumentHost.newWindowAction(
             for: url, sourceIsNativeReadingTab: true) == .openTab(url))
-        #expect(DashboardWindowController.newWindowAction(
+        #expect(ControlUIDocumentHost.newWindowAction(
             for: url, sourceIsNativeReadingTab: false) == .openExternal(url))
         for sourceIsNativeReadingTab in [false, true] {
             for address in ["about:blank", "file:///tmp/private", "mailto:reader@example.test"] {
                 let target = try #require(URL(string: address))
-                #expect(DashboardWindowController.newWindowAction(
+                #expect(ControlUIDocumentHost.newWindowAction(
                     for: target,
                     sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
             }
-            #expect(DashboardWindowController.newWindowAction(
+            #expect(ControlUIDocumentHost.newWindowAction(
                 for: nil, sourceIsNativeReadingTab: sourceIsNativeReadingTab) == .ignore)
         }
     }
@@ -258,12 +258,12 @@ struct DashboardNativeBrowserContractTests {
     @Test func `reading browser navigation reserves auxiliary schemes for subframes`() throws {
         let webURL = try #require(URL(string: "https://example.test/"))
         let blankURL = try #require(URL(string: "about:blank"))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
-        #expect(!DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
-        #expect(DashboardWindowController.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: webURL, isMainFrame: true))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: webURL, isMainFrame: false))
+        #expect(!ControlUIDocumentHost.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: true))
+        #expect(ControlUIDocumentHost.shouldAllowBrowserNavigation(to: blankURL, isMainFrame: false))
         for address in ["file:///tmp/private", "mailto:reader@example.test"] {
-            #expect(try !DashboardWindowController.shouldAllowBrowserNavigation(
+            #expect(try !ControlUIDocumentHost.shouldAllowBrowserNavigation(
                 to: #require(URL(string: address)), isMainFrame: false))
         }
     }
@@ -278,20 +278,20 @@ struct DashboardNativeBrowserContractTests {
             (false, false, .cancel),
         ]
         for testCase in cases {
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: url, canShowMIMEType: false,
                 isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == testCase.expected)
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: url, canShowMIMEType: true,
                 isMainFrame: testCase.mainFrame, userActivated: testCase.activated) == .allow)
         }
         for address in ["file:///private/download", "mailto:reader@example.test", "about:blank"] {
             let target = try #require(URL(string: address))
-            #expect(DashboardWindowController.browserResponseAction(
+            #expect(ControlUIDocumentHost.browserResponseAction(
                 for: target, canShowMIMEType: false,
                 isMainFrame: true, userActivated: true) == .cancel)
         }
-        #expect(DashboardWindowController.browserResponseAction(
+        #expect(ControlUIDocumentHost.browserResponseAction(
             for: nil, canShowMIMEType: false, isMainFrame: true, userActivated: true) == .cancel)
     }
 
@@ -327,7 +327,7 @@ struct DashboardNativeBrowserHostTests {
         }
         #expect(fixture.host.state.tabs.map(\.favicon) == [favicon, favicon])
         let first = try #require(fixture.host.webView(for: "mac-first"))
-        fixture.host.navigationWillStart(try #require(URL(string: "https://example.test/next")), in: first)
+        try fixture.host.navigationWillStart(#require(URL(string: "https://example.test/next")), in: first)
         #expect(fixture.host.state.tabs.map(\.favicon) == [nil, favicon])
     }
 
