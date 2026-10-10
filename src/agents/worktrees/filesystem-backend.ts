@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { isRosettaTranslatedProcess } from "../../shared/rosetta-translation.js";
 import type {
   WorktreeFilesystemBackend,
   WorktreeFilesystemOptions,
@@ -74,28 +73,33 @@ export async function detectWorktreeFilesystemBackend(
   }
   const backend = await nativeWorktreeFilesystem.probe(parentPath, options);
   assertActive(options);
-  // The APFS ACL guard calls getattrlist through koffi, which faults under Rosetta.
-  if (
-    (backend !== "apfs" && backend !== "btrfs") ||
-    (backend === "apfs" && isRosettaTranslatedProcess())
-  ) {
+  if (backend !== "apfs" && backend !== "btrfs") {
     return null;
   }
   const apfs =
     backend === "apfs" ? (await import("./filesystem-apfs.native.js")).apfsFilesystem : undefined;
   assertActive(options);
   if (apfs) {
-    const parentAcl = apfs.readDirectoryAcl(parentPath);
+    const parentAcl = await apfs.readDirectoryAcl(parentPath, options);
+    assertActive(options);
     if (parentAcl === undefined || parentAcl === "inheritable") {
       return null;
     }
   }
-  const assertCloneAcls = (directory: string, parent: string) => {
+  const assertCloneAcls = async (
+    directory: string,
+    parent: string,
+    aclOptions: WorktreeFilesystemOptions,
+  ) => {
     if (!apfs) {
       return;
     }
-    const acl = apfs.readDirectoryAcl(parent);
-    if (acl === undefined || acl === "inheritable" || apfs.readDirectoryAcl(directory) !== "none") {
+    const acl = await apfs.readDirectoryAcl(parent, aclOptions);
+    if (
+      acl === undefined ||
+      acl === "inheritable" ||
+      (await apfs.readDirectoryAcl(directory, aclOptions)) !== "none"
+    ) {
       throw new Error("APFS directory cloning cannot preserve directory ACLs; use Git checkout");
     }
   };
@@ -115,12 +119,12 @@ export async function detectWorktreeFilesystemBackend(
     },
     async cloneTemplate(source, destination, cloneOptions) {
       const parent = path.dirname(destination);
-      assertCloneAcls(source, parent);
+      await assertCloneAcls(source, parent, cloneOptions);
       assertActive(cloneOptions);
       // Native writes retain their descriptors until settlement, including after abort.
       await nativeWorktreeFilesystem.copy(source, destination, cloneOptions);
       assertActive(cloneOptions);
-      assertCloneAcls(destination, parent);
+      await assertCloneAcls(destination, parent, cloneOptions);
     },
   };
 }
