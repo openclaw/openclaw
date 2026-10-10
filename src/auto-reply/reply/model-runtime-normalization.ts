@@ -195,7 +195,7 @@ export async function prepareModelSelectionRuntime(params: {
           sessionEntry: runtimeEntry,
         });
   let hydratedSelection: ModelCatalogEntry | undefined;
-  if (params.hydrateThinkingCatalog !== false) {
+  if (params.hydrateThinkingCatalog !== false && params.cfg.plugins?.enabled !== false) {
     // The selected route owns its capabilities. A prepared default-provider row cannot
     // supply thinking or context metadata for an explicit cross-provider selection.
     const { loadProviderScopedThinkingCatalog } =
