@@ -29,6 +29,7 @@ import {
   type ResolvedSkillDiscoveryLimits,
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
@@ -509,7 +510,8 @@ export async function canonicalizePathForContainment(targetPath: string): Promis
   }
 }
 
-export async function resolveBackupAgentRoot(
+/** Resolve one configured agent's canonical backup root and owner database path. */
+async function resolveBackupAgentRoot(
   config: OpenClawConfig,
   agentId: string,
 ): Promise<BackupAgentRoot> {
@@ -523,6 +525,33 @@ export async function resolveBackupAgentRoot(
   };
 }
 
+/**
+ * Resolve the one database an explicit `--agent` snapshot should capture.
+ * The Gateway session database always lives under the canonical state root, so
+ * when `agentDir` points elsewhere its `openclaw-agent.sqlite` may be only a
+ * secondary or stray store; prefer the canonical database whenever it exists.
+ * Full archive backups are unaffected because their ownership union already
+ * snapshots both the configured root and the canonical layout. When neither
+ * exists, the configured path is returned unchanged so callers keep their
+ * established missing-file behavior.
+ */
+export async function resolveBackupAgentSnapshotPath(
+  config: OpenClawConfig,
+  agentId: string,
+): Promise<string> {
+  const { databasePath: configuredPath } = await resolveBackupAgentRoot(config, agentId);
+  const canonicalPath = resolveOpenClawAgentSqlitePath({ agentId });
+  const existingFile = async (candidate: string): Promise<string | undefined> =>
+    await fs
+      .realpath(candidate)
+      .then(async (real) => ((await fs.stat(real)).isFile() ? real : undefined))
+      .catch(() => undefined);
+  return (
+    (await existingFile(canonicalPath)) ?? (await existingFile(configuredPath)) ?? configuredPath
+  );
+}
+
+/** Resolve configured agent storage roots and their canonical database paths for backup ownership. */
 export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<BackupAgentRoot[]> {
   return await Promise.all(
     listAgentIds(config).map((agentId) => resolveBackupAgentRoot(config, agentId)),
