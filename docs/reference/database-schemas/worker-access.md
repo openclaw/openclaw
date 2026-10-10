@@ -259,14 +259,20 @@ not discard evidence of a push or pull request that already happened. Committed
 worker receipts install facts before normal completion and preserve the native
 notification decisions, including no-op transitions.
 
+Bookkeeping operations check host custody before dispatch and apply their durable
+execution predicates in the worker transaction, without transaction or commit
+handshakes back to the host. An accepted write may finish after caller revocation;
+its receipt grants no authority for another GitHub action. FIFO writes and shutdown
+still join native settlement. An unknown outcome remains an error for that write,
+but does not disable later operations that reread the current durable state.
+
 Personal GitHub OAuth start, device polling, confirmation, expiration, refresh,
 and disconnect use typed connection commands. Each command rereads the current
 generation and operation identity inside its transaction. Profile merge uses the
 same connection kernel through the profile writer. Credentials never enter
 public notifications or commit-fact envelopes. The connection owner publishes
-nonsecret generation and selection postimages, including deletion tombstones,
-before profile-retirement observers run. Captured source capabilities subscribe
-before their initial snapshot and stay revoked after a matching committed change,
+the changed owner IDs before profile-retirement observers run. Captured source
+capabilities subscribe before their initial snapshot and stay revoked after a matching committed change,
 even if the old connection is restored. Profile-retirement notifications carry
 only the affected profile IDs. OAuth and refresh semantics and the existing stored
 representation remain unchanged.

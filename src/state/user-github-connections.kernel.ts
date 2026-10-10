@@ -12,7 +12,6 @@ import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { stageUserGitHubConnectionCommit } from "./user-github-connection-events.js";
 import {
-  projectUserGitHubConnectionAuthority,
   userGitHubConnectionSchema,
   type UserGitHubConnection,
   type UserGitHubConnectionCommit,
@@ -23,13 +22,13 @@ import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 function publishAfterCommit(
   db: DatabaseSync,
-  changes: UserGitHubConnectionCommit["changes"],
+  changedOwners: string[],
   retiredProfileIds: string[],
   capture?: (receipt: UserGitHubConnectionCommit) => void,
 ): void {
   const receipt: UserGitHubConnectionCommit = {
     kind: "user-github-connection",
-    changes,
+    changedOwners,
     retiredProfileIds,
   };
   if (capture) {
@@ -116,7 +115,7 @@ export function writeUserGitHubConnectionInDatabase(
   const retained = new Set(connectionProfiles(parsed));
   publishAfterCommit(
     db,
-    [{ owner, connection: projectUserGitHubConnectionAuthority(parsed) }],
+    [owner],
     connectionProfiles(current).filter((id) => !retained.has(id)),
     capture,
   );
@@ -205,10 +204,7 @@ export function mergeUserGitHubConnection(
   const retained = new Set(connectionProfiles(next));
   publishAfterCommit(
     db,
-    [
-      { owner: source, connection: null },
-      { owner: target, connection: projectUserGitHubConnectionAuthority(next) },
-    ],
+    [source, target],
     [...connectionProfiles(sourceRecord), ...connectionProfiles(targetRecord)].filter(
       (id) => !retained.has(id),
     ),

@@ -331,7 +331,7 @@ export async function requirePersonalGitHubPublicationConfirmationAsync(
   await personalMutation(
     scope,
     { operation: "restart", instanceId },
-    assertCurrent ?? scope.assertLifetimeCurrent,
+    assertCurrent ?? scope.assertCurrent,
   );
 }
 
@@ -342,7 +342,7 @@ export async function markGitHubPublicationReportedAsync(
 ) {
   const scope = mutationScope();
   const input = { operation: "report" as const, requestId };
-  const assertOwned = assertCurrent ?? scope.assertLifetimeCurrent;
+  const assertOwned = assertCurrent ?? scope.assertCurrent;
   if (kind === "personal") {
     await personalMutation(scope, input, assertOwned);
   } else if (kind === "repository") {

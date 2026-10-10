@@ -10,10 +10,7 @@ import {
   deferGitHubPublicationRequestsInDatabase,
 } from "../gateway/github-publication-store.js";
 import * as repository from "../gateway/github-repository-publication-store.js";
-import {
-  deferSqliteWorkerCommitReceipt,
-  requestSqliteWorkerOperationAdmission,
-} from "../infra/sqlite-worker-operation-admission.js";
+import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { captureGitHubPublicationWorkerReceipt } from "./github-publication-receipts.js";
 import { publicationRequestOperations } from "./github-publication-request.worker.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.js";
@@ -97,9 +94,8 @@ function mutate(
   }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: { operation } });
+      // Accepted bookkeeping can settle after caller revocation; it grants no GitHub action.
       const receipt = capture();
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
       deferSqliteWorkerCommitReceipt(db, receipt);
       return receipt;
     },
