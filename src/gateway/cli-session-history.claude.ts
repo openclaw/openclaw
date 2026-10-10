@@ -350,10 +350,15 @@ export function cleanClaudeCliImportedUserDisplay(message: unknown): unknown {
   if (!Array.isArray(content) || content.some((block) => isToolResultBlock(block))) {
     return message;
   }
+  // Generated prefixes belong to the beginning of the whole turn. Later text
+  // blocks may quote the same frame and must retain the sender's evidence.
+  const firstTextIndex = content.findIndex(
+    (block) => isRecord(block) && block.type === "text" && typeof block.text === "string",
+  );
   return {
     ...message,
-    content: content.map((block) =>
-      isRecord(block) && block.type === "text" && typeof block.text === "string"
+    content: content.map((block, index) =>
+      index === firstTextIndex && isRecord(block) && typeof block.text === "string"
         ? Object.assign({}, block, { text: stripClaudeCliGeneratedUserPrefixes(block.text) })
         : block,
     ),

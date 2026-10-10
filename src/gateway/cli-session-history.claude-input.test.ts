@@ -202,6 +202,17 @@ describe("Claude imported internal inputs", () => {
     expect(message?.provenance).toBeUndefined();
   });
 
+  it("preserves system-event evidence quoted in a later native text block", () => {
+    const content = [
+      { type: "text", text: "Explain this log:\n" },
+      {
+        type: "text",
+        text: "System: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
+      },
+    ];
+    expect(importUnmatched(content)).toMatchObject({ content });
+  });
+
   it.each(["", 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n'])(
     "drops queued system event lines from a real user turn",
     (context) => {
