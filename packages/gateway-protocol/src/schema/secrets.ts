@@ -69,7 +69,7 @@ export const SecretsStoreListResultSchema = closedObject({
 
 /** Create or replace one team secret-store entry. */
 export const SecretsStoreSetParamsSchema = closedObject({
-  expectedOwnerId: Type.Optional(withSince("2026.9", NonEmptyString)),
+  expectedOwnerId: Type.Optional(withSince("2026.9", Type.String({ minLength: 1 }))),
   inheritExistingKind: Type.Optional(withSince("2026.9", Type.Boolean())),
   valueSource: Type.Optional(withSince("2026.9", Type.Literal("argv"))),
   name: SecretStoreMutationNameSchema,
@@ -80,7 +80,7 @@ export const SecretsStoreSetParamsSchema = closedObject({
 
 /** Soft-delete one team secret-store entry. */
 export const SecretsStoreDeleteParamsSchema = closedObject({
-  expectedOwnerId: Type.Optional(withSince("2026.9", NonEmptyString)),
+  expectedOwnerId: Type.Optional(withSince("2026.9", Type.String({ minLength: 1 }))),
   name: SecretStoreMutationNameSchema,
 });
 
