@@ -372,13 +372,17 @@ describe("ordinary chat input admission", () => {
             if (!database) {
               throw new Error("Native incognito input must remain in its existing owner");
             }
-            nativePendingAtAck = readPendingInput(database, {
+            const snapshot = readPendingInput(database, {
               kind: "stage",
               sessionKey: scope.sessionKey,
               sessionId: scope.sessionId,
               idempotencyKey: `${params.idempotencyKey}:user`,
               trackCompletion: true,
             });
+            if (snapshot.kind !== "stage") {
+              throw new Error("Native incognito ACK must retain its staged input");
+            }
+            nativePendingAtAck = snapshot;
           }
         }
       });
