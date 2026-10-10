@@ -871,7 +871,6 @@ export const en: TranslationMap & {
     archivedOnlyTooltip: "Show only archived sessions.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
-    searchLabel: "Search sessions",
     clearSearch: "Clear search",
     user: "User",
     assistant: "Assistant",

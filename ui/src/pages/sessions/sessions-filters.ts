@@ -4,6 +4,7 @@ import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
+import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   normalizeSessionsGroupBy,
   SESSION_GROUP_MODES,
@@ -11,6 +12,7 @@ import {
 } from "../../lib/sessions/grouping.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
+import type { SessionsProps } from "./view.ts";
 
 export type SessionsAdvancedFiltersProps = {
   activeMinutes: string;
@@ -181,4 +183,84 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
       </div>
     </wa-popover>
   `;
+}
+
+export function handleSessionsSearchKeydown(
+  event: KeyboardEvent,
+  props: Pick<SessionsProps, "sessionMenu" | "onSearchChange">,
+) {
+  // SAFETY: This listener is bound directly to the search input.
+  const input = event.currentTarget as HTMLInputElement;
+  const document = input.ownerDocument;
+  if (
+    event.key !== "Escape" ||
+    event.defaultPrevented ||
+    event.isComposing ||
+    event.keyCode === 229 ||
+    event.altKey ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.shiftKey ||
+    document.activeElement !== input ||
+    !input.value ||
+    props.sessionMenu ||
+    document.openClawModalLayers?.size ||
+    document.querySelector(
+      "dialog[open], [aria-modal='true'], openclaw-menu-surface, wa-dropdown[open], wa-popover[open], wa-select[open]",
+    )
+  ) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  props.onSearchChange("");
+}
+
+export function clearSessionsSearch(event: MouseEvent, onSearchChange: (query: string) => void) {
+  // SAFETY: This listener is bound directly to the clear button.
+  const input = (event.currentTarget as HTMLElement).parentElement?.querySelector("input");
+  input?.focus({ preventScroll: true });
+  onSearchChange("");
+}
+
+// Drag-over highlighting toggles a class directly on the target row instead of
+// re-rendering per dragover event; lit re-renders mid-drag would cancel the drag.
+function setDropTargetActive(event: DragEvent, active: boolean) {
+  // SAFETY: These handlers are bound to the session row receiving the drag event.
+  (event.currentTarget as HTMLElement | null)?.classList.toggle(
+    "session-drop-target--active",
+    active,
+  );
+}
+
+export function categoryDropHandlers(props: SessionsProps, category: string | null) {
+  if (props.groupBy !== "category" || props.groupWriteDisabledReason) {
+    return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
+  }
+  const carriesSessionKey = (event: DragEvent) =>
+    event.dataTransfer?.types.includes(SESSION_DRAG_MIME) === true;
+  return {
+    dragover: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
+      event.preventDefault();
+      if (event.dataTransfer) {
+        event.dataTransfer.dropEffect = "move";
+      }
+      setDropTargetActive(event, true);
+    },
+    dragleave: (event: DragEvent) => setDropTargetActive(event, false),
+    drop: (event: DragEvent) => {
+      if (!carriesSessionKey(event)) {
+        return;
+      }
+      event.preventDefault();
+      setDropTargetActive(event, false);
+      const key = event.dataTransfer?.getData(SESSION_DRAG_MIME);
+      if (key) {
+        props.onAssignCategory(key, category);
+      }
+    },
+  } as const;
 }

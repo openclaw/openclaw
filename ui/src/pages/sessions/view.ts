@@ -57,10 +57,12 @@ import { parseAgentSessionKey, parseSessionKeyParts } from "../../lib/sessions/s
 import { renderCategoryCell } from "./category-cell.ts";
 import { renderSessionStatusBadge } from "./session-status.ts";
 import {
+  categoryDropHandlers,
+  clearSessionsSearch,
+  handleSessionsSearchKeydown,
   renderSessionsAdvancedFilters,
   type SessionsAdvancedFiltersProps,
 } from "./sessions-filters.ts";
-import { renderSessionsSearch } from "./sessions-search.ts";
 import { renderTranscriptSearch, type TranscriptSearchProps } from "./transcript-search-view.ts";
 
 export type SessionsProps = {
@@ -371,47 +373,6 @@ function sessionGroupLabel(group: SessionRowGroup, props: SessionsProps): string
   return id;
 }
 
-// Drag-over highlighting toggles a class directly on the target row instead of
-// re-rendering per dragover event; lit re-renders mid-drag would cancel the drag.
-function setDropTargetActive(event: DragEvent, active: boolean) {
-  (event.currentTarget as HTMLElement | null)?.classList.toggle(
-    "session-drop-target--active",
-    active,
-  );
-}
-
-function categoryDropHandlers(props: SessionsProps, category: string | null) {
-  if (props.groupBy !== "category" || props.groupWriteDisabledReason) {
-    return { dragover: nothing, dragleave: nothing, drop: nothing } as const;
-  }
-  const carriesSessionKey = (event: DragEvent) =>
-    event.dataTransfer?.types.includes(SESSION_DRAG_MIME) === true;
-  return {
-    dragover: (event: DragEvent) => {
-      if (!carriesSessionKey(event)) {
-        return;
-      }
-      event.preventDefault();
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = "move";
-      }
-      setDropTargetActive(event, true);
-    },
-    dragleave: (event: DragEvent) => setDropTargetActive(event, false),
-    drop: (event: DragEvent) => {
-      if (!carriesSessionKey(event)) {
-        return;
-      }
-      event.preventDefault();
-      setDropTargetActive(event, false);
-      const key = event.dataTransfer?.getData(SESSION_DRAG_MIME);
-      if (key) {
-        props.onAssignCategory(key, category);
-      }
-    },
-  } as const;
-}
-
 function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
   const label = sessionGroupLabel(group, props);
   const count = t(
@@ -581,7 +542,28 @@ function renderSessionsTable(props: SessionsProps) {
       role="group"
       aria-label=${t("sessionsView.filterControls")}
     >
-      ${renderSessionsSearch(props)}
+      <div class="data-table-search sessions-toolbar__search">
+        ${icons.search}
+        <input
+          type="text"
+          aria-label=${t("sessionsView.searchPlaceholder")}
+          placeholder=${t("sessionsView.searchPlaceholder")}
+          .value=${props.searchQuery}
+          @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
+          @keydown=${(event: KeyboardEvent) => handleSessionsSearchKeydown(event, props)}
+        />
+        <button
+          type="button"
+          class="sessions-toolbar__clear"
+          aria-label=${t("sessionsView.clearSearch")}
+          title=${t("sessionsView.clearSearch")}
+          ?hidden=${!props.searchQuery}
+          ?disabled=${!props.searchQuery}
+          @click=${(event: MouseEvent) => clearSessionsSearch(event, props.onSearchChange)}
+        >
+          ${icons.x}
+        </button>
+      </div>
       ${renderSettingsSegmented<SessionArchivedFilter>({
         value: props.statusFilter,
         ariaLabel: t("sessionsView.sessionState"),

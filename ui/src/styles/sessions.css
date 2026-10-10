@@ -215,6 +215,10 @@
   background: transparent;
 }
 
+.sessions-toolbar__clear[hidden] {
+  display: none;
+}
+
 .sessions-toolbar__clear:hover {
   color: var(--text);
   background: var(--bg-hover);
