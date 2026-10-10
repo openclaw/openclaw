@@ -155,17 +155,13 @@ export async function prepareBundledDiscoveryMode(
     ? readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options))
     : undefined;
   if (snapshot) {
-    const metadata = owner.metadata;
-    const generation = discoveryState.generation;
     const signal = getPluginCacheRetirementSignal(owner);
     // Private policy needs no global activation, but its caller must retain this exact scope.
     const assertCurrent = () => {
       signal.throwIfAborted();
       if (
-        owner.metadata !== metadata ||
-        discoveryState.generation !== generation ||
         readBundledDiscoveryFact(() => getActiveOpenClawStateDatabaseReadSnapshot(options)) !==
-          snapshot
+        snapshot
       ) {
         throw new PluginCacheFactInvalidatedError(
           "Plugin discovery snapshot changed during preparation; retry the operation.",
@@ -195,20 +191,10 @@ export async function prepareBundledDiscoveryMode(
           );
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
-    if (discoveryState.generation !== generation) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery state changed during preparation; retry the operation.",
-      );
-    }
     return { value, generation };
   });
   const activate = () => {
     prepared.assertCurrent();
-    if (discoveryState.generation !== generation) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin discovery state changed during preparation; retry the operation.",
-      );
-    }
     // Another root may use the single-slot memo while preparation awaits its row.
     // Reuse this operation's captured fact for the following synchronous derivation.
     discoveryState.memoized = { key, value: prepared.value.value };
@@ -225,6 +211,7 @@ export async function prepareBundledDiscoveryMode(
 export function clearBundledDiscoveryModeMemo(): void {
   discoveryState.memoized = undefined;
   discoveryState.snapshotModes = new WeakMap();
+  // Inactive operation caches must also discard facts completed before this clear.
   discoveryState.generation = {};
   for (const cache of new Set([getPluginCache(), getProcessPluginCache()])) {
     cache.preparedBundledDiscoveryModes.clear();

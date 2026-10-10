@@ -7,13 +7,33 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   clearBundledDiscoveryModeMemo,
+  prepareBundledDiscoveryMode,
   readBundledDiscoveryModeMemoized,
 } from "./bundled-discovery-state.js";
 import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-support.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 
 describe("readBundledDiscoveryModeMemoized", () => {
   afterEach(() => {
     clearBundledDiscoveryModeMemo();
+  });
+
+  it("clears prepared facts in an inactive operation cache", async () => {
+    const env = { OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "plugin-mode-cache") };
+    await using cache = createPluginCache();
+    await withPluginCache(cache, () =>
+      prepareBundledDiscoveryMode(env, async () => ({ value_json: '"compat"' })),
+    );
+
+    clearBundledDiscoveryModeMemo();
+
+    expect(
+      withPluginCache(cache, () => readBundledDiscoveryModeMemoized(env, {}, () => "allowlist")),
+    ).toBe("allowlist");
+    await withPluginCache(cache, async () => {
+      await prepareBundledDiscoveryMode(env, async () => ({ value_json: '"allowlist"' }));
+      expect(readBundledDiscoveryModeMemoized(env)).toBe("allowlist");
+    });
   });
 
   it("observes a machine-state write after the memo is cleared", async () => {

@@ -27,7 +27,7 @@ export type { PluginCache } from "./plugin-cache.types.js";
 
 const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
 
-/** Explicit fact invalidation cancels its preparation. */
+/** Read-scope invalidation cancels its preparation. */
 export class PluginCacheFactInvalidatedError extends Error {
   readonly code = PLUGIN_CACHE_FACT_INVALIDATED;
 }
@@ -259,7 +259,7 @@ export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
   );
 }
 
-/** Coalesce asynchronous facts without republishing data after explicit invalidation. */
+/** Coalesce reads; an invalidated in-flight read may finish without repopulating the cache. */
 export async function preparePluginCacheFact<T>(
   owner: PluginCache,
   facts: Map<string, PluginCacheFact<T>>,
@@ -283,29 +283,18 @@ export async function preparePluginCacheFact<T>(
         .then((value) => {
           signal.throwIfAborted();
           const published = facts.get(key);
-          if (published !== pending) {
-            if (published && "value" in published) {
-              return published;
-            }
-            throw new PluginCacheFactInvalidatedError(
-              "Plugin state changed during preparation; retry the operation.",
-            );
+          if (published && "value" in published) {
+            return published;
           }
           const ready = { value };
-          facts.set(key, ready);
+          if (published === pending) {
+            facts.set(key, ready);
+          }
           return ready;
         })
         .catch((error: unknown) => {
-          const published = facts.get(key);
-          if (published === pending) {
+          if (facts.get(key) === pending) {
             facts.delete(key);
-          }
-          signal.throwIfAborted();
-          if (published !== pending && !isPluginCacheFactInvalidatedError(error)) {
-            throw new PluginCacheFactInvalidatedError(
-              "Plugin state changed during preparation; retry the operation.",
-              { cause: error },
-            );
           }
           throw error;
         })
@@ -317,11 +306,6 @@ export async function preparePluginCacheFact<T>(
   const ready = "pending" in current ? await current.pending : current;
   const assertCurrent = () => {
     signal.throwIfAborted();
-    if (facts.get(key) !== ready) {
-      throw new PluginCacheFactInvalidatedError(
-        "Plugin state changed during preparation; retry the operation.",
-      );
-    }
   };
   assertCurrent();
   return { value: ready.value, assertCurrent };
