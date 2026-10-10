@@ -155,12 +155,30 @@ it.each(
       const nativeAssets =
         process.platform === "freebsd"
           ? [
-              "package.json",
-              "indirect.cjs",
-              "src/koffi/indirect.cjs",
-              "LICENSE.txt",
-              `build/koffi/freebsd_${process.arch}/koffi.node`,
-            ].map((file) => path.join(directory, "runtime", "node_modules", "koffi", file))
+              ...[
+                "package.json",
+                "LICENSE",
+                "dist/darwin.js",
+                "dist/errors.js",
+                "dist/identity.js",
+                "dist/index.js",
+                "dist/native-binding.js",
+                "dist/native-error.js",
+                "dist/native.js",
+              ].map((file) =>
+                path.join(directory, "runtime", "node_modules", "@openclaw", "proc-safe", file),
+              ),
+              ...["package.json", "proc-safe-native.node"].map((file) =>
+                path.join(
+                  directory,
+                  "runtime",
+                  "node_modules",
+                  "@openclaw",
+                  `proc-safe-freebsd-${process.arch}`,
+                  file,
+                ),
+              ),
+            ]
           : [];
       expect(staged).toEqual([entry, ...nativeAssets]);
       expect(readdirSync(directory)).toEqual(["runtime"]);
@@ -211,6 +229,8 @@ it.each(
         `
           import assert from "node:assert/strict";
           import { isBuiltin, registerHooks } from "node:module";
+          import path from "node:path";
+          import { fileURLToPath } from "node:url";
           import { DatabaseSync } from "node:sqlite";
           import { pathToFileURL } from "node:url";
           const kind = process.argv[2];
@@ -218,9 +238,14 @@ it.each(
           const entry = pathToFileURL(entryPath).href;
           if (kind === "package") process.argv = [process.execPath, entryPath, "--anchor", process.argv[3], "--operation", process.argv[4], "status"];
           registerHooks({ resolve(specifier, context, nextResolve) {
-            assert(isBuiltin(specifier) || specifier === entry,
-              "Unexpected sealed runtime dependency: " + specifier);
-            return nextResolve(specifier, context);
+            if (isBuiltin(specifier) || specifier === entry) return nextResolve(specifier, context);
+            assert.equal(kind, "managed", "Unexpected package recovery dependency");
+            assert.equal(process.platform, "freebsd", "Unexpected native dependency");
+            const resolved = nextResolve(specifier, context);
+            const privateRoot = path.join(path.dirname(entryPath), "node_modules") + path.sep;
+            assert(fileURLToPath(resolved.url).startsWith(privateRoot),
+              "Dependency escaped private runtime: " + specifier);
+            return resolved;
           } });
           const runtime = await import(entry);
           if (kind === "managed") for (const name of [
@@ -233,6 +258,21 @@ it.each(
             assert.equal(typeof runtime[name], "function", name);
           }
           if (kind === "managed") {
+          if (process.platform === "freebsd") {
+            const options = { databasePath: path.join(process.cwd(), "identity.sqlite"), serviceManagerEnv: {} };
+            const store = runtime.createManagedHandoffLeaseStore(options);
+            const current = store.processIdentity(process.pid);
+            assert.match(current.startIdentity, /^[0-9]+$/);
+            assert.equal(store.inspectProcessIdentity(current), "live");
+            const { Worker } = await import("node:worker_threads");
+            const { once } = await import("node:events");
+            const worker = new Worker(new URL("data:text/javascript," + encodeURIComponent(
+              'import { parentPort } from "node:worker_threads"; import { createManagedHandoffLeaseStore } from ' + JSON.stringify(entry) + ';' +
+              'parentPort.postMessage(createManagedHandoffLeaseStore(' + JSON.stringify(options) + ').processIdentity(process.pid));'
+            )));
+            try { const [observed] = await once(worker, "message"); assert.deepEqual(observed, current); }
+            finally { await worker.terminate(); }
+          }
           const db = new DatabaseSync(":memory:");
           try {
             db.exec(runtime.extractSqliteTableSchema(runtime.OPENCLAW_STATE_SCHEMA_SQL, "gateway_restart_sentinel", {
