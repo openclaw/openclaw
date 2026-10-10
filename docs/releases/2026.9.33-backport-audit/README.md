@@ -48,7 +48,7 @@ An `already-covered` row marked `mechanical-equivalence-only` is an empty probe,
 
 These are material reliability/UX repairs to existing owners, not feature, SDK, schema or dependency upgrades. No security advisory backport is selected. `proposals.json` records exact ordered source SHAs, producers/callers, prerequisite dispositions, publication owners, no-surface-change alternatives and remaining gates.
 
-Two source commits need minimal baseline adaptations. The unapplied, test-inclusive proposals are `proposals/snapshot-birthtime.patch` and `proposals/plugin-restart-state.patch`; hashes are in `proposals.json`. Blank patch-context lines omit whitespace padding; default `git apply` was checked against the baseline and produced the exact same staged trees as the tested patches. Do not import main's snapshot module split/state20 changes or its unrelated server-close callback exit policy.
+Two source commits need minimal baseline adaptations. The unapplied, test-inclusive proposals are `proposals/snapshot-birthtime.diff` and `proposals/plugin-restart-state.diff`; hashes are in `proposals.json`. These are source-diff documents, not pnpm dependency patches. Blank patch-context lines omit whitespace padding; default `git apply` was checked against the baseline and produced the exact same staged trees as the tested patches. Do not import main's snapshot module split/state20 changes or its unrelated server-close callback exit policy.
 
 ## Observed proof and limits
 

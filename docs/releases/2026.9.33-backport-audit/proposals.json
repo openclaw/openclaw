@@ -697,7 +697,7 @@
         "src/infra/sqlite-snapshot.ts"
       ],
       "adaptation": "Port only sameFileStatFingerprint repair to the unsplit 9.9 owner; add zero/ctime/corruption regression cases using its existing durability seam. Existing copy fallback/unknown identity/source independence coverage retained.",
-      "proposedPatch": "proposals/snapshot-birthtime.patch",
+      "proposedPatch": "proposals/snapshot-birthtime.diff",
       "patchSha256": "476ed95fb5e494f72bc32d3c58372faba4e506c6b0e7da259659ab3b0e8442f8",
       "rawApplicability": {
         "status": "conflicted",
@@ -850,7 +850,7 @@
         "src/plugins/runtime.ts"
       ],
       "adaptation": "Select only both runtime.ts shutdown hunks from the public main repair. Adapt baseline host retirement test to preserve shutdown state and add real last-owner/surviving-owner regressions. Explicit removal, scope capture, cleanup result and error-policy controls retained.",
-      "proposedPatch": "proposals/plugin-restart-state.patch",
+      "proposedPatch": "proposals/plugin-restart-state.diff",
       "patchSha256": "af688b1b68c2b608ed18c4d33caf469e07014c91e090643e512a7be2360434a2",
       "rawApplicability": {
         "status": "conflicted",
