@@ -190,6 +190,10 @@ A remote binding without maintenance support fails instead of using Gateway file
 The file worker implements these operations and native change notifications.
 The paired-node file-transfer adapter connects these operations through the
 existing service-owned node channel and node file policy.
+Requester-scoped `writeDreams` and `appendCorpus` calls carry `assertCurrent`
+separately from the serialized request. Transports must retain that callback in
+node dispatch and recheck it after preparation, immediately before starting the
+remote write. Refusal closes the prepared channel and waits for accepted cleanup.
 
 Task-time Skill preparation uses remote discovery. Channel-native menus use
 Gateway-owned Skills without waiting for the Harness; remote menu support is

@@ -497,9 +497,10 @@ export async function appendSessionCorpusLines(params: {
   );
   const content = `${params.lines.map((entry) => entry.rendered).join("\n")}\n`;
   const files = getMemoryWorkspaceMaintenance(params.workspaceDir);
-  captureMemoryMutationAuthority()?.();
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const existingLines = files
-    ? await files.appendCorpus(absolutePath, content)
+    ? await files.appendCorpus(absolutePath, content, assertCurrent)
     : await appendSessionCorpusText(absolutePath, content);
   return params.lines.map((entry, index) => ({
     path: relativePath,

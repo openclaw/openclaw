@@ -89,7 +89,7 @@ export async function writeDreamsFileAtomic(
   assertCurrent?.();
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
-    return await files.writeDreams(dreamsPath, content);
+    return await files.writeDreams(dreamsPath, content, assertCurrent);
   }
   await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
   await assertSafeDreamsPath(dreamsPath);

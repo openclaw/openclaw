@@ -1,6 +1,10 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  createWorkspaceMemoryFileClient,
+  registerAgentWorkspaceAccess,
+} from "openclaw/plugin-sdk/agent-workspace-runtime";
 import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as sessionCorpus from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
@@ -31,7 +35,7 @@ import {
 import { listMemoryEntryOrigins, recordMemoryEntryOrigins } from "./memory-entry-origins.js";
 import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { executeSessionBackfillBatch } from "./session-backfill.js";
-import { appendSessionCorpusText } from "./session-ingestion.js";
+import { appendSessionCorpusLines, appendSessionCorpusText } from "./session-ingestion.js";
 import { seedCanonicalTranscript } from "./session-ingestion.test-support.js";
 import * as promotion from "./short-term-promotion.js";
 import {
@@ -82,6 +86,58 @@ afterAll(async () => {
 });
 
 describe("memory mutation authority at durable effects", () => {
+  it.each(["diary", "corpus"] as const)(
+    "carries the captured %s authority to remote dispatch",
+    async (kind) => {
+      let captured: (() => void) | undefined;
+      const memoryFiles = createWorkspaceMemoryFileClient({
+        workspaceDir: workspace,
+        remoteWorkspaceDir: "/node",
+        signal: new AbortController().signal,
+        request: async (_request, _signal, assertCurrent) => {
+          captured = assertCurrent;
+          return JSON.stringify({ result: 0 });
+        },
+        subscribe: async () => {},
+      });
+      const unexpected = async (): Promise<never> => {
+        throw new Error("unexpected bridge call");
+      };
+      const unregister = registerAgentWorkspaceAccess(workspace, {
+        memoryFiles,
+        bridge: { readFile: unexpected, writeFile: unexpected, stat: unexpected },
+      });
+      try {
+        await withMemoryMutationAuthority(
+          () => {},
+          async () => {
+            if (kind === "diary") {
+              await writeDreamsFileAtomic(path.join(workspace, "DREAMS.md"), "entry\n", workspace);
+            } else {
+              await appendSessionCorpusLines({
+                workspaceDir: workspace,
+                day: "2026-01-02",
+                lines: [
+                  {
+                    day: "2026-01-02",
+                    snippet: "entry",
+                    rendered: "entry",
+                    provenance: { originClass: "owner" },
+                  },
+                ],
+              });
+            }
+            expect(captured).toBeTypeOf("function");
+            expect(() => captured!()).not.toThrow();
+          },
+        );
+        expect(() => captured!()).toThrow("Memory mutation authority is closed");
+      } finally {
+        unregister();
+      }
+    },
+  );
+
   it("keeps a captured SQLite store bound to the invocation that opened it", async () => {
     const store = await withMemoryMutationAuthority(
       () => {},
