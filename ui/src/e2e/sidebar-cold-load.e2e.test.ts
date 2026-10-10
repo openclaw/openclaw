@@ -465,25 +465,45 @@ suite.define(() => {
           settled.navigation.filter((key) => key !== "plugin:reports/overview"),
         );
 
+        const failSidebarLoad = async () => {
+          await page.reload();
+          await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
+          await gateway.waitForRequest("connect");
+          await gateway.setMethodResponse("sessions.list", {
+            __mockError: {
+              code: "UNAVAILABLE",
+              message: "Synthetic session catalog temporarily unavailable",
+            },
+          });
+          await gateway.resolveDeferred("connect");
+          await sidebar.locator(".sidebar-online__retry").waitFor();
+          await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
+          await sidebar
+            .locator('.sidebar-brand__new-thread:not(:disabled):not([aria-disabled="true"])')
+            .waitFor();
+          expect(await sidebar.locator(".sidebar-online__counts").count()).toBe(0);
+          expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
+        };
         await waitForSavedSidebar(page);
+        await failSidebarLoad();
+
+        await page.evaluate((settingsKey) => {
+          const settings = JSON.parse(localStorage.getItem(settingsKey) ?? "{}");
+          localStorage.setItem(
+            settingsKey,
+            JSON.stringify({ ...settings, sidebarAgentsMode: "chip" }),
+          );
+        }, controlUiBundledSettingsStorageKey(suite.server.baseUrl));
         await page.reload();
-        await page.locator('aside.sidebar[data-snapshot-state="cached"]').waitFor();
         await gateway.waitForRequest("connect");
-        await gateway.deferNext("sessions.list");
+        await gateway.setMethodResponse("sessions.list", {
+          ...sessionsListResponse(sessions),
+          ownerSessionCounts,
+        });
         await gateway.resolveDeferred("connect");
-        await gateway.waitForRequest("sessions.list", { match: { excludeDock: true } });
-        await gateway.waitForRequest("sessions.list", {
-          match: { includeOwnerSessionCounts: true },
-        });
-        await gateway.rejectDeferred("sessions.list", {
-          code: "UNAVAILABLE",
-          message: "Synthetic session catalog temporarily unavailable",
-        });
-        await sidebar.locator(".sidebar-online__retry").waitFor();
-        await page.locator('aside.sidebar[data-snapshot-state="live"]').waitFor();
-        await sidebar.locator(".sidebar-brand__new-thread:enabled").waitFor();
-        expect(await sidebar.locator(".sidebar-online__counts").count()).toBe(0);
-        expect(await sidebar.getAttribute("data-snapshot-saved")).toBe("false");
+        await sidebar.locator(".sidebar-agent-card__name").waitFor();
+        await waitForSavedSidebar(page);
+        await failSidebarLoad();
       },
     );
   });

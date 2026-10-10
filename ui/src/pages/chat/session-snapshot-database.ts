@@ -1,4 +1,5 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   type SessionSnapshotInvalidationReason,
@@ -45,7 +46,7 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
         database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
         database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
       }
-      database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "key" });
+      database.createObjectStore(SIDEBAR_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
     });
     request.addEventListener("success", () => resolve(request.result));
     request.addEventListener("error", () =>
@@ -121,17 +122,12 @@ export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<
     if (!isPersistableChatSnapshotKey(sessionKey)) {
       return undefined;
     }
-    return await new Promise<unknown>((resolve, reject) => {
-      const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
-      const request = transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey);
-      transaction.addEventListener("complete", () => resolve(request.result));
-      transaction.addEventListener("error", () =>
-        reject(transaction.error ?? new Error("IndexedDB read failed")),
-      );
-      transaction.addEventListener("abort", () =>
-        reject(transaction.error ?? new Error("IndexedDB read aborted")),
-      );
-    });
+    const transaction = database.transaction(CHAT_SNAPSHOT_STORE_NAME, "readonly");
+    const [value] = await Promise.all([
+      requestResult(transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).get(sessionKey)),
+      transactionComplete(transaction),
+    ]);
+    return value;
   } catch (error) {
     debugSnapshotStore("resetting cache after IndexedDB read failure", error);
     await resetSessionSnapshotDatabase(database);

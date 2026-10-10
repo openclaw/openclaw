@@ -4,15 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { clearBootRecords, type BootRecord } from "../app/boot-record.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { subscribeSnapshotInvalidation } from "../pages/chat/session-snapshot-invalidation-events.ts";
 import {
   clearStoredChatSnapshots,
   deleteStoredChatSnapshot,
 } from "../pages/chat/session-snapshot-invalidation.ts";
 import {
-  consumePrewarmedSidebarSnapshot,
-  prewarmSidebarSnapshot,
-} from "../pages/chat/sidebar-snapshot-prewarm.ts";
-import { SidebarSnapshotStore } from "../pages/chat/sidebar-snapshot-store.ts";
+  admitSidebarBootScope,
+  sidebarSnapshotScopeKey,
+} from "../pages/chat/session-snapshot-prewarm.ts";
+import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { SidebarSnapshotController } from "./sidebar-snapshot-controller.ts";
@@ -151,12 +152,13 @@ describe("sidebar snapshot lifecycle", () => {
   });
 
   async function warmFixture() {
-    const store = new SidebarSnapshotStore(parseSidebarSnapshot);
-    disposers.push(() => store.dispose());
-    await store.write(scope, model);
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    await store.writeSidebar(sidebarSnapshotScopeKey(scope), model, parseSidebarSnapshot);
     const test = fixture();
     disposers.push(
-      prewarmSidebarSnapshot(test.gateway, { ...scope, scope: scope.gatewayScope }),
+      admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
       () => test.controller.hostDisconnected(),
     );
     test.controller.hostConnected();
@@ -180,7 +182,57 @@ describe("sidebar snapshot lifecycle", () => {
     expect(test.host.captureSidebarSnapshot).not.toHaveBeenCalled();
     test.controller.hostUpdated();
     await saved;
-    expect(await test.store.read(scope)).toEqual(live);
+    expect(
+      await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
+    ).toEqual(live);
+  });
+
+  it("does not report an unchanged model saved while its write is pending", async () => {
+    const test = fixture();
+    const issued = createDeferred<void>();
+    const written = createDeferred<boolean>();
+    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
+      issued.resolve();
+      return written.promise;
+    });
+    test.controller.hostConnected();
+    disposers.push(() => test.controller.hostDisconnected());
+    test.publish();
+    const saved = test.settle();
+    test.controller.hostUpdated();
+    await issued.promise;
+    try {
+      test.controller.hostUpdated();
+      expect(test.controller.saved).toBe(false);
+    } finally {
+      written.resolve(true);
+    }
+    await saved;
+    expect(test.controller.saved).toBe(true);
+  });
+
+  it("waits for a reverted model to finish writing after a different model was queued", async () => {
+    const test = await warmFixture();
+    const issued = createDeferred<void>();
+    const written = createDeferred<boolean>();
+    vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
+      issued.resolve();
+      return written.promise;
+    });
+    test.publish();
+    test.settle({ ...model, onlineExpanded: false });
+    test.controller.hostUpdated();
+    test.controller.hostUpdated();
+    await issued.promise;
+    const saved = test.settle(model);
+    try {
+      test.controller.hostUpdated();
+      test.controller.hostUpdated();
+      expect(test.controller.saved).toBe(false);
+    } finally {
+      written.resolve(true);
+    }
+    await saved;
   });
 
   it.each(["profile", "connection"] as const)(
@@ -210,28 +262,32 @@ describe("sidebar snapshot lifecycle", () => {
     },
   );
 
-  it.each(["pending", "ready", "cache-eviction"] as const)(
-    "fences a %s prewarm against individual session invalidation",
-    async (state) => {
-      const store = new SidebarSnapshotStore(parseSidebarSnapshot);
-      disposers.push(() => store.dispose());
-      await store.write(scope, model);
-      const test = fixture();
-      disposers.push(prewarmSidebarSnapshot(test.gateway, { ...scope, scope: scope.gatewayScope }));
-      const prewarm = consumePrewarmedSidebarSnapshot(test.gateway);
-      if (!prewarm) {
-        throw new Error("expected sidebar prewarm");
-      }
-      if (state === "ready") {
-        expect(await prewarm.promise).toEqual(model);
-      }
-      await deleteStoredChatSnapshot(sessionKey, state === "cache-eviction" ? state : undefined);
-      expect(prewarm.isCurrent()).toBe(state === "cache-eviction");
-      if (state !== "ready") {
-        expect(await prewarm.promise).toEqual(state === "cache-eviction" ? model : null);
-      }
-    },
-  );
+  it("discards an admitted boot scope retired before the sidebar mounts", () => {
+    const test = fixture();
+    disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
+    clearBootRecords(scope.gatewayScope, { recoveryScope: scope.recoveryScope });
+    test.controller.hostConnected();
+    disposers.push(() => test.controller.hostDisconnected());
+    expect(test.controller.pending).toBe(false);
+    expect(test.host.sidebarSnapshot).toBeNull();
+  });
+
+  it("discards the boot scope before an asynchronous session deletion completes", async () => {
+    const test = fixture();
+    const deletion = createDeferred<void>();
+    const stop = subscribeSnapshotInvalidation(() => deletion.promise);
+    disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
+    const clearing = deleteStoredChatSnapshot(sessionKey);
+    try {
+      test.controller.hostConnected();
+      disposers.push(() => test.controller.hostDisconnected());
+      expect(test.controller.pending).toBe(false);
+    } finally {
+      stop();
+      deletion.resolve();
+      await clearing;
+    }
+  });
 
   it("retires the displayed pre-hello cache when its boot owner rejects admission", async () => {
     const test = await warmFixture();
@@ -277,7 +333,9 @@ describe("sidebar snapshot lifecycle", () => {
     test.controller.hostUpdated();
     await saved;
     expect(test.controller.saved).toBe(true);
-    expect(await test.store.read(scope)).toEqual(model);
+    expect(
+      await test.store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot),
+    ).toEqual(model);
   });
 
   it("does not hold a cold render and can save again after remount", async () => {
@@ -291,8 +349,11 @@ describe("sidebar snapshot lifecycle", () => {
     const saved = test.settle();
     test.controller.hostUpdated();
     await saved;
-    const store = new SidebarSnapshotStore(parseSidebarSnapshot);
-    disposers.push(() => store.dispose());
-    expect(await store.read(scope)).toEqual(model);
+    const store = new SessionSnapshotStore();
+    store.connect();
+    disposers.push(() => store.disconnect());
+    expect(await store.readSidebar(sidebarSnapshotScopeKey(scope), parseSidebarSnapshot)).toEqual(
+      model,
+    );
   });
 });

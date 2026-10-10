@@ -140,21 +140,14 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       );
     }
     return (
-      !!this.sessionData.sessionsResult &&
       !this.sessionData.sessionsLoading &&
-      !context.sessions.presentation.resultCached
+      (!!(this.sessionData.sessionMutationError ?? context.sessions.state.error) ||
+        (!!this.sessionData.sessionsResult && !context.sessions.presentation.resultCached))
     );
   }
 
   captureSidebarSnapshot(): SidebarSnapshotModel | null {
-    if (
-      !this.context ||
-      this.sidebarSnapshot ||
-      this.sessionData.ownerCounts.error !== null ||
-      (this.sidebarAgentsMode === "roster" &&
-        rosterActivityStore(this.context).snapshot.error !== null) ||
-      (this.context.plugins.registryStatus !== "complete" && !this.sidebarPluginSnapshot)
-    ) {
+    if (!this.context) {
       return null;
     }
     const rows = this.selectedAgentSessionRows(this.getSessionNavigationState());

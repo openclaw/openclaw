@@ -1,6 +1,7 @@
-import { parseSidebarEntry, serializeSidebarEntry } from "../app-navigation.ts";
+import { serializeSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { presenceViewerLastActivity } from "../lib/presence-users.ts";
 import { sidebarOnlineOrder } from "./app-sidebar-online.ts";
@@ -15,6 +16,15 @@ import {
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
 
+function displayUser(user: AuthenticatedUser | null | undefined) {
+  return user
+    ? {
+        ...user,
+        identity: user.identity?.type === "profile" ? user.identity : undefined,
+      }
+    : null;
+}
+
 export function captureSidebarSnapshotModel(
   host: AppSidebarRenderHost,
   context: ApplicationContext,
@@ -23,6 +33,16 @@ export function captureSidebarSnapshotModel(
 ): SidebarSnapshotModel | null {
   const zone = host.reconciledSidebarZone(rows);
   const roster = rosterActivityStore(context).snapshot;
+  if (
+    host.sidebarSnapshot ||
+    host.sessionData.sessionMutationError !== null ||
+    context.sessions.state.error !== null ||
+    host.sessionData.ownerCounts.error !== null ||
+    (host.sidebarAgentsMode === "roster" && roster.error !== null) ||
+    (context.plugins.registryStatus !== "complete" && !host.sidebarPluginSnapshot)
+  ) {
+    return null;
+  }
   const online = sidebarOnlineOrder(host);
   const plugins = [...zone.pluginTabs].map(([key, tab]) => ({ key, ...tab }));
   for (const { key, pluginId, value } of host.pluginNavigation()) {
@@ -36,10 +56,9 @@ export function captureSidebarSnapshotModel(
   const sessionKeys = new Set(sessions.map((row) => row.key));
   return parseSidebarSnapshot({
     mode: host.sidebarAgentsMode,
-    entries: zone.entries.map(serializeSidebarEntry).filter((value) => {
-      const entry = parseSidebarEntry(value);
-      return entry?.type !== "session" || sessionKeys.has(entry.key);
-    }),
+    entries: zone.entries
+      .filter((entry) => entry.type !== "session" || sessionKeys.has(entry.key))
+      .map(serializeSidebarEntry),
     sessions,
     ...snapshotSections(sections, host.collapsedSessionSections, presentation),
     cards: roster.cards,
@@ -49,8 +68,7 @@ export function captureSidebarSnapshotModel(
     onlineUsers: online.users.map((user) => {
       const lastActivityAt = presenceViewerLastActivity(user);
       return {
-        ...user,
-        identity: user.identity?.type === "profile" ? user.identity : undefined,
+        ...displayUser(user),
         watchedSessions: [],
         entries: lastActivityAt === undefined ? [] : [{ ts: 0, lastActivityAt }],
       };
@@ -61,15 +79,7 @@ export function captureSidebarSnapshotModel(
     onlineExpanded: host.teamOnlineExpanded,
     ownerId: host.sessionOwnerFilterId,
     involvingMe: host.sessionInvolvingMeFilterActive,
-    footer: context.gateway.snapshot.selfUser
-      ? {
-          ...context.gateway.snapshot.selfUser,
-          identity:
-            context.gateway.snapshot.selfUser.identity?.type === "profile"
-              ? context.gateway.snapshot.selfUser.identity
-              : undefined,
-        }
-      : null,
+    footer: displayUser(context.gateway.snapshot.selfUser),
     brand: readSidebarBrandPresentation(host),
   });
 }

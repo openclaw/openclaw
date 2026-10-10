@@ -11,7 +11,7 @@ import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import type { SessionDataControllerHost } from "./session-data-controller-catalog.ts";
 import { SessionDataController } from "./session-data-controller.ts";
 
-describe("sidebar warm roster publication", () => {
+describe("sidebar live roster publication", () => {
   it.each([
     { name: "before controller binding", cacheTiming: "before", profileId: null, filtered: false },
     { name: "after controller binding", cacheTiming: "after", profileId: null, filtered: false },
@@ -28,7 +28,7 @@ describe("sidebar warm roster publication", () => {
       filtered: true,
     },
   ] as const)(
-    "publishes cache loaded $name, then replaces it with the live roster",
+    "leaves routing cache loaded $name to its owner and renders only live rows",
     async ({ cacheTiming, profileId, filtered }) => {
       const cached = sessionsResult(
         [
@@ -142,8 +142,8 @@ describe("sidebar warm roster publication", () => {
 
         expect(sessions.canonicalListRevision).toBe(0);
         expect(sessions.state.resultCached).toBe(true);
-        expect(controller.sessionsResult).toEqual(cached);
-        expect(controller.sessionsAgentId).toBe("main");
+        expect(controller.sessionsResult).toBeNull();
+        expect(controller.sessionsAgentId).toBeNull();
         expect(request).not.toHaveBeenCalled();
 
         if (filtered) {

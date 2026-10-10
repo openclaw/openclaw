@@ -13,25 +13,20 @@ export function sidebarSnapshotInvalidationMatches(
   sidebarKey: string,
   { sessionKey, scopePrefix, reason }: SnapshotInvalidation,
 ): boolean {
-  if (scopePrefix) {
-    return sidebarKey.startsWith(scopePrefix);
-  }
-  if (!sessionKey) {
-    return true;
-  }
   if (reason === "cache-eviction") {
     return false;
   }
-  if (sessionKey === sidebarKey) {
-    return true;
+  if (!sessionKey) {
+    return !scopePrefix || sidebarKey.startsWith(scopePrefix);
   }
   const separator = sessionKey.indexOf("\u0000");
   // Session removal also retires its display copies; history LRU eviction does not.
   return (
-    sessionKey.startsWith("scope:[") &&
-    separator >= 0 &&
-    !sessionKey.slice(separator + 1).startsWith("sidebar:") &&
-    sidebarKey.startsWith(sessionKey.slice(0, separator + 1))
+    sessionKey === sidebarKey ||
+    (sessionKey.startsWith("scope:[") &&
+      separator >= 0 &&
+      !sessionKey.slice(separator + 1).startsWith("sidebar:") &&
+      sidebarKey.startsWith(sessionKey.slice(0, separator + 1)))
   );
 }
 

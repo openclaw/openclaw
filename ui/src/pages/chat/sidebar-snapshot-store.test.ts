@@ -13,24 +13,27 @@ import {
   deleteStoredChatSnapshot,
 } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import { SidebarSnapshotStore, type SidebarSnapshotScope } from "./sidebar-snapshot-store.ts";
 
-const scope: SidebarSnapshotScope = {
+const scope = {
   gatewayScope: "wss://sidebar.example",
   recoveryScope: "account-a",
   profileId: "profile-a",
 };
+const key = (value: typeof scope) =>
+  `scope:${JSON.stringify([value.gatewayScope, value.recoveryScope])}\u0000sidebar:${JSON.stringify(value.profileId)}`;
 const modelSchema = z.object({ rows: z.array(z.string()) }).strict();
+const validate = (value: unknown) => {
+  const parsed = modelSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+};
 const model = { rows: ["Agent Juniper", "Dashboard Cedar", "Calendar"] };
 const sessionKey = `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000agent:main:cedar`;
 
 describe("persistent sidebar projections", () => {
-  const stores: SidebarSnapshotStore<z.infer<typeof modelSchema>>[] = [];
+  const stores: SessionSnapshotStore[] = [];
   function createStore() {
-    const store = new SidebarSnapshotStore((value) => {
-      const result = modelSchema.safeParse(value);
-      return result.success ? result.data : null;
-    });
+    const store = new SessionSnapshotStore();
+    store.connect();
     stores.push(store);
     return store;
   }
@@ -42,7 +45,8 @@ describe("persistent sidebar projections", () => {
   afterEach(async () => {
     await clearStoredChatSnapshots();
     for (const store of stores.splice(0)) {
-      store.dispose();
+      store.disconnect();
+      await store.whenIdle();
     }
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -51,22 +55,24 @@ describe("persistent sidebar projections", () => {
   it("restores the settled row order before a connection and isolates gateway, account and profile", async () => {
     const writer = createStore();
     const captured = { rows: [...model.rows] };
-    const writing = writer.write(scope, captured);
+    const writing = writer.writeSidebar(key(scope), captured, validate);
     captured.rows.reverse();
-    await writing;
+    expect(await writing).toBe(true);
     const reader = createStore();
-    expect(await reader.read(scope)).toEqual(model);
+    expect(await reader.readSidebar(key(scope), validate)).toEqual(model);
     for (const other of [
       { ...scope, gatewayScope: "wss://other.example" },
       { ...scope, recoveryScope: "account-b" },
       { ...scope, profileId: "profile-b" },
     ]) {
-      expect(await reader.read(other)).toBeNull();
-      await writer.write(other, model);
+      expect(await reader.readSidebar(key(other), validate)).toBeNull();
+      await writer.writeSidebar(key(other), model, validate);
     }
-    await writer.invalidate(scope);
-    expect(await reader.read(scope)).toBeNull();
-    expect(await reader.read({ ...scope, profileId: "profile-b" })).toEqual(model);
+    await writer.delete(key(scope));
+    expect(await reader.readSidebar(key(scope), validate)).toBeNull();
+    expect(await reader.readSidebar(key({ ...scope, profileId: "profile-b" }), validate)).toEqual(
+      model,
+    );
   });
 
   it("shares account and global invalidation with the transcript cache", async () => {
@@ -74,16 +80,16 @@ describe("persistent sidebar projections", () => {
     const otherProfile = { ...scope, profileId: "profile-b" };
     const otherAccount = { ...scope, recoveryScope: "account-b" };
     for (const current of [scope, otherProfile, otherAccount]) {
-      await store.write(current, model);
+      await store.writeSidebar(key(current), model, validate);
     }
     await clearStoredChatSnapshots(
       `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000`,
     );
-    expect(await store.read(scope)).toBeNull();
-    expect(await store.read(otherProfile)).toBeNull();
-    expect(await store.read(otherAccount)).toEqual(model);
+    expect(await store.readSidebar(key(scope), validate)).toBeNull();
+    expect(await store.readSidebar(key(otherProfile), validate)).toBeNull();
+    expect(await store.readSidebar(key(otherAccount), validate)).toEqual(model);
     await clearStoredChatSnapshots();
-    expect(await store.read(otherAccount)).toBeNull();
+    expect(await store.readSidebar(key(otherAccount), validate)).toBeNull();
   });
 
   it("prunes oldest records by count, UTF-8 bytes, and age", async () => {
@@ -91,20 +97,22 @@ describe("persistent sidebar projections", () => {
     vi.spyOn(Date, "now").mockImplementation(() => now++);
     const store = createStore();
     for (let index = 0; index < 9; index += 1) {
-      await store.write({ ...scope, profileId: `profile-${index}` }, model);
+      await store.writeSidebar(key({ ...scope, profileId: `profile-${index}` }), model, validate);
     }
-    expect(await store.read({ ...scope, profileId: "profile-0" })).toBeNull();
-    expect(await store.read({ ...scope, profileId: "profile-1" })).toEqual(model);
+    expect(await store.readSidebar(key({ ...scope, profileId: "profile-0" }), validate)).toBeNull();
+    expect(await store.readSidebar(key({ ...scope, profileId: "profile-1" }), validate)).toEqual(
+      model,
+    );
     await clearStoredChatSnapshots();
     const large = { rows: ["🦞".repeat(70_000)] };
-    await store.write(scope, large);
-    await store.write({ ...scope, profileId: "newer" }, large);
-    expect(await store.read(scope)).toBeNull();
-    expect(await store.read({ ...scope, profileId: "newer" })).toEqual(large);
-    await store.write(scope, { rows: ["🦞".repeat(140_000)] });
-    expect(await store.read(scope)).toBeNull();
+    await store.writeSidebar(key(scope), large, validate);
+    await store.writeSidebar(key({ ...scope, profileId: "newer" }), large, validate);
+    expect(await store.readSidebar(key(scope), validate)).toBeNull();
+    expect(await store.readSidebar(key({ ...scope, profileId: "newer" }), validate)).toEqual(large);
+    await store.writeSidebar(key(scope), { rows: ["🦞".repeat(140_000)] }, validate);
+    expect(await store.readSidebar(key(scope), validate)).toBeNull();
     now += 31 * 24 * 60 * 60 * 1000;
-    expect(await store.read({ ...scope, profileId: "newer" })).toBeNull();
+    expect(await store.readSidebar(key({ ...scope, profileId: "newer" }), validate)).toBeNull();
   });
 
   it.each([undefined, "cache-eviction"] as const)(
@@ -114,7 +122,7 @@ describe("persistent sidebar projections", () => {
       const otherProfile = { ...scope, profileId: "profile-b" };
       const otherAccount = { ...scope, recoveryScope: "account-b" };
       for (const current of [scope, otherProfile, otherAccount]) {
-        await store.write(current, model);
+        await store.writeSidebar(key(current), model, validate);
       }
       const transcripts = new SessionSnapshotStore();
       const snapshot = {
@@ -130,9 +138,9 @@ describe("persistent sidebar projections", () => {
       expect(await transcripts.read(sessionKey)).toBeNull();
       expect(await transcripts.read(retained)).toEqual(snapshot);
       const expected = reason === "cache-eviction" ? model : null;
-      expect(await store.read(scope)).toEqual(expected);
-      expect(await store.read(otherProfile)).toEqual(expected);
-      expect(await store.read(otherAccount)).toEqual(model);
+      expect(await store.readSidebar(key(scope), validate)).toEqual(expected);
+      expect(await store.readSidebar(key(otherProfile), validate)).toEqual(expected);
+      expect(await store.readSidebar(key(otherAccount), validate)).toEqual(model);
     },
   );
 
@@ -142,7 +150,7 @@ describe("persistent sidebar projections", () => {
       const store = createStore();
       const invalidate = () =>
         kind === "profile"
-          ? store.invalidate(scope)
+          ? store.delete(key(scope))
           : kind === "session" || kind === "cache-eviction"
             ? deleteStoredChatSnapshot(sessionKey, kind === "cache-eviction" ? kind : undefined)
             : clearStoredChatSnapshots(
@@ -150,10 +158,10 @@ describe("persistent sidebar projections", () => {
                   ? `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000`
                   : undefined,
               );
-      await Promise.all([store.write(scope, model), invalidate()]);
+      await Promise.all([store.writeSidebar(key(scope), model, validate), invalidate()]);
       const expected = kind === "cache-eviction" ? model : null;
-      expect(await store.read(scope)).toEqual(expected);
-      await store.write(scope, model);
+      expect(await store.readSidebar(key(scope), validate)).toEqual(expected);
+      await store.writeSidebar(key(scope), model, validate);
       let invalidation: Promise<void> | undefined;
       const original = IDBObjectStore.prototype.getAll;
       vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
@@ -166,16 +174,16 @@ describe("persistent sidebar projections", () => {
         });
         return request;
       });
-      expect(await store.read(scope)).toEqual(expected);
+      expect(await store.readSidebar(key(scope), validate)).toEqual(expected);
       expect(invalidation).toBeDefined();
       await invalidation;
-      expect(await createStore().read(scope)).toEqual(expected);
+      expect(await createStore().readSidebar(key(scope), validate)).toEqual(expected);
     },
   );
 
   it("resets a mismatched stored projection and rejects unadmitted display data", async () => {
     const store = createStore();
-    await store.write(scope, model);
+    await store.writeSidebar(key(scope), model, validate);
     const database = await openSessionSnapshotDatabase();
     if (!database) {
       throw new Error("expected snapshot database");
@@ -183,24 +191,28 @@ describe("persistent sidebar projections", () => {
     const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
     const objectStore = transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME);
     const keys = await requestResult(objectStore.getAllKeys());
-    objectStore.put({ key: keys[0], projectionVersion: 99, savedAt: 1, model });
+    objectStore.put({ sessionKey: keys[0], projectionVersion: 99, savedAt: 1, model });
     await transactionComplete(transaction);
     database.close();
-    expect(await store.read(scope)).toBeNull();
+    expect(await store.readSidebar(key(scope), validate)).toBeNull();
     const unadmitted = { ...model, token: "synthetic-disallowed-field" };
-    await store.write(scope, unadmitted);
-    expect(await store.read(scope)).toBeNull();
+    await store.writeSidebar(key(scope), unadmitted, validate);
+    expect(await store.readSidebar(key(scope), validate)).toBeNull();
   });
 
-  it("treats unavailable persistence as a cache miss and stops work after disposal", async () => {
+  it("treats unavailable persistence as a cache miss and stops work after disconnect", async () => {
     const store = createStore();
-    const writing = store.write(scope, model);
-    store.dispose();
+    const writing = store.writeSidebar(key(scope), model, validate);
+    store.disconnect();
+    store.connect();
+    await store.whenIdle();
     await writing;
-    expect(await createStore().read(scope)).toBeNull();
+    expect(await createStore().readSidebar(key(scope), validate)).toBeNull();
+    await store.writeSidebar(key(scope), model, validate);
+    expect(await store.readSidebar(key(scope), validate)).toEqual(model);
     vi.stubGlobal("indexedDB", undefined);
     const unavailable = createStore();
-    await expect(unavailable.write(scope, model)).resolves.toBeUndefined();
-    expect(await unavailable.read(scope)).toBeNull();
+    await expect(unavailable.writeSidebar(key(scope), model, validate)).resolves.toBe(false);
+    expect(await unavailable.readSidebar(key(scope), validate)).toBeNull();
   });
 });

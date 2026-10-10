@@ -1,4 +1,11 @@
 import {
+  sameBootRecordOwner,
+  subscribeBootRecordChanges,
+  type BootRecord,
+} from "../../app/boot-record.ts";
+import type { ApplicationGateway } from "../../app/gateway.ts";
+import {
+  sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
@@ -51,8 +58,70 @@ export function markPrewarmedChatSnapshotReady(): void {
     pending.readyAt ??= Date.now();
   }
 }
-subscribeSnapshotInvalidation(({ sessionKey, scopePrefix }) => {
+subscribeSnapshotInvalidation((invalidation) => {
+  const { sessionKey, scopePrefix } = invalidation;
   if (!scopePrefix || pending?.cacheKey.startsWith(scopePrefix)) {
     discardPrewarmedChatSnapshot(sessionKey);
   }
+  for (const [gateway, { scope }] of sidebarScopes) {
+    if (sidebarSnapshotInvalidationMatches(sidebarSnapshotScopeKey(scope), invalidation)) {
+      sidebarScopes.delete(gateway);
+    }
+  }
 });
+
+export type SidebarSnapshotScope = {
+  gatewayScope: string;
+  recoveryScope: string;
+  profileId: string | null;
+};
+export const sidebarSnapshotScopeKey = (scope: SidebarSnapshotScope): string =>
+  `scope:${JSON.stringify([scope.gatewayScope, scope.recoveryScope])}\u0000sidebar:${JSON.stringify(scope.profileId)}`;
+const sidebarScopes = new Map<
+  ApplicationGateway,
+  { scope: SidebarSnapshotScope; revision: number }
+>();
+
+export function subscribeSidebarBootRetirement(
+  currentScope: () => SidebarSnapshotScope | null,
+  retire: () => void,
+): () => void {
+  return subscribeBootRecordChanges(({ scope, retiredOwner, replacement }) => {
+    const current = currentScope();
+    if (!current || (scope !== undefined && scope !== current.gatewayScope)) return;
+    const owner = { recoveryScope: current.recoveryScope };
+    if (
+      (!retiredOwner || sameBootRecordOwner(retiredOwner, owner)) &&
+      !sameBootRecordOwner(replacement, owner)
+    )
+      retire();
+  });
+}
+
+/** Bootstrap admits the account; the mounted sidebar reads before its first paint. */
+export function admitSidebarBootScope(
+  gateway: ApplicationGateway,
+  record: Pick<BootRecord, "scope" | "recoveryScope" | "profileId">,
+): () => void {
+  if (!record.recoveryScope) return () => {};
+  const scope = {
+    gatewayScope: record.scope,
+    recoveryScope: record.recoveryScope,
+    profileId: record.profileId,
+  };
+  sidebarScopes.set(gateway, { scope, revision: gateway.connectionRevision });
+  const stop = subscribeSidebarBootRetirement(
+    () => scope,
+    () => sidebarScopes.delete(gateway),
+  );
+  return () => {
+    stop();
+    sidebarScopes.delete(gateway);
+  };
+}
+
+export function consumeSidebarBootScope(gateway: ApplicationGateway) {
+  const admitted = sidebarScopes.get(gateway);
+  sidebarScopes.delete(gateway);
+  return admitted;
+}

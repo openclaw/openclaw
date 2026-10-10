@@ -327,10 +327,11 @@ class SidebarNewSessionMenu extends AgentRosterElement {
     return cachedRosterCards(this.host) ?? super.cards();
   }
   @property({ attribute: false }) host!: RosterHost;
+  @property({ attribute: false }) access!: ReturnType<RosterHost["readNewSessionAccess"]>;
 
   override render() {
     return this.avatars.withActiveRoutes(() => {
-      const access = this.host.readNewSessionAccess();
+      const access = this.access;
       const cards = this.cards();
       return html`<wa-dropdown
         class="sidebar-new-session-menu"
@@ -394,6 +395,7 @@ customElements.define("openclaw-sidebar-new-session-menu", SidebarNewSessionMenu
 export function renderSidebarNewSessionMenu(host: RosterHost) {
   return html`<openclaw-sidebar-new-session-menu
     .host=${host}
+    .access=${host.readNewSessionAccess()}
     .active=${host.navigationVisible}
   ></openclaw-sidebar-new-session-menu>`;
 }
