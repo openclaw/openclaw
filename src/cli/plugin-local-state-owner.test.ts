@@ -617,7 +617,7 @@ describe("plugin commands respect the local state owner", () => {
       await occupyState();
       fixture.memoryManager.mockResolvedValueOnce({ manager: null, error });
       const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      const diagnostics = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const diagnostics = vi.spyOn(console, "error").mockImplementation(() => undefined);
       await runCli(["memory", "search", "query", "--json"]);
       expect(JSON.parse(String(output.mock.calls.at(-1)?.[0]))).toEqual(
         error
