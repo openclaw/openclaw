@@ -16,6 +16,10 @@ export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
 export { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../infra/worker-pool-sizing.js";
 // Bounds startup session reconciliation for large fleets without letting one slow store hold every slot.
 export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
+// Startup releases every deferred agent from the shared readiness gate at once; bounding
+// their deletion-journal reads keeps the fan-out far below the state-read pool's
+// pending-task admission, where an overload would fail otherwise-healthy agents for good.
+export const AGENT_DATABASE_STARTUP_JOURNAL_CONCURRENCY = 8;
 
 export type OpenClawAgentDatabase = {
   agentId: string;
