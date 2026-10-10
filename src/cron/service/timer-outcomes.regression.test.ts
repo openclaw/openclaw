@@ -13,6 +13,7 @@ import * as schedule from "../schedule.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
+import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import type { DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { runMissedJobs } from "./timer-catchup.js";
@@ -142,6 +143,59 @@ describe("cron timer outcome and failure policy regressions", () => {
         expect(state.store.jobs).toHaveLength(1);
         expect(state.store.jobs[0]).toMatchObject({ enabled });
       }
+    },
+  );
+
+  it.each([
+    { name: "current fired success", deleteAfterRun: true, expectedDelete: true },
+    { name: "without deleteAfterRun", deleteAfterRun: false, expectedDelete: false },
+    {
+      name: "trigger retired before recovery",
+      deleteAfterRun: true,
+      triggerStateRetired: true,
+      expectedDelete: false,
+    },
+  ])(
+    "applies trigger-once retirement when startup recovery replays a finalized run ($name)",
+    ({ name, deleteAfterRun, triggerStateRetired, expectedDelete }) => {
+      // Finalization records history before the row commit, so a crash between
+      // them is recovered here and must reach the same deletion decision.
+      const runningAtMs = Date.parse("2026-10-08T12:00:00.000Z");
+      const job = createIsolatedRegressionJob({
+        id: `trigger-once-recovery-${name.replaceAll(" ", "-")}`,
+        name: "trigger-once recovery",
+        scheduledAt: runningAtMs,
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: runningAtMs },
+        payload: { kind: "agentTurn", message: "cleanup" },
+        state: { nextRunAtMs: runningAtMs, runningAtMs },
+      });
+      job.trigger = { script: "json({ fire: true })", once: true };
+      job.deleteAfterRun = deleteAfterRun;
+      const state = createCronServiceState({
+        storePath: "/tmp/cron-trigger-once-recovery.json",
+        nowMs: () => runningAtMs + 1_000,
+        runIsolatedAgentJob: createDefaultIsolatedRunner(),
+      });
+
+      const restored = restoreFinalizedStartupRun({
+        state,
+        job,
+        runningAtMs,
+        deferredNotifications: [],
+        triggerEval: { fired: true, stateChanged: false },
+        ...(triggerStateRetired ? { triggerStateRetired } : {}),
+        entry: {
+          ts: runningAtMs + 1_000,
+          jobId: job.id,
+          action: "finished",
+          status: "ok",
+          deliveryStatus: "not-requested",
+          runAtMs: runningAtMs,
+          durationMs: 1_000,
+        },
+      });
+
+      expect(restored?.shouldDelete).toBe(expectedDelete);
     },
   );
 

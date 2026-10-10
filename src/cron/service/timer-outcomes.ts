@@ -73,6 +73,19 @@ function resolveCronRunTriggerOwnership(params: {
     : "current";
 }
 
+/** A fired, successful once trigger ends a recurring job, so deleteAfterRun may retire it. */
+export function isTriggerOnceTerminalRun(params: {
+  job: CronJob;
+  triggerOwnership: "current" | "stale";
+  triggerEval?: CronTriggerEvalOutcome;
+}): boolean {
+  return (
+    params.triggerOwnership === "current" &&
+    params.job.trigger?.once === true &&
+    params.triggerEval?.fired === true
+  );
+}
+
 function assignNextRunAtMs(
   params: Parameters<typeof resolveNextRunAtMsOrDisable>[0],
 ): number | undefined {
@@ -231,11 +244,11 @@ export function applyJobResult(
     opts.scheduleMode === "preserve" && oneShotOccurrenceAtMs !== undefined;
   const ownsSchedule = opts.scheduleOwnership !== "stale";
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
-  const isTriggerOnceTerminalRun = opts.triggerOnceTerminalRun === true;
+  const retiresTriggerOnce = opts.triggerOnceTerminalRun === true;
   // Authored completion includes intentional silence and the admitted best-effort policy.
   const shouldDelete =
     ownsSchedule &&
-    (isOneShotSchedule || isTriggerOnceTerminalRun) &&
+    (isOneShotSchedule || retiresTriggerOnce) &&
     !preserveOneShotSchedule &&
     job.deleteAfterRun === true &&
     completionStatus === "succeeded";
@@ -732,10 +745,11 @@ export function applyOutcomeToAuthoritativeJob(
       opts.request?.preserveCadence && scheduleOwnership === "current" ? "preserve" : "advance",
     scheduleOwnership,
     scheduleOwnershipAtMs: opts.request?.scheduleOwnershipAtMs,
-    triggerOnceTerminalRun:
-      triggerOwnership === "current" &&
-      job.trigger?.once === true &&
-      result.triggerEval?.fired === true,
+    triggerOnceTerminalRun: isTriggerOnceTerminalRun({
+      job,
+      triggerOwnership,
+      triggerEval: result.triggerEval,
+    }),
     deferredNotifications: opts.deferredNotifications,
   });
   applyTriggerRunResult(job, result, { scheduleOwnership, triggerOwnership });
