@@ -211,7 +211,7 @@ export async function runMessageActionDiscoveryAsync<T>(
     const contextKey = JSON.stringify(
       Object.entries(contextFacts)
         .filter(([, value]) => value !== undefined)
-        .sort(([left], [right]) => left.localeCompare(right)),
+        .toSorted(([left], [right]) => left.localeCompare(right)),
     );
     const adapterDescriptions = request.actions ? (descriptions.get(request.actions) ?? []) : [];
     let prepared = adapterDescriptions.find(
