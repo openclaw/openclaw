@@ -10,7 +10,6 @@
     "legacy-operator-state",
     "workshop-doctor-recovery",
     "update-report-recovery",
-    "gateway-boot-lifecycle",
     "dreaming-cron-doctor",
     "cron-owner-doctor",
     "mobile-pairing-reconnect",

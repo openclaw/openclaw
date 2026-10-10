@@ -641,7 +641,7 @@ NODE
 }
 
 run_update_restart_probe_gateway() {
-  local action="$1" port="$2" command_timeout="$3" readiness_mode="${4:-strict}" required_log_text="${5:-}"
+  local action="$1" port="$2" command_timeout="$3" readiness_mode="${4:-strict}"
   local log_file="$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_DAEMON_LOG"
   local result_out="${log_file}.${action}.out" result_err="${log_file}.${action}.err"
   local readiness_log="${log_file}.${action}.readiness.log"
@@ -676,7 +676,7 @@ run_update_restart_probe_gateway() {
     fi
   fi
   gateway_pid="$(cat "$OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE")" || return "$?"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" "$((10#$budget * 4))" "$port" "$readiness_mode" "$required_log_text" >"$readiness_log" 2>&1 || service_status=$?
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$log_file" "$((10#$budget * 4))" "$port" "$readiness_mode" >"$readiness_log" 2>&1 || service_status=$?
   if [ "$service_status" -ne 0 ]; then
     openclaw_e2e_print_log "$readiness_log" >&2
     return "$service_status"

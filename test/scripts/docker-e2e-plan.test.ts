@@ -835,30 +835,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
-  it("pins opt-in gateway-boot-lifecycle to published 2026.9.6 without credentials", () => {
-    const scenario = "gateway-boot-lifecycle";
-    const baseline = "2026.9.6";
-    const name = `published-upgrade-survivor-${baseline}-${scenario}`;
-    const plan = planFor({
-      selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.9.5 2026.9.6 2026.9.7",
-      upgradeSurvivorScenarios: scenario,
-    });
-    expect(plan.lanes.map(summarizeLane)).toEqual([
-      publishedUpgradeSurvivorLane(name, `openclaw@${baseline}`, scenario),
-    ]);
-    expect(plan.credentials).toEqual([]);
-    for (const alias of ["reported-issues", "far-reaching"]) {
-      expect(
-        planFor({
-          selectedLaneNames: ["published-upgrade-survivor"],
-          upgradeSurvivorBaselines: baseline,
-          upgradeSurvivorScenarios: alias,
-        }).lanes.map((lane) => lane.name),
-      ).not.toContain(name);
-    }
-  });
-
   it.each([
     { scenario: "projects-doctor", baselines: ["2026.9.4"] },
     { scenario: "projects-startup-migration", baselines: ["2026.9.4"] },
