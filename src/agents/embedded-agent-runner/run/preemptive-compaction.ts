@@ -15,7 +15,7 @@ import {
   estimateToolSchemaTokens,
 } from "../../sessions/context-token-pressure.js";
 import { log } from "../logger.js";
-import type { PromptCacheRequestObservation } from "../prompt-cache-request-observer.js";
+import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
@@ -257,7 +257,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
 /** Check the projected foreground request; persisted usage alone cannot bind its prefix. */
 export function checkMidTurnPrecheck(params: {
   context: Parameters<StreamFn>[1];
-  previousRequest?: Pick<PromptCacheRequestObservation, "promptTokens" | "messageCount">;
+  previousRequest?: MeasuredRequestContext;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
@@ -265,15 +265,27 @@ export function checkMidTurnPrecheck(params: {
   onPrecheck: (request: MidTurnPrecheckRequest) => void;
 }): void {
   const { context, previousRequest } = params;
-  const promptTokens = previousRequest?.promptTokens;
   const anchor =
     previousRequest &&
-    promptTokens !== undefined &&
-    Number.isFinite(promptTokens) &&
-    promptTokens > 0
-      ? { promptTokens, messageCount: previousRequest.messageCount }
+    Number.isFinite(previousRequest.contextTokens) &&
+    previousRequest.contextTokens > 0
+      ? previousRequest
       : undefined;
   const messages = context.messages;
+  // Measured completion occupancy includes opaque reasoning. Its async fragments
+  // share either identity; unrelated synthetic assistants remain fresh content.
+  const appended = anchor
+    ? messages
+        .slice(anchor.messageCount)
+        .filter(
+          (message) =>
+            message.role !== "assistant" ||
+            !(
+              (anchor.responseId && message.responseId?.trim() === anchor.responseId) ||
+              (anchor.turnId && message.turnId?.trim() === anchor.turnId)
+            ),
+        )
+    : messages;
   const estimate = createFreshLlmBoundaryTokenEstimator(anchor ? {} : context);
   const precheck = shouldPreemptivelyCompactBeforePrompt({
     ...params,
@@ -285,9 +297,9 @@ export function checkMidTurnPrecheck(params: {
     replay: anchor ? undefined : params.replay,
     llmBoundaryTokenPressure: {
       estimatedPromptTokens:
-        (anchor?.promptTokens ?? 0) +
+        (anchor?.contextTokens ?? 0) +
         estimate({
-          messages: anchor ? messages.slice(anchor.messageCount) : messages,
+          messages: appended,
           prompt: "",
         }),
       source: anchor ? "provider_context_usage" : "transcript_estimate",

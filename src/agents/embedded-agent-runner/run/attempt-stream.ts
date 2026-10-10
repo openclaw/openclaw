@@ -2,6 +2,7 @@ import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runt
 import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
@@ -430,7 +431,7 @@ export function installEmbeddedAttemptStreamGuards(
   }
   return {
     onModelRequest: (...args: Parameters<typeof cacheObserver.onModelRequest>) => {
-      const previous = cacheObserver.getObservation();
+      const previous = cacheObserver.getContextUsage();
       const request = cacheObserver.onModelRequest(...args);
       if (request.requestIndex > 1) {
         contextGuards.checkMidTurnPrecheck({
@@ -446,12 +447,15 @@ export function installEmbeddedAttemptStreamGuards(
         });
       }
     },
-    onModelUsage: (usage: NormalizedUsage | undefined) => {
+    onModelUsage: (
+      usage: NormalizedUsage | undefined,
+      identity?: Pick<AssistantMessage, "responseId" | "turnId">,
+    ) => {
       // Async-tool fragments also end messages. result() marks the terminal
       // response before core commits its final fragment with normalized usage.
       if (modelResponseTerminal) {
         modelResponseTerminal = false;
-        cacheObserver.onModelUsage(usage, providerPromptState.lastAttempt);
+        cacheObserver.onModelUsage(usage, providerPromptState.lastAttempt, identity);
       }
     },
     getPromptCacheObservation: cacheObserver.getObservation,

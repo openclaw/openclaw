@@ -1,3 +1,4 @@
+import type { AssistantMessage } from "../../llm/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { NormalizedUsage } from "../usage.js";
 import {
@@ -13,6 +14,14 @@ type PromptCacheObservationStart = ReturnType<typeof beginPromptCacheObservation
   messageCount: number;
 };
 type PromptCacheSnapshot = PromptCacheObservationStart["snapshot"];
+
+export type MeasuredRequestContext = {
+  requestIndex: number;
+  messageCount: number;
+  contextTokens: number;
+  responseId?: string;
+  turnId?: string;
+};
 
 export type PromptCacheRequestObservation = {
   requestIndex: number;
@@ -43,6 +52,7 @@ export function createPromptCacheRequestObserver(
   let requestIndex = 0;
   let request: PromptCacheObservationStart | undefined;
   let observation: PromptCacheRequestObservation | undefined;
+  let contextUsage: MeasuredRequestContext | undefined;
   return {
     onModelRequest: (
       model: Pick<Parameters<StreamFn>[0], "provider" | "id" | "api">,
@@ -68,12 +78,24 @@ export function createPromptCacheRequestObserver(
     onModelUsage: (
       usage: NormalizedUsage | undefined,
       providerPrompt?: ProviderPromptState["lastAttempt"],
+      identity?: Pick<AssistantMessage, "responseId" | "turnId">,
     ) => {
       if (!request) {
         return;
       }
       const cacheBreak = completePromptCacheObservation({ ...params, usage, providerPrompt });
       const hasCacheTelemetry = usage?.cacheTelemetry?.state !== "unavailable";
+      // Keep completion identity private; cache diagnostics need only aggregate usage.
+      contextUsage =
+        usage?.contextUsage?.state === "available"
+          ? {
+              requestIndex: request.requestIndex,
+              messageCount: request.messageCount,
+              contextTokens: usage.contextUsage.totalTokens,
+              responseId: identity?.responseId?.trim() || undefined,
+              turnId: identity?.turnId?.trim() || undefined,
+            }
+          : undefined;
       observation = {
         requestIndex: request.requestIndex,
         messageCount: request.messageCount,
@@ -93,5 +115,6 @@ export function createPromptCacheRequestObserver(
       onObservation(observation, snapshot);
     },
     getObservation: () => observation,
+    getContextUsage: () => contextUsage,
   };
 }
