@@ -1420,7 +1420,6 @@ async function prepareCliRunContextWithinReadFence(
             sessionKey: params.sessionKey?.trim() || params.sessionId,
           });
     assertSkillsCurrent();
-    const systemPromptSkillsPrompt = preparedSkills.prompt;
     const runtimeChannel = skipsTurnPreparation
       ? undefined
       : normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -1452,7 +1451,7 @@ async function prepareCliRunContextWithinReadFence(
             ownerNumbers: params.ownerNumbers,
             docsPath: openClawReferences.docsPath ?? undefined,
             sourcePath: openClawReferences.sourcePath ?? undefined,
-            skillsPrompt: systemPromptSkillsPrompt,
+            skillsPrompt: preparedSkills.prompt,
             tools: promptTools,
             contextFiles,
             bootstrapMode,
@@ -1535,6 +1534,7 @@ async function prepareCliRunContextWithinReadFence(
         promptContext,
         promptForHooks,
       } = await prepareCliTurnPromptContext({
+        configuredTimezone: params.config?.agents?.defaults?.userTimezone,
         prompt: preparedPrompt,
         systemPrompt,
         privateContext: executionTarget.kind === "plugin",
@@ -1622,7 +1622,7 @@ async function prepareCliRunContextWithinReadFence(
       sandbox: { mode: "off", sandboxed: false },
       systemPrompt,
       injectedWorkspaceFiles: bootstrapInjectionStats,
-      skillsPrompt: systemPromptSkillsPrompt,
+      skillsPrompt: preparedSkills.prompt,
       tools: promptTools,
       currentTurn: {
         ...(params.currentInboundEventKind ? { kind: params.currentInboundEventKind } : {}),

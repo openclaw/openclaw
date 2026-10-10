@@ -214,6 +214,8 @@ export function buildSidebarSessionNavigationState(input: {
       archived: row.archived === true,
       visibility: row.visibility,
       sharingRole: row.sharingRole,
+      communication: row.communication,
+      effectiveCommunication: row.effectiveCommunication,
       draftOwnedBySelf: isSidebarDraftOwnedBySelf(row, context?.gateway.snapshot.selfUser?.id),
       category: normalizeOptionalString(row.category),
       icon: normalizeOptionalString(row.icon),

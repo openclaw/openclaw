@@ -9,6 +9,40 @@ title: "Configuration — agent sessions"
 
 `session.*` keys: how conversations map to sessions, when a session resets, and who can see or join one.
 
+## Communication defaults
+
+Configure whether sessions may initiate or accept messages from other sessions:
+
+```json5
+{
+  session: {
+    communication: {
+      send: "always",
+      receive: "ask",
+    },
+  },
+}
+```
+
+Both directions accept `always`, `ask`, or `never`; omitted values default to
+`always`. `ask` requires a human decision before sending or admitting the message
+as new peer input. Existing access restrictions still apply to `always`.
+
+The Control UI **Session settings** submenu can override either direction. **Reset** removes the
+override, so later configuration changes apply again. Existing explicit overrides
+are not overwritten when defaults change. Resets preserve the session settings,
+new explicit children and forks inherit them, and delegated work remains subject
+to its parent restrictions. Adopting an existing session never replaces its settings.
+Changes apply to new admissions, not already accepted messages.
+
+These preferences do not replace `tools.sessions.visibility`, human sharing, or
+the channel-oriented `sendPolicy`. Requested replies and authorized task results
+retain their existing completion authority. See [Session tools](/concepts/session-tool#communication-preferences).
+
+Older versions do not enforce these preferences. Before downgrading, remove the
+new configuration keys and restore any restrictions through the older version
+of tool and session policy.
+
 ## Session
 
 ```json5

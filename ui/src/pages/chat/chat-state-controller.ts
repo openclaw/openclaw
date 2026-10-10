@@ -28,7 +28,11 @@ import {
 } from "./composer-persistence-state.ts";
 import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
-import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
+import {
+  type AfterCommitEffect,
+  notifyRenderLifecycleForTest,
+  type RenderLifecycle,
+} from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
 
 type ChatRenderLifecycleScope = Set<() => void>;
@@ -361,6 +365,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.composerPersistence.persistChangedState();
     this.captureRenderLifecycleChanges();
     this.onStateChange?.();
+    notifyRenderLifecycleForTest(this.host, "invalidate");
     this.host.requestUpdate();
     return true;
   }
@@ -480,6 +485,9 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   }
 
   hostUpdated() {
+    if (this.renderLifecycleScope && this.isRenderLifecycleScopeActive(this.renderLifecycleScope)) {
+      notifyRenderLifecycleForTest(this.host, "commit");
+    }
     const state = this.stateValue;
     if (!this.scrollAfterUpdate) {
       return;

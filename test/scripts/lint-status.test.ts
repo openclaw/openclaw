@@ -53,6 +53,8 @@ export function waitForFile(file) {
     "tsx.mjs",
     "windows-cmd-helpers.mjs",
     "lib/tsx-cli-shim.mjs",
+    "lib/arg-utils.mts",
+    "lib/arg-utils.runtime.mjs",
     "lib/local-check-runtime.mts",
     "lib/check-limits.mts",
     "lib/oxlint-changed-scope.mts",
@@ -95,6 +97,8 @@ export function waitForFile(file) {
     }),
   );
   write("node_modules/tsx/loader.mjs", "export {};\n");
+  // Git inventory behavior is covered by the ratchet's own repository fixtures.
+  write("scripts/check-control-ui-lit-ratchet.mts", "export function main() { return 0; }\n");
   preparedScripts ??= (async () => {
     const { bundles } = await build({
       config: false,

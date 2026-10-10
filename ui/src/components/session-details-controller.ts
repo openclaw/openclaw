@@ -1,10 +1,10 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
-import type { GatewaySessionRow } from "../../api/types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import type {
   SessionCapability,
   SessionRowObservation,
-} from "../../lib/sessions/session-capability.ts";
+} from "../lib/sessions/session-capability.ts";
 
 type DetailScope = { sessions: Pick<SessionCapability, "observeRow" | "describe"> };
 
@@ -12,15 +12,26 @@ type DetailScope = { sessions: Pick<SessionCapability, "observeRow" | "describe"
 export class SessionDetailsController<Scope extends DetailScope> implements ReactiveController {
   loading = false;
   error: string | null = null;
-  private binding?: { matches: () => boolean; dispose: () => void };
+  private binding?: {
+    matches: () => boolean;
+    dispose: () => void;
+    row: () => GatewaySessionRow | null;
+  };
+
+  get row(): GatewaySessionRow | null {
+    return this.binding?.matches() ? this.binding.row() : null;
+  }
 
   constructor(
     private readonly host: ReactiveControllerHost,
     private readonly options: {
       captureScope: () => Scope | null;
       isCurrent: (scope: Scope) => boolean;
-      row: () => GatewaySessionRow | undefined;
-      agentId: (row: GatewaySessionRow, scope: Scope) => string;
+      row: () => Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId"> | undefined;
+      agentId: (
+        row: Pick<GatewaySessionRow, "key" | "sessionId" | "rowMode" | "agentId">,
+        scope: Scope,
+      ) => string;
     },
   ) {
     host.addController(this);
@@ -43,8 +54,11 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
     }
     this.reset();
     const row = this.options.row();
+    if (!row) {
+      return;
+    }
     const scope = this.options.captureScope();
-    if (!row || !scope) {
+    if (!scope) {
       return;
     }
     const { key, sessionId } = row;
@@ -62,6 +76,8 @@ export class SessionDetailsController<Scope extends DetailScope> implements Reac
         );
       },
       dispose: () => observation?.dispose(),
+      row: () =>
+        observation?.row && observation.row.sessionId === sessionId ? observation.row : null,
     };
     const current = () => this.binding === binding && binding.matches();
     const refresh = async () => {

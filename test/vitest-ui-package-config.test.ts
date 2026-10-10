@@ -161,6 +161,7 @@ describe("ui package vitest config", () => {
         };
       };
       expect(report.discovered.length).toBeGreaterThan(1000);
+      expect(report.discovered).toContain("ui/src/solid-smoke/solid-smoke.test.tsx");
       // Package isolated/timing/Chromium projects retain their separate owners.
       expect(report.rootNodeFiles).toEqual(report.packageNodeFiles);
       expect(report.rootNodeFiles).toContain(
@@ -372,9 +373,12 @@ describe("ui package vitest config", () => {
     }
   });
 
-  it("keeps native Chromium files out of root jsdom without dropping Node-driven Playwright files", async () => {
+  it.each([
+    { patterns: ["ui/src/**/*.test.ts"] },
+    { patterns: ["ui/src/**/*.test.ts", "ui/src/**/*.test.tsx"] },
+  ])("keeps native Chromium files out of root jsdom for $patterns", async ({ patterns }) => {
     const includeFile = path.join(tempDirs.make("ui-node-selection-"), "include.json");
-    writeFileSync(includeFile, JSON.stringify(["ui/src/**/*.test.ts"]));
+    writeFileSync(includeFile, JSON.stringify(patterns));
     const runtimeIncludeFile = path.join(path.dirname(includeFile), "runtime-include.json");
     writeFileSync(
       runtimeIncludeFile,
@@ -407,6 +411,9 @@ describe("ui package vitest config", () => {
       .filter((file) => file.endsWith(".browser.test.ts"))
       .map((file) => `ui/${file}`);
     const rootFiles = globTestFiles(root.include ?? [], { exclude: root.exclude });
+    expect(rootFiles.includes("ui/src/solid-smoke/solid-smoke.test.tsx")).toBe(
+      patterns.includes("ui/src/**/*.test.tsx"),
+    );
     expect(nativeFiles).toContain("ui/src/components/markdown-mermaid.runtime.browser.test.ts");
     expect(nodeFiles).toContain("ui/src/components/form-controls.browser.test.ts");
     expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
@@ -482,6 +489,7 @@ describe("ui package vitest config", () => {
       ["extensions/workboard/browser/catalog.test.ts"],
     ],
     [[], []],
+    [["ui/src/solid-smoke/solid-smoke.test.tsx"], ["ui/src/solid-smoke/solid-smoke.test.tsx"]],
     [
       ["ui/src/components/markdown.progress.node.test.ts"],
       ["ui/src/components/markdown.progress.node.test.ts"],
