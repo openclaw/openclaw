@@ -14,6 +14,7 @@ import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-
 import {
   hasPendingSqliteDatabaseSchemaMutation,
   readSqliteDatabaseAdmissions,
+  readSqliteDatabaseWriteRevision,
 } from "./sqlite-database-admission.js";
 import type {
   AdmissionTaskInput,
@@ -83,6 +84,8 @@ it.each([
     const reader = openNodeSqliteDatabase(location);
     reader.exec("PRAGMA journal_mode=WAL; CREATE TABLE original(value)");
     admitSqliteSchema(reader);
+    const writeRevision = readSqliteDatabaseWriteRevision(reader);
+    expect(writeRevision).toBeTypeOf("number");
     const broker = new SqliteWorkerBroker();
     let held = false;
     try {
@@ -100,6 +103,7 @@ it.each([
           nativeLocations: [location],
           admission: createSqliteWorkerOperationAdmission((_request, grant) => {
             held = true;
+            expect(readSqliteDatabaseWriteRevision(reader)).toBeUndefined();
             expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
             expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
               !rollback,
@@ -119,6 +123,8 @@ it.each([
         await mutation;
       }
       expect(held).toBe(true);
+      expect(readSqliteDatabaseWriteRevision(reader)).toBeTypeOf("number");
+      expect(readSqliteDatabaseWriteRevision(reader)).not.toBe(writeRevision);
       expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
       expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(
         !rollback,
@@ -264,10 +270,16 @@ it("publishes through a retained physical database after its original pathname i
     });
     createDatabase(replacementPath, 99);
     renameSync(replacementPath, location);
+    const revision = readSqliteDatabaseWriteRevision(reader);
+    expect(revision).toBeTypeOf("number");
+    await store!.execute({ type: "writeRows", input: { sql: "UPDATE proof SET value=43" } });
+    const updatedRevision = readSqliteDatabaseWriteRevision(reader);
+    expect(updatedRevision).toBeTypeOf("number");
+    expect(updatedRevision).not.toBe(revision);
+    expect(reader.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
     await store!.execute({ type: "mutate", input: undefined });
     expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
     expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("worker_publication")).toBe(true);
-    expect(reader.prepare("SELECT value FROM proof").get()).toEqual({ value: 42 });
     const replacement = openNodeSqliteDatabase(location, { readOnly: true });
     try {
       admitSqliteSchema(replacement);

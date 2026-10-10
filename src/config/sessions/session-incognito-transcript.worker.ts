@@ -86,6 +86,9 @@ export function createIncognitoTranscriptWorker(
     admit: (stage) => admit(stage, keys),
   });
   let binding: { id: string; moduleUrl: string; input: TranscriptReportWorkerTarget } | undefined;
+  let workerTranscript:
+    | typeof import("../../gateway/worker-environments/transcript-commit.kernel.js")
+    | undefined;
   const resolved = (input: { sessionKey: string; sessionId: string }) => ({
     agentId: database.agentId,
     path: database.path,
@@ -115,6 +118,10 @@ export function createIncognitoTranscriptWorker(
   };
   return {
     async prepare(command: Command) {
+      if (command.type === "session.workerTranscript.commit") {
+        workerTranscript =
+          await import("../../gateway/worker-environments/transcript-commit.kernel.js");
+      }
       if (command.type === "session.goal.mutate") {
         ensureSessionGoalOperationsSchema(database.db);
       }
@@ -164,6 +171,38 @@ export function createIncognitoTranscriptWorker(
         return withSqlitePostCommitPublications(database.db, () => {
           const target = resolved(command.input);
           switch (command.type) {
+            case "session.workerTranscript.commit":
+              return reply<"session.workerTranscript.commit">(
+                write(() => {
+                  if (!workerTranscript) {
+                    throw new Error("Worker transcript kernel was not prepared");
+                  }
+                  const scope = { ...target, storePath: database.path, ...command.input.fence };
+                  const refusal = resolveTranscriptAppendRefusal(
+                    readExactSessionEntryRow(database, target.sessionKey)?.entry,
+                    target,
+                    scope,
+                  );
+                  if (refusal) {
+                    throw new SessionTranscriptWriterClaimReboundError(refusal);
+                  }
+                  const input = { ...command.input.batch, scope };
+                  const plan = workerTranscript.prepareTranscriptCommit(input);
+                  let projectionNeedsReconcile = false;
+                  const result =
+                    !plan.result.ok || plan.result.messages.length === input.messages.length
+                      ? plan.result
+                      : workerTranscript.applyPreparedTranscriptCommit(
+                          input,
+                          plan,
+                          command.input.preparedMessages.slice(plan.result.messages.length),
+                          () => {
+                            projectionNeedsReconcile = true;
+                          },
+                        );
+                  return { result, projectionNeedsReconcile };
+                }),
+              );
             case "session.lock.events":
             case "session.lock.facts":
             case "session.lock.replace": {
