@@ -1,11 +1,18 @@
 /* @vitest-environment jsdom */
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
-import { renderCapabilityChips } from "./capability-chips.ts";
+import { afterEach, describe, expect, it } from "vitest";
+import { mountSolid } from "../../test-helpers/solid.ts";
+import { CapabilityChips } from "./capability-chips.tsx";
+
+const disposers: Array<() => void> = [];
+afterEach(() => {
+  for (const dispose of disposers.splice(0)) {
+    dispose();
+  }
+});
 
 function renderChips(caps: string[]) {
   const container = document.createElement("div");
-  render(renderCapabilityChips(caps), container);
+  disposers.push(mountSolid(() => CapabilityChips({ caps }), container).dispose);
   return container;
 }
 

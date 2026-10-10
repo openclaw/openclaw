@@ -1,13 +1,44 @@
-import { render } from "lit";
-import { expect } from "vitest";
-import { renderDevices } from "../pages/devices/view.ts";
+import { createSignal, flush } from "solid-js";
+import { afterEach, expect } from "vitest";
+import { DevicesView } from "../pages/devices/view.tsx";
 import type { DevicesProps } from "../pages/devices/view.types.ts";
 import { createDevicesViewProps } from "./devices-fixtures.ts";
+import { mountSolid } from "./solid.ts";
+
+const fixtures = new Map<
+  HTMLElement,
+  { update: (props: DevicesProps) => void; dispose: () => void }
+>();
+afterEach(() => {
+  for (const fixture of fixtures.values()) {
+    fixture.dispose();
+  }
+  fixtures.clear();
+});
+
+export function renderDevicesInto(container: HTMLElement, overrides: Partial<DevicesProps>) {
+  const props = createDevicesViewProps(overrides);
+  const mounted = fixtures.get(container);
+  if (mounted) {
+    mounted.update(props);
+    flush();
+    return;
+  }
+  const view = mountSolid(() => {
+    const [current, setCurrent] = createSignal(props);
+    fixtures.set(container, { update: (next) => setCurrent(next), dispose: () => {} });
+    return <DevicesView {...current()} />;
+  }, container);
+  const fixture = fixtures.get(container);
+  if (fixture) {
+    fixture.dispose = view.dispose;
+  }
+}
 
 export function renderDevicesContainer(overrides: Partial<DevicesProps>): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
-  render(renderDevices(createDevicesViewProps(overrides)), container);
+  renderDevicesInto(container, overrides);
   return container;
 }
 

@@ -1,12 +1,36 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { createSignal, flush } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import { renderConnection } from "./view.ts";
+import { mountSolid } from "../../test-helpers/solid.ts";
+import { ConnectionView, type ConnectionProps } from "./view.tsx";
 
-type ConnectionProps = Parameters<typeof renderConnection>[0];
+const mountedConnections = new Map<
+  HTMLElement,
+  { update: (props: ConnectionProps) => void; dispose: () => void }
+>();
+
+afterEach(() => {
+  for (const [container, mounted] of mountedConnections) {
+    mounted.dispose();
+    container.remove();
+  }
+  mountedConnections.clear();
+});
+
+function mountConnection(props: ConnectionProps, container: HTMLElement) {
+  const mounted = mountedConnections.get(container);
+  if (mounted) {
+    mounted.update(props);
+    flush();
+    return;
+  }
+  const [current, setCurrent] = createSignal(props);
+  const view = mountSolid(() => <ConnectionView {...current()} />, container);
+  mountedConnections.set(container, { update: (next) => setCurrent(next), dispose: view.dispose });
+}
 
 function createConnectionProps(overrides: Partial<ConnectionProps> = {}): ConnectionProps {
   return {
@@ -78,12 +102,74 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 }
 
 describe("connection view rendering", () => {
+  it("keeps edited controls and details mounted while diagnostics refresh", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onConnectionChange = vi.fn();
+    const onSecretChange = vi.fn();
+    const onSessionKeyChange = vi.fn();
+    const onConnect = vi.fn();
+    const props = createConnectionProps({
+      phase: "connected",
+      dirty: true,
+      onConnectionChange,
+      onSecretChange,
+      onSessionKeyChange,
+      onConnect,
+    });
+    mountConnection(props, container);
+    const url = container.querySelector<HTMLInputElement>('input[aria-label="Gateway URL"]')!;
+    const secret = container.querySelector<HTMLInputElement>('input[aria-label="Gateway secret"]')!;
+    const session = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Default session"]',
+    )!;
+    const details = container.querySelector("details")!;
+    details.open = true;
+    url.focus();
+    url.setSelectionRange(4, 7);
+
+    mountConnection(
+      {
+        ...props,
+        ping: { averageMs: 10, p50Ms: 8, p95Ms: 15, p99Ms: 19, count: 3 },
+        pingSamples: [
+          { at: 100, value: 8 },
+          { at: 200, value: 19 },
+        ],
+        statusHistory: [{ at: 200, status: { eventLoop: { cpuCoreRatio: 0.2 } } }],
+        showGatewaySecret: true,
+      },
+      container,
+    );
+
+    expect(container.querySelector('input[aria-label="Gateway URL"]')).toBe(url);
+    expect(container.querySelector('input[aria-label="Gateway secret"]')).toBe(secret);
+    expect(document.activeElement).toBe(url);
+    expect([url.selectionStart, url.selectionEnd]).toEqual([4, 7]);
+    expect(container.querySelector("details")).toBe(details);
+    expect(details.open).toBe(true);
+    expect(secret.type).toBe("text");
+    expect(container.querySelector(".connection-ping__stats")?.textContent).toContain("19.0");
+
+    url.value = "wss://next.example";
+    url.dispatchEvent(new Event("input", { bubbles: true }));
+    secret.value = "next-secret";
+    secret.dispatchEvent(new Event("input", { bubbles: true }));
+    session.value = "next-session";
+    session.dispatchEvent(new Event("input", { bubbles: true }));
+    container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary")!.click();
+    expect(onConnectionChange).toHaveBeenCalledWith({ gatewayUrl: "wss://next.example" });
+    expect(onSecretChange).toHaveBeenCalledWith("next-secret");
+    expect(onSessionKeyChange).toHaveBeenCalledWith("next-session");
+    expect(onConnect).toHaveBeenCalledOnce();
+  });
+
   it.each(["connected", "offline", "stopped", "reconnecting"] as const)(
     "offers saved browser sign-in recovery at the bottom while %s",
     (phase) => {
       const container = document.createElement("div");
       const props = createConnectionProps({ phase, canForgetDevice: true });
-      render(renderConnection(props), container);
+      mountConnection(props, container);
       const section = [...container.querySelectorAll(".settings-section")].at(-1);
       expect(section?.querySelector("h2")?.textContent?.trim()).toBe("Browser");
       expect(section?.querySelector(".settings-row__title")?.textContent?.trim()).toBe(
@@ -94,7 +180,7 @@ describe("connection view rendering", () => {
       expect(button?.textContent?.trim()).toBe("Forget this browser");
       expect(button?.className).toBe("btn");
       expect(button?.disabled).toBe(false);
-      render(renderConnection({ ...props, canForgetDevice: false }), container);
+      mountConnection({ ...props, canForgetDevice: false }, container);
       expect(container.textContent).not.toContain("Browser");
     },
   );
@@ -110,7 +196,7 @@ describe("connection view rendering", () => {
     ["reload-required", null, null],
   ] as const)("offers the appropriate action in %s with error %s", (phase, lastError, label) => {
     const container = document.createElement("div");
-    render(renderConnection(createConnectionProps({ phase, lastError })), container);
+    mountConnection(createConnectionProps({ phase, lastError }), container);
     const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
     expect(action?.textContent?.trim() ?? null).toBe(label);
     if (action) {
@@ -125,7 +211,7 @@ describe("connection view rendering", () => {
     "lets a corrected draft replace a connection stuck in %s",
     (phase) => {
       const container = document.createElement("div");
-      render(renderConnection(createConnectionProps({ phase, dirty: true })), container);
+      mountConnection(createConnectionProps({ phase, dirty: true }), container);
       const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
       expect(action?.textContent?.trim()).toBe("Apply and reconnect");
       expect(action?.disabled).toBe(false);
@@ -139,7 +225,7 @@ describe("connection view rendering", () => {
     });
     props.settings.gatewayUrl = "wss://other.example";
     const container = document.createElement("div");
-    render(renderConnection(props), container);
+    mountConnection(props, container);
     expect(container.querySelector('input[aria-label="Gateway secret"]')).not.toBeNull();
     expect(container.textContent).not.toContain("Authenticated via trusted proxy.");
   });
@@ -149,7 +235,7 @@ describe("connection view rendering", () => {
     const secret = btoa(
       JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
     ).replace(/=+$/g, "");
-    render(renderConnection(createConnectionProps({ secret })), container);
+    mountConnection(createConnectionProps({ secret }), container);
     const control = container
       .querySelector('input[aria-label="Gateway secret"]')
       ?.closest(".settings-row__control");
@@ -157,7 +243,7 @@ describe("connection view rendering", () => {
       "device setup code for the OpenClaw mobile app",
     );
     expect(control?.textContent).toContain("openclaw gateway auth-token --show");
-    render(renderConnection(createConnectionProps()), container);
+    mountConnection(createConnectionProps(), container);
     expect(control?.querySelector('[role="status"]')).toBeNull();
   });
 
@@ -168,7 +254,7 @@ describe("connection view rendering", () => {
       settings: { ...createConnectionProps().settings, gatewayUrl: "wss://draft.example:443/" },
     });
     const container = document.createElement("div");
-    render(renderConnection(props), container);
+    mountConnection(props, container);
 
     const summary = container.querySelector(".settings-section__desc")?.textContent ?? "";
     expect(summary).toContain("Connected to live.example");
@@ -177,7 +263,7 @@ describe("connection view rendering", () => {
 
   it("renders the connection form with a single credential field and offline status", async () => {
     const container = document.createElement("div");
-    render(renderConnection(createConnectionProps()), container);
+    mountConnection(createConnectionProps(), container);
     await Promise.resolve();
 
     expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
@@ -201,7 +287,7 @@ describe("connection view rendering", () => {
       const input = () =>
         container.querySelector<HTMLInputElement>('input[aria-label="Gateway secret"]');
 
-      render(renderConnection(props), container);
+      mountConnection(props, container);
       expect(input()?.type).toBe("password");
       expect(input()?.value).toBe("tok");
       expect(input()?.placeholder).toBe("Paste the token or type the password");
@@ -211,7 +297,7 @@ describe("connection view rendering", () => {
         container.querySelector('button[aria-label="Toggle secret visibility"]'),
       ).not.toBeNull();
 
-      render(renderConnection({ ...props, showGatewaySecret: true }), container);
+      mountConnection({ ...props, showGatewaySecret: true }, container);
       expect(input()?.type).toBe("text");
       expect(input()?.value).toBe("tok");
     },
@@ -223,7 +309,7 @@ describe("connection view rendering", () => {
       snapshot: { authMode: "trusted-proxy", uptimeMs: 90_000 },
       policy: { tickIntervalMs: 30_000 },
     } as unknown as GatewayHelloOk;
-    render(renderConnection(createConnectionProps({ phase: "connected", hello })), container);
+    mountConnection(createConnectionProps({ phase: "connected", hello }), container);
     await Promise.resolve();
 
     expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
@@ -277,7 +363,7 @@ describe("connection view rendering", () => {
         },
       ],
     } satisfies SystemInfoResult;
-    render(renderConnection(createConnectionProps({ systemInfo })), container);
+    mountConnection(createConnectionProps({ systemInfo }), container);
     await Promise.resolve();
 
     const sections = [...container.querySelectorAll(".settings-section__heading")].map((node) =>
@@ -338,10 +424,7 @@ describe("connection view rendering", () => {
     expect(container.textContent).not.toContain("Uptime");
 
     for (const disks of [systemInfo.disks.slice(0, 1), [], undefined]) {
-      render(
-        renderConnection(createConnectionProps({ systemInfo: { ...systemInfo, disks } })),
-        container,
-      );
+      mountConnection(createConnectionProps({ systemInfo: { ...systemInfo, disks } }), container);
       expect(container.querySelectorAll(".config-host__stat")).toHaveLength(
         2 + (disks?.length ?? 0),
       );
@@ -352,33 +435,31 @@ describe("connection view rendering", () => {
 
   it("escalates host meter tones and hides the section when the RPC is unavailable", async () => {
     const container = document.createElement("div");
-    render(
-      renderConnection(
-        createConnectionProps({
-          systemInfo: {
-            machineName: "Gateway Mac",
-            hostname: "gateway.local",
-            platform: "darwin",
-            release: "25.5.0",
-            arch: "arm64",
-            osLabel: "macOS 26.5.0",
-            nodeVersion: "v24.1.0",
-            pid: 1234,
-            uptimeMs: 60_000,
-            cpuCount: 10,
-            loadAverage: [9.8, 9.1, 8.4],
-            memoryTotalBytes: 34_359_738_368,
-            memoryFreeBytes: 2_147_483_648,
-            disks: [
-              {
-                path: "/",
-                totalBytes: 994_662_584_320,
-                availableBytes: 198_932_516_864,
-              },
-            ],
-          },
-        }),
-      ),
+    mountConnection(
+      createConnectionProps({
+        systemInfo: {
+          machineName: "Gateway Mac",
+          hostname: "gateway.local",
+          platform: "darwin",
+          release: "25.5.0",
+          arch: "arm64",
+          osLabel: "macOS 26.5.0",
+          nodeVersion: "v24.1.0",
+          pid: 1234,
+          uptimeMs: 60_000,
+          cpuCount: 10,
+          loadAverage: [9.8, 9.1, 8.4],
+          memoryTotalBytes: 34_359_738_368,
+          memoryFreeBytes: 2_147_483_648,
+          disks: [
+            {
+              path: "/",
+              totalBytes: 994_662_584_320,
+              availableBytes: 198_932_516_864,
+            },
+          ],
+        },
+      }),
       container,
     );
     await Promise.resolve();
@@ -389,8 +470,8 @@ describe("connection view rendering", () => {
     expect(tone("Memory")).toBe("config-host__meter-fill--critical");
     expect(tone("Disk /")).toBe("config-host__meter-fill--warn");
 
-    render(
-      renderConnection(createConnectionProps({ systemInfo: null, systemInfoUnavailable: true })),
+    mountConnection(
+      createConnectionProps({ systemInfo: null, systemInfoUnavailable: true }),
       container,
     );
     await Promise.resolve();
@@ -399,7 +480,7 @@ describe("connection view rendering", () => {
 
   it("reserves the Gateway host section while its first snapshot loads", async () => {
     const container = document.createElement("div");
-    render(renderConnection(createConnectionProps()), container);
+    mountConnection(createConnectionProps(), container);
     await Promise.resolve();
 
     const systemSection = container.querySelector("#settings-connection-host");
@@ -414,8 +495,8 @@ describe("connection view rendering", () => {
 
   it("surfaces the last connection error only while disconnected", async () => {
     const container = document.createElement("div");
-    render(
-      renderConnection(createConnectionProps({ lastError: "connect failed: unauthorized" })),
+    mountConnection(
+      createConnectionProps({ lastError: "connect failed: unauthorized" }),
       container,
     );
     await Promise.resolve();
@@ -429,10 +510,8 @@ describe("connection view rendering", () => {
       errorStatus?.closest(".settings-section")?.querySelector("h2")?.textContent?.trim(),
     ).toBe("Connection");
 
-    render(
-      renderConnection(
-        createConnectionProps({ phase: "connected", lastError: "connect failed: unauthorized" }),
-      ),
+    mountConnection(
+      createConnectionProps({ phase: "connected", lastError: "connect failed: unauthorized" }),
       container,
     );
     expect(container.querySelector(".settings-status--danger")).toBeNull();

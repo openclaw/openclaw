@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
 import { formatTimeAgo } from "../../lib/format.ts";
@@ -13,10 +12,10 @@ import {
 } from "../../test-helpers/devices-fixtures.ts";
 import {
   renderDevicesContainer,
+  renderDevicesInto,
   getDevicesSection as getSection,
   getDeviceSettingsRow as getSettingsRow,
-} from "../../test-helpers/devices-view.ts";
-import { renderDevices } from "./view.ts";
+} from "../../test-helpers/devices-view.tsx";
 
 vi.mock("../../components/desktop/desktop-focus-window.ts", () => ({
   openDesktopFocus: vi.fn(),
@@ -491,13 +490,10 @@ describe("devices inventory rendering", () => {
     copy.focus();
     expect(document.activeElement).toBe(copy);
 
-    render(
-      renderDevices({
-        ...props,
-        nodes: [{ ...node, approvalState: "pending-reapproval", pendingRequestId: "request-new" }],
-      }),
-      container,
-    );
+    renderDevicesInto(container, {
+      ...props,
+      nodes: [{ ...node, approvalState: "pending-reapproval", pendingRequestId: "request-new" }],
+    });
 
     expect(container.querySelector('wa-dropdown-item[value="approve"]')).not.toBeNull();
     expect(container.querySelector('wa-dropdown-item[value="copy"]')).toBe(copy);

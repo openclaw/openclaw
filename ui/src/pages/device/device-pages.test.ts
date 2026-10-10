@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "@solidjs/signals";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type {
@@ -15,11 +16,13 @@ import {
   createNativeDeviceSettingsSnapshot,
   createTauriDeviceSettingsSnapshot,
 } from "../../test-helpers/native-device-settings.ts";
-import "./device-page.ts";
-import "./permissions-page.ts";
+import { mountSolid } from "../../test-helpers/solid.ts";
+import "./device-page.tsx";
+import "./permissions-page.tsx";
 
 type DevicePageElement = HTMLElement & { updateComplete: Promise<boolean> };
-type ToggleElement = HTMLElement & { checked: boolean; disabled: boolean };
+type ToggleElement = HTMLInputElement;
+const mounts: Array<() => void> = [];
 
 function createCapability(
   snapshot: NativeDeviceSettingsSnapshot | null = createNativeDeviceSettingsSnapshot(),
@@ -69,9 +72,10 @@ async function mount(
 ) {
   const provider = createApplicationContextProvider({ nativeDeviceSettings } as ApplicationContext);
   const page = document.createElement(tag) as DevicePageElement;
-  provider.append(page);
   document.body.append(provider);
+  mounts.push(mountSolid(() => page, provider).dispose);
   await page.updateComplete;
+  flush();
   return page;
 }
 
@@ -86,7 +90,7 @@ function row(page: HTMLElement, title: string): HTMLElement {
 }
 
 function toggle(page: HTMLElement, title: string, checked: boolean) {
-  const element = row(page, title).querySelector<ToggleElement>("wa-switch")!;
+  const element = row(page, title).querySelector<ToggleElement>('input[role="switch"]')!;
   element.checked = checked;
   element.dispatchEvent(new Event("change", { bubbles: true }));
 }
@@ -109,8 +113,11 @@ function submitDomain(page: HTMLElement) {
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
-afterEach(() => {
+afterEach(async () => {
+  mounts.splice(0).forEach((dispose) => dispose());
   document.body.replaceChildren();
+  await Promise.resolve();
+  flush();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -137,9 +144,10 @@ describe("native device settings pages", () => {
         desktopSharing: { state: "off" },
       });
       await page.updateComplete;
-      expect(row(page, "Desktop sharing").querySelector<ToggleElement>("wa-switch")!.checked).toBe(
-        false,
-      );
+      flush();
+      expect(
+        row(page, "Desktop sharing").querySelector<ToggleElement>('input[role="switch"]')!.checked,
+      ).toBe(false);
       native.publish({
         ...snapshot,
         desktopSharing: {
@@ -148,10 +156,11 @@ describe("native device settings pages", () => {
         },
       });
       await page.updateComplete;
+      flush();
       expect(row(page, "Desktop sharing status").textContent).toContain("Unavailable");
       expect(page.textContent).toContain("Install the OpenClaw CLI");
       const permissions = await mount("openclaw-device-permissions-page", native.capability);
-      expect(permissions.querySelector("wa-switch")).toBeNull();
+      expect(permissions.querySelector('input[role="switch"]')).toBeNull();
       expect(permissions.textContent).not.toContain("Location access");
     },
   );
@@ -160,7 +169,7 @@ describe("native device settings pages", () => {
     const page = await mount("openclaw-device-page", native.capability);
     const title = "Native experience (Experimental)";
     const experience = row(page, title);
-    expect(experience.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
+    expect(experience.querySelector<ToggleElement>('input[role="switch"]')!.checked).toBe(false);
     expect(experience.textContent).toContain("When off, use the Web experience");
     toggle(page, title, true);
     expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
@@ -171,12 +180,14 @@ describe("native device settings pages", () => {
     saved.app.nativeExperienceEnabled = true;
     native.publish(saved);
     await page.updateComplete;
-    expect(experience.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
+    flush();
+    expect(experience.querySelector<ToggleElement>('input[role="switch"]')!.checked).toBe(true);
     toggle(page, title, false);
     expect(native.capability.set).toHaveBeenLastCalledWith("app.nativeExperienceEnabled", false);
     delete saved.app.nativeExperienceEnabled;
     native.publish(saved);
     await page.updateComplete;
+    flush();
     expect(page.textContent).not.toContain(title);
   });
 
@@ -189,7 +200,7 @@ describe("native device settings pages", () => {
     expect(hosting.textContent).toContain(
       "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
     );
-    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
+    expect(hosting.querySelector<ToggleElement>('input[role="switch"]')!.checked).toBe(false);
     toggle(page, title, true);
     expect(native.capability.set).toHaveBeenCalledExactlyOnceWith(
       "app.keepGatewayRunning",
@@ -197,12 +208,14 @@ describe("native device settings pages", () => {
       expect.any(Function),
     );
     await page.updateComplete;
-    expect(hosting.querySelector<ToggleElement>("wa-switch")!.disabled).toBe(true);
+    flush();
+    expect(hosting.querySelector<ToggleElement>('input[role="switch"]')!.disabled).toBe(true);
     const saved = createNativeDeviceSettingsSnapshot();
     saved.app.keepGatewayRunning = true;
     native.settle(0, saved);
     await page.updateComplete;
-    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
+    flush();
+    expect(hosting.querySelector<ToggleElement>('input[role="switch"]')!.checked).toBe(true);
     toggle(page, title, false);
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "app.keepGatewayRunning",
@@ -211,20 +224,23 @@ describe("native device settings pages", () => {
     );
     native.settle(1, saved, new Error("Gateway did not become ready."));
     await page.updateComplete;
-    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(true);
+    flush();
+    expect(hosting.querySelector<ToggleElement>('input[role="switch"]')!.checked).toBe(true);
     expect(hosting.querySelector('[role="alert"]')?.textContent).toContain(
       "Could not change Gateway hosting. Gateway did not become ready.",
     );
     saved.app.keepGatewayRunningAvailable = false;
     native.publish(saved);
     await page.updateComplete;
-    expect(hosting.querySelector<ToggleElement>("wa-switch")!.disabled).toBe(true);
+    flush();
+    expect(hosting.querySelector<ToggleElement>('input[role="switch"]')!.disabled).toBe(true);
     native.capability.set.mockClear();
     hosting.click();
     expect(native.capability.set).not.toHaveBeenCalled();
     delete saved.app.keepGatewayRunning;
     native.publish(saved);
     await page.updateComplete;
+    flush();
     expect(page.textContent).not.toContain(title);
   });
 
@@ -252,12 +268,14 @@ describe("native device settings pages", () => {
       desktopAvailability: { state: "unknown" },
     });
     await page.updateComplete;
-    expect(hosting.querySelector<ToggleElement>("wa-switch")!.checked).toBe(false);
+    flush();
+    expect(hosting.querySelector<ToggleElement>('input[role="switch"]')!.checked).toBe(false);
     expect(row(page, "Desktop availability").textContent).toContain("Unknown");
     const capabilities = { ...snapshot.capabilities };
     delete capabilities.unattendedDesktopEnabled;
     native.publish({ ...snapshot, capabilities, desktopAvailability: { state: "unlocked" } });
     await page.updateComplete;
+    flush();
     expect(row(page, "Desktop availability").textContent).toContain("Unlocked");
     expect(page.textContent).not.toContain("Keep computer awake");
   });
@@ -289,11 +307,11 @@ describe("native device settings pages", () => {
     async (tag) => {
       const browserPage = await mount(tag, null);
       expect(browserPage.textContent).toContain("only available inside the OpenClaw app");
-      expect(browserPage.querySelector("wa-switch")).toBeNull();
+      expect(browserPage.querySelector('input[role="switch"]')).toBeNull();
       const { capability } = createCapability(null);
       const waitingPage = await mount(tag, capability);
       expect(waitingPage.textContent).toContain("Waiting for settings from the app");
-      expect(waitingPage.querySelector("wa-switch")).toBeNull();
+      expect(waitingPage.querySelector('input[role="switch"]')).toBeNull();
     },
   );
 
@@ -322,9 +340,9 @@ describe("native device settings pages", () => {
     iconStyles.value = "origami";
     iconStyles.dispatchEvent(new Event("change", { bubbles: true }));
     expect(capability.set).toHaveBeenCalledWith("app.iconStyle", "origami");
-    expect(row(page, "Launch at login").querySelector<ToggleElement>("wa-switch")!.disabled).toBe(
-      true,
-    );
+    expect(
+      row(page, "Launch at login").querySelector<ToggleElement>('input[role="switch"]')!.disabled,
+    ).toBe(true);
     expect(row(page, "Launch at login").textContent).toContain("requires a bundled app");
     expect(
       row(page, "Computer Control provider").querySelector<HTMLOptionElement>(
@@ -357,6 +375,7 @@ describe("native device settings pages", () => {
     };
     native.publish(next);
     await page.updateComplete;
+    flush();
     const iconStyles = row(page, "Dock icon").querySelector<HTMLSelectElement>("select")!;
     expect(iconStyles.value).toBe("origami");
     expect(iconStyles.options).toHaveLength(1);
@@ -368,12 +387,14 @@ describe("native device settings pages", () => {
     next.browser.cookieSync.available = false;
     native.publish(next);
     await page.updateComplete;
+    flush();
     expect(row(page, "Quick Chat shortcut").textContent).toContain("⌘K");
-    expect(row(page, "Show Dock icon").querySelector<ToggleElement>("wa-switch")!.checked).toBe(
-      false,
-    );
     expect(
-      row(page, "Enable Peekaboo Bridge").querySelector<ToggleElement>("wa-switch")!.disabled,
+      row(page, "Show Dock icon").querySelector<ToggleElement>('input[role="switch"]')!.checked,
+    ).toBe(false);
+    expect(
+      row(page, "Enable Peekaboo Bridge").querySelector<ToggleElement>('input[role="switch"]')!
+        .disabled,
     ).toBe(true);
     expect(page.querySelector('[aria-label="Computer Control provider"]')).toBeNull();
     expect(page.querySelector('[aria-label="Dock icon"]')).toBeNull();
@@ -441,16 +462,18 @@ describe("native device settings pages", () => {
     };
     native.publish(next);
     await page.updateComplete;
+    flush();
     expect(page.querySelector('[aria-label="Appearance"]')).toBeNull();
     expect(page.textContent).not.toContain("Health summaries");
-    expect(row(page, "Notifications").querySelector<ToggleElement>("wa-switch")!.checked).toBe(
-      false,
-    );
+    expect(
+      row(page, "Notifications").querySelector<ToggleElement>('input[role="switch"]')!.checked,
+    ).toBe(false);
     delete next.app;
     delete next.capabilities;
     native.publish(next);
     await page.updateComplete;
-    expect(page.querySelectorAll("wa-switch, select, input")).toHaveLength(0);
+    flush();
+    expect(page.querySelectorAll('input[role="switch"], select, input')).toHaveLength(0);
     expect(page.querySelectorAll(".settings-group")).toHaveLength(1);
     expect(row(page, "Diagnostics").querySelector("button")).not.toBeNull();
   });
@@ -461,8 +484,10 @@ describe("native device settings pages", () => {
     for (const hostname of ["  EXAMPLE.COM ", "  ACCOUNTS.EXAMPLE.ORG  "]) {
       typeDomain(page, hostname);
       await page.updateComplete;
+      flush();
       submitDomain(page);
       await page.updateComplete;
+      flush();
     }
     expect(capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.domains",
@@ -483,14 +508,17 @@ describe("native device settings pages", () => {
     for (const hostname of ["a.example.com", "b.example.com"]) {
       typeDomain(page, hostname);
       await page.updateComplete;
+      flush();
       submitDomain(page);
       await page.updateComplete;
+      flush();
     }
 
     const older = createNativeDeviceSettingsSnapshot();
     older.browser.cookieSync.domains = ["example.com", "a.example.com"];
     native.settle(0, older);
     await page.updateComplete;
+    flush();
     page.querySelector<HTMLButtonElement>('[aria-label="Remove example.com"]')?.click();
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.domains",
@@ -502,10 +530,12 @@ describe("native device settings pages", () => {
     latest.browser.cookieSync.domains = ["a.example.com", "b.example.com"];
     native.settle(2, latest);
     await page.updateComplete;
+    flush();
     const external = createNativeDeviceSettingsSnapshot();
     external.browser.cookieSync.domains = ["external.example.com"];
     native.publish(external);
     await page.updateComplete;
+    flush();
     expect(row(page, "Domains").textContent).toContain("external.example.com");
     expect(row(page, "Domains").textContent).not.toContain("b.example.com");
   });
@@ -528,6 +558,8 @@ describe("native device settings pages", () => {
     );
     typeInput(input, "personal-browser");
     page.remove();
+    await Promise.resolve();
+    flush();
     expect(capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
       "personal-browser",
@@ -550,6 +582,7 @@ describe("native device settings pages", () => {
     older.browser.cookieSync.targetProfile = "first-profile";
     native.settle(0, older);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("second-profile");
 
     typeInput(input, `${input.value}-final`);
@@ -563,10 +596,12 @@ describe("native device settings pages", () => {
     latest.browser.cookieSync.targetProfile = "second-profile-final";
     native.settle(2, latest);
     await page.updateComplete;
+    flush();
     const external = createNativeDeviceSettingsSnapshot();
     external.browser.cookieSync.targetProfile = "external-profile";
     native.publish(external);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("external-profile");
   });
 
@@ -576,14 +611,18 @@ describe("native device settings pages", () => {
     const first = await mount("openclaw-device-page", native.capability);
     typeDomain(first, "b.example.com");
     await first.updateComplete;
+    flush();
     submitDomain(first);
     const firstProfile = row(first, "Target profile").querySelector<HTMLInputElement>("input")!;
     typeInput(firstProfile, "pending-profile");
     first.remove();
+    await Promise.resolve();
+    flush();
 
     const second = await mount("openclaw-device-page", native.capability);
     typeDomain(second, "c.example.com");
     await second.updateComplete;
+    flush();
     submitDomain(second);
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.domains",
@@ -593,6 +632,8 @@ describe("native device settings pages", () => {
     const secondProfile = row(second, "Target profile").querySelector<HTMLInputElement>("input")!;
     typeInput(secondProfile, `${secondProfile.value}-remote`);
     second.remove();
+    await Promise.resolve();
+    flush();
     expect(native.capability.set).toHaveBeenLastCalledWith(
       "browser.cookieSync.targetProfile",
       "pending-profile-remote",
@@ -622,14 +663,18 @@ describe("native device settings pages", () => {
     const first = await mount("openclaw-device-page", native.capability);
     typeDomain(first, "rejected.example.com");
     await first.updateComplete;
+    flush();
     submitDomain(first);
     const profile = row(first, "Target profile").querySelector<HTMLInputElement>("input")!;
     typeInput(profile, "rejected-profile");
     first.remove();
+    await Promise.resolve();
+    flush();
     const second = await mount("openclaw-device-page", native.capability);
     native.settle(0);
     native.settle(1);
     await second.updateComplete;
+    flush();
     expect(row(second, "Domains").textContent).not.toContain("rejected.example.com");
     expect(row(second, "Target profile").querySelector<HTMLInputElement>("input")!.value).toBe(
       "default",
@@ -652,16 +697,19 @@ describe("native device settings pages", () => {
     normalized.browser.cookieSync.targetProfile = "work";
     native.settle(0, normalized);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("work");
     typeInput(input, "older");
     await vi.advanceTimersByTimeAsync(400);
     typeInput(input, "newer");
     native.settle(1, normalized);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("newer");
     await vi.advanceTimersByTimeAsync(400);
     native.settle(2, normalized);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("work");
   });
 
@@ -679,9 +727,11 @@ describe("native device settings pages", () => {
     native.settle(0, older);
     native.settle(1);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("first");
     native.settle(2);
     await page.updateComplete;
+    flush();
     expect(input.value).toBe("default");
   });
 
@@ -745,6 +795,7 @@ describe("native device settings pages", () => {
       snapshot.permissions.entries = [{ id, status: "granted" }];
       native.publish(snapshot);
       await page.updateComplete;
+      flush();
       expect(permission.textContent).toContain("Granted");
       expect(permission.querySelector("button")).toBeNull();
     },
@@ -780,7 +831,7 @@ describe("native device settings pages", () => {
       row(page, "Reminders").querySelector<HTMLButtonElement>("button")!.click();
       expect(native.capability.openSystemSettings).toHaveBeenCalledWith("reminders");
       expect(page.textContent).not.toContain("System-wide presence detection");
-      expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
+      expect(row(page, "Precise location").querySelector('input[role="switch"]')).toBeNull();
       expect(row(page, "Precise location").textContent).toContain("Disabled");
       const settings = row(page, "Precise location").querySelector<HTMLButtonElement>("button")!;
       expect(settings.textContent?.trim()).toBe("Open Settings");
@@ -796,30 +847,32 @@ describe("native device settings pages", () => {
         },
       });
       await page.updateComplete;
+      flush();
       expect(row(page, "Precise location").textContent).toContain("Enabled");
-      expect(row(page, "Precise location").querySelector("wa-switch")).toBeNull();
+      expect(row(page, "Precise location").querySelector('input[role="switch"]')).toBeNull();
     },
   );
 
   it("enables precision with location access and changes local location and activity preferences", async () => {
     const native = createCapability();
     const page = await mount("openclaw-device-permissions-page", native.capability);
-    expect(row(page, "Precise location").querySelector<ToggleElement>("wa-switch")!.disabled).toBe(
-      true,
-    );
-    const modes = row(page, "Location access").querySelector<HTMLElement & { value: string }>(
-      "wa-radio-group",
+    expect(
+      row(page, "Precise location").querySelector<ToggleElement>('input[role="switch"]')!.disabled,
+    ).toBe(true);
+    const mode = row(page, "Location access").querySelector<HTMLInputElement>(
+      'input[value="whileUsing"]',
     )!;
-    modes.value = "whileUsing";
-    modes.dispatchEvent(new Event("change", { bubbles: true }));
+    mode.checked = true;
+    mode.dispatchEvent(new Event("change", { bubbles: true }));
     expect(native.capability.set).toHaveBeenCalledWith("permissions.location.mode", "whileUsing");
     const next = createNativeDeviceSettingsSnapshot();
     next.permissions.location.mode = "whileUsing";
     native.publish(next);
     await page.updateComplete;
-    expect(row(page, "Precise location").querySelector<ToggleElement>("wa-switch")!.disabled).toBe(
-      false,
-    );
+    flush();
+    expect(
+      row(page, "Precise location").querySelector<ToggleElement>('input[role="switch"]')!.disabled,
+    ).toBe(false);
     toggle(page, "Precise location", true);
     expect(native.capability.set).toHaveBeenCalledWith("permissions.location.precise", true);
     toggle(page, "System-wide presence detection", true);

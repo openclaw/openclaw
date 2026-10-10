@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
@@ -9,16 +10,20 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
 import { deviceSystemInfo } from "../../test-helpers/devices-fixtures.ts";
-import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import "../debug/debug-overlay-content.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import "./connection-page.tsx";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
+import { mountSolid } from "../../test-helpers/solid.ts";
 import { DebugOverlay } from "../debug/debug-overlay.ts";
-import { ConnectionPage } from "./connection-page.ts";
+type ConnectionPage = SolidBridgeElement<object>;
+const mounts: Array<() => void> = [];
 
 const gatewayActivity = {
   eventLoop: {
@@ -59,14 +64,14 @@ function source(
 }
 
 async function mount(gateway: ApplicationGateway) {
-  const page = new ConnectionPage();
+  const page = document.createElement("openclaw-connection-page") as ConnectionPage;
   const context = {
     gateway,
     channels: { state: { channelsLastSuccess: null }, subscribe: () => () => undefined },
   } as unknown as ApplicationContext;
   const provider = createApplicationContextProvider(context);
-  provider.append(page);
   document.body.append(provider);
+  mounts.push(mountSolid(() => page, provider).dispose);
   await settleLitElement(page);
   return { page, context, provider };
 }
@@ -79,8 +84,11 @@ function control(page: ConnectionPage, selector: string) {
   return element;
 }
 
-afterEach(() => {
+afterEach(async () => {
+  mounts.splice(0).forEach((dispose) => dispose());
   document.body.replaceChildren();
+  await Promise.resolve();
+  flush();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();

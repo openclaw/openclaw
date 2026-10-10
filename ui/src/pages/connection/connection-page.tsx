@@ -1,92 +1,76 @@
 import "../../styles/connection.css";
-import { consume } from "@lit/context";
-import { html } from "lit";
-import { state } from "lit/decorators.js";
+import { createSignal, onCleanup } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import {
   loadSettings,
   resolveGatewayCredentialsForUrlEdit,
   type UiSettings,
 } from "../../app/settings.ts";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
-import { renderLearnMoreLink } from "../../components/settings-ui.ts";
-import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import type { SparklineSample } from "../../components/sparkline-tile.ts";
-import { t } from "../../i18n/index.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
+import type { GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import {
   canReadSystemInfo,
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  GatewayPageController,
-  type GatewayPageChange,
-} from "../../lit/gateway-page-controller.ts";
-import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { PollController } from "../../lit/poll-controller.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   CONNECTION_PING_SAMPLE_LIMIT,
   summarizeConnectionPing,
   type ConnectionPingSummary,
 } from "./latency.ts";
 import { isUnknownSystemInfoMethodError } from "./system-info.ts";
-import { renderConnection } from "./view.ts";
+import { ConnectionView } from "./view.tsx";
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
 
-export class ConnectionPage extends OpenClawLightDomElement {
-  @consume({ context: applicationContext, subscribe: true })
-  private context!: ApplicationContext;
-
-  @state() private settings: UiSettings = loadSettings();
-  @state() private password = "";
-  @state() private gatewaySecretVisible = false;
-  @state() private systemInfo: SystemInfoResult | null = null;
-  @state() private systemInfoUnavailable = false;
-  @state() private ping: ConnectionPingSummary | null = null;
-  @state() private pingFailed = false;
-  private pingSamples: SparklineSample[] = [];
-  private pingRequest: AbortController | null = null;
-  @state() private statusHistory: GatewayStatusSample[] = [];
-  @state() private statusFailed = false;
-  @state() private systemInfoRequest: AbortController | null = null;
-
+class ConnectionDraft {
+  settings: UiSettings = loadSettings();
+  password = "";
+  gatewaySecretVisible = false;
+  systemInfo: SystemInfoResult | null = null;
+  systemInfoUnavailable = false;
+  ping: ConnectionPingSummary | null = null;
+  pingFailed = false;
+  pingSamples: SparklineSample[] = [];
+  pingRequest: AbortController | null = null;
+  statusHistory: GatewayStatusSample[] = [];
+  statusFailed = false;
+  systemInfoRequest: AbortController | null = null;
   private sessionKeyBaseline = "";
   private sessionGatewayUrl = "";
-  @state() private sessionSaved = false;
+  sessionSaved = false;
+  polling!: ReturnType<typeof useVisiblePoll>;
+  gateway!: ReturnType<typeof useGatewayPage>;
 
-  private readonly diagnosticsPolling = new PollController(
-    this,
-    SYSTEM_INFO_POLL_INTERVAL_MS,
-    () => this.refreshDiagnostics(),
-    false,
-  );
+  constructor(
+    readonly context: ApplicationContext,
+    readonly host: HTMLElement,
+    readonly changed: () => void,
+  ) {}
 
-  private readonly gateway = new GatewayPageController(this, {
-    getGateway: () => this.context?.gateway,
-    invalidateRequests: () => this.resetDiagnostics(),
-    onSnapshot: (change) => this.handleGatewaySnapshot(change),
-    onPageActivation: () => this.syncDiagnosticsPolling(),
-  });
-
-  override disconnectedCallback() {
-    this.resetDiagnostics();
-    this.gatewaySecretVisible = false;
-    super.disconnectedCallback();
+  private get isConnected() {
+    return this.host.isConnected;
   }
 
-  private handleGatewaySnapshot({
-    snapshot,
-    initial,
-    sourceChanged,
-    clientChanged,
-  }: GatewayPageChange) {
+  dispose() {
+    this.resetDiagnostics();
+    this.gatewaySecretVisible = false;
+  }
+
+  handleGatewaySnapshot({ snapshot, initial, sourceChanged, clientChanged }: GatewayPageChange) {
     const wasSystemInfoUnavailable = this.systemInfoUnavailable;
     if (initial || sourceChanged || clientChanged) {
       this.resetDiagnostics();
@@ -125,7 +109,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
   }
 
   private stopDiagnosticsPolling() {
-    this.diagnosticsPolling.stop();
+    this.polling.stop();
     this.pingRequest?.abort();
     this.pingRequest = null;
     this.systemInfoRequest?.abort();
@@ -141,7 +125,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.statusFailed = false;
   }
 
-  private syncDiagnosticsPolling() {
+  syncDiagnosticsPolling() {
     const snapshot = this.context.gateway.snapshot;
     if (
       !this.isConnected ||
@@ -152,12 +136,12 @@ export class ConnectionPage extends OpenClawLightDomElement {
       this.stopDiagnosticsPolling();
       return;
     }
-    if (this.diagnosticsPolling.start()) {
+    if (this.polling.start()) {
       this.refreshDiagnostics();
     }
   }
 
-  private refreshDiagnostics() {
+  refreshDiagnostics() {
     void this.loadDiagnostic("ping");
     void this.loadDiagnostic("system-info");
   }
@@ -179,6 +163,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     }
     const request = new AbortController();
     this[requestKey] = request;
+    this.changed();
     const isCurrent = () =>
       this[requestKey] === request &&
       this.isConnected &&
@@ -212,8 +197,8 @@ export class ConnectionPage extends OpenClawLightDomElement {
           return;
         }
         this.systemInfo = sample.value;
-        this.diagnosticsPolling.stop();
-        this.diagnosticsPolling.start();
+        this.polling.stop();
+        this.polling.start();
         if (this.statusHistory.at(-1)?.at !== sample.at) {
           this.statusHistory = [
             ...this.statusHistory.slice(-(CONNECTION_PING_SAMPLE_LIMIT - 1)),
@@ -244,6 +229,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
     } finally {
       if (this[requestKey] === request) {
         this[requestKey] = null;
+        this.changed();
       }
     }
   }
@@ -287,7 +273,7 @@ export class ConnectionPage extends OpenClawLightDomElement {
       gateway.connection.gatewayUrl === gatewayUrl
     ) {
       gateway.forgetDeviceToken?.();
-      this.requestUpdate();
+      this.changed();
     }
   }
 
@@ -305,14 +291,14 @@ export class ConnectionPage extends OpenClawLightDomElement {
     this.settings = { ...this.settings, ...patch };
   }
 
-  override render() {
+  viewProps() {
     const gateway = this.context.gateway.snapshot;
     const live = this.context.gateway.connection;
     const dirty =
       this.settings.gatewayUrl !== live.gatewayUrl ||
       this.settings.token !== live.token ||
       this.password !== live.password;
-    const body = renderConnection({
+    return {
       phase: gateway.phase,
       hello: gateway.hello,
       settings: this.settings,
@@ -333,20 +319,26 @@ export class ConnectionPage extends OpenClawLightDomElement {
       showGatewaySecret: this.gatewaySecretVisible,
       canForgetDevice: this.context.gateway.hasStoredDeviceToken?.() ?? false,
       onForgetDevice: () => void this.forgetDevice(),
-      onConnectionChange: (patch) => this.updateConnection(patch),
-      onSecretChange: (token) => {
+      onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => {
+        this.updateConnection(patch);
+        this.changed();
+      },
+      onSecretChange: (token: string) => {
         this.password = "";
         this.updateConnection({ token });
+        this.changed();
       },
-      onSessionKeyChange: (sessionKey) => {
+      onSessionKeyChange: (sessionKey: string) => {
         this.sessionSaved = false;
         this.settings = {
           ...this.settings,
           sessionKey,
         };
+        this.changed();
       },
       onToggleGatewaySecretVisibility: () => {
         this.gatewaySecretVisible = !this.gatewaySecretVisible;
+        this.changed();
       },
       onConnect: () =>
         this.context.gateway.connect({
@@ -354,25 +346,60 @@ export class ConnectionPage extends OpenClawLightDomElement {
           token: this.settings.token,
           password: this.password,
         }),
-      onDiscardConnection: () => this.resetConnectionDraft(),
+      onDiscardConnection: () => {
+        this.resetConnectionDraft();
+        this.changed();
+      },
       onReconnect: () => this.context.gateway.connect(),
-      onSaveSession: () => this.saveSession(),
-      onDiscardSession: () => this.resetSessionDraft(),
-    });
-    return html`
-      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
-        <div>
-          <h1 class="page-title">${titleForRoute("connection")}</h1>
-          <div class="page-subtitle">
-            ${subtitleForRoute("connection")} ${renderLearnMoreLink(CONNECTION_DOCS_URL)}
-          </div>
-        </div>
-      </section>
-      ${renderSettingsWorkspace(body)}
-    `;
+      onSaveSession: () => {
+        this.saveSession();
+        this.changed();
+      },
+      onDiscardSession: () => {
+        this.resetSessionDraft();
+        this.changed();
+      },
+    };
   }
 }
 
-if (!customElements.get("openclaw-connection-page")) {
-  customElements.define("openclaw-connection-page", ConnectionPage);
+function ConnectionContent(_props: object, host: HTMLElement) {
+  const context = useApplication();
+  const [revision, setRevision] = createSignal(0);
+  const changed = () => setRevision((value) => value + 1);
+  const draft = new ConnectionDraft(context, host, changed);
+  draft.polling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () => draft.refreshDiagnostics());
+  draft.gateway = useGatewayPage({
+    getGateway: () => context.gateway,
+    invalidateRequests: () => draft.dispose(),
+    onSnapshot: (change) => {
+      draft.handleGatewaySnapshot(change);
+      changed();
+    },
+    onPageActivation: () => draft.syncDiagnosticsPolling(),
+  });
+  onCleanup(() => draft.dispose());
+  const props = () => {
+    revision();
+    return draft.viewProps();
+  };
+  return (
+    <>
+      <SettingsPageHeader
+        title={titleForRoute("connection", t)}
+        subtitle={
+          <>
+            {subtitleForRoute("connection", t)} <LearnMoreLink url={CONNECTION_DOCS_URL} />
+          </>
+        }
+      />
+      <SettingsWorkspace>
+        <ConnectionView {...props()} />
+      </SettingsWorkspace>
+    </>
+  );
 }
+
+export const ConnectionPage = defineSolidBridge("openclaw-connection-page", ConnectionContent, {
+  properties: {},
+});
