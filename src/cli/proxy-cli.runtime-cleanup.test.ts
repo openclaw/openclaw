@@ -71,7 +71,7 @@ beforeEach(() => {
   process.exitCode = undefined;
   startServer.mockResolvedValue({
     proxyUrl: "http://127.0.0.1:7799",
-    captureEnv: { OPENCLAW_DEBUG_PROXY_URL: "http://capture:fixture@127.0.0.1:7799" },
+    captureEnv: { OPENCLAW_DEBUG_PROXY_URL: "http://capture.invalid:7799" },
     stop: stopServer,
   });
   ensureCa.mockResolvedValue({ certPath: "fixture-cert.pem" });
@@ -236,7 +236,7 @@ describe("proxy command cleanup errors", () => {
           ["synthetic-child"],
           expect.objectContaining({
             stdio: "inherit",
-            env: { OPENCLAW_DEBUG_PROXY_URL: "http://capture:fixture@127.0.0.1:7799" },
+            env: { OPENCLAW_DEBUG_PROXY_URL: "http://capture.invalid:7799" },
             reject: false,
           }),
         );

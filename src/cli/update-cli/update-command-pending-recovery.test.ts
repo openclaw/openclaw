@@ -600,12 +600,16 @@ it.each([false, true])(
     const siblingFinished = createDeferredCore();
     const unregisterSibling = registerSignalExitGate(siblingFinished.promise);
     const retired = createDeferredCore();
-    const observeRetirement = (event: string | symbol, listener: unknown) => {
+    const removeListener = process.off.bind(process);
+    // Bun removes native signal listeners without emitting EventEmitter.removeListener.
+    // Observe the real removal effect, preserving its implementation and return value.
+    const off = vi.spyOn(process, "off").mockImplementation((event, listener) => {
+      const result = removeListener(event, listener);
       if (event === "SIGBREAK" && listener === signal) {
         retired.resolve();
       }
-    };
-    process.on("removeListener", observeRetirement);
+      return result;
+    });
     const cause = new UpdateCommandRecoveryPendingError("Database rollback could not finish");
     try {
       signal!("SIGINT");
@@ -639,7 +643,7 @@ it.each([false, true])(
       await recovery.complete(false, { preserveState: true });
       await waitForCliSignalExit();
       await retired.promise;
-      process.off("removeListener", observeRetirement);
+      off.mockRestore();
       process.exitCode = previousExitCode;
     }
   },

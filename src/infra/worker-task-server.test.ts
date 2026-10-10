@@ -260,7 +260,7 @@ it("retains admission context for asynchronous resource cleanup and successor ta
     expect(exchanges).toHaveBeenCalledTimes(4);
     expect(getSqliteDatabaseAdmissionUpstream()).toEqual({ port: admissionPort, closed: false });
     expect(isDeletedAgentDatabasePath("/synthetic/retired-agent.sqlite")).toBe(false);
-    admissionPeer.postMessage("still open");
+    admissionPeer.postMessage("still open", []);
     expect(receiveMessageOnPort(admissionPort)?.message).toBe("still open");
     expect(closeAdmission).not.toHaveBeenCalled();
     expect(port.close).not.toHaveBeenCalled();

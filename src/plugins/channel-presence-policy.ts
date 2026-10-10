@@ -280,18 +280,23 @@ function addPolicySignal(
 function loadInstalledChannelManifestRecords(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
+  env?: NodeJS.ProcessEnv;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): readonly PluginManifestRecord[] {
+  if (params.manifestRecords) {
+    return params.manifestRecords;
+  }
+  const env = params.env ?? process.env;
   if (!params.workspaceDir) {
     return resolveConfigWidePluginManifestRegistry({
       config: params.config,
-      env: params.env,
+      env,
     }).plugins;
   }
   return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
+    env,
     includeDisabled: true,
   }).plugins;
 }
@@ -308,14 +313,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   discovery?: PluginDiscoveryResult;
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir;
-  const records =
-    params.manifestRecords ??
-    loadInstalledChannelManifestRecords({
-      config: params.config,
-      workspaceDir,
-      env,
-    });
+  const records = loadInstalledChannelManifestRecords(params);
 
   const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const entrySources = new Map<string, Set<ConfiguredChannelPresenceSource>>();
@@ -452,10 +450,7 @@ export function listChannelIdsForOwnershipMigration(
   >,
 ): string[] {
   const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir;
-  const records =
-    params.manifestRecords ??
-    loadInstalledChannelManifestRecords({ config: params.config, workspaceDir, env });
+  const records = loadInstalledChannelManifestRecords(params);
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
   const persistedTrustedChannelIds = listPotentialConfiguredChannelPresenceSignals(
@@ -577,13 +572,7 @@ export function resolveDiscoverableScopedChannelPluginIds(params: {
   if (channelIds.length === 0) {
     return [];
   }
-  const records =
-    params.manifestRecords ??
-    loadInstalledChannelManifestRecords({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
+  const records = loadInstalledChannelManifestRecords(params);
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
   const candidateIds = sortUniqueStrings(

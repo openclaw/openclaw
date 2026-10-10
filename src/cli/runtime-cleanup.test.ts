@@ -9,6 +9,11 @@ import { closeCliResources, getPendingCliDisposers } from "./runtime-cleanup.js"
 
 const memoryClosed = vi.hoisted(() => vi.fn(async () => {}));
 const databasesClosed = vi.hoisted(() => vi.fn(async () => {}));
+const skillsClosed = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/refresh.js")>()),
+  closeSkillsWatchers: skillsClosed,
+}));
 vi.mock("../state/openclaw-agent-db-resources.js", () => ({
   hasOpenClawAgentDatabaseAsyncResources: () => true,
 }));
@@ -36,6 +41,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   memoryClosed.mockClear();
   databasesClosed.mockClear();
+  skillsClosed.mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -68,6 +74,7 @@ it("continues later cleanup when a harness disposer never settles", async () => 
     await entered.promise;
     await vi.advanceTimersByTimeAsync(5_000);
     await closing;
+    expect(skillsClosed).toHaveBeenCalledOnce();
     expect(memoryClosed).toHaveBeenCalledOnce();
     expect(databasesClosed).toHaveBeenCalledOnce();
     expect(getPendingCliDisposers()).toEqual(["agent-harness/stalled-fixture"]);
@@ -113,10 +120,16 @@ it("stops scheduling and joins admitted callbacks before dependent CLI resources
     expect(databasesClosed).not.toHaveBeenCalled();
     release.resolve();
     await Promise.all([running, closing]);
+    expect(skillsClosed).toHaveBeenCalledOnce();
     expect(memoryClosed).toHaveBeenCalledOnce();
     expect(databasesClosed).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
     await Promise.all([running, closing, scheduler.stop()]);
   }
+});
+
+it("leaves watcher retirement to an embedded caller without process ownership", async () => {
+  await closeCliResources();
+  expect(skillsClosed).not.toHaveBeenCalled();
 });

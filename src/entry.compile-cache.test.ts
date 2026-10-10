@@ -106,7 +106,8 @@ describe("entry compile cache", () => {
     vi.spyOn(process, "execArgv", "get").mockReturnValue(["--no-warnings"]);
     processKill = vi.spyOn(process, "kill").mockReturnValue(true);
     originalExitCode = process.exitCode;
-    process.exitCode = undefined;
+    // A nondefault status proves settlement has not published either success or failure.
+    process.exitCode = 17;
     writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   });
 
@@ -243,7 +244,7 @@ describe("entry compile cache", () => {
         onSignal: expect.any(Function),
       });
       child.emit("exit", 0, null);
-      expect(process.exitCode).toBeUndefined();
+      expect(process.exitCode).toBe(17);
       child.emit("close", 0, null);
       await expect(completion).resolves.toBe(true);
       expect(process.exitCode).toBe(0);
@@ -318,17 +319,22 @@ describe("entry compile cache", () => {
           expectDefined(options?.onSignal, "signal handler")("SIGTERM");
           vi.advanceTimersByTime(1_000);
           expect(kill).toHaveBeenCalledWith("SIGTERM");
-          expect(process.exitCode).toBeUndefined();
+          expect(process.exitCode).toBe(17);
           vi.advanceTimersByTime(1_000);
           expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
-          expect(process.exitCode).toBeUndefined();
+          expect(process.exitCode).toBe(17);
           expect(processKill).not.toHaveBeenCalled();
           child.emit("exit", null, "SIGKILL");
-          expect(process.exitCode).toBeUndefined();
+          expect(process.exitCode).toBe(17);
+          expect(processKill).not.toHaveBeenCalled();
           child.emit("close", null, "SIGKILL");
           await expect(completion).resolves.toBe(true);
           expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
-          expect(processKill).not.toHaveBeenCalled();
+          if (platform === "win32") {
+            expect(processKill).not.toHaveBeenCalled();
+          } else {
+            expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+          }
         });
       } finally {
         vi.useRealTimers();
@@ -363,7 +369,7 @@ describe("entry compile cache", () => {
       expect.stringContaining("Failed to respawn CLI without compile cache: Error: spawn failed"),
     );
     expect(writeStderr).not.toHaveBeenCalled();
-    expect(process.exitCode).toBeUndefined();
+    expect(process.exitCode).toBe(17);
     child.emit("close", -2, null);
     await expect(diagnosticCompletion).resolves.toBe(true);
     expect(process.exitCode).toBe(1);

@@ -366,7 +366,7 @@ describe("one-shot CLI completion", () => {
     expect(result.status).toBe(exitCode);
     expect(result.signal).toBeNull();
     expect(JSON.parse(result.stdout)).toEqual({ ok: exitCode === 0 });
-    expect(result.stderr).toContain("\x1b[?25h");
+    expect(result.stderr).toBe("");
   });
 
   it("keeps real dual-TTY JSON clean after a fatal unhandled rejection", () => {

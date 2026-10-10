@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime, ExitError, restoreRuntimeTerminalState } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { waitForPendingCliDisposers } from "./runtime-cleanup.js";
 import { waitForCliSignalExit } from "./signal-exit-barrier.js";
 
@@ -67,9 +67,8 @@ export async function runCliWithExitFinalization(params: {
       } else if (requestedCode !== undefined) {
         process.exitCode = requestedCode === "process" ? resolveProcessExitCode() : requestedCode;
       }
-      // Natural exit drains stdio and disposes V8's isolate before joining its
-      // compiler workers. Never reintroduce process.exit here (nodejs/node#64274).
-      restoreRuntimeTerminalState("CLI completion", { resumeStdinIfPaused: false });
+      // Natural exit drains stdio and V8 compiler work. Terminal mutation belongs
+      // to the interactive/runtime-exit owner; ordinary completion must not emit resets.
     }
   }
   // A cleanup failure must not replace an embedded runtime's original exit.

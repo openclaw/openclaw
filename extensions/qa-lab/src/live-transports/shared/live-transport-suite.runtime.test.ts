@@ -79,10 +79,12 @@ async function writeAgentE2eRecipe(
 }
 
 describe("live transport suite runtime", () => {
+  let previousExitCode: typeof process.exitCode;
   beforeEach(() => {
+    previousExitCode = process.exitCode;
+    process.exitCode = undefined;
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_SOURCE", "");
     vi.stubEnv("OPENCLAW_QA_CREDENTIAL_ROLE", "");
-    vi.stubEnv("OPENCLAW_QA_MATRIX_DISABLE_FORCE_EXIT", "1");
     vi.clearAllMocks();
     runQaSuiteCommand.mockReset();
     loadMatrixQaE2eeRuntime.mockReset();
@@ -91,6 +93,8 @@ describe("live transport suite runtime", () => {
   });
 
   afterEach(() => {
+    process.exitCode = previousExitCode;
+    vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
 
@@ -182,9 +186,15 @@ describe("live transport suite runtime", () => {
             ? ["matrix-allowbots-default-block"]
             : scenarioIds,
     };
-    runQaSuiteCommand.mockImplementation((options) =>
-      runQaSuite({ ...params, scenarioIds: options.scenarioIds }),
-    );
+    let suite: ReturnType<typeof runQaSuite> | undefined;
+    runQaSuiteCommand.mockImplementation((options) => {
+      suite = runQaSuite({ ...params, scenarioIds: options.scenarioIds });
+      return suite;
+    });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const exit = vi.spyOn(process, "exit").mockImplementation(() => {
+      throw new Error("Matrix CLI must not force process exit");
+    });
     const run =
       caller === "dedicated"
         ? parseQa(
@@ -219,7 +229,16 @@ describe("live transport suite runtime", () => {
         expect(runFlowWorkers).not.toHaveBeenCalled();
         if (outcome === "failed") {
           initialization.reject(failure);
-          expect(await settled).toBe(failure);
+          if (caller === "dedicated") {
+            expect(suite).toBeDefined();
+            await expect(suite).rejects.toBe(failure);
+            expect(await settled).toBeUndefined();
+            expect(stderr).toHaveBeenCalledExactlyOnceWith(`${failure.message}\n`);
+            expect(process.exitCode).toBe(1);
+            expect(exit).not.toHaveBeenCalled();
+          } else {
+            expect(await settled).toBe(failure);
+          }
           expect(runFlowWorkers).not.toHaveBeenCalled();
           for (const name of priorArtifacts) {
             await expect(fs.stat(path.join(outputDir, "proof", name))).rejects.toMatchObject({

@@ -211,7 +211,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     ],
     diagnostics: [
       "TypeScript @deprecated annotations and state-store migration documentation",
-      "plugin compatibility inventory; no new runtime warnings",
+      "plugin compatibility inventory; legacy writer migrations use the shared once-per-plugin-and-capability-family warning policy",
     ],
     tests: [
       "src/plugins/compat/registry.test.ts",
