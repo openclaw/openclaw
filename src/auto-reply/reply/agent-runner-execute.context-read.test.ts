@@ -53,7 +53,7 @@ it("keeps a cron context prefix readable when an inbound turn persists before qu
     });
     const recovery = createReplyRestartRecoveryClaimController({
       ...target,
-      acquireSessionActor: actor.acquireSessionActor,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "inbound-run",
       sourceTurnId: "channel-user:v1:synthetic-dm",
       lifecycleGeneration: getAgentEventLifecycleGeneration(),

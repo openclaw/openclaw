@@ -52,7 +52,7 @@ describe("restart recovery claim successors", () => {
       });
       const controller = createReplyRestartRecoveryClaimController({
         agentId: "main",
-        acquireSessionActor: actor.acquireSessionActor,
+        acquireSessionActor: () => actor.acquireSessionActor(),
         admissionRunId: "queued-run",
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         getEntry: () => entry,
@@ -144,7 +144,7 @@ describe("restart recovery claim successors", () => {
     });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
-      acquireSessionActor: actor.acquireSessionActor,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: sourceTurnId,
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       getEntry: () => entry,

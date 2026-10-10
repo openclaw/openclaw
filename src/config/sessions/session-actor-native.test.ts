@@ -249,7 +249,9 @@ it("retains staged custody when authority ends during committed publication", as
         recorder.stageApproved?.({
           runId: "native-run",
           assertCurrent() {
-            if (!live) throw new Error("staged authority ended");
+            if (!live) {
+              throw new Error("staged authority ended");
+            }
           },
         }),
       ).rejects.toThrow("staged authority ended");
@@ -302,7 +304,9 @@ it("refuses staging when custody authority ends at the final actor commit", asyn
         {
           ...current,
           authorize(stage, snapshot, publication) {
-            if (stage === "commit" && owner.db.isTransaction && ++commits === 2) live = false;
+            if (stage === "commit" && owner.db.isTransaction && ++commits === 2) {
+              live = false;
+            }
             current.authorize(stage, snapshot, publication);
           },
         },
@@ -314,7 +318,9 @@ it("refuses staging when custody authority ends at the final actor commit", asyn
         recorder.stageApproved?.({
           runId: "native-run",
           assertCurrent() {
-            if (!live) throw new Error("final custody authority ended");
+            if (!live) {
+              throw new Error("final custody authority ended");
+            }
           },
         }),
       ).rejects.toThrow("final custody authority ended");
@@ -394,7 +400,9 @@ it("rolls back recorder adoption when accepted input authority is revoked at COM
     let commitReached = false;
     const failure = new Error("accepted input authority revoked");
     const assertCurrent = () => {
-      if (!live) throw failure;
+      if (!live) {
+        throw failure;
+      }
     };
     const recorder = createUserTurnTranscriptRecorder({
       input: { text: "must remain pending", timestamp: 1, idempotencyKey: "native-revoked:user" },

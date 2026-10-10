@@ -60,7 +60,7 @@ describe("applySessionHints", () => {
     });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
-      acquireSessionActor: actor.acquireSessionActor,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "new-input",
       lifecycleGeneration,
       getEntry: () => entry,

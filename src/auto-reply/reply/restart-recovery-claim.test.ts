@@ -66,10 +66,10 @@ function createController(
     isRestartAbort: () => false,
     resolveDeliveryContext: () => undefined,
     ...params,
-    acquireSessionActor: actor.acquireSessionActor,
+    acquireSessionActor: () => actor.acquireSessionActor(),
   });
   return Object.assign(controller, {
-    acquireSessionActor: actor.acquireSessionActor,
+    acquireSessionActor: () => actor.acquireSessionActor(),
     [Symbol.asyncDispose]: () => actor[Symbol.asyncDispose](),
   });
 }
@@ -742,7 +742,9 @@ describe("createReplyRestartRecoveryClaimController", () => {
         ),
       );
       try {
-        const failure = await fixture.controller.beginBeforeAgentReply().catch((error) => error);
+        const failure = await fixture.controller
+          .beginBeforeAgentReply()
+          .catch((error: unknown) => error);
         expect(revoked).toBe(true);
         expect(isAgentRunStaleLifecycleError(failure)).toBe(true);
         expect(fixture.read()).toEqual(before);

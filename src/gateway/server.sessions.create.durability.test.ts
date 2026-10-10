@@ -57,6 +57,9 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
                   const committing =
                     (command.type === "session.actor.acceptInput" ||
                       command.type === "session.actor.adoptRun") &&
+                    typeof command.input === "object" &&
+                    command.input !== null &&
+                    "turn" in command.input &&
                     command.input.turn !== undefined;
                   if (committing) {
                     turnBoundary.committing = true;

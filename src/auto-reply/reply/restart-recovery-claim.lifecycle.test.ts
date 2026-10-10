@@ -88,7 +88,7 @@ async function withTrackedReply(
     });
     const controller = createReplyRestartRecoveryClaimController({
       ...scope,
-      acquireSessionActor: actor.acquireSessionActor,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       admissionRunId: "old-recovery",
       lifecycleGeneration: operation.lifecycleGeneration,
       getEntry: () => entry,
@@ -121,7 +121,7 @@ async function withTrackedReply(
           await replaceSessionEntry(scope, entry);
         },
         readEntry: () => loadSessionEntry(scope),
-        releaseDatabase: actor.release,
+        releaseDatabase: () => actor.release(),
       });
       if (storage === "native-incognito") {
         expect(native).toBeDefined();
@@ -330,7 +330,7 @@ describe("restart recovery claim settlement", () => {
       });
       const controller = createReplyRestartRecoveryClaimController({
         agentId: "main",
-        acquireSessionActor: actor.acquireSessionActor,
+        acquireSessionActor: () => actor.acquireSessionActor(),
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
         admissionRunId: "recovery-run",
         getEntry: () => entry,
@@ -385,7 +385,7 @@ describe("restart recovery claim settlement", () => {
     });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
-      acquireSessionActor: actor.acquireSessionActor,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
@@ -446,7 +446,7 @@ describe("restart recovery claim settlement", () => {
       });
       const controller = createReplyRestartRecoveryClaimController({
         agentId: "main",
-        acquireSessionActor: actor.acquireSessionActor,
+        acquireSessionActor: () => actor.acquireSessionActor(),
         lifecycleGeneration:
           interruption === "missing-generation" ? undefined : lifecycleGeneration,
         admissionRunId: "recovery-run",
@@ -594,7 +594,7 @@ describe("restart recovery claim settlement", () => {
     });
     const controller = createReplyRestartRecoveryClaimController({
       agentId: "main",
-      acquireSessionActor: actor.acquireSessionActor,
+      acquireSessionActor: () => actor.acquireSessionActor(),
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
       admissionRunId: "recovery-run",
       getEntry: () => entry,
