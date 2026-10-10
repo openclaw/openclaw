@@ -232,7 +232,7 @@ describe("standalone proxy owner routing", () => {
           expect(await store.listSessions()).toEqual([
             expect.objectContaining({
               id: settings.sessionId,
-              eventCount: expect.any(Number),
+              eventCount: 3,
               endedAt: expect.any(Number),
               proxyUrl: server.proxyUrl,
             }),
