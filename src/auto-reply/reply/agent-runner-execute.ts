@@ -123,6 +123,36 @@ type ExecutePreparedReplyAgentRunInput = Omit<
 export async function executePreparedReplyAgentRun(
   input: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const onAgentRunTerminalOutcome = input.opts?.onAgentRunTerminalOutcome;
+  if (!onAgentRunTerminalOutcome) {
+    return executePreparedReplyAgentRunInner(input, input.opts);
+  }
+
+  let terminalOutcome: "completed" | "failed" | undefined;
+  const executionOpts = {
+    ...input.opts,
+    onAgentRunTerminalOutcome: (outcome: "completed" | "failed") => {
+      terminalOutcome = outcome === "failed" ? outcome : (terminalOutcome ?? outcome);
+    },
+  };
+  try {
+    return await executePreparedReplyAgentRunInner(input, executionOpts);
+  } catch (error) {
+    if (terminalOutcome !== undefined) {
+      terminalOutcome = "failed";
+    }
+    throw error;
+  } finally {
+    if (terminalOutcome) {
+      onAgentRunTerminalOutcome(terminalOutcome);
+    }
+  }
+}
+
+async function executePreparedReplyAgentRunInner(
+  input: ExecutePreparedReplyAgentRunInput,
+  executionOpts: ExecutePreparedReplyAgentRunInput["opts"],
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   // Preserve the invocation snapshot across preparation; live session state uses its getters.
   const context = { ...input };
   const {
@@ -195,6 +225,7 @@ export async function executePreparedReplyAgentRun(
   const preflightCompactionApplied =
     (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
+  // Queued turns outlive this invocation and must not inherit its terminal buffer.
   const runFollowupTurn = createFollowupRunner({
     resolveGatewayContext: getGatewayContextResolver(replyOperation),
     opts,
@@ -288,6 +319,7 @@ export async function executePreparedReplyAgentRun(
       traceAgentPhase("reply.run_agent_turn", () =>
         executeAgentTurn({
           ...context,
+          opts: executionOpts,
           resolveVisibleReplyDelivery: input.resolveVisibleReplyDelivery,
           replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         }),
@@ -328,6 +360,7 @@ export async function executePreparedReplyAgentRun(
 
   const result = await finalizeReplyAgentRun({
     ...context,
+    opts: executionOpts,
     activeSessionEntry,
     preflightCompactionApplied,
     runFollowupTurn,
