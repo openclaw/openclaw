@@ -177,6 +177,7 @@ scripts/lib/gateway-server-test-plan.mts
 scripts/lib/list-test-files.mts
 scripts/lib/local-check-runtime.mts
 scripts/lib/managed-child-process.mts
+scripts/lib/managed-cleanup-handoff.mts
 scripts/lib/managed-windows-job-entrypoint.mts
 scripts/lib/managed-windows-job-launcher.mts
 scripts/lib/managed-windows-job.mts

@@ -168,8 +168,10 @@ const count = (f: Fixture, type: string) => f.events.filter((event) => event.typ
 
 async function open(f: Fixture) {
   const before = count(f, "after-show");
+  const shown = nextPhase(f.dropdown, "after-show");
   f.dropdown.open = true;
-  await expect.poll(() => count(f, "after-show")).toBe(before + 1);
+  await shown;
+  expect(count(f, "after-show")).toBe(before + 1);
 }
 
 async function duringAnimation(

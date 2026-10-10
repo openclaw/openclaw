@@ -402,6 +402,11 @@ autosave for new edits; an offline reload keeps the pending draft.
 Devices node-binding controls also pause while configuration reloads, so a pending
 read cannot overwrite a new selection.
 
+When Advanced settings reconnects, a form with an already loaded schema stays
+visible at your reading position while the schema refreshes. Form and Setup
+controls cannot be edited until that refresh finishes. The first load still
+shows **Loading schema…** until a schema is available.
+
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or
 process creates it first, the editor keeps your draft and reports a conflict.
