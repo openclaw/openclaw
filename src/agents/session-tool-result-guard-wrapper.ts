@@ -19,18 +19,22 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
-import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
+import {
+  resolveLiveToolResultMaxChars,
+  truncateToolResultMessage,
+} from "./embedded-agent-runner/tool-result-truncation.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
+import { resolveMaxToolResultChars } from "./session-tool-result-guard.payload.js";
 import type { SessionManager } from "./sessions/index.js";
 import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
-import { setSessionToolTextPreparer } from "./sessions/session-tool-result-redaction.js";
+import { setSessionToolResultPreparer } from "./sessions/session-tool-result-redaction.js";
 import {
   copyCodeModeSourceAppend,
   type CodeModeSourceAppend,
@@ -253,6 +257,12 @@ export function guardSessionManager(
       }
     : undefined;
 
+  const maxToolResultChars = resolveMaxToolResultChars({
+    maxToolResultChars:
+      typeof opts?.contextWindowTokens === "number"
+        ? resolveLiveToolResultMaxChars({ contextWindowTokens: opts.contextWindowTokens })
+        : undefined,
+  });
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
     agentId: opts?.agentId,
@@ -303,12 +313,7 @@ export function guardSessionManager(
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
     config: opts?.config,
-    maxToolResultChars:
-      typeof opts?.contextWindowTokens === "number"
-        ? resolveLiveToolResultMaxChars({
-            contextWindowTokens: opts.contextWindowTokens,
-          })
-        : undefined,
+    maxToolResultChars,
     // Compaction may have removed the admitted user from model context. If the
     // prompt reinjects it, keep it model-only; a different queued input clears this above.
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
@@ -333,9 +338,11 @@ export function guardSessionManager(
     },
     onUserMessageBlocked: opts?.onUserMessageBlocked,
   });
-  setSessionToolTextPreparer(guardedSessionManager, (block) =>
-    prepareModelVisibleToolTextBlock(block, resolveTranscriptLoggingConfig(opts?.config)),
-  );
+  setSessionToolResultPreparer(guardedSessionManager, {
+    prepareText: (block) =>
+      prepareModelVisibleToolTextBlock(block, resolveTranscriptLoggingConfig(opts?.config)),
+    cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
+  });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
   guardedSessionManager.flushPendingToolResults = guard.flushPendingToolResults;
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;

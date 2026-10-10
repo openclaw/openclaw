@@ -120,7 +120,7 @@ export async function processCompletionsStream(
   if (options?.strictReasoningTags) {
     reasoningTagTextPartitioner.markStrict();
   }
-  type ToolCallBlock = ToolCall & { partialArgs: string };
+  type ToolCallBlock = ToolCall & { partialJson: string };
   let currentBlock: TextBlock | ThinkingBlock | ToolCallBlock | null = null;
   const directContent: { block: TextBlock | ThinkingBlock | null } = { block: null };
   let currentTextSource: OpenAICompletionsTextSource | undefined;
@@ -286,14 +286,14 @@ export async function processCompletionsStream(
       id: `call_${randomUUID().replaceAll("-", "").slice(0, 24)}`,
       name: toolCall.name,
       arguments: toolCall.arguments,
-      partialArgs: toolCall.partialArgs,
+      partialJson: toolCall.partialJson,
     };
     currentBlock = block;
     appendToolCallBlock(block);
     pushStreamEvent({
       type: "toolcall_delta",
       contentIndex: blockIndices.get(block) ?? -1,
-      delta: toolCall.partialArgs,
+      delta: toolCall.partialJson,
       partial: output,
     });
   };
@@ -519,7 +519,7 @@ export async function processCompletionsStream(
               id: toolCall.id || "",
               name: toolCall.function?.name || "",
               arguments: {},
-              partialArgs: "",
+              partialJson: "",
               ...(initialSig ? { thoughtSignature: initialSig } : {}),
             };
             encryptedReasoning.rememberToolCall(block.id, block);
@@ -558,11 +558,11 @@ export async function processCompletionsStream(
           }
           const toolArgumentsDelta = toolCall.function?.arguments;
           if (toolArgumentsDelta) {
-            block.partialArgs += toolArgumentsDelta;
+            block.partialJson += toolArgumentsDelta;
             // Preview refresh is scheduled geometrically; the terminal
             // finalize re-parses the full buffer authoritatively either way.
-            if (toolArgumentPreviewSchedules.get(block)?.(block.partialArgs.length)) {
-              block.arguments = parseStreamingJson(block.partialArgs);
+            if (toolArgumentPreviewSchedules.get(block)?.(block.partialJson.length)) {
+              block.arguments = parseStreamingJson(block.partialJson);
             }
           }
           if (toolArgumentsDelta || directMode) {

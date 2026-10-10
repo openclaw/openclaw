@@ -1,6 +1,9 @@
 /** Managed node-host install plan builder. */
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
+import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadNodeHostConfig } from "../node-host/config.js";
+import { canReuseNodeHostDeviceToken } from "../node-host/gateway-auth.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonRuntimeBinDir,
@@ -25,6 +28,7 @@ export async function buildNodeInstallPlan(params: {
   installedAppsSharing?: boolean;
   commands?: string[];
   allCommands?: boolean;
+  gatewayAuthFromEnv?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimeExplicit?: boolean;
   devMode?: boolean;
@@ -54,6 +58,9 @@ export async function buildNodeInstallPlan(params: {
     runtimePath,
     wrapperPath,
   });
+  if (params.gatewayAuthFromEnv) {
+    programArguments.push("--auth-from-env");
+  }
 
   await emitNodeRuntimeWarning({
     env: params.env,
@@ -70,6 +77,29 @@ export async function buildNodeInstallPlan(params: {
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
   });
+  if (!params.gatewayAuthFromEnv) {
+    const savedGateway = (await loadNodeHostConfig(params.env))?.gateway;
+    const identity = savedGateway ? loadDeviceIdentityIfPresent({ env: params.env }) : null;
+    if (
+      identity &&
+      (await canReuseNodeHostDeviceToken({
+        savedGateway,
+        gatewayCandidates: [
+          {
+            host: params.host,
+            port: params.port,
+            contextPath: params.contextPath,
+            tls: params.tls,
+          },
+        ],
+        deviceId: identity.deviceId,
+        env: params.env,
+      }))
+    ) {
+      delete environment.OPENCLAW_GATEWAY_TOKEN;
+      delete environment.OPENCLAW_GATEWAY_PASSWORD;
+    }
+  }
   return {
     programArguments,
     workingDirectory,

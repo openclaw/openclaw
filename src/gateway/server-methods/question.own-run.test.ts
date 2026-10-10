@@ -24,7 +24,11 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
-import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -34,7 +38,6 @@ import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
-import type { GatewayWsClient } from "../server/ws-types.js";
 import { canReceiveSessionEvent } from "../session-sharing.js";
 import * as questionRegistration from "./question.durable-registration.js";
 import * as questionFixture from "./question.registration-collision.test-harness.js";
@@ -42,6 +45,7 @@ import {
   adminRequestClient,
   broadcast,
   callQuestionRpc,
+  createQuestionTestPeer,
   manager,
   requestParams,
   secretRequestParams,
@@ -53,39 +57,6 @@ questionFixture.registerQuestionCollisionTests(createOwnRunFixture);
 
 const answers = { answers: { destination: ["Library"] } };
 const sessionScope = { agentId: "main", sessionKey: requestParams.sessionKey };
-
-function questionPeer(
-  profile: ReturnType<typeof ensureProfileForEmail>,
-  connId: string,
-  scopes = ["operator.sessions.write"],
-) {
-  const socket = {
-    bufferedAmount: 0,
-    readyState: 1,
-    close: vi.fn(),
-    send: vi.fn(
-      (
-        _wire: string | Buffer,
-        options?: { binary: false } | ((error?: Error) => void),
-        callback?: (error?: Error) => void,
-      ) => (typeof options === "function" ? options : callback)?.(),
-    ),
-  };
-  const client: GatewayWsClient = {
-    socket: socket as unknown as GatewayWsClient["socket"],
-    connect: { role: "operator", scopes } as GatewayWsClient["connect"],
-    connId,
-    usesSharedGatewayAuth: false,
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      avatarRevision: "",
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-  };
-  return { client, socket };
-}
 
 async function createOwnRunFixture(
   durable = false,
@@ -120,7 +91,7 @@ async function createOwnRunFixture(
     createdActor: { type: "human", source: "profile", id: creatorProfileId ?? profile.id },
   };
   await questionFixture.writeQuestionFixtureEntry(sessionScope, entry, legacyGeneration);
-  const browser = questionPeer(profile, "original-browser");
+  const browser = createQuestionTestPeer(profile, "original-browser");
   if (durable) {
     browser.client.internal = { authenticatedOperator: true };
     browser.client.authPolicy = captureGatewayAuthPolicy(cfg, {
@@ -596,7 +567,7 @@ describe("own-run question admission", () => {
       try {
         await withOwnRunQuestion(async (f) => {
           const id = await f.request();
-          const foreign = questionPeer(
+          const foreign = createQuestionTestPeer(
             ensureProfileForEmail("foreign-drain@example.test"),
             "foreign",
           );
@@ -669,7 +640,7 @@ describe("own-run question admission", () => {
         payload: { id },
       });
       f.clients.delete(f.browser.client);
-      const reconnected = questionPeer(f.profile, "reconnected-browser");
+      const reconnected = createQuestionTestPeer(f.profile, "reconnected-browser");
       f.clients.add(reconnected.client);
       expect((await f.call("question.list", {}, reconnected.client))[1]).toMatchObject({
         questions: [{ id }],
@@ -718,7 +689,7 @@ describe("own-run question admission", () => {
   it("conceals questions from foreign viewers and members with session read and write scopes", async () => {
     await withOwnRunQuestion(async (f) => {
       const peers = ["viewer", "member"].map((name) =>
-        questionPeer(ensureProfileForEmail(name + "@example.test"), name, [
+        createQuestionTestPeer(ensureProfileForEmail(name + "@example.test"), name, [
           "operator.sessions.write",
           "operator.sessions.read",
         ]),
@@ -908,10 +879,16 @@ describe("own-run question admission", () => {
           settled = true;
           return result;
         });
-        const recipient = questionPeer(f.profile, "independent-current-recipient");
+        const recipient = createQuestionTestPeer(f.profile, "independent-current-recipient");
         const entered = createDeferred();
         const release = createDeferred();
         const failure = new Error("Transient question worker read failure");
+        // The injected failure must exercise the worker instead of a warm entry receipt.
+        sessionChanges.invalidate({
+          ...sessionScope,
+          storePath: resolveOpenClawAgentSqlitePath(sessionScope),
+          factsInvalidated: true,
+        });
         const run = projectionLane.pool.run.bind(projectionLane.pool);
         const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
           if (cause === "transient worker failure") {
@@ -951,6 +928,7 @@ describe("own-run question admission", () => {
             await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           }
+          expect(spy).toHaveBeenCalledOnce();
         } finally {
           release.resolve();
           await result;

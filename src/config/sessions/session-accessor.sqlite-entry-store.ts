@@ -717,6 +717,8 @@ export function writeSessionEntry(
     entry: normalizedEntry,
     previousEntry: canonicalPreviousEntry,
     entryJson: persisted.entryJson,
+    snapshotEntry: canonicalEntry,
+    snapshots: persisted.snapshotsChanged ? persisted.snapshots : undefined,
     allowStoredAliases: options.allowStoredAliases,
     sideMetadataUnchanged,
     writeGeneration,

@@ -9,14 +9,49 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import type { GatewayBroadcastFn } from "../server-broadcast-types.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import type { GatewayWsClient } from "../server/ws-types.js";
 import { createQuestionHandlers } from "./question.js";
 import { createSecretStoreWriteService } from "./secrets.js";
 import type { GatewayClient, GatewayRequestOptions, RespondFn } from "./types.js";
+
+export function createQuestionTestPeer(
+  profile: ReturnType<typeof ensureProfileForEmail>,
+  connId: string,
+  scopes = ["operator.sessions.write"],
+) {
+  const socket = {
+    bufferedAmount: 0,
+    readyState: 1,
+    close: vi.fn(),
+    send: vi.fn(
+      (
+        _wire: string | Buffer,
+        options?: { binary: false } | ((error?: Error) => void),
+        callback?: (error?: Error) => void,
+      ) => (typeof options === "function" ? options : callback)?.(),
+    ),
+  };
+  const client: GatewayWsClient = {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    connect: { role: "operator", scopes } as GatewayWsClient["connect"],
+    connId,
+    usesSharedGatewayAuth: false,
+    authenticatedUserProfile: {
+      profileId: profile.id,
+      displayName: null,
+      avatarRevision: "",
+      hasAvatar: false,
+      updatedAt: profile.updatedAt,
+    },
+  };
+  return { client, socket };
+}
 
 export let manager: QuestionManager;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
