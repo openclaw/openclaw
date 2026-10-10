@@ -131,15 +131,23 @@ type SessionsSendDeliveryParams = {
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
   expectedSessionId?: string;
+  /** Communication binds an incarnation without claiming result ownership or forbidding Cron fallback. */
+  preparedTargetSessionId?: string;
   retainAcceptance?: boolean;
   assertDispatchCurrent?: () => void;
   // Destination policy fences input commit, not an already accepted acknowledgment.
   assertSendCurrent?: () => void;
   sourceOrigin?: DeliveryContext;
+  /** A Cron fallback is another exact recipient and needs its own admission. */
+  prepareFallback?: (sessionKey: string) => Promise<{
+    callGateway: AgentToolGatewayRequestCaller;
+    assertCurrent: () => void;
+    close: () => void;
+  }>;
   mode?: "steer" | "followup";
 };
 
-type SessionsSendStart =
+export type SessionsSendStart =
   | {
       ok: true;
       runId: string;
@@ -171,10 +179,11 @@ export async function trySessionsSendActiveRunDelivery(
         "Target has no active run that accepts steering. Use mode=followup to start a new turn.",
       );
     }
+    const expectedActiveSessionId = params.expectedSessionId ?? params.preparedTargetSessionId;
     if (
       activeRunSessionId &&
-      params.expectedSessionId &&
-      activeRunSessionId !== params.expectedSessionId
+      expectedActiveSessionId &&
+      activeRunSessionId !== expectedActiveSessionId
     ) {
       throw new Error("active run session incarnation changed");
     }
@@ -315,7 +324,13 @@ export async function startSessionsSendAgentRun(
   params: SessionsSendDeliveryParams & { fallbackSessionKey?: string },
 ): Promise<SessionsSendStart> {
   const { fallbackSessionKey } = params;
+  let fallback:
+    | Awaited<ReturnType<NonNullable<SessionsSendDeliveryParams["prepareFallback"]>>>
+    | undefined;
   try {
+    if (fallbackSessionKey) {
+      fallback = await params.prepareFallback?.(fallbackSessionKey);
+    }
     // Self-sends retain the captured conversation; a distinct Cron parent uses its own route.
     const sourceOrigin = fallbackSessionKey ? undefined : params.sourceOrigin;
     const sendParams = sourceOrigin
@@ -330,8 +345,12 @@ export async function startSessionsSendAgentRun(
     const accepted = params.retainAcceptance
       ? createDeferredCore<{ runId: string; admissionPending?: boolean }>()
       : undefined;
-    params.assertSendCurrent?.();
-    const responsePromise = params.callGateway<{ runId: string; admissionPending?: boolean }>({
+    const assertSendCurrent = fallback?.assertCurrent ?? params.assertSendCurrent;
+    assertSendCurrent?.();
+    const responsePromise = (fallback?.callGateway ?? params.callGateway)<{
+      runId: string;
+      admissionPending?: boolean;
+    }>({
       method: "agent",
       params: fallbackSessionKey
         ? {
@@ -341,7 +360,7 @@ export async function startSessionsSendAgentRun(
           }
         : sendParams,
       timeoutMs: 10_000,
-      ...resolveSendMutationGuards(params),
+      ...resolveSendMutationGuards({ ...params, assertSendCurrent }),
       ...(accepted
         ? {
             expectFinal: true,
@@ -384,6 +403,8 @@ export async function startSessionsSendAgentRun(
     };
   } catch (err) {
     return deliveryFailure(params, err);
+  } finally {
+    fallback?.close();
   }
 }
 

@@ -4,6 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { BackgroundPreference } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import {
   normalizeTabIconPreference,
   normalizeUiAppearancePreference,
@@ -25,6 +26,7 @@ import { normalizeChatSplitLayout } from "../pages/chat/split-layout-persistence
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
 import { resolveControlUiPaths } from "./browser.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
+import { loadBackgroundPreference, saveBackgroundPreference } from "./settings-background.ts";
 import { normalizeTerminalFontFamily } from "./terminal-font.ts";
 import { parseThemeSelection, type ThemeMode, type ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
@@ -56,7 +58,12 @@ type ScopedSessionSelection = {
 
 type PersistedUiSettings = Omit<
   UiSettings,
-  "token" | "sessionKey" | "lastActiveSessionKey" | "selectedAgentId" | "navCollapsed"
+  | "token"
+  | "sessionKey"
+  | "lastActiveSessionKey"
+  | "selectedAgentId"
+  | "navCollapsed"
+  | "background"
 > & {
   token?: never;
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
@@ -184,6 +191,8 @@ export type UiSettings = {
   tabIcon?: TabIconPreference;
   // Device-local: custom terminal faces must be installed on the browser computer.
   terminalFontFamily?: string;
+  // Personal metadata: persisted only after identity is known, never in the general mirror.
+  background?: BackgroundPreference;
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
@@ -406,6 +415,11 @@ let unpersistedSettings: UiPreferences | null = null;
 type LivePreferenceOwner = { gatewayUrl: () => string; refresh: () => void };
 let livePreferenceOwner: LivePreferenceOwner | null = null;
 
+/** Refresh the mounted preference projection after an identity-only mirror change. */
+export function refreshUiPreferences(): void {
+  livePreferenceOwner?.refresh();
+}
+
 /** Bind local writes to the mounted runtime, never its credentials. */
 export function bindUiPreferences(owner: LivePreferenceOwner): () => void {
   livePreferenceOwner = owner;
@@ -431,7 +445,8 @@ export function loadUiPreferences(
     (!targetGatewayUrl ||
       gatewayOriginScope(cached.gatewayUrl) === gatewayOriginScope(targetGatewayUrl))
   ) {
-    return targetGatewayUrl ? { ...cached, gatewayUrl: targetGatewayUrl } : cached;
+    const gatewayUrl = targetGatewayUrl ?? cached.gatewayUrl;
+    return { ...cached, gatewayUrl, background: loadBackgroundPreference(gatewayUrl) };
   }
   const { pageUrl: pageDerivedUrl, effectiveUrl: defaultUrl } = deriveDefaultGatewayUrl();
   const storage = getSafeLocalStorage();
@@ -467,7 +482,7 @@ export function loadUiPreferences(
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));
     if (!source) {
-      return defaults;
+      return { ...defaults, background: loadBackgroundPreference(defaults.gatewayUrl) };
     }
     const parsed = source.parsed;
     const parsedGatewayUrl = source.gatewayUrl;
@@ -503,6 +518,7 @@ export function loadUiPreferences(
       accent: normalizeAccentColor(parsed.accent),
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
+      background: loadBackgroundPreference(gatewayUrl),
       tabIcon: normalizeTabIconPreference(parsed.tabIcon),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: booleanSetting("chatShowThinking"),
@@ -694,8 +710,9 @@ export function saveSettings(next: UiSettings, options: { selectGateway?: boolea
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,
   };
+  saveBackgroundPreference(next.gatewayUrl, next.background);
   const serialized = JSON.stringify(persisted);
-  const { token: _token, ...preferences } = next;
+  const { token: _token, background: _background, ...preferences } = next;
   unpersistedSettings = preferences;
   try {
     const { pageUrl } = deriveDefaultGatewayUrl();

@@ -8,15 +8,13 @@ import type {
 } from "../../image-generation/types.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { extractOriginalFilename } from "../../media/store.js";
-import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBuffers } from "./generated-media-batch-persistence.js";
 import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
 import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
   buildMediaGenerateToolExecutionResult,
-  describeMediaGenerationResult,
+  buildSavedMediaAttachment,
   buildMediaGenerationGeometryDetails,
 } from "./media-generate-result-shared.js";
 import {
@@ -48,7 +46,6 @@ export async function executeImageGenerationJob(params: {
     handle: params.taskHandle,
     progressSummary: "Saving generated image",
   });
-  const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
   const geometryDetails = buildMediaGenerationGeometryDetails("image", result, {
     size: request.size,
     aspectRatio: request.aspectRatio,
@@ -64,25 +61,13 @@ export async function executeImageGenerationJob(params: {
   const revisedPrompts = result.images
     .map((image) => image.revisedPrompt?.trim())
     .filter((entry): entry is string => Boolean(entry));
-  const attachments = savedImages.map((image) => ({
-    type: "image" as const,
-    path: image.path,
-    mimeType: image.contentType,
-    name: extractOriginalFilename(image.path),
-    sizeBytes: image.size,
-  }));
-  const lines = [
-    `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
-    ...(warning ? [`Warning: ${warning}`] : []),
-    ...formatGeneratedAttachmentLines(attachments),
-  ];
+  const attachments = savedImages.map((image) => buildSavedMediaAttachment("image", image));
   const execution = buildMediaGenerateToolExecutionResult({
+    kind: "image",
     result,
     attachments,
     mediaUrls: savedImages.map((media) => media.path),
-    lines,
     taskHandle: params.taskHandle,
-    warning,
     details: {
       ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
       ...geometryDetails,

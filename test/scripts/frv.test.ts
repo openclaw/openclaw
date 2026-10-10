@@ -1628,6 +1628,59 @@ describe("FRV child rerun", () => {
     );
   });
 
+  it("recovers only a failed receipt after passing workloads, then requires resealed acceptance", async () => {
+    const publisher = "Seal full release child evidence / Seal child receipt";
+    const selected = child("normalCi", "101");
+    const childRuns = new Map([["101", { attempt: 1, conclusion: "success" }]]);
+    const parent = { attempt: 1, conclusion: "failure" };
+    const client = {
+      ...controllerClient([selected], childRuns, parent),
+      getAttemptJobs: async (_id: string, attempt: number) => [
+        ...(attempt === 1 ? [{ ...job("workload"), id: 11, run_id: 101, run_attempt: 1 }] : []),
+        {
+          ...job(publisher, attempt === 1 ? "failure" : "success"),
+          id: 12 + attempt,
+          run_id: 101,
+          run_attempt: attempt,
+        },
+      ],
+      rerunJob: vi.fn(async () => {
+        childRuns.set("101", { attempt: 2, conclusion: "success" });
+      }),
+      rerunFailed: vi.fn(),
+      rerunParent: vi.fn(async () => {
+        parent.attempt = 2;
+        parent.conclusion = "success";
+      }),
+      verify: vi.fn(async () => "sealed accepted evidence"),
+    };
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        child: "normalCi",
+        dryRun: true,
+      }),
+    ).resolves.toMatchObject({ action: "would-rerun", childRerun: { mode: "receipt" } });
+    await expect(
+      continueFailed(plan([selected]), "77", client, {
+        child: "normalCi",
+        log: vi.fn(),
+      }),
+    ).resolves.toMatchObject({
+      action: "reran-child",
+      reruns: [{ mode: "receipt", jobId: 13, sourceRunAttempt: 1, runAttempt: 2 }],
+    });
+    expect(client.rerunJob).toHaveBeenCalledExactlyOnceWith(13);
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.verify).not.toHaveBeenCalled();
+    await expect(continueFailed(plan([selected]), "77", client)).resolves.toMatchObject({
+      action: "reran-parent",
+      finalRunId: "77",
+    });
+    expect(client.rerunJob).toHaveBeenCalledOnce();
+    expect(client.rerunFailed).not.toHaveBeenCalled();
+    expect(client.verify).toHaveBeenCalledOnce();
+  });
+
   it("refuses a rerun beyond the attempt budget before any POST", async () => {
     const scenario = rerunScenario({ childSource: [2, "failure"], childAfter: [[3, "success"]] });
     await expect(
