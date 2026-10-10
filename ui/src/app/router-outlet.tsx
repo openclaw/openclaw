@@ -10,7 +10,7 @@ import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availabili
 import { projectI18n, t } from "../lib/reactive/i18n.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
-import { LitRouteHost, settleLitRouteHost } from "./lit-route-host.tsx";
+import { LitRouteHost } from "./lit-route-host.tsx";
 import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
@@ -385,7 +385,8 @@ export function RouterOutlet(props: RouterOutletProps): SolidJSX.Element {
         return false;
       }
       const current = generation;
-      await settleLitRouteHost(host);
+      // The island commits with Solid; descendants own their independent work.
+      await Promise.resolve();
       if (disposed || !host.isConnected) {
         return false;
       }

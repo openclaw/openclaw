@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/schema/web-search.ts";
+import type { ChannelsPairingListResult, ChannelsStatusSnapshot } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -223,6 +224,20 @@ suite.define(() => {
             await installExistingNativeDeviceSettings(page);
             const methodResponses = {
               ...createNativeEmbedLayoutMethodResponses(),
+              "channels.status": {
+                ts: 0,
+                channels: {},
+                channelAccounts: {},
+                channelOrder: [],
+                channelLabels: {},
+                channelDefaultAccountId: {},
+              } satisfies ChannelsStatusSnapshot,
+              "channels.pairing.list": {
+                accounts: [],
+                requests: [],
+                commandOwnerConfigured: false,
+                limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+              } satisfies ChannelsPairingListResult,
               "webSearch.status": {
                 enabled: true,
                 provider: null,

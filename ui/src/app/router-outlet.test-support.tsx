@@ -1,7 +1,7 @@
 import { render } from "@solidjs/testing-library";
+import { ReactiveElement } from "lit";
 import { createSignal, flush, onSettled } from "solid-js";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
-import { settleLitRouteHost } from "./lit-route-host.tsx";
 import { RouterOutlet, type RouterOutletProps } from "./router-outlet.tsx";
 
 type Inputs = {
@@ -50,7 +50,11 @@ export async function settleRouterOutlet(outlet: ControlUiReadinessOutlet): Prom
   await new Promise<void>((resolve) => {
     onSettled(resolve);
   });
-  await settleLitRouteHost(outlet);
+  // Test fixtures may inspect descendants; production readiness stops at the outlet.
+  const elements = [...outlet.querySelectorAll("*")].filter(
+    (element): element is ReactiveElement => element instanceof ReactiveElement,
+  );
+  await Promise.all(elements.map((element) => element.updateComplete));
   flush();
   await new Promise<void>((resolve) => {
     onSettled(resolve);

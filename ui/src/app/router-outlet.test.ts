@@ -1,5 +1,5 @@
 import { createRouter, definePage, type RouteMatch, type Router } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
+import { html, LitElement, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
@@ -17,6 +17,7 @@ type TestData = { label: string };
 type TestOwnerMatch = Pick<RouteMatch<string, unknown, TestData>, "data" | "location">;
 type TestModule = {
   render: (data: TestData | undefined) => unknown;
+  retainOnNavigate?: boolean;
   renderOwnerKey?: (
     match: TestOwnerMatch,
     settled: TestOwnerMatch | undefined,
@@ -41,6 +42,54 @@ async function settleOutlet(outlet: RouterOutletElement): Promise<void> {
 }
 
 describe("openclaw-router-outlet", () => {
+  it("settles the active route when a parked descendant's update fails", async () => {
+    class ParkedSurface extends LitElement {}
+    customElements.define(`test-parked-surface-${crypto.randomUUID()}`, ParkedSurface);
+    const parked = new ParkedSurface();
+    const context = { label: "page" };
+    const router = createRouter<RouteId, TestContext, TestModule, TestData>({
+      routes: [
+        definePage({
+          id: "page",
+          path: "/page",
+          component: () => ({
+            retainOnNavigate: true,
+            renderOwnerKey: () => "retained-page",
+            render: () => html`<section>${parked}</section>`,
+          }),
+          loader: () => ({ label: "page" }),
+        }),
+        definePage({
+          id: "next",
+          path: "/next",
+          component: () => ({ render: () => html`<p>Current destination</p>` }),
+        }),
+      ],
+    });
+    const outlet = createOutlet(router, context);
+    const childUpdate = createDeferredCore<boolean>();
+    // Background work observes its own failure independently of route presentation.
+    void childUpdate.promise.catch(() => undefined);
+    try {
+      await router.navigate("page", context);
+      await settleOutlet(outlet);
+      await router.navigate("next", context);
+      await settleOutlet(outlet);
+      expect(parked.isConnected).toBe(true);
+      expect(parked.closest("[hidden][inert][aria-hidden=true]")).not.toBeNull();
+      Object.defineProperty(parked, "updateComplete", { value: childUpdate.promise });
+
+      const settlement = outlet.settlePresentation();
+      childUpdate.reject(new Error("Parked background update failed"));
+      await expect(settlement).resolves.toBe(true);
+      expect(outlet.textContent).toContain("Current destination");
+    } finally {
+      childUpdate.resolve(true);
+      outlet.dispose();
+      router.stop();
+    }
+  });
+
   it("retains MCP Apps across route IDs that share an explicit owner", async () => {
     const teardownView = vi.fn(async () => undefined);
     const nextData = createDeferredCore<TestData>();

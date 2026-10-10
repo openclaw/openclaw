@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { nothing, ReactiveElement, render } from "lit";
+import { nothing, render } from "lit";
 import { createEffect, onCleanup } from "solid-js";
 
 type LitRouteHostProps = {
@@ -47,13 +47,4 @@ export function LitRouteHost(props: LitRouteHostProps): SolidJSX.Element {
       )}
     </>
   );
-}
-
-/** The island is synchronous; its custom-element descendants may commit later. */
-export async function settleLitRouteHost(host: HTMLElement): Promise<void> {
-  await Promise.resolve();
-  const elements = [...host.querySelectorAll("*")].filter(
-    (element): element is ReactiveElement => element instanceof ReactiveElement,
-  );
-  await Promise.all(elements.map((element) => element.updateComplete));
 }
