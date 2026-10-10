@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/memory-host-core";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import {
   isRecord,
   normalizeStringEntries,
@@ -27,6 +28,7 @@ import {
 } from "./config.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { lintMemoryWikiVault } from "./lint.js";
+import { WikiPageNotUtf8Error } from "./markdown.js";
 import {
   probeObsidianCli,
   OBSIDIAN_ACTIONS,
@@ -346,6 +348,26 @@ function printWikiResult<T>(
   return result;
 }
 
+/**
+ * Compile and lint re-emit whole vault pages. A malformed page must show its
+ * refusal: the root failure renderer hides unclassified error messages in human
+ * output, while JSON mode keeps the shared machine envelope and nonzero exit.
+ */
+async function runWikiRewriteAction(
+  json: boolean | undefined,
+  run: () => Promise<void>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    if (json || !(error instanceof WikiPageNotUtf8Error)) {
+      throw error;
+    }
+    defaultRuntime.error(error.message);
+    process.exitCode = 1;
+  }
+}
+
 function addWikiSearchConfigOptions<T extends Command>(command: T): T {
   return command
     .option(
@@ -551,27 +573,31 @@ export function registerWikiCli(program: Command, registration: MemoryWikiCliReg
   vaultCommand(wiki, "compile", "Refresh generated wiki indexes")
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
-      const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
-      printWikiResult(
-        await compileMemoryWikiVault(config),
-        opts.json,
-        (value) =>
-          `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
-      );
+      await runWikiRewriteAction(opts.json, async () => {
+        const { appConfig, config } = requireCommandContext();
+        await syncMemoryWikiImportedSources({ config, appConfig });
+        printWikiResult(
+          await compileMemoryWikiVault(config),
+          opts.json,
+          (value) =>
+            `Compiled wiki vault at ${value.vaultRoot} (${value.pages.length} pages, ${value.updatedFiles.length} indexes updated).`,
+        );
+      });
     });
 
   vaultCommand(wiki, "lint", "Lint the wiki vault and write a report")
     .option("--json", "Print JSON")
     .action(async (opts: WikiJsonOptions) => {
-      const { appConfig, config } = requireCommandContext();
-      await syncMemoryWikiImportedSources({ config, appConfig });
-      printWikiResult(
-        await lintMemoryWikiVault(config),
-        opts.json,
-        (value) =>
-          `Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
-      );
+      await runWikiRewriteAction(opts.json, async () => {
+        const { appConfig, config } = requireCommandContext();
+        await syncMemoryWikiImportedSources({ config, appConfig });
+        printWikiResult(
+          await lintMemoryWikiVault(config),
+          opts.json,
+          (value) =>
+            `Linted wiki vault at ${value.vaultRoot} (${value.issueCount} issues, report: ${value.reportPath}).`,
+        );
+      });
     });
 
   vaultCommand(wiki, "ingest", "Ingest a local file into the wiki sources folder")
