@@ -12,6 +12,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => applyPluginAutoEnableMock(...args),
 }));
 
+// mock-isolation: Collector-scope fixtures supply channel owners without persisted plugin discovery.
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
   resolveConfiguredChannelPluginIdsAsync: async (...args: unknown[]) =>
     resolveConfiguredChannelPluginIdsMock(...args),

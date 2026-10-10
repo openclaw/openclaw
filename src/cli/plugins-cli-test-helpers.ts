@@ -535,6 +535,7 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: CLI report fixtures own registry leases and cleanup without activating installed plugins.
 vi.mock("../plugins/status.js", () => ({
   buildPluginSnapshotReportAsync: async (
     ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
