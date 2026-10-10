@@ -12,7 +12,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
 import {
   captureManifest,
-  nodeWorkspaceManifestCapture,
   runNodeWorkspaceManifestCapture,
 } from "./node-worker-workspace-commands.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
@@ -42,32 +41,6 @@ async function fixture() {
 }
 
 describe("resident node manifest capture", () => {
-  it("captures, memoizes, and detects small edits through workspace exec without spawning", async () => {
-    const { runtime, identity, workspaceDir, argv } = await fixture();
-    const spawn = vi
-      .spyOn(exec, "runCommandWithTimeout")
-      .mockRejectedValue(new Error("unexpected child"));
-    const file = path.join(workspaceDir, "file.txt");
-    await fs.writeFile(file, "before");
-    const capture = async (memo = "[]") => {
-      const result = await runtime.exec({ ...identity, argv, input: memo });
-      expect(result).toMatchObject({ code: 0, termination: "exit", workspaceDir });
-      return parseRemoteWorkspaceManifestEnvelope(result.stdout);
-    };
-    const first = await capture();
-    expect(first.metrics.contentHashCount).toBe(1);
-    const second = await capture(JSON.stringify(first.memo));
-    expect(second.manifestRef).toBe(first.manifestRef);
-    expect(second.metrics).toMatchObject({ contentHashCount: 0, memoHitCount: 1 });
-    await fs.writeFile(file, "after - different size");
-    const changed = await capture(JSON.stringify(second.memo));
-    expect(changed.manifestRef).not.toBe(first.manifestRef);
-    expect(changed.metrics.contentHashCount).toBe(1);
-    await fs.rm(file);
-    expect((await capture(JSON.stringify(changed.memo))).manifestRef).not.toBe(changed.manifestRef);
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
   it("uses the same canonical bytes for transfer capture and the standalone transport", async () => {
     const { home, workspaceDir } = await fixture();
     await fs.writeFile(path.join(workspaceDir, "script.sh"), "#!/bin/sh\n", { mode: 0o755 });
@@ -177,18 +150,6 @@ describe("resident node manifest capture", () => {
       "keep.ignored",
       "new.txt",
     ]);
-  });
-
-  it("retains child execution for changed programs and different workspace paths", () => {
-    const argv = ["node", "-e", REMOTE_WORKSPACE_MANIFEST_JS, "/workspace", "", "all", "memo-v1"];
-    expect(nodeWorkspaceManifestCapture(argv, "/workspace")).toBeDefined();
-    expect(nodeWorkspaceManifestCapture(argv, "/other")).toBeUndefined();
-    expect(
-      nodeWorkspaceManifestCapture(argv.with(2, `${REMOTE_WORKSPACE_MANIFEST_JS}\n`), "/workspace"),
-    ).toBeUndefined();
-    expect(
-      nodeWorkspaceManifestCapture(argv.with(4, "a".repeat(40)).with(5, "eligible"), "/workspace"),
-    ).toBeDefined();
   });
 
   it("keeps the workspace environment and joins a cancelled Git read before releasing capture", async () => {

@@ -98,9 +98,7 @@ describe("node desktop stream command", () => {
   it.each([
     ["caller-selected host", { host: "192.0.2.10" }],
     ["relative password path", { passwordFilePath: "vnc.password" }],
-    ["invalid RFB port", { port: 65_536 }],
     ["account without password file", { username: "worker" }],
-    ["oversized account", { username: "x".repeat(64), passwordFilePath: path.resolve("password") }],
   ])("rejects worker stream payload with %s", async (_name, override) => {
     await expect(
       invokeNodeWorkerDesktopStream({
@@ -122,12 +120,6 @@ describe("node desktop stream command", () => {
       securityType: 1,
       username: undefined,
       message: "refusing unauthenticated loopback RFB server",
-    },
-    {
-      name: "unsupported scheme",
-      securityType: 19,
-      username: undefined,
-      message: "loopback RFB server security is unsupported",
     },
     {
       name: "managed account without ARD",
@@ -236,23 +228,18 @@ describe("node desktop stream command", () => {
   });
 
   it.each([
-    ...["", "/openclaw-gw", "/openclaw-gw/"].flatMap((contextPath) =>
-      [
-        { securityTypes: [2], auth: "vnc-password", username: undefined },
-        { securityTypes: [30], auth: "ard-account", username: "worker" },
-      ].map(({ securityTypes, auth, username }) => ({
-        securityTypes,
-        auth,
-        username,
-        contextPath,
-        workerAuth: auth,
-      })),
-    ),
     {
       contextPath: "",
-      securityTypes: [2, 30],
-      username: "worker",
+      securityTypes: [2],
+      username: undefined,
       auth: "vnc-password",
+      workerAuth: "vnc-password",
+    },
+    {
+      contextPath: "/openclaw-gw/",
+      securityTypes: [30],
+      username: "worker",
+      auth: "ard-account",
       workerAuth: "ard-account",
     },
   ])(

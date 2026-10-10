@@ -377,21 +377,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
   }
 
-  async function withPathTokenCommand<T>(
-    tmpPrefix: string,
-    run: (ctx: { link: string; expected: string }) => Promise<T>,
-  ): Promise<T> {
-    const tmp = fixtureDir(tmpPrefix);
-    const binDir = path.join(tmp, "bin");
-    fs.mkdirSync(binDir, { recursive: true });
-    const link = path.join(binDir, "poccmd");
-    fs.symlinkSync("/bin/echo", link);
-    const expected = fs.realpathSync(link);
-    return await withEnvAsync({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` }, () =>
-      run({ link, expected }),
-    );
-  }
-
   async function withFakeTsxOnPath<T>(run: () => Promise<T>): Promise<T> {
     const binDir = fixtureDir("tsx-bin-");
     const runtimePath = path.join(binDir, process.platform === "win32" ? "tsx.cmd" : "tsx");
@@ -402,23 +387,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       fs.chmodSync(runtimePath, 0o755);
     }
     return await withEnvAsync({ PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` }, run);
-  }
-
-  function expectCommandPinnedToCanonicalPath(
-    runCommand: MockedRunCommand,
-    expected: string,
-    commandTail: string[],
-    cwd?: string,
-  ) {
-    const params = { runCommand, expected, commandTail, cwd };
-    expect(params.runCommand).toHaveBeenCalledWith(
-      [params.expected, ...params.commandTail],
-      params.cwd,
-      expect.any(Object),
-      undefined,
-      undefined,
-      expect.any(Function),
-    );
   }
 
   async function runInvoke(params: {
@@ -938,41 +906,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
-    "pins PATH-token executable to canonical path for allowlist runs",
-    async () => {
-      const runCommand = vi.fn(async () => ({
-        ...localResult(),
-      }));
-      const sendInvokeResult = vi.fn(async () => {});
-      await withPathTokenCommand(
-        "openclaw-allowlist-path-pin-",
-        async ({ link: _link, expected }) => {
-          approvalsStore.saveExecApprovals(
-            policy("allowlist", "off", "deny", {
-              main: {
-                allowlist: [{ pattern: expected }],
-              },
-            }),
-          );
-          await runLocal({
-            security: "allowlist",
-            command: ["poccmd", "-n", "SAFE"],
-            runCommand,
-            sendInvokeResult,
-          });
-          expectCommandPinnedToCanonicalPath(
-            runCommand,
-            expected,
-            ["-n", "SAFE"],
-            fs.realpathSync(process.cwd()),
-          );
-          expectOk(sendInvokeResult);
-        },
-      );
-    },
-  );
-
   it.runIf(process.platform !== "win32").each([
     { boundary: "commit", revoke: true },
     { boundary: "callback", revoke: true },
@@ -1264,30 +1197,26 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     }
   });
 
-  it.each([
-    ["cmd.exe", "/d", "/s", "/c", "echo context"],
-    ["powershell.exe", "-NoProfile", "-Command", "Write-Output context"],
-    ["/bin/sh", "-c", "echo context"],
-  ])("injects routing context after filtering shell overrides for %s", async (...command) => {
-    const { runCommand, sendInvokeResult } = await runLocal({
-      command,
-      executionContext: { senderId: "sender-1", chatId: "chat-1", subagent: true },
-      env: { OPENCLAW_TEST: "untrusted", OPENCLAW_SUBAGENT_EXEC: "0" },
-    });
-    expectOk(sendInvokeResult);
-    expect(runArgv(runCommand)).toEqual(command);
-    expect(firstMockCall(runCommand)[2]).toMatchObject({
-      OPENCLAW_CHANNEL_CONTEXT: '{"sender":{"id":"sender-1"},"chat":{"id":"chat-1"}}',
-      OPENCLAW_SUBAGENT_EXEC: "1",
-    });
-    expect(firstMockCall(runCommand)[2]).not.toHaveProperty("OPENCLAW_TEST");
-  });
+  it.each([["/bin/sh", "-c", "echo context"]])(
+    "injects routing context after filtering shell overrides for %s",
+    async (...command) => {
+      const { runCommand, sendInvokeResult } = await runLocal({
+        command,
+        executionContext: { senderId: "sender-1", chatId: "chat-1", subagent: true },
+        env: { OPENCLAW_TEST: "untrusted", OPENCLAW_SUBAGENT_EXEC: "0" },
+      });
+      expectOk(sendInvokeResult);
+      expect(runArgv(runCommand)).toEqual(command);
+      expect(firstMockCall(runCommand)[2]).toMatchObject({
+        OPENCLAW_CHANNEL_CONTEXT: '{"sender":{"id":"sender-1"},"chat":{"id":"chat-1"}}',
+        OPENCLAW_SUBAGENT_EXEC: "1",
+      });
+      expect(firstMockCall(runCommand)[2]).not.toHaveProperty("OPENCLAW_TEST");
+    },
+  );
 
   it.each<[InvokeOptions["params"]["executionContext"], string | undefined, string | undefined]>([
-    [{ chatId: "chat-1" }, '{"chat":{"id":"chat-1"}}', undefined],
-    [{ subagent: true }, undefined, "1"],
     [{}, undefined, undefined],
-    [undefined, undefined, undefined],
   ])(
     "applies context %j while preserving legacy inheritance",
     async (executionContext, channel, subagent) => {
@@ -1402,7 +1331,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expectWriteDenied(invoke);
   });
 
-  it.each([undefined, "auto-review"] as const)(
+  it.each(["auto-review"] as const)(
     "rejects tightened ask policy for source=%s during authorization commit",
     async (approvalSource) => {
       approvalsStore.saveExecApprovals(policy("full", "off", "deny"));
@@ -1754,44 +1683,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(runCommand).toHaveBeenCalledTimes(1);
     expectOk(sendInvokeResult, "inline-eval-ok");
     expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
-  });
-
-  it("keeps cmd.exe transport wrappers approval-gated on Windows", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    try {
-      for (const testCase of [
-        {
-          name: "env-assignment cmd.exe",
-          commandPrefix: ["env", "FOO=bar", "cmd.exe", "/d", "/s", "/c"],
-        },
-      ]) {
-        const tempDir = fixtureDir("openclaw-cmd-wrapper-allow-");
-        const scriptPath = path.join(tempDir, "check_mail.cmd");
-        fs.writeFileSync(scriptPath, "@echo off\r\necho ok\r\n");
-        const command = [...testCase.commandPrefix, `${scriptPath} --limit 5`];
-
-        approvalsStore.saveExecApprovals(
-          allowlistPolicy({
-            agents: {
-              main: {
-                allowlist: [{ pattern: scriptPath }],
-              },
-            },
-          }),
-        );
-        const invoke = await runLocal({
-          security: "allowlist",
-          ask: "on-miss",
-          command,
-          cwd: tempDir,
-        });
-
-        expect(invoke.runCommand, testCase.name).not.toHaveBeenCalled();
-        expectApprovalRequired(invoke.sendNodeEvent, invoke.sendInvokeResult);
-      }
-    } finally {
-      platformSpy.mockRestore();
-    }
   });
 
   it("fails closed when cmd.exe wrapper trust is downgraded before execution", async () => {

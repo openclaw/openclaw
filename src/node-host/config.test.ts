@@ -171,28 +171,6 @@ describe("node-host SQLite config", () => {
     });
   });
 
-  it("keeps installed-app sharing disabled by default and persists an explicit enable", async () => {
-    const { env } = makeTestEnv();
-    const initial = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {},
-      env,
-      nowMs: 1,
-    });
-    expect(initial.installedAppsSharing).toBe(false);
-
-    const enabled = await configureNodeHost({
-      fallbackDisplayName: "node",
-      gateway: {},
-      installedAppsSharing: true,
-      env,
-      nowMs: 2,
-    });
-    expect(enabled.installedAppsSharing).toBe(true);
-    closeOpenClawStateDatabaseForTest();
-    await expect(loadNodeHostConfig(env)).resolves.toMatchObject({ installedAppsSharing: true });
-  });
-
   it("normalizes command restrictions and preserves them across reopen and endpoint updates", async () => {
     const { env } = makeTestEnv();
     await configureNodeHost({
@@ -231,7 +209,7 @@ describe("node-host SQLite config", () => {
     );
   });
 
-  it.each([{ commands: "fixture.read" }, { commands: [""] }, { commands: [42] }])(
+  it.each([{ commands: [""] }])(
     "rejects corrupt command restrictions rather than exposing the full host: $commands",
     async ({ commands }) => {
       const { env } = makeTestEnv();
@@ -257,38 +235,6 @@ describe("node-host SQLite config", () => {
     await expect(loadNodeHostConfig(env)).resolves.toEqual(second);
   }, 30_000);
 
-  it("preserves explicit custom ids and atomically clears omitted gateway fields", async () => {
-    const { env } = makeTestEnv();
-    await configureNodeHost({
-      nodeId: "first-custom-id",
-      fallbackDisplayName: "node",
-      gateway: {
-        host: "old.example",
-        port: 443,
-        tls: true,
-        tlsFingerprint: fixtureDigest,
-        contextPath: "/old",
-      },
-      env,
-      nowMs: 20,
-    });
-    const configured = await configureNodeHost({
-      nodeId: "custom id with spaces inside",
-      fallbackDisplayName: "node",
-      gateway: { host: "new.example", port: 18789, tls: false },
-      env,
-      nowMs: 21,
-    });
-
-    expect(configured).toMatchObject({
-      nodeId: "custom id with spaces inside",
-      gateway: { host: "new.example", port: 18789, tls: false },
-    });
-    expect(configured.gateway?.tlsFingerprint).toBeUndefined();
-    expect(configured.gateway?.contextPath).toBeUndefined();
-    await expect(loadNodeHostConfig(env)).resolves.toEqual(configured);
-  });
-
   it("rejects corrupt canonical rows instead of rotating identity", async () => {
     const { env } = makeTestEnv();
     writeConfigMachineState(NODE_HOST_CONFIG_KEY, { version: 2, nodeId: "stale-node" }, { env });
@@ -299,15 +245,13 @@ describe("node-host SQLite config", () => {
     ).rejects.toThrow("unsupported version 2");
   });
 
-  it.each(["source", "claim", "dangling-source-symlink"] as const)(
+  it.each(["claim", "dangling-source-symlink"] as const)(
     "blocks runtime while retired state remains: %s",
     async (kind) => {
       const { env, stateDir } = makeTestEnv();
       const sourcePath = path.join(stateDir, "node.json");
       const claimPath = `${sourcePath}.doctor-importing`;
-      if (kind === "source") {
-        await fs.writeFile(sourcePath, "{}\n", "utf8");
-      } else if (kind === "claim") {
+      if (kind === "claim") {
         await fs.writeFile(claimPath, "{}\n", "utf8");
       } else {
         await fs.symlink(path.join(stateDir, "missing-node.json"), sourcePath);

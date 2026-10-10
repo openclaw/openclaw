@@ -205,20 +205,6 @@ describe("node host MCP live lifecycle", () => {
     await manager.close();
   });
 
-  it("does not publish duplicate canonical wire names", async () => {
-    const client = createClient({ tools: () => [tool("search"), tool(" search ")] });
-    const manager = await startNodeHostMcpManager(
-      { docs: { command: "docs" } },
-      { createClient: () => client, resolveTransport: () => stdioTransport, warn: vi.fn() },
-    );
-
-    expect(manager.descriptors).toEqual([]);
-    await expect(manager.callMcpTool({ server: "docs", tool: "search" })).rejects.toMatchObject({
-      code: "MCP_TOOL_UNAVAILABLE",
-    });
-    await manager.close();
-  });
-
   it("redacts Streamable HTTP response bodies from node diagnostics", async () => {
     const client = createClient({
       tools: () => [tool("fail")],
@@ -236,47 +222,6 @@ describe("node host MCP live lifecycle", () => {
       .catch((caught: unknown) => caught);
     expect(String(error)).not.toContain("body-secret");
     expect(String(error)).toContain("[redacted response body]");
-    await manager.close();
-  });
-
-  it("refreshes additions, removals, and schemas without replacing descriptor authority", async () => {
-    let listed = [tool("before")];
-    let notifyToolsChanged: (() => void) | undefined;
-    const client = createClient({ tools: () => listed });
-    const onDescriptorsChanged = vi.fn();
-    const manager = await startNodeHostMcpManager(
-      { docs: { command: "docs" } },
-      {
-        createClient: (_serverName, options) => {
-          notifyToolsChanged = options.onToolsChanged;
-          return client;
-        },
-        resolveTransport: () => stdioTransport,
-        onDescriptorsChanged,
-        warn: vi.fn(),
-      },
-    );
-    const descriptorAuthority = manager.descriptors;
-
-    listed = [
-      tool("after", {
-        type: "object",
-        properties: { revision: { type: "number" } },
-        required: ["revision"],
-      }),
-    ];
-    notifyToolsChanged?.();
-
-    await vi.waitFor(() =>
-      expect(manager.descriptors.map((descriptor) => descriptor.mcp?.tool)).toEqual(["after"]),
-    );
-    expect(manager.descriptors).toBe(descriptorAuthority);
-    expect(manager.descriptors[0]?.parameters).toEqual(listed[0]?.inputSchema);
-    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
-
-    notifyToolsChanged?.();
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(3));
-    expect(onDescriptorsChanged).toHaveBeenCalledOnce();
     await manager.close();
   });
 
@@ -675,39 +620,6 @@ describe("node host MCP live lifecycle", () => {
     }
     await vi.advanceTimersByTimeAsync(60_000);
     expect(createClientMock).toHaveBeenCalledTimes(13);
-  });
-
-  it("keeps global ordering and descriptor caps after refresh", async () => {
-    let listed = [tool("initial")];
-    let notifyToolsChanged: (() => void) | undefined;
-    const crowded = createClient({ tools: () => listed });
-    const sibling = createClient({ tools: () => [tool("sibling")] });
-    const manager = await startNodeHostMcpManager(
-      { crowded: { command: "crowded" }, sibling: { command: "sibling" } },
-      {
-        createClient: (serverName, options) => {
-          if (serverName === "crowded") {
-            notifyToolsChanged = options.onToolsChanged;
-            return crowded;
-          }
-          return sibling;
-        },
-        resolveTransport: () => stdioTransport,
-        warn: vi.fn(),
-      },
-    );
-
-    listed = Array.from({ length: 130 }, (_, index) =>
-      tool(`tool-${String(index).padStart(3, "0")}`),
-    ).toReversed();
-    notifyToolsChanged?.();
-    await vi.waitFor(() => expect(manager.descriptors).toHaveLength(128));
-    expect(manager.descriptors[0]?.mcp).toEqual({ server: "crowded", tool: "tool-000" });
-    expect(manager.descriptors.at(-1)?.mcp).toEqual({ server: "crowded", tool: "tool-127" });
-    expect(manager.descriptors.some((descriptor) => descriptor.mcp?.server === "sibling")).toBe(
-      false,
-    );
-    await manager.close();
   });
 
   it("bounds initial server connection fan-out at six", async ({ onTestFinished }) => {

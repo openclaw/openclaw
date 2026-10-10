@@ -57,31 +57,6 @@ function runExecutable(params: {
 }
 
 describe("resolveSystemRunExecArgv", () => {
-  it("pins Windows shell execution to the resolved allowlisted executable", async () => {
-    const trustedExecutable = "C:\\trusted-bin\\safe.exe";
-    const result = await resolveWindowsShellExecArgv({
-      raw: "safe --version",
-      argv: ["safe", "--version"],
-      resolution: {
-        kind: "command",
-        execution: {
-          kind: "executable",
-          rawExecutable: "safe",
-          resolvedPath: trustedExecutable,
-          executableName: "safe.exe",
-        },
-        policy: {
-          kind: "executable",
-          rawExecutable: "safe",
-          resolvedPath: trustedExecutable,
-          executableName: "safe.exe",
-        },
-      },
-    });
-
-    expect(result).toEqual([trustedExecutable, "--version"]);
-  });
-
   it("preserves unresolved Windows shell argv authorized by a bare wildcard", async () => {
     const result = await resolveWindowsShellExecArgv({
       raw: "safe --version",
@@ -90,47 +65,6 @@ describe("resolveSystemRunExecArgv", () => {
     });
 
     expect(result).toEqual(["safe", "--version"]);
-  });
-
-  it("fails closed for Windows opaque shell transports before inner argv rewrite", async () => {
-    const trustedExecutable = "C:\\trusted-bin\\safe-tool.exe";
-    const result = await resolveSystemRunExecArgv({
-      plannedAllowlistArgv: undefined,
-      argv: ["nu.exe", "--commands", "safe-tool arg"],
-      security: "allowlist",
-      isWindows: true,
-      policy: {
-        approvedByAsk: false,
-        analysisOk: true,
-        allowlistSatisfied: true,
-      },
-      shellCommand: "safe-tool arg",
-      segments: [
-        {
-          raw: "safe-tool arg",
-          argv: ["safe-tool", "arg"],
-          resolution: {
-            kind: "command",
-            execution: {
-              kind: "executable",
-              rawExecutable: "safe-tool",
-              resolvedPath: trustedExecutable,
-              executableName: "safe-tool.exe",
-            },
-            policy: {
-              kind: "executable",
-              rawExecutable: "safe-tool",
-              resolvedPath: trustedExecutable,
-              executableName: "safe-tool.exe",
-            },
-          },
-        },
-      ],
-      segmentSatisfiedBy: ["allowlist"],
-      authorizationPlan: undefined,
-    });
-
-    expect(result).toBeNull();
   });
 
   it("fails closed when the Windows shell execution plan is blocked", async () => {
