@@ -440,6 +440,7 @@ async function runPendingMaintenance(
       retireMaintenanceOwner(databasePath, owner);
       return;
     }
+    // A running pass keeps its captured policy; configuration changes apply to the next pass.
     const { maintenance, operation } = prepared;
     if (operation === null) {
       if (isCurrent() && owner.generation !== generation) {
@@ -461,12 +462,6 @@ async function runPendingMaintenance(
       if (
         (admitted &&
           [...owner.activeSessionKeys].some((key) => !activeSessionKeys.includes(key))) ||
-        !isDeepStrictEqual(
-          maintenance,
-          owner.maintenanceConfig
-            ? normalizeResolvedMaintenanceConfigInput(owner.maintenanceConfig)
-            : resolveMaintenanceConfig(),
-        ) ||
         (admitted &&
           operation.input.preservation !== null &&
           !isDeepStrictEqual(operation.input.preservation, capturePreservation()))

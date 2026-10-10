@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -26,7 +25,6 @@ import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.
 import * as ageFacts from "./session-accessor.sqlite-maintenance-age.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
 import * as reclamationRun from "./session-accessor.sqlite-reclamation-run.js";
-import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   resolveMaintenanceConfigFromInput,
@@ -197,39 +195,6 @@ it.each(["immediate", "periodic"] as const)(
   },
 );
 
-it("stops input-change retries without automatic maintenance warnings during Gateway drain", async () => {
-  const { request } = createStore();
-  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
-  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
-  const warn = vi.spyOn(logger, "warn");
-  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-  const run = dispatch.getMockImplementation()!;
-  dispatch.mockImplementationOnce(async (params) => {
-    request.maintenanceConfig.maxEntries += 1;
-    try {
-      return await run(params);
-    } catch (error) {
-      expect(error).toBeInstanceOf(SqliteReclamationInputsChangedError);
-      markGatewayRestartDraining("stop (SIGTERM)");
-      throw error;
-    }
-  });
-  kickSessionEntryMaintenanceAfterWrite(request);
-  await yieldToEventLoop();
-  await vi.advanceTimersByTimeAsync(ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS + 1);
-  expect(dispatch.mock.calls.filter(([{ plan }]) => plan.kind === "maintenance-plan")).toHaveLength(
-    1,
-  );
-  expect(warn).not.toHaveBeenCalledWith(
-    "SQLite automatic session maintenance failed",
-    expect.anything(),
-  );
-  expect(warn).not.toHaveBeenCalledWith(
-    "SQLite automatic session maintenance paused after repeated input changes",
-    expect.anything(),
-  );
-});
-
 it.each([
   ["a drain-refused commit", false],
   ["an unrelated failure", true],
@@ -376,62 +341,42 @@ it("commits an automatic plan while unrelated writes arrive every 100 ms", async
   );
 });
 
-it.for([1, 3])(
-  "replans policy conflicts without write quiet, bounded at three attempts (%s)",
-  async (conflicts, { signal }) => {
-    const { request, scope, storePath, updatedAt, archived } = createStore();
-    const foregroundTurn = new AsyncLocalStorage<string>();
-    const timerContexts = new Set<string | undefined>();
-    const setTimer = globalThis.setTimeout;
-    vi.spyOn(globalThis, "setTimeout").mockImplementation((...args) => {
-      timerContexts.add(foregroundTurn.getStore());
-      return setTimer(...args);
-    });
-    const victimKey = "agent:main:replan-victim";
-    runOpenClawAgentWriteTransaction((owner) => {
-      writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
-    }, scope);
-    const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
-    vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
-    const warn = vi.spyOn(logger, "warn");
-    const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
-    const run = dispatch.getMockImplementation()!;
-    let rejections = 0;
+it("finishes a running pass with its captured policy when configuration changes", async ({
+  signal,
+}) => {
+  const { request, scope, storePath, updatedAt, archived } = createStore();
+  const victimKey = "agent:main:replan-victim";
+  runOpenClawAgentWriteTransaction((owner) => {
+    writeSessionEntry(owner, victimKey, { sessionId: "victim", updatedAt: updatedAt - 2_000 });
+  }, scope);
+  const logger = logging.getChildLogger({ subsystem: "session-sqlite" });
+  vi.spyOn(logging, "getChildLogger").mockReturnValue(logger);
+  const warn = vi.spyOn(logger, "warn");
+  const dispatch = vi.mocked(reclamationRun.runSqliteSessionReclamation);
+  const run = dispatch.getMockImplementation()!;
+  let changed = false;
 
-    dispatch.mockImplementation((params) => {
-      if (
-        params.plan.kind === "maintenance-plan" &&
-        params.plan.input.preservation !== null &&
-        rejections < conflicts
-      ) {
-        rejections += 1;
-        request.maintenanceConfig.maxEntries += 1;
-      }
-      return run(params);
-    });
-    foregroundTurn.run("completed-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
-    await yieldToEventLoop();
-    expect(rejections).toBe(conflicts);
-    expect(countPlanningPasses()).toBe(conflicts === 1 ? 2 : 3);
-    if (conflicts === 3) {
-      expect(warn).toHaveBeenCalledWith(
-        "SQLite automatic session maintenance paused after repeated input changes",
-        expect.objectContaining({ rejections: 3, error: expect.any(Error) }),
-      );
-      expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archivedAt).toBeUndefined();
-      await vi.advanceTimersByTimeAsync(30 * 60 * 1_000);
-      expect(countPlanningPasses()).toBe(3);
-      foregroundTurn.run("later-turn", () => kickSessionEntryMaintenanceAfterWrite(request));
-      await vi.advanceTimersByTimeAsync(1_000);
+  dispatch.mockImplementation((params) => {
+    if (
+      params.plan.kind === "maintenance-plan" &&
+      params.plan.input.preservation !== null &&
+      !changed
+    ) {
+      changed = true;
+      request.maintenanceConfig.pruneAfterMs = 60_000;
     }
-    // Writer fairness can yield again after the retry timer fires.
-    await withinTest(archived, signal);
-    expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
-      "age-retention",
-    );
-    expect(timerContexts).toEqual(new Set([undefined]));
-  },
-);
+    return run(params);
+  });
+  kickSessionEntryMaintenanceAfterWrite(request);
+  await yieldToEventLoop();
+  expect(changed).toBe(true);
+  expect(countPlanningPasses()).toBe(1);
+  await withinTest(archived, signal);
+  expect(loadSessionEntry({ sessionKey: victimKey, storePath })?.archiveReason).toBe(
+    "age-retention",
+  );
+  expect(warn).not.toHaveBeenCalled();
+});
 
 it("bounds empty maintenance writes while retaining the next age deadline", async ({ signal }) => {
   const { database, request, storePath, archived } = createStore();
