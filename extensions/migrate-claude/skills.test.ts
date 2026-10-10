@@ -46,6 +46,8 @@ describe("Claude command skill import", () => {
     // The importer reports the failure for this item and leaves the source as-is.
     expect(result.status).toBe("error");
     expect(result.reason).toContain("not valid UTF-8");
+    // The failure tells the operator how to recover and retry.
+    expect(result.reason).toContain("Re-save or re-encode the file as UTF-8");
     await expect(fs.readFile(source)).resolves.toEqual(original);
     await expect(fs.access(path.join(target, "SKILL.md"))).rejects.toMatchObject({
       code: "ENOENT",

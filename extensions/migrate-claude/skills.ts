@@ -144,7 +144,9 @@ function firstParagraph(content: string): string | undefined {
 async function readClaudeCommandContent(sourcePath: string): Promise<string> {
   const bytes = await fs.readFile(sourcePath);
   if (!isUtf8(bytes)) {
-    throw new Error(`Claude command file is not valid UTF-8: ${sourcePath}`);
+    throw new Error(
+      `Claude command file is not valid UTF-8: ${sourcePath}. Re-save or re-encode the file as UTF-8, then rerun the migration.`,
+    );
   }
   return bytes.toString("utf8");
 }
