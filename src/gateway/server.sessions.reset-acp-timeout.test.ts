@@ -205,10 +205,7 @@ test.each(["source-and-acp", "acp", "committed-callback"])(
     expect(notified).toHaveBeenCalledExactlyOnceWith(sessionKey, "main");
     await recordChildActivity();
     expect(peekSystemEvents(sessionKey)).toEqual([]);
-    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledExactlyOnceWith({
-      targetSessionKey: sessionKey,
-      reason: "session-reset",
-    });
+    expect(threadBindingMocks.unbindThreadBindingsBySessionKey).not.toHaveBeenCalled();
     expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
     expect(events).toEqual([
@@ -267,6 +264,19 @@ test.each(["cancelSession", "closeSession"] as const)(
     }
   },
 );
+
+test("reset still terminates subagent bindings when the subagent has ACP metadata", async () => {
+  await createSessionStoreDir();
+  const sessionKey = "agent:main:subagent:acp-worker";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("acp-worker") } });
+  seedCanonicalAcpSessionMeta({ sessionKey, meta: resolvedAcpMeta() });
+  const reset = await directSessionReq("sessions.reset", { key: sessionKey });
+  expect(reset.ok).toBe(true);
+  expect(threadBindingMocks.unbindThreadBindingsBySessionKey).toHaveBeenCalledExactlyOnceWith({
+    targetSessionKey: sessionKey,
+    reason: "session-reset",
+  });
+});
 
 test.each([true, false])(
   "reset binds legacy ACP metadata to the committed canonical row (existing=%s)",

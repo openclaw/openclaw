@@ -66,7 +66,6 @@ import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
-import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { runPluginHostCleanup } from "../plugins/host-hook-cleanup.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -122,6 +121,7 @@ import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
+import { emitSessionUnboundLifecycleEvent } from "./session-unbound-lifecycle.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import { loadSessionEntry } from "./session-utils.js";
 import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -178,39 +178,6 @@ const mcpRunEndWatcherState = resolveGlobalSingleton<McpRunEndWatcherState>(
 const mcpRunEndWatchers = mcpRunEndWatcherState.watchers;
 
 export { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook };
-
-export async function emitSessionUnboundLifecycleEvent(params: {
-  targetSessionKey: string;
-  reason: "session-reset" | "session-delete";
-  emitHooks?: boolean;
-}) {
-  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
-  await getSessionBindingService().unbind({
-    targetSessionKey: params.targetSessionKey,
-    reason: params.reason,
-  });
-
-  if (params.emitHooks === false) {
-    return;
-  }
-
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("subagent_ended")) {
-    return;
-  }
-  await hookRunner.runSubagentEnded(
-    {
-      targetSessionKey: params.targetSessionKey,
-      targetKind,
-      reason: params.reason,
-      sendFarewell: true,
-      outcome: params.reason === "session-reset" ? "reset" : "deleted",
-    },
-    {
-      childSessionKey: params.targetSessionKey,
-    },
-  );
-}
 
 async function ensureSessionRuntimeCleanup(params: {
   cfg: OpenClawConfig;
@@ -1267,7 +1234,12 @@ export async function performGatewaySessionReset(params: {
               });
             },
           );
-          if (hadExistingEntry) {
+          // Captured ACP metadata is rebound to this committed logical target below.
+          // Its runtime generation ended, not its conversation binding ownership.
+          if (
+            hadExistingEntry &&
+            (!deferredAcpResetState || isSubagentSessionKey(target.canonicalKey))
+          ) {
             postCommitActions.push(() =>
               emitSessionUnboundLifecycleEvent({
                 targetSessionKey: target.canonicalKey,

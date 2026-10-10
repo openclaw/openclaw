@@ -38,9 +38,9 @@ import { invalidSessionRequest } from "../session-request-error.js";
 import {
   cleanupSessionBeforeMutation,
   emitGatewaySessionEndPluginHook,
-  emitSessionUnboundLifecycleEvent,
 } from "../session-reset-service.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
+import { emitSessionUnboundLifecycleEvent } from "../session-unbound-lifecycle.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { loadGatewaySessionEntryReadOnly, loadSessionEntry } from "../session-utils.js";
 import { prepareSessionWorkerPlacementRetirement } from "../worker-environments/session-placement-lifecycle.js";
