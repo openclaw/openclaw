@@ -218,7 +218,9 @@ export const openclawTheme = {
 // The upstream catalog consumes the DOM context protocol; the theme is immutable.
 export function provideTheme(host) {
   const listener = (event) => {
-    if (event.context !== Context.themeContext) return;
+    if (event.context !== Context.themeContext) {
+      return;
+    }
     event.stopPropagation();
     event.callback(openclawTheme);
   };

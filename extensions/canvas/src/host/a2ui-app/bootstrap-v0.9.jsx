@@ -27,14 +27,18 @@ class A2UIModel {
     const processor = new MessageProcessor([basicCatalog], async (action) => {
       try {
         const api = globalThis.openclaw;
-        if (!api?.state?.emit) throw new Error("missing board action bridge");
+        if (!api?.state?.emit) {
+          throw new Error("missing board action bridge");
+        }
         if (globalThis.openclawA2UIBoot?.actionTier === "prompt" && api.prompt?.send) {
           await api.prompt.send(actionText(action));
         } else {
           await api.state.emit({ eventType: "a2ui.action", action });
         }
       } catch (error) {
-        if (processor !== this.#processor) return;
+        if (processor !== this.#processor) {
+          return;
+        }
         this.error = String(error?.message ?? error);
         this.notify();
       }
@@ -53,7 +57,9 @@ class A2UIModel {
   }
 
   applyMessages(messages) {
-    if (!Array.isArray(messages)) throw new Error("A2UI: expected messages array");
+    if (!Array.isArray(messages)) {
+      throw new Error("A2UI: expected messages array");
+    }
     this.#processor.processMessages(messages);
     this.notify();
     return { ok: true, surfaces: this.getSurfaces() };

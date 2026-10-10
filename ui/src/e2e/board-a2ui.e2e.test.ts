@@ -186,12 +186,12 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
   });
 
   for (const { version, colorScheme, rejectsAction, name } of [
-    ...(["v0.8", "v0.9"] as const).flatMap((version) =>
+    ...(["v0.8", "v0.9"] as const).flatMap((protocol) =>
       (["dark", "light"] as const).map((theme) => ({
-        version,
+        version: protocol,
         colorScheme: theme,
         rejectsAction: false,
-        name: `renders a ${version} widget with the ${theme} scrollbar theme`,
+        name: `renders a ${protocol} widget with the ${theme} scrollbar theme`,
       })),
     ),
     {

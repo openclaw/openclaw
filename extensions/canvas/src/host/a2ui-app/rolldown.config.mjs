@@ -22,7 +22,9 @@ const createConfig = (input, file) => ({
     {
       name: "canvas-solid",
       transform(source, id) {
-        if (!id.endsWith(".jsx")) return null;
+        if (!id.endsWith(".jsx")) {
+          return null;
+        }
         return {
           code: transform(source, {
             filename: id,

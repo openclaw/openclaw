@@ -18,7 +18,9 @@ export function defineHost(Model, App) {
       };
       globalThis.openclawA2UI = this.#api;
       const messages = globalThis.openclawA2UIBoot?.messages;
-      if (Array.isArray(messages)) this.#model.applyMessages(messages);
+      if (Array.isArray(messages)) {
+        this.#model.applyMessages(messages);
+      }
       this.#dispose = render(() => <App model={this.#model} />, this);
     }
 
@@ -27,7 +29,9 @@ export function defineHost(Model, App) {
       this.#dispose = undefined;
       this.#disconnect?.();
       this.#disconnect = undefined;
-      if (globalThis.openclawA2UI === this.#api) delete globalThis.openclawA2UI;
+      if (globalThis.openclawA2UI === this.#api) {
+        delete globalThis.openclawA2UI;
+      }
     }
   }
   if (!customElements.get("openclaw-a2ui-host")) {
