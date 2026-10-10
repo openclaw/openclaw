@@ -9,7 +9,7 @@ import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
 import { loadUpdateRecovery } from "../infra/update-run-recovery.js";
-import type { RecoveryCleanupArtifact } from "./doctor-session-sqlite-recovery-inventory.js";
+import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
 

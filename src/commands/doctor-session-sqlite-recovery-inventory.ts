@@ -32,27 +32,9 @@ import {
   collectUpdateCaptureInventory,
   readCompletedUpdateHistory,
 } from "./update-capture-cleanup.js";
+import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
-type Outcome =
-  | "candidate"
-  | "verification-required"
-  | "protected"
-  | "blocked"
-  | "removed"
-  | "disposed"
-  | "failed";
-export type RecoveryCleanupArtifact = {
-  /** Absent for session migration originals; captures are whole update-capture directories. */
-  kind?: "update-capture";
-  path: string;
-  runs: string[];
-  bytes: number;
-  outcome: Outcome;
-  reason: string;
-  detail?: string;
-  consequence?: string;
-  removedBytes?: number;
-};
+type Outcome = RecoveryCleanupArtifact["outcome"];
 export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
