@@ -21,6 +21,7 @@ export type ShellLayoutTraits = Partial<Record<(typeof TRAITS)[number][0], boole
 const contentControllers = new WeakMap<Element, ShellLayoutController>();
 
 /** Render owners publish layout facts before their descendants can measure layout. */
+// Temporary Lit reporter for the shared layout owner; remove at renderer cutover.
 class ShellLayoutTraitsDirective extends AsyncDirective {
   private host?: Element;
   private traits: ShellLayoutTraits = {};
@@ -68,8 +69,11 @@ export class ShellLayoutController implements ReactiveController {
   private readonly reporters = new Map<object, { host: Element; traits: ShellLayoutTraits }>();
   private content?: Element;
 
-  constructor(private readonly host: ReactiveControllerHost) {
-    host.addController(this);
+  constructor(
+    private readonly host: Pick<ReactiveControllerHost, "requestUpdate"> &
+      Partial<Pick<ReactiveControllerHost, "addController">>,
+  ) {
+    host.addController?.(this);
   }
 
   readonly contentRef = (content: Element | undefined) => {

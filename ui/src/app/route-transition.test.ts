@@ -2,6 +2,7 @@ import { createRouter } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RouteId } from "../app-routes.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../pages/chat/chat-history-events.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { navigateWithRouteTransition } from "./route-transition.ts";
 
 function testDocumentWithOutlet(animate = vi.fn()) {
@@ -12,15 +13,10 @@ function testDocumentWithOutlet(animate = vi.fn()) {
     ],
   });
   void router.navigate("chat", undefined);
-  const outlet = document.createElement("openclaw-router-outlet") as HTMLElement & {
-    updateComplete: Promise<void>;
-  };
-  // Own data property: the real OpenClawRouterOutlet may already be registered by a
-  // sibling test in this worker, and Lit's updateComplete is a getter-only accessor.
-  Object.defineProperty(outlet, "updateComplete", {
-    value: Promise.resolve(),
-    configurable: true,
-  });
+  const outlet = Object.assign(document.createElement("openclaw-router-outlet"), {
+    presentationSettled: true,
+    settlePresentation: async () => true,
+  }) satisfies ControlUiReadinessOutlet;
   outlet.animate = animate;
   document.body.append(outlet);
   return {

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { render, type LitElement, type TemplateResult } from "lit";
+import type { LitElement, TemplateResult } from "lit";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
@@ -15,25 +16,15 @@ import { settleLitElements } from "../test-helpers/lit-settle.ts";
 import "../components/app-sidebar.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import {
+  createShellOwner,
+  mountShellView,
+  refreshShellView,
+} from "./app-host-solid.test-support.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
-import type { ShellViewHost } from "./app-shell-view.ts";
-import type { ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "./context.ts";
 import { loadSettings } from "./settings.ts";
-import "./app-host.ts";
 import type { UpdateProgress } from "./update-confirmation.ts";
-
-type PairingShell = HTMLElement &
-  Pick<ShellViewHost, "devicePairSetup" | "settingsSidebar"> & {
-    runtime?: ApplicationRuntime;
-    render: () => TemplateResult;
-    routeState: {
-      routeId?: string;
-      location?: { pathname: string; search: string; hash: string };
-    };
-    outboxStoreRuntime: OutboxStoreRuntime | null;
-    openNewSession: (agentId: string) => void;
-  };
 
 type PairingSidebar = LitElement & {
   render: () => TemplateResult;
@@ -108,6 +99,7 @@ function createPairingShell(params: {
       snapshot: overlaySnapshot,
       openDevicePairSetup,
     },
+    plugins: { selectedReplacement: () => null },
     config: { current: {} },
     runtimeConfig: {
       state: { configSnapshot: null, configForm: null, configSchema: null, configUiHints: {} },
@@ -117,7 +109,7 @@ function createPairingShell(params: {
     sessions: { state: { result: null } },
     theme: { mode: "system", settings: loadSettings() },
   } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as PairingShell;
+  const shell = createShellOwner();
   const router = createApplicationRouter();
   shell.runtime = {
     context,
@@ -135,14 +127,19 @@ function createPairingShell(params: {
     routeId: "chat",
     location: { pathname: "/chat", search: "", hash: "" },
   };
-  const container = document.createElement("div");
-  onTestFinished(() => {
-    render(null, container);
-    router.stop();
-  });
+  const container = shell.element;
+  onTestFinished(() => router.stop());
+  let mounted = false;
+  const refresh = () => {
+    if (!mounted) {
+      mountShellView(shell);
+      mounted = true;
+    }
+    refreshShellView(shell);
+  };
 
   const renderSidebar = () => {
-    render(shell.render(), container);
+    refresh();
     const sidebar = container.querySelector<PairingSidebar>("openclaw-app-sidebar");
     if (!sidebar) {
       throw new Error("Expected the application shell to render its navigation sidebar");
@@ -156,7 +153,7 @@ function createPairingShell(params: {
     renderSidebar();
     await vi.dynamicImportSettled();
     return await waitForFast(() => {
-      render(shell.render(), container);
+      refresh();
       const dialog = container.querySelector<HTMLElement>(
         '.device-pair-setup:not([aria-busy="true"])',
       );
@@ -176,6 +173,7 @@ function createPairingShell(params: {
     renderSidebar,
     renderPairingDialog,
     container,
+    refresh,
   };
 }
 
@@ -244,7 +242,7 @@ describe("application shell pairing access", () => {
     "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
       vi.useFakeTimers();
-      const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
+      const { shell, renderSidebar, container, overlaySnapshot, refresh } = createPairingShell({
         auth: { role: "operator", scopes: ["operator.admin"] },
       });
       let storedOutboxes = {
@@ -282,7 +280,7 @@ describe("application shell pairing access", () => {
       const renderTopbarChild = vi.spyOn(topbar, "render");
 
       overlaySnapshot.approvalBusy = true;
-      render(shell.render(), container);
+      refresh();
       await settleLitElements([sidebar, topbar]);
 
       expect(renderSidebarChild).not.toHaveBeenCalled();
@@ -309,7 +307,7 @@ describe("application shell pairing access", () => {
           attentionCountForSession: () => 2,
           hasSessionDraft: () => false,
         };
-        render(shell.render(), container);
+        refresh();
         await settleLitElements([sidebar, topbar]);
         expect(renderSidebarChild).toHaveBeenCalledOnce();
         expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
@@ -375,10 +373,7 @@ describe("application shell pairing access", () => {
   it("updates the shell when the stored outbox changes", async () => {
     vi.useFakeTimers();
     let publish: (() => void) | undefined;
-    const shell = document.createElement("openclaw-app-shell") as LitElement & {
-      outboxStoreRuntime: OutboxStoreRuntime;
-      navigationSidebar: PairingSidebar;
-    };
+    const shell = createShellOwner();
     shell.outboxStoreRuntime = {
       read: () => ({
         total: 0,
@@ -394,17 +389,20 @@ describe("application shell pairing access", () => {
       },
       invalidate: () => undefined,
     };
-    document.body.append(shell, shell.navigationSidebar);
+    document.body.append(shell.element, shell.navigationSidebar);
+    shell.connect();
     try {
-      await settleLitElements([shell, shell.navigationSidebar]);
-      expect(shell.isUpdatePending).toBe(false);
-      expect(shell.navigationSidebar.isUpdatePending).toBe(false);
+      await settleLitElements([shell.navigationSidebar as PairingSidebar]);
+      const update = vi.spyOn(shell, "requestUpdate");
+      expect((shell.navigationSidebar as PairingSidebar).isUpdatePending).toBe(false);
 
       publish?.();
 
-      expect(shell.isUpdatePending).toBe(true);
+      expect(update).toHaveBeenCalledOnce();
+      flush();
     } finally {
-      shell.remove();
+      shell.disconnect();
+      shell.element.remove();
       shell.navigationSidebar.remove();
     }
     expect(publish).toBeUndefined();
@@ -471,7 +469,7 @@ describe("application shell pairing access", () => {
   });
 
   it.each([false, true])("keeps lazy settings navigation visible (failed: %s)", (failed) => {
-    const { shell, container } = createPairingShell({ auth: { role: "operator" } });
+    const { shell, container, refresh } = createPairingShell({ auth: { role: "operator" } });
     const loadRenderer = vi.fn();
     shell.routeState = {
       routeId: "profile",
@@ -484,7 +482,7 @@ describe("application shell pairing access", () => {
     } else {
       shell.settingsSidebar.load = loadRenderer;
     }
-    render(shell.render(), container);
+    refresh();
     const sidebar = container.querySelector<HTMLElement>(".settings-sidebar");
     if (failed) {
       expect(sidebar?.getAttribute("aria-busy")).toBeNull();
@@ -549,7 +547,7 @@ describe("application shell pairing access", () => {
 
   it("expires a node setup link from the pairing clock", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(4_000);
-    const { shell, container, renderSidebar } = createPairingShell({
+    const { container, renderSidebar, refresh } = createPairingShell({
       auth: { role: "operator", scopes: ["operator.pairing"] },
       setupCode: "pair-node-secret",
       access: "node",
@@ -559,13 +557,13 @@ describe("application shell pairing access", () => {
     renderSidebar();
     await vi.dynamicImportSettled();
     await waitForFast(() => {
-      render(shell.render(), container);
+      refresh();
       expect(container.querySelector('[role="timer"]')?.textContent).toContain("0:01");
     });
     expect(container.querySelector(".device-pair-setup__command code")).not.toBeNull();
 
     now.mockReturnValue(5_000);
-    render(shell.render(), container);
+    refresh();
     expect(container.querySelector('[role="timer"]')?.textContent?.toLowerCase()).toContain(
       "expired",
     );

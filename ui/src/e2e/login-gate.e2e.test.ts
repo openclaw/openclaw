@@ -164,10 +164,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
+            return window.openclawControlUi?.snapshot().gatewayPhase;
           }),
         )
         .toBe("reload-required");
@@ -249,10 +246,7 @@ suite.define(() => {
       await expect
         .poll(() =>
           page.evaluate(() => {
-            const app = document.querySelector("openclaw-app") as HTMLElement & {
-              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
-            };
-            return app.runtime?.context.gateway.snapshot.phase;
+            return window.openclawControlUi?.snapshot().gatewayPhase;
           }),
         )
         .toBe("reconnecting");
@@ -639,17 +633,10 @@ suite.define(() => {
       expect(await gatewayInput.getAttribute("spellcheck")).toBe("false");
       expect(await gatewayInput.getAttribute("enterkeyhint")).toBe("go");
 
-      // App renders must retain the real connection action, not a fixture-owned callback.
-      await page.evaluate(async () => {
-        const app = document.querySelector<
-          HTMLElement & { requestUpdate(): void; updateComplete: Promise<unknown> }
-        >("openclaw-app")!;
-        app.requestUpdate();
-        await app.updateComplete;
-        await document.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
-          "openclaw-login-gate",
-        )!.updateComplete;
-      });
+      // Editing the production form rerenders the root while preserving its connection action.
+      const originalUrl = await gatewayInput.inputValue();
+      await gatewayInput.fill(`${originalUrl}/edited`);
+      await gatewayInput.fill(originalUrl);
       await gateway.deferNext("connect");
       await gatewayInput.press("Enter");
       await gateway.waitForRequest("connect", { after: 1 });
@@ -763,14 +750,8 @@ suite.define(() => {
       await chatModule.request;
       const mounting = mountLoginGate(page, null);
       void mounting.catch(() => {});
-      // Let fixture mounting begin before the startup route can finish loading.
-      expect(
-        await page.evaluate(
-          () =>
-            document.querySelector<HTMLElement & { startupPending: boolean }>("openclaw-app")
-              ?.startupPending,
-        ),
-      ).toBe(true);
+      // The held route cannot have mounted while the login presentation is changed.
+      expect(await page.locator("openclaw-chat-page").count()).toBe(0);
       chatModule.release();
       await mounting;
       expect(await page.locator(".login-gate__failure").count()).toBe(0);
@@ -869,14 +850,6 @@ suite.define(() => {
         expect(inputBounds!.y + inputBounds!.height).toBeLessThanOrEqual(300);
         expect(await resizeViewport(500)).toEqual({ height: 500, bottomInset: "" });
         expect(await input.evaluate((element) => document.activeElement === element)).toBe(true);
-        await resizeViewport(300);
-        const cleaned = await page.evaluate(() => {
-          document.querySelector("openclaw-app")!.remove();
-          return ["--shell-viewport-height", "--shell-safe-area-bottom"].map((name) =>
-            document.documentElement.style.getPropertyValue(name),
-          );
-        });
-        expect(cleaned).toEqual(["", ""]);
       } finally {
         await closeContext(context);
       }

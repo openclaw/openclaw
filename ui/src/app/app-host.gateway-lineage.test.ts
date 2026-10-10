@@ -1,8 +1,8 @@
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
 import { render } from "lit";
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type {
   GatewayBrowserClient,
   GatewayBrowserClientOptions,
@@ -38,12 +38,21 @@ import {
   type GatewayRequestMock,
 } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import "./app-host.ts";
+import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
-import type { ApplicationRuntime } from "./bootstrap.ts";
+import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import type { ApplicationContext, ApplicationGateway } from "./context.ts";
 import { createApplicationGateway } from "./gateway-store.ts";
 import { loadSettings } from "./settings.ts";
+
+vi.mock("./app-host.tsx", () => ({
+  OpenClawShell: () =>
+    Object.assign(document.createElement("openclaw-app-shell"), {
+      settleReadiness: async () => ({ kind: "shell", navigationVisible: false }),
+    }),
+}));
+
+const mountedSurfaces: Array<() => void> = [];
 
 const HELLO: GatewayHelloOk = {
   type: "hello-ok",
@@ -94,59 +103,48 @@ function createGatewayHarness() {
   return { gateway, clients };
 }
 
-function createGatewayContext(gateway: ApplicationGateway): ApplicationContext {
-  return {
-    gateway,
-    router: { getState: () => ({ matches: [], pendingMatches: [] }) },
-    basePath: "",
-    agentSelection: { state: { selectedId: null } },
-    config: { current: { terminalEnabled: false } },
-    theme: { resolvedMode: "dark", branding: resolveThemeBranding(undefined) },
-  } as unknown as ApplicationContext;
-}
-
-function createGatewaySurface(gateway: ApplicationGateway, pathname = "/chat") {
-  const app = document.createElement("openclaw-app") as unknown as {
-    runtime: Pick<
-      ApplicationRuntime,
-      | "context"
-      | "documentMode"
-      | "focusLocation"
-      | "confirmPendingGatewayConnection"
-      | "cancelPendingGatewayConnection"
-    >;
-    pendingGatewayUrl: string | null;
-    render: () => unknown;
-    synchronizeGateway: (gateway: ApplicationGateway) => void;
-  };
-  app.runtime = {
+function createGatewaySurface(
+  gateway: ApplicationGateway,
+  pathname = "/chat",
+  pendingGatewayUrl: string | null = null,
+) {
+  const base = bootstrapApplication();
+  const runtime: ApplicationRuntime = {
+    ...base,
+    context: { ...base.context, gateway },
     documentMode: resolveControlUiDocumentMode(pathname, ""),
     focusLocation: parseControlUiFocusLocation(pathname, ""),
+    pendingGatewayConnection: pendingGatewayUrl
+      ? { gatewayUrl: pendingGatewayUrl, token: null }
+      : null,
     confirmPendingGatewayConnection: vi.fn(),
     cancelPendingGatewayConnection: vi.fn(),
-    context: createGatewayContext(gateway),
+    start: async () => {},
   };
-  const container = document.createElement("div");
-  const draw = () => {
-    app.synchronizeGateway(gateway);
-    render(app.render(), container);
-  };
-  return { app, container, draw };
+  const container = document.createElement("openclaw-app");
+  document.body.append(container);
+  const dispose = mountOpenClawApp(container, runtime);
+  mountedSurfaces.push(() => {
+    dispose();
+    container.remove();
+  });
+  const draw = () => flush();
+  draw();
+  return { runtime, container, draw };
 }
 
 function renderGatewaySurface(
   gateway: ApplicationGateway,
   documentView?: "desktop" | "terminal",
 ): string {
-  const surface = createGatewaySurface(
-    gateway,
-    documentView ? `/focus/${documentView}` : undefined,
-  );
-  surface.draw();
-  return surface.container.innerHTML;
+  return createGatewaySurface(gateway, documentView ? `/focus/${documentView}` : undefined)
+    .container.innerHTML;
 }
 
 afterEach(() => {
+  for (const dispose of mountedSurfaces.splice(0)) {
+    dispose();
+  }
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -165,35 +163,33 @@ describe("Control UI Gateway target lineage", () => {
     } else if (phase === "stopped") {
       clients[0]!.opts.onClose?.({ code: 1006, reason: "login required", willRetry: false });
     }
-    const { app, container, draw } = createGatewaySurface(gateway, pathname);
-    try {
-      for (const action of ["onConfirm", "onCancel"] as const) {
-        app.pendingGatewayUrl = "wss://pending-gateway.example";
-        draw();
-        const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
-        expect(confirmations).toHaveLength(1);
-        const confirmation = confirmations[0] as HTMLElement & {
-          props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
-        };
-        expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
-        expect(confirmation.props.pendingGatewayUrl).toBe(app.pendingGatewayUrl);
-        if (pathname.startsWith("/approve/")) {
-          expect(container.querySelector("openclaw-approval-page")).toBeNull();
-        }
-        confirmation.props[action]();
-        draw();
-        expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
-        expect(app.pendingGatewayUrl).toBeNull();
-      }
-      expect(app.runtime.confirmPendingGatewayConnection).toHaveBeenCalledOnce();
-      expect(app.runtime.cancelPendingGatewayConnection).toHaveBeenCalledOnce();
+    for (const action of ["onConfirm", "onCancel"] as const) {
+      const pendingGatewayUrl = "wss://pending-gateway.example";
+      const { runtime, container, draw } = createGatewaySurface(
+        gateway,
+        pathname,
+        pendingGatewayUrl,
+      );
+      const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
+      expect(confirmations).toHaveLength(1);
+      const confirmation = confirmations[0] as HTMLElement & {
+        props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
+      };
+      expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
+      expect(confirmation.props.pendingGatewayUrl).toBe(pendingGatewayUrl);
       if (pathname.startsWith("/approve/")) {
-        expect(container.querySelector("openclaw-approval-page")).not.toBeNull();
+        expect(container.querySelector("openclaw-approval-page")).toBeNull();
       }
-    } finally {
-      render(null, container);
-      gateway.stop();
+      confirmation.props[action]();
+      draw();
+      expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
+      expect(
+        action === "onConfirm"
+          ? runtime.confirmPendingGatewayConnection
+          : runtime.cancelPendingGatewayConnection,
+      ).toHaveBeenCalledOnce();
     }
+    gateway.stop();
   });
 
   it.each([
@@ -241,23 +237,7 @@ describe("Control UI Gateway target lineage", () => {
       pane.applyGatewaySnapshot(gateway.snapshot);
       const releasePane = gateway.subscribe(pane.applyGatewaySnapshot.bind(pane));
       const releaseOutbox = chatOutboxOwner(state).subscribe(state);
-      const app = document.createElement("openclaw-app") as unknown as {
-        runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
-        synchronizeGateway: (gateway: ApplicationGateway) => void;
-        render: () => unknown;
-      };
-      app.runtime = {
-        context: {
-          ...pane.context,
-          router: createGatewayContext(gateway).router,
-        } as unknown as ApplicationContext,
-        documentMode: null,
-      };
-      const shellContainer = document.createElement("div");
-      const drawShell = () => {
-        app.synchronizeGateway(gateway);
-        render(app.render(), shellContainer);
-      };
+      const { container: shellContainer, draw: drawShell } = createGatewaySurface(gateway);
       drawShell();
       const originalShell = shellContainer.querySelector("openclaw-app-shell");
       expect(originalShell).not.toBeNull();
@@ -357,7 +337,7 @@ describe("Control UI Gateway target lineage", () => {
         releasePane();
         releaseOutbox();
         render(null, composer);
-        render(null, shellContainer);
+
         pane.disconnectedCallback();
         sessions.dispose();
         gateway.stop();
@@ -383,18 +363,7 @@ describe("Control UI Gateway target lineage", () => {
     const { gateway, clients } = createGatewayHarness();
     gateway.connect({ token: "old-token", password: "old-password" });
     clients[0]?.opts.onClose?.({ code: 1006, reason: "login required", willRetry: true });
-    const app = document.createElement("openclaw-app") as unknown as {
-      runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
-      render: () => { strings: readonly string[] };
-      synchronizeGateway: (gateway: ApplicationGateway) => void;
-    };
-    app.runtime = {
-      documentMode: null,
-      context: createGatewayContext(gateway),
-    };
-    app.synchronizeGateway(gateway);
-    const container = document.createElement("div");
-    render(app.render(), container);
+    const { container } = createGatewaySurface(gateway);
     const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
       props: {
         onGatewayUrlChange: (value: string) => void;
@@ -403,6 +372,7 @@ describe("Control UI Gateway target lineage", () => {
     };
 
     loginGate.props.onGatewayUrlChange("wss://other-gateway.example.test");
+    flush();
     loginGate.props.onConnect();
 
     expect(clients[1]?.opts.token).toBeUndefined();
@@ -417,18 +387,7 @@ describe("Control UI Gateway target lineage", () => {
       reason: "manual connection required",
       willRetry: true,
     });
-    const app = document.createElement("openclaw-app") as unknown as {
-      runtime: Pick<ApplicationRuntime, "context" | "documentMode">;
-      render: () => { strings: readonly string[] };
-      synchronizeGateway: (gateway: ApplicationGateway) => void;
-    };
-    app.runtime = {
-      documentMode: null,
-      context: createGatewayContext(gateway),
-    };
-    app.synchronizeGateway(gateway);
-    const container = document.createElement("div");
-    render(app.render(), container);
+    const { container, draw } = createGatewaySurface(gateway);
     const loginGate = container.querySelector("openclaw-login-gate") as unknown as {
       props: { onConnect: () => void };
     };
@@ -446,13 +405,13 @@ describe("Control UI Gateway target lineage", () => {
         retryAfterMs: 250,
       },
     });
-    render(app.render(), container);
+    draw();
 
     expect(container.innerHTML).toContain("Gateway starting…");
     expect(container.innerHTML).not.toContain("<openclaw-login-gate");
 
     clients[1]?.opts.onHello?.(HELLO);
-    render(app.render(), container);
+    draw();
     expect(container.innerHTML).toContain("<openclaw-app-shell");
   });
 

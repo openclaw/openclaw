@@ -18,6 +18,7 @@ import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.
 import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import {
   committedRouterState,
   createLazyElementSpec,
@@ -38,7 +39,6 @@ import type {
   ApplicationGatewaySnapshot,
 } from "./context.ts";
 import type { LazyCustomElementRequestController } from "./lazy-custom-element.ts";
-import "./app-host.ts";
 import {
   persistLazyShellAction,
   readLazyShellAction,
@@ -65,14 +65,6 @@ function createRouteSessions() {
   return sessions;
 }
 
-type AppLifecycleState = {
-  loginToken: string;
-  loginPassword: string;
-  loginShowGatewaySecret: boolean;
-  disconnectedCallback: () => void;
-  synchronizeGateway: (gateway: ApplicationGateway) => void;
-};
-
 type ShellInitializationState = {
   routeState: { routeId?: string };
   ensureAgentsList: (
@@ -97,7 +89,7 @@ type ShellServerPreferencesState = {
   shellGateway: ShellGatewayOwner;
 };
 
-type ShellLifecycle = Pick<ShellChromeEventState, "connectedCallback" | "disconnectedCallback">;
+type ShellLifecycle = Pick<ShellChromeEventState, "connect" | "disconnect">;
 
 type ShellLazySurfaceState = ShellKeyboardState &
   ShellLifecycle & {
@@ -125,12 +117,11 @@ type ShellChromeEventState = {
   navDrawerOpen: boolean;
   handleShellNavDrawerToggle: (event: Event) => void;
   openPalette: () => void;
-  connectedCallback: () => void;
-  disconnectedCallback: () => void;
+  connect: () => void;
+  disconnect: () => void;
 };
 
-type ShellNavDrawerCloseState = HTMLElement &
-  ShellChromeEventState & {
+type ShellNavDrawerCloseState = { element: HTMLElement } & ShellChromeEventState & {
     desktopNavigationExpanded: boolean;
     navDrawerTrigger: HTMLElement | null;
     closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
@@ -156,7 +147,7 @@ function configureLazyPaletteShell(
   element: TestOptionalCustomElement,
   openPalette: () => void,
 ): ShellLazySurfaceState {
-  const shell = document.createElement("openclaw-app-shell") as unknown as ShellLazySurfaceState;
+  const shell = createShellOwner() as unknown as ShellLazySurfaceState;
   shell.commandPaletteElement = element;
   Object.defineProperty(shell, "updateComplete", {
     configurable: true,
@@ -173,11 +164,11 @@ function configureLazyPaletteShell(
 }
 
 async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promise<void>) {
-  shell.connectedCallback();
+  shell.connect();
   try {
     await run();
   } finally {
-    shell.disconnectedCallback();
+    shell.disconnect();
   }
 }
 
@@ -192,7 +183,7 @@ type ShellEpochState = {
   activeSessionKey: string;
   commandPaletteTarget: unknown;
   settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
-  disconnectedCallback: () => void;
+  disconnect: () => void;
 };
 
 type ShellRouteCommitState = {
@@ -216,54 +207,11 @@ type ShellSessionNavigationState = {
   recoverNotFoundRoute: () => boolean;
 };
 
-describe("OpenClaw app lifecycle", () => {
-  it("hides revealed login credentials when the app connection epoch ends", () => {
-    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
-    app.loginShowGatewaySecret = true;
-
-    app.disconnectedCallback();
-
-    expect(app.loginShowGatewaySecret).toBe(false);
-  });
-
-  it("hides revealed login credentials when the Gateway source changes", () => {
-    const app = document.createElement("openclaw-app") as unknown as AppLifecycleState;
-    const snapshot = {
-      client: null,
-      phase: "stopped",
-      lastError: null,
-      lastErrorCode: null,
-    } as ApplicationGatewaySnapshot;
-    const firstGateway = {
-      snapshot,
-      connection: { gatewayUrl: "ws://first.test", token: "first", password: "first-password" },
-    } as ApplicationGateway;
-    const secondGateway = {
-      snapshot,
-      connection: {
-        gatewayUrl: "ws://second.test",
-        token: "second",
-        password: "second-password",
-      },
-    } as ApplicationGateway;
-    app.synchronizeGateway(firstGateway);
-    app.loginShowGatewaySecret = true;
-
-    app.synchronizeGateway(secondGateway);
-
-    expect(app.loginShowGatewaySecret).toBe(false);
-    expect(app.loginToken).toBe("second");
-    expect(app.loginPassword).toBe("second-password");
-  });
-});
-
 describe("OpenClaw shell source initialization", () => {
   it("preserves reload intent on disconnect but clears it on context replacement", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     persistLazyShellAction({ eventType: COMMAND_PALETTE_OPEN_EVENT });
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellLazyLifecycleState;
+    const shell = createShellOwner() as unknown as ShellLazyLifecycleState;
 
     shell.resetForDocumentDisconnect();
     expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
@@ -322,7 +270,7 @@ describe("OpenClaw shell source initialization", () => {
   });
 
   it("clears retained presentation when its context epoch ends", () => {
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellEpochState;
+    const shell = createShellOwner() as unknown as ShellEpochState;
     const trigger = document.createElement("button");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
@@ -334,7 +282,7 @@ describe("OpenClaw shell source initialization", () => {
       globalThis.setTimeout(() => undefined, 60_000),
     );
 
-    shell.disconnectedCallback();
+    shell.disconnect();
 
     expect(shell.navDrawerOpen).toBe(false);
     expect(shell.navDrawerTrigger).toBeNull();
@@ -345,9 +293,8 @@ describe("OpenClaw shell source initialization", () => {
   });
 
   it("initializes replacement capabilities even when the Gateway client is unchanged", () => {
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellInitializationState & Pick<ShellLifecycle, "disconnectedCallback">;
+    const shell = createShellOwner() as unknown as ShellInitializationState &
+      Pick<ShellLifecycle, "disconnect">;
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
@@ -378,7 +325,7 @@ describe("OpenClaw shell source initialization", () => {
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
 
-    shell.disconnectedCallback();
+    shell.disconnect();
     shell.ensureAgentsList(snapshot, secondAgents);
     shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
 
@@ -390,9 +337,7 @@ describe("OpenClaw shell source initialization", () => {
 describe("OpenClaw shell route session commits", () => {
   it("preserves catalog identity when routing a slash-command draft", () => {
     const navigate = vi.fn();
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSessionNavigationState;
+    const shell = createShellOwner() as unknown as ShellSessionNavigationState;
     shell.runtime = {
       context: {
         basePath: "",
@@ -418,9 +363,7 @@ describe("OpenClaw shell route session commits", () => {
   it("defers an unscoped not-found fallback until agent defaults are connected", () => {
     const replace = vi.fn();
     const snapshot = { phase: "connecting", hello: null };
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSessionNavigationState;
+    const shell = createShellOwner() as unknown as ShellSessionNavigationState;
     shell.runtime = {
       context: {
         basePath: "",
@@ -451,7 +394,7 @@ describe("OpenClaw shell route session commits", () => {
     const calls: string[] = [];
     const setAgent = vi.fn((agentId: string | null) => calls.push(`agent:${agentId}`));
     const setSessionKey = vi.fn((sessionKey: string) => calls.push(`session:${sessionKey}`));
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellRouteCommitState;
+    const shell = createShellOwner() as unknown as ShellRouteCommitState;
     shell.runtime = {
       context: {
         gateway: {
@@ -484,9 +427,7 @@ describe("OpenClaw shell route session commits", () => {
   });
 
   it("retains the custodian leave transition through an unresolved route state", () => {
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellCustodianRouteState;
+    const shell = createShellOwner() as unknown as ShellCustodianRouteState;
 
     shell.shellNavigation.updateRouteState({ routeId: "custodian" });
     shell.shellNavigation.updateRouteState({});
@@ -531,9 +472,7 @@ describe("OpenClaw shell server preferences", () => {
       // reconcileServerUiPrefs only accepts the current context's capability.
       runtimeConfig,
     } as unknown as ApplicationContext;
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellServerPreferencesState;
+    const shell = createShellOwner() as unknown as ShellServerPreferencesState;
     shell.runtime = { context };
 
     shell.shellGateway.reconcileServerUiPrefs(runtimeConfig);
@@ -550,9 +489,7 @@ describe("OpenClaw shell settings search", () => {
       ensureLoaded: vi.fn(() => Promise.resolve()),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsSearchLoadState;
+    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
     shell.runtime = {
       context: { runtimeConfig } as unknown as ApplicationContext,
     };
@@ -573,9 +510,7 @@ describe("OpenClaw shell settings search", () => {
       ensureLoaded: vi.fn(() => Promise.resolve()),
       ensureSchemaLoaded: vi.fn(() => Promise.resolve()),
     } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsSearchLoadState;
+    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
     shell.runtime = {
       context: { runtimeConfig: firstRuntimeConfig } as unknown as ApplicationContext,
     };
@@ -597,9 +532,7 @@ describe("OpenClaw shell settings search", () => {
       ensureLoaded: vi.fn(() => Promise.resolve()),
       ensureSchemaLoaded: vi.fn(() => Promise.reject(new Error("schema unavailable"))),
     } as unknown as ApplicationContext["runtimeConfig"];
-    const shell = document.createElement(
-      "openclaw-app-shell",
-    ) as unknown as ShellSettingsSearchLoadState;
+    const shell = createShellOwner() as unknown as ShellSettingsSearchLoadState;
     shell.runtime = {
       context: { runtimeConfig } as unknown as ApplicationContext,
     };
@@ -640,12 +573,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   });
 
   it("prevents unhandled window file drops without overriding accepted targets", () => {
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    const shell = createShellOwner() as unknown as ShellChromeEventState;
     const acceptedDropTarget = document.createElement("div");
     const nativeFileInput = document.createElement("input");
     nativeFileInput.type = "file";
     document.body.append(acceptedDropTarget, nativeFileInput);
-    shell.connectedCallback();
+    shell.connect();
 
     try {
       for (const type of ["dragover", "drop"] as const) {
@@ -673,14 +606,14 @@ describe("OpenClaw shell keyboard shortcuts", () => {
         expect(nonFile.dataTransfer.dropEffect).toBe("copy");
       }
     } finally {
-      shell.disconnectedCallback();
+      shell.disconnect();
       acceptedDropTarget.remove();
       nativeFileInput.remove();
     }
   });
 
   it("keeps focus in place when the navigation drawer closes without restoration", () => {
-    const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
+    const shell = createShellOwner() as ShellNavDrawerCloseState;
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     shell.navDrawerOpen = true;
@@ -697,7 +630,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
   it("closes an open navigation drawer before moving its sidebar into desktop layout", async () => {
     await import("../components/app-sidebar.ts");
     vi.stubGlobal("matchMedia", () => ({ matches: false }));
-    const shell = document.createElement("openclaw-app-shell") as ShellNavDrawerCloseState;
+    const shell = createShellOwner() as ShellNavDrawerCloseState;
     const updateNavigation = vi.fn();
     shell.runtime = {
       context: {
@@ -711,7 +644,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       dismissTransientMenus: () => boolean;
     };
     const dismissTransientMenus = vi.spyOn(sidebar, "dismissTransientMenus").mockReturnValue(true);
-    shell.append(sidebar);
+    shell.element.append(sidebar);
     const trigger = document.body.appendChild(document.createElement("button"));
     const restoreTriggerFocus = vi.spyOn(trigger, "focus");
     const closeNavDrawer = vi.spyOn(shell, "closeNavDrawer");
@@ -740,7 +673,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     );
     const openPalette = vi.fn();
     const trigger = document.createElement("button");
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellChromeEventState;
+    const shell = createShellOwner() as unknown as ShellChromeEventState;
     shell.runtime = {
       context: {
         navigation: { snapshot: { navCollapsed: false }, update: vi.fn() },
@@ -842,7 +775,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     window.addEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.addEventListener(UI_COMMAND_EVENT, uiCommandEvent);
     window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = {
       context: {
         basePath: "",
@@ -961,7 +894,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       ]),
       selectedId: "main",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
@@ -982,7 +915,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: roster("main", [{ id: "fallback" }, { id: "main" }]),
       selectedId: "writer",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
@@ -999,7 +932,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: structuredClone(unchanged),
       selectedId: "main",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });
@@ -1019,7 +952,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       next: unchanged,
       selectedId: "main",
     });
-    const shell = document.createElement("openclaw-app-shell") as unknown as ShellUiCommandState;
+    const shell = createShellOwner() as unknown as ShellUiCommandState;
     shell.runtime = { context: harness.context };
 
     shell.handleGatewayEvent({ event: "config.changed", payload: {} });

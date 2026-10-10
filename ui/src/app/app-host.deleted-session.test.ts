@@ -34,13 +34,12 @@ import { reviewPrivateComposerDraft } from "../pages/chat/components/private-com
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
+import { createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
-import type { StoredOutboxScopeHost } from "./app-shell-gateway.ts";
 import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { createChatSubmissions } from "./chat-submissions.ts";
 import type { ApplicationContext } from "./context.ts";
-import "./app-host.ts";
 
 type DeletedSessionShell = {
   runtime: { context: ApplicationContext };
@@ -69,7 +68,7 @@ function createSessionRecoveryShell(params: {
   const { gateway } = fixture;
   gateway.setSessionKey = setSessionKey;
   gateway.snapshot.phase = "connected";
-  const shell = document.createElement("openclaw-app-shell") as unknown as DeletedSessionShell;
+  const shell = createShellOwner() as unknown as DeletedSessionShell;
   shell.runtime = {
     context: {
       basePath: "",
@@ -639,7 +638,7 @@ describe("OpenClaw shell deleted-session recovery", () => {
         },
       }),
     );
-    const shell = document.createElement("openclaw-app-shell") as unknown as DeletedSessionShell;
+    const shell = createShellOwner() as unknown as DeletedSessionShell;
     const deletedSessions = [
       { key: deletedKey, agentId: "main", retireBeforeRevision: Date.now() },
     ];
@@ -769,9 +768,7 @@ it("projects only the ready recovery owner's attachment failures through the she
     gateway,
     agents: { state: { agentsList: null } },
   } as unknown as ApplicationContext;
-  const shell = document.createElement("openclaw-app-shell") as HTMLElement & {
-    storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost;
-  };
+  const shell = createShellOwner();
   const ownSessionKey = "agent:main:own-attachment";
   const otherSessionKey = "agent:main:other-attachment";
   const admittedHost = {

@@ -16,7 +16,8 @@ type Swipe = {
   backdrop: HTMLElement | null;
 };
 
-export type NavDrawerHost = HTMLElement & {
+export type NavDrawerHost = Pick<HTMLElement, "querySelector" | "isConnected"> & {
+  readonly element: HTMLElement;
   readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly navDrawerOpen: boolean;
@@ -40,20 +41,20 @@ export class NavDrawerSwipeOwner {
   }
 
   connect(): void {
-    this.host.addEventListener("touchstart", this.handleStart, { passive: true });
-    this.host.addEventListener("touchmove", this.handleMove, { passive: false });
-    this.host.addEventListener("touchend", this.handleEnd, { passive: true });
-    this.host.addEventListener("touchcancel", this.cancel, { passive: true });
+    this.host.element.addEventListener("touchstart", this.handleStart, { passive: true });
+    this.host.element.addEventListener("touchmove", this.handleMove, { passive: false });
+    this.host.element.addEventListener("touchend", this.handleEnd, { passive: true });
+    this.host.element.addEventListener("touchcancel", this.cancel, { passive: true });
     if (this.host.navDrawerOpen) {
       this.opened();
     }
   }
 
   disconnect(): void {
-    this.host.removeEventListener("touchstart", this.handleStart);
-    this.host.removeEventListener("touchmove", this.handleMove);
-    this.host.removeEventListener("touchend", this.handleEnd);
-    this.host.removeEventListener("touchcancel", this.cancel);
+    this.host.element.removeEventListener("touchstart", this.handleStart);
+    this.host.element.removeEventListener("touchmove", this.handleMove);
+    this.host.element.removeEventListener("touchend", this.handleEnd);
+    this.host.element.removeEventListener("touchcancel", this.cancel);
     this.reset();
   }
 

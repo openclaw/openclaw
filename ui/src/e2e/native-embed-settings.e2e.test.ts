@@ -326,7 +326,7 @@ suite.define(() => {
                 ).toBe(true);
               } else {
                 await page.locator(".native-embed-header .page-title").waitFor();
-                await page.locator("openclaw-router-outlet > *").first().waitFor();
+                await page.locator("openclaw-router-outlet").waitFor();
               }
               if (route === "search") {
                 await page

@@ -80,6 +80,8 @@ import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 let nativeCommandsOwner: AbortController | undefined;
 
 export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
+  readonly element: HTMLElement;
+  readonly isConnected: boolean;
   readonly activeSessionKey: string;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
@@ -127,9 +129,13 @@ export class ShellChromeOwner {
     const options = { signal: this.listeners.signal };
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
-    host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
+    host.element.addEventListener(
+      COMMAND_PALETTE_TARGET_EVENT,
+      this.handleCommandPaletteTarget,
+      options,
+    );
     for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
-      host.addEventListener(type, () => host.requestUpdate(), options);
+      host.element.addEventListener(type, () => host.requestUpdate(), options);
     }
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
@@ -201,9 +207,9 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
+      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host.element) ?? null;
       host.navDrawerOpen = true;
-      moveToastToNavDrawer(host);
+      moveToastToNavDrawer(host.element);
       if (!this.navDrawerSwipe.opened()) {
         void host.updateComplete.then(() => {
           if (host.isConnected && host.navDrawerOpen) {
@@ -246,7 +252,7 @@ export class ShellChromeOwner {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.closed();
     }
-    restoreToastFromNavDrawer(host);
+    restoreToastFromNavDrawer(host.element);
     const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
@@ -335,7 +341,7 @@ export class ShellChromeOwner {
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
         requestAnimationFrame(() => {
-          this.restoreFocusTo(visibleNavDrawerToggle(host));
+          this.restoreFocusTo(visibleNavDrawerToggle(host.element));
         });
       }
     });
@@ -362,7 +368,8 @@ export class ShellChromeOwner {
     }
   };
 
-  dismissSidebarTransientMenus = (): boolean => dismissNavigationTransientSurfaces(this.host);
+  dismissSidebarTransientMenus = (): boolean =>
+    dismissNavigationTransientSurfaces(this.host.element);
 
   private readonly handleDocumentKeydownBubble = (event: KeyboardEvent): void => {
     const host = this.host;
@@ -402,7 +409,10 @@ export class ShellChromeOwner {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
-      handleNavDrawerKeydown(host, event);
+      handleNavDrawerKeydown(
+        Object.assign(host.element, { closeNavDrawer: host.closeNavDrawer }),
+        event,
+      );
       return;
     }
     if (!host.commandPalette && isCommandPaletteShortcut(event)) {
