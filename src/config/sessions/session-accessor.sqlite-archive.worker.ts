@@ -16,11 +16,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
   exchangeSqliteDatabaseAdmissions,
 } from "../../infra/sqlite-worker-database-admission-relay.js";
+import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { cancelWorkerIdleGc, scheduleWorkerIdleGc } from "../../infra/worker-idle-gc.js";
 import { routeLogsToStderr } from "../../logging/console.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
