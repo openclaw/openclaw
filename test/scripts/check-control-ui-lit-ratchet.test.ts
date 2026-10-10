@@ -38,7 +38,7 @@ describe("Control UI Lit ratchet", () => {
         ],
         [
           "plain.ts",
-          '// import { html } from "lit"; new Task(); html`<wa-button>`\nconst text = "this.requestUpdate(); @state()";',
+          '// import { html } from "lit"; new Task(); html`<wa-button>`\nconst text = "this.requestUpdate(); @state()"; const [, next] = values; function pick([, entry]) { return entry; }',
         ],
         [
           "imports.ts",
@@ -49,6 +49,10 @@ describe("Control UI Lit ratchet", () => {
           'import { html as markup } from "lit"; import { state as mark } from "lit/decorators.js"; const view = (markup)`<div />`; (this.requestUpdate)(); class C { @(mark()) value = 0; }',
         ],
         ["import-equals.cts", 'import Lit = require("lit");'],
+        [
+          "controllers.ts",
+          'import type { ReactiveController as Controller } from "lit"; import { Directive as BaseDirective } from "lit/directive.js"; class C implements Controller {} class D extends BaseDirective {}',
+        ],
         [
           "commonjs.cts",
           'const Lit = require("lit"); const { html: markup } = Lit; const draw = markup; const { state: mark } = require("lit/decorators.js"); const { Task: Work } = require("@lit/task"); class C { @mark() value = 0; work = new Work(this, {}); render() { return draw`<div />`; } }',
@@ -72,6 +76,7 @@ describe("Control UI Lit ratchet", () => {
       stateDecorators: 1,
     });
     expect(counts.get("import-equals.cts")).toMatchObject({ litImports: 1 });
+    expect(counts.get("controllers.ts")).toMatchObject({ reactiveControllers: 1, directives: 1 });
     expect(counts.get("commonjs.cts")).toMatchObject({
       litImports: 3,
       htmlTemplates: 1,

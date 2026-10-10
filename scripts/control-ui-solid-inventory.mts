@@ -90,6 +90,7 @@ function nameOf(node: ts.Node): string | undefined {
   if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
     return node.text;
   if (ts.isPropertyAccessExpression(node)) return node.name.text;
+  if (ts.isQualifiedName(node)) return node.right.text;
   if (ts.isElementAccessExpression(node) && node.argumentExpression)
     return nameOf(node.argumentExpression);
   return undefined;
@@ -152,7 +153,7 @@ function createLitNameResolver(tree: ts.SourceFile) {
       return;
     }
     for (const element of name.elements) {
-      if (!ts.isBindingElement(element)) continue;
+      if (!ts.isBindingElement(element) || !element.name) continue;
       const property =
         ts.isObjectBindingPattern(name) && !element.dotDotDotToken
           ? nameOf(element.propertyName ?? element.name)
@@ -334,7 +335,9 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
       if (ts.isNewExpression(node) && canonicalName(node.expression) === "Task") metrics.tasks++;
       if (ts.isHeritageClause(node)) {
         for (const type of node.types) {
-          const name = canonicalName(type.expression);
+          const name = canonicalName(
+            ts.isTypeReferenceNode(type) ? type.typeName : type.expression,
+          );
           if (node.token === ts.SyntaxKind.ImplementsKeyword && name === "ReactiveController")
             metrics.reactiveControllers++;
           if (
