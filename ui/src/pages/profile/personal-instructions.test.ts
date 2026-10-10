@@ -358,6 +358,43 @@ it("retains the unsettled draft but ignores an old save completion after reconne
   expect(element.textContent).toContain("Unsaved changes");
 });
 
+it("preserves newer draft edits after returning to an agent with a pending save", async () => {
+  const saving = createDeferred<typeof file>();
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(file)
+    .mockReturnValueOnce(saving.promise)
+    .mockResolvedValueOnce({ ...file, agentId: "other", content: "Other instructions" })
+    .mockResolvedValueOnce({ ...file, hash: "hash-3" });
+  const { element, selection } = mount(request);
+  await settle(element);
+  await input(element, "First edit");
+  button(element, "Save").click();
+  await settle(element);
+  selection.set("other");
+  await settle(element);
+  selection.set("main");
+  await settle(element);
+  await input(element, "Second edit");
+
+  saving.resolve({ ...file, content: "First edit", hash: "hash-2" });
+  await settle(element);
+  expect(element.querySelector("textarea")?.value).toBe("Second edit");
+  expect(element.textContent).toContain("Unsaved changes");
+  expect(button(element, "Save").disabled).toBe(false);
+
+  await input(element, file.content);
+  expect(button(element, "Save").disabled).toBe(false);
+  button(element, "Save").click();
+  expect(request).toHaveBeenLastCalledWith("users.personalFile.set", {
+    agentId: "main",
+    content: file.content,
+    expectedHash: "hash-2",
+  });
+  await settle(element);
+  expect(element.textContent).toContain("Saved");
+});
+
 it("rejects a response for a different profile rather than enabling a save", async () => {
   const request = vi.fn().mockResolvedValue({ ...file, profileId: "someone-else" });
   const { element } = mount(request);

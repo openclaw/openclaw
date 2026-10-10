@@ -169,6 +169,7 @@ export class PersonalInstructions extends OpenClawLightDomElement {
   ) {
     const client = this.client;
     const connectionId = this.connectionId;
+    const draft = this.draft;
     const isCurrent = () =>
       this.available &&
       this.client === client &&
@@ -187,15 +188,18 @@ export class PersonalInstructions extends OpenClawLightDomElement {
         throw new Error(t("profilePage.personalInstructions.contextChanged"));
       }
       this.file = result;
-      this.draft = result.content;
+      if (this.draft === draft) {
+        this.busy = null;
+        this.draft = result.content;
+      }
       this.drafts.delete(result.agentId);
-      this.saved = operation === "save";
+      this.saved = operation === "save" && this.draft === result.content;
     } catch (error) {
       if (isCurrent()) {
         this.error = formatUiError(error);
       }
     } finally {
-      if (isCurrent()) {
+      if (isCurrent() && this.draft === draft) {
         this.busy = null;
       }
     }

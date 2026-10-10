@@ -42,7 +42,10 @@ export class ModelProviderDiscoveryController implements ReactiveController {
     if (!owner) {
       return;
     }
-    if (this.options.getOwner().agentId !== owner.agentId) {
+    const agentId = this.options.getOwner().agentId;
+    // Reconnect can temporarily clear the roster selection. The mounted setup
+    // owns wizard recovery and authorization loss; only a new selection replaces it.
+    if (agentId !== null && agentId !== owner.agentId) {
       this.reset();
     }
   }
