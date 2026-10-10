@@ -87,6 +87,7 @@ type ScreenshotFrameOptions = {
   scrollTo?: Locator;
   animations?: "disabled";
   animationFrameBeforeCapture?: boolean;
+  repaintBeforeCapture?: boolean;
   fullPage?: boolean;
 };
 
@@ -156,6 +157,25 @@ export async function takeControlUiScreenshotFrame(
         { message: "Proof frame did not reach visible, settled targets" },
       )
       .toBe(true);
+    if (options.repaintBeforeCapture) {
+      // Invalidate tiles painted before async images decoded, including their
+      // antialiased clips. Restore presentation before measuring the final frame.
+      await surface.evaluate(async (element) => {
+        const style = (element as HTMLElement).style;
+        const value = style.getPropertyValue("visibility");
+        const priority = style.getPropertyPriority("visibility");
+        try {
+          style.setProperty("visibility", "hidden", "important");
+          await new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+          );
+        } finally {
+          style.setProperty("visibility", value, priority);
+        }
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      });
+      await waitForControlUiFrameLayout(targets);
+    }
     const settled = await inspectControlUiFrameTargets(targets);
     expect(
       settled.every((target) => target.visible),
