@@ -63,7 +63,9 @@ export function prepareSessionEntryReplacementPublication(
   const unavailableParticipantKeys = new Set<string>();
   const written = new Map(
     [...result.current].flatMap(([key, entry]) => {
-      const postimage = readWrittenSessionEntryPostimage(database, key, entry);
+      const postimage = fullEntries
+        ? undefined
+        : readWrittenSessionEntryPostimage(database, key, entry);
       return postimage ? [[key, postimage] as const] : [];
     }),
   );
