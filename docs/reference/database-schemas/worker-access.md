@@ -1976,6 +1976,60 @@ no schema, stored bytes, durability, retention, permissions, or update migration
 it claims no incognito T1 retirement. The production owner selection and native
 selector deletion remain a later atomic cutover.
 
+### Plugin admission and Codex session preparation (P07, inactive)
+
+Plugin registry dispatch retains an explicitly supplied incognito actor through
+ownership preparation and the complete callback. Delegated ownership, initializer
+currency, and work admission remain synchronous live predicates. Initialization
+compares the same complete pending entry through an owner-published fingerprint;
+ordinary policy guards compare only their named fields, so unrelated metadata
+changes do not revoke an admitted operation. Public metadata stays a caller-owned
+projection rather than an authorization cache.
+
+Codex prepares session policy before asynchronous work and rechecks the captured
+session, lifecycle, execution host, and node at native and tool effects. A storage
+refusal never selects default execution policy. Commands and marker-only history
+retain their physical store; by-ID history uses transcript windows rather than
+current-entry discovery. A conversation binding records its private lifecycle so
+cleanup still releases its subscription after the actor closes. The asynchronous
+sandbox preparer carries the selected runtime status through provisioning and
+rechecks the same sandbox, creator, execution, and model fields at its effects.
+The released synchronous sandbox method keeps its existing contract.
+
+This preparation is inactive: unbound incognito remains host-owned and allocates
+no actor. Tests supply canonical actors explicitly. The existing Gateway creator
+still owns fresh creation; the prepared plugin handoff does not activate it.
+Production acquisition, fresh-creation composition, and native selector deletion
+remain P12 work. No incognito T1 retirement, schema, retention, permission, or update
+migration is claimed. Existing installations need no migration; the
+published-driver update cell remains a separate landing check.
+
+### Incognito workspace consumers (P08, inactive)
+
+Explicitly bound workspace, files, diff, MCP, placement, and publication consumers
+prepare full session rows through the existing incognito actor. Planning rows
+include project selection and diff baselines; they are not retained as host
+authority. Filesystem, Git, and provider effects consume the actor's acknowledged
+sharing, workspace, and runtime metadata with the existing requester, repository,
+placement, and environment guards. Same-actor destination writes recheck exact
+source predicates inside their transaction. Unrelated title changes do not revoke
+workspace authority.
+
+Title and file-history work distinguish actor incarnations even when the session
+ID and physical root are reused. MCP file handles keep their original source and
+refuse a retired actor. Worker transcript batches compose their existing commit
+kernel in the same actor transaction; receipt recovery does not append the batch
+again. Accepted work retains settlement custody through consumer completion.
+Shared-state publication records, Git effects, and placement policy keep their
+existing owners.
+
+This preparation is inactive: production incognito acquisition and its native
+selectors remain host-owned until P12. An explicit absent actor source remains
+absent and never searches durable stores; a retained ended actor refuses access.
+No feature flag, worker service, schema, retention, permission, content limit,
+freshness probe, or update migration is introduced. No incognito T1 retirement
+is claimed before production activation.
+
 ### Incognito command, CLI, and harness consumers (P03, inactive)
 
 Explicit actor bindings now carry command admission, CLI history and compaction,
@@ -2634,10 +2688,20 @@ Page reclamation and blocking checkpoint modes keep their zero-timeout scope.
 Existing worker-local maintenance and synchronous offline/close checkpoints retain
 their owners; durability, schemas, retention, and update behavior are unchanged.
 
-Worker authority requests wait for the retained host owner's grant or refusal;
-host scheduling delays do not expire that authority. The host still checks current
-authority before granting, and broker failure joins worker exit before releasing
-custody. Native SQLite and broker-capacity admission keep their own deadlines.
+Worker authority requests retain their unbounded live-owner wait unless the caller
+explicitly supplies a `deadlineMs` budget. Only cron's runtime mutation preparation
+and outcome-retention calls opt in to 1,000 ms. Its two handshakes leave 3,000 ms of
+other writers' 5,000 ms busy budget for SQL and rollback. A timeout atomically
+cancels the request and throws a retryable admission error; the synchronous
+transaction rolls back before native settlement releases custody. The host ignores
+late requests and cannot grant a canceled request. Other transaction and commit
+callers, as well as open and preparation requests, keep their existing unbounded wait.
+The host still checks current authority before granting, and broker failure joins
+worker exit before releasing custody. Cron warns and retries through its scheduler,
+preserving startup recovery mode and durable reservation markers. Unknown outcomes
+remain recovery-owned and are never blindly retried. No schema, configuration,
+stored-data, or update/rollback migration changes are required. Native SQLite and
+broker-capacity admission keep their own deadlines.
 Startup, schema work, and offline maintenance use the installation's single
 process owner. Ordinary writes acquire their actual SQLite transaction; they do
 not acquire a separate coordination database or carry a lock-directory namespace.

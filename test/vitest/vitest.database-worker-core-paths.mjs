@@ -1001,6 +1001,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.reply-fallback.test.ts",
   "src/agents/prepared-model-runtime.remote-publication.test.ts",
   "src/agents/prepared-model-runtime.scoped-refresh.test.ts",
+  "src/agents/prepared-model-runtime.native-demand.test.ts",
   "src/agents/prepared-model-runtime.startup-static.test.ts",
   "src/agents/prepared-model-runtime.test.ts",
   "src/tui/embedded-prepared-runtime.test.ts",

@@ -521,6 +521,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       ...resolveSessionCreateRootParameters(p, preparedRoot?.value),
       permissionMode: p.permissionMode,
       ...(p.toolOverrides !== undefined ? { toolOverrides: p.toolOverrides } : {}),
+      ...(p.communication !== undefined ? { communication: p.communication } : {}),
       prepareLifecycle,
       onLifecycleCleanupError: (error) =>
         sessionLog.warn(

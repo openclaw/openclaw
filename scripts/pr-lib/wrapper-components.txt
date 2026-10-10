@@ -38,6 +38,7 @@ packages/gateway-protocol/src/schema/worker-session-tools.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
+packages/gateway-protocol/src/session-communication.ts
 packages/gateway-protocol/src/svg-image.ts
 packages/gateway-protocol/src/theme-ids.ts
 packages/gateway-protocol/src/theme.ts
@@ -1016,6 +1017,7 @@ src/infra/sqlite-database-admission.ts
 src/infra/sqlite-error-diagnostics.ts
 src/infra/sqlite-existing-database.ts
 src/infra/sqlite-file-copy.ts
+src/infra/sqlite-file-generation-worker.ts
 src/infra/sqlite-file-generation.ts
 src/infra/sqlite-files.ts
 src/infra/sqlite-handle-lifecycle.ts
@@ -1100,6 +1102,7 @@ src/infra/sqlite-worker-broker.ts
 src/infra/sqlite-worker-input-admission.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
+src/infra/sqlite-worker-database-admission-relay.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-settlement.ts
@@ -1386,6 +1389,7 @@ src/plugins/plugin-cache-artifacts.ts
 src/plugins/plugin-cache-files.ts
 src/plugins/plugin-cache-sdk.ts
 src/plugins/plugin-cache.ts
+src/plugins/plugin-capture-resolution.ts
 src/plugins/plugin-catalog-source.ts
 src/plugins/plugin-config-trust.ts
 src/plugins/plugin-control-plane-context.ts
@@ -1624,6 +1628,7 @@ src/shared/regexp.ts
 src/shared/rosetta-translation.ts
 src/shared/sandbox-workspace-paths.ts
 src/shared/settle-within.ts
+src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts

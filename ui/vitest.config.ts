@@ -7,7 +7,7 @@ import { playwright } from "@vitest/browser-playwright";
 import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
-import { experimental_getRunnerTask, type Reporter, type Vitest } from "vitest/node";
+import type { Vitest } from "vitest/node";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
@@ -30,12 +30,13 @@ import {
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
+  resolveUiTypeScriptPath,
   uiNodeDrivenBrowserTestFiles,
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
-import { webkitExpectedFailures } from "./test/webkit-expected-failures.ts";
+import { controlUiSolidPlugin } from "./vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -133,39 +134,7 @@ const webkitTestFiles = [
   "src/pages/chat/chat-composer-overflow.browser.test.ts",
   "src/pages/chat/components/chat-effort-picker.browser.test.ts",
   "src/pages/chat/components/chat-model-picker.browser.test.ts",
-];
-
-const webkitExpectedFailureReporter: Reporter = {
-  onTestModuleCollected(module) {
-    if (module.project.name !== "webkit") {
-      return;
-    }
-    const entries = webkitExpectedFailures.filter((entry) =>
-      module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`),
-    );
-    for (const test of module.children.allTests()) {
-      if (entries.some((entry) => entry.name === test.fullName)) {
-        // Mirror the browser-side flag for native expected-failure reporting.
-        experimental_getRunnerTask(test).fails = true;
-      }
-    }
-  },
-  onTestRunEnd(modules) {
-    const webkitModules = modules.filter((module) => module.project.name === "webkit");
-    if (webkitModules.length === 0) {
-      return;
-    }
-    for (const entry of webkitExpectedFailures) {
-      const tests = webkitModules
-        .filter((module) => module.moduleId.replaceAll("\\", "/").endsWith(`/${entry.file}`))
-        .flatMap((module) => Array.from(module.children.allTests()))
-        .filter((test) => test.fullName === entry.name);
-      if (tests.length !== 1 || tests[0]?.result().state !== "passed") {
-        throw new Error(`WebKit expected failure did not execute as expected: ${entry.name}`);
-      }
-    }
-  },
-};
+].map((file) => resolveUiTypeScriptPath(file, here));
 
 export function createUiBrowserVitestConfig(
   env = process.env,
@@ -174,7 +143,7 @@ export function createUiBrowserVitestConfig(
   const include = includeUiTests(
     browser === "webkit"
       ? webkitTestFiles
-      : ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+      : ["src/**/*.browser.test.{ts,tsx}", "../extensions/*/browser/**/*.browser.test.{ts,tsx}"],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -206,6 +175,7 @@ export function createUiBrowserVitestConfig(
   return defineProject({
     root: here,
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
@@ -293,10 +263,7 @@ export function createUiBrowserVitestConfig(
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: [
-        "./src/test-helpers/lit-warnings.setup.ts",
-        ...(browser === "webkit" ? ["./test/webkit-expected-failures.setup.ts"] : []),
-      ],
+      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
       browser: {
         enabled: true,
         provider,
@@ -360,15 +327,16 @@ export default defineConfig({
   test: {
     ...sharedUiTestConfig,
     maxWorkers: sharedVitestConfig.test.maxWorkers,
-    reporters: [
-      ...sharedVitestConfig.test.reporters,
-      ...(process.env.OPENCLAW_UI_WEBKIT === "1" ? [webkitExpectedFailureReporter] : []),
-    ],
+    reporters: sharedVitestConfig.test.reporters,
     // These projects already own their complete plugins, aliases, and test config.
     projects: [
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -382,14 +350,17 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests(["src/**/*.test.ts", "../extensions/*/browser/**/*.test.ts"]),
+          include: includeUiTests([
+            "src/**/*.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.test.{ts,tsx}",
+          ]),
           exclude: [
-            "src/**/*.browser.test.ts",
-            "src/**/*.e2e.test.ts",
-            "src/**/*.node.test.ts",
-            "../extensions/*/browser/**/*.browser.test.ts",
-            "../extensions/*/browser/**/*.e2e.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.browser.test.{ts,tsx}",
+            "src/**/*.e2e.test.{ts,tsx}",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.browser.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...mockRegistryUnitTests,
           ],
           environment: "jsdom",
@@ -398,7 +369,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -416,7 +391,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -429,8 +408,8 @@ export default defineConfig({
           // layout tests, whose browser lives in module scope. Resetting the
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
-            "src/**/*.node.test.ts",
-            "../extensions/*/browser/**/*.node.test.ts",
+            "src/**/*.node.test.{ts,tsx}",
+            "../extensions/*/browser/**/*.node.test.{ts,tsx}",
             ...nodeDrivenBrowserLayoutTests,
           ]),
           environment: "jsdom",
@@ -443,7 +422,11 @@ export default defineConfig({
         : []),
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,

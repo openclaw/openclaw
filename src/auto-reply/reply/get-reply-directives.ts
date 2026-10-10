@@ -1,13 +1,13 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-  normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { listModelAliasCandidates } from "../../agents/model-selection-shared.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -146,11 +146,12 @@ export async function resolveReplyDirectives(params: {
   const canInterpretTextDirectives =
     allowTextCommands && command.isAuthorizedSender && ctx.CommandInterpretationSuppressed !== true;
   const commandTextHasSlash = commandText.includes("/");
-  const hasConfiguredModelAliases =
-    commandTextHasSlash &&
-    Object.values(cfg.agents?.defaults?.models ?? {}).some((entry) =>
-      Boolean(normalizeOptionalString(entry.alias)),
-    );
+  const configuredModelAliases = commandTextHasSlash
+    ? listModelAliasCandidates(cfg, agentId)
+        .map((candidate) => candidate.alias)
+        .filter(Boolean)
+    : [];
+  const hasConfiguredModelAliases = configuredModelAliases.length > 0;
   const hasSkillReferences =
     canInterpretTextDirectives && hasSkillReferenceCandidate(command.commandBodyNormalized);
   const reservedCommands = new Set<string>();
@@ -163,12 +164,9 @@ export async function resolveReplyDirectives(params: {
     }
   }
 
-  const rawAliases = hasConfiguredModelAliases
-    ? Object.values(cfg.agents?.defaults?.models ?? {})
-        .map((entry) => normalizeOptionalString(entry.alias))
-        .filter((alias): alias is string => Boolean(alias))
-        .filter((alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)))
-    : [];
+  const rawAliases = configuredModelAliases.filter(
+    (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
+  );
   const skillCommandContext = {
     workspaceDir,
     cfg,
