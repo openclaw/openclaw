@@ -27,7 +27,6 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
-import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
@@ -83,8 +82,6 @@ import {
 } from "../gateway/session-row-projection.js";
 import { capArrayByJsonBytes } from "../gateway/session-transcript-readers.js";
 import { projectSessionPatchResult } from "../gateway/session-utils-model.js";
-import { buildGatewaySessionRow } from "../gateway/session-utils-row.js";
-import { createGatewaySessionEntryReader } from "../gateway/session-utils-store-lineage.js";
 import {
   getSessionDefaults,
   listAgentsForGateway,
@@ -139,6 +136,7 @@ import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js
 import {
   createEmbeddedSessionReader,
   readEmbeddedHistorySessionInfo,
+  readEmbeddedPrivateHistorySessionInfo,
 } from "./embedded-session-reader.js";
 import type {
   ChatSendOptions,
@@ -465,15 +463,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       ...loadOptions,
       includeStoreChildEntries: true,
     });
-    const {
-      cfg,
-      agentId: sessionAgentId,
-      storePath,
-      store,
-      readSource,
-      entry,
-      canonicalKey,
-    } = selected;
+    const { cfg, agentId: sessionAgentId, storePath, readSource, entry, canonicalKey } = selected;
     const sessionId = entry?.sessionId;
     const runtimePluginsPrewarm = ensureEmbeddedHistoryRuntimePluginsLoaded({
       cfg,
@@ -551,36 +541,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
       storePath: readSource?.path ?? storePath,
     };
     const privateEntry = entry && (entry.incognito || isIncognitoSessionKey(canonicalKey));
-    const [privateAcpMeta] = privateEntry
-      ? await readAcpSessionMetaForEntries({
-          cfg,
-          entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry }],
-        })
-      : [];
-    const privateRuntimeOwnership = privateEntry
-      ? await readSessionRuntimeOwnershipAsync({
-          config: cfg,
-          agentId: sessionAgentId,
-          sessionKey: canonicalKey,
-          storePath: target.storePath,
-          sessionEntry: entry,
-          readPreparedPreviousSessionId: () => entry.previousSessionId,
-        })
-      : undefined;
     const sessionInfo = privateEntry
-      ? buildGatewaySessionRow({
-          cfg,
-          storePath,
-          store,
-          key: canonicalKey,
-          entry,
-          preparedAcpMeta: privateAcpMeta ?? null,
-          preparedRuntimeOwnership: privateRuntimeOwnership ?? null,
-          agentId: sessionAgentId,
-          modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
-          lightweightListRow: true,
-          skipTranscriptUsageFallback: true,
-        })
+      ? await readEmbeddedPrivateHistorySessionInfo(selected, entry)
       : entry && projection
         ? await readEmbeddedHistorySessionInfo(projection, target, {
             sessionId,

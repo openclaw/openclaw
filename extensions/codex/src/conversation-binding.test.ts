@@ -199,7 +199,9 @@ import {
   createCodexTestBindingStateStore,
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
-  type CodexAppServerThreadBinding,
+  testConversationIdentity,
+  writeTestConversationBinding,
+  readTestConversationBinding,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
 import { withCodexConversationThreadActivity } from "./app-server/thread-ownership.js";
@@ -214,27 +216,6 @@ import {
 } from "./conversation-binding-hooks.js";
 import { prepareCodexConversationBinding } from "./conversation-binding-preparation.js";
 import { readCodexConversationActiveTurn } from "./conversation-control.js";
-
-function testConversationIdentity(sessionFile: string) {
-  return {
-    kind: "conversation" as const,
-    bindingId: legacyCodexConversationBindingId(sessionFile),
-  };
-}
-
-async function writeTestConversationBinding(
-  sessionFile: string,
-  binding: CodexAppServerThreadBinding,
-): Promise<void> {
-  await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
-    kind: "set",
-    binding: { clientId: "test-client", ...binding },
-  });
-}
-
-async function readTestConversationBinding(sessionFile: string) {
-  return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
-}
 
 function conversationMessage(
   content: string,

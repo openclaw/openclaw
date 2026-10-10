@@ -25,7 +25,10 @@ import {
   CODEX_APP_SERVER_BINDING_NAMESPACE,
 } from "../app-server/session-binding-meta.js";
 import type { StoredCodexAppServerBinding as MigratedBindingRow } from "../app-server/session-binding-record.js";
-import { readLegacySessionIndex } from "./session-binding-legacy-index.js";
+import {
+  readLegacySessionIndex,
+  resolveLegacySessionFileLocator,
+} from "./session-binding-legacy-index.js";
 
 const LEGACY_BINDING_SUFFIX = ".codex-app-server.json";
 const CODEX_AGENT_HARNESS_ID = "codex";
@@ -304,30 +307,6 @@ async function collectBindingOwners(
     owners: new Map([...owners].map(([key, values]) => [key, [...values.values()]])),
     failures,
   };
-}
-
-// Doctor-only locator for retired file-backed session indexes. Active runtime
-// never resolves these paths; migration needs them only to find old sidecars.
-async function resolveLegacySessionFileLocator(
-  sessionsDir: string,
-  entry: { sessionFile?: string },
-  sessionId: string,
-): Promise<string> {
-  const base = path.resolve(sessionsDir);
-  const fallback = path.join(base, `${sessionId}.jsonl`);
-  const sessionFile = entry.sessionFile?.trim();
-  if (!sessionFile) {
-    return fallback;
-  }
-  const candidate = path.resolve(base, sessionFile);
-  const [canonicalBase, canonicalCandidate] = await Promise.all([
-    canonicalPathFromExistingAncestor(base),
-    canonicalPathFromExistingAncestor(candidate),
-  ]);
-  if (!isPathInside(canonicalBase, canonicalCandidate)) {
-    throw new Error("legacy session file locator escapes its session directory");
-  }
-  return candidate;
 }
 
 function tryResolveLegacyBindingOwnerAgentId(params: {

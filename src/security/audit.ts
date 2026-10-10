@@ -282,13 +282,6 @@ function applySecurityAuditSuppressions(
   return { findings: active, suppressedFindings };
 }
 
-function normalizeAllowFromList(list: Array<string | number> | undefined | null): string[] {
-  if (!Array.isArray(list)) {
-    return [];
-  }
-  return normalizeStringEntries(list);
-}
-
 async function collectFilesystemFindings(params: {
   stateDir: string;
   configPath: string;
@@ -490,7 +483,7 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
     return findings;
   }
   for (const [provider, list] of Object.entries(allowFrom)) {
-    const normalized = normalizeAllowFromList(list);
+    const normalized = normalizeStringEntries(Array.isArray(list) ? list : []);
     if (normalized.includes("*")) {
       findings.push({
         checkId: `tools.elevated.allowFrom.${provider}.wildcard`,

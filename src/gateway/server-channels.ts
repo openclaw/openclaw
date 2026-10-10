@@ -92,6 +92,7 @@ import {
   runChannelAccountMonitor,
   runChannelAccountStartup,
   waitForChannelStartupHandoff,
+  waitForDeferredAccountStart,
 } from "./server-channel-startup.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -173,23 +174,6 @@ type ChannelAccountStopState = (
 ) & {
   cleanup?: Promise<ChannelAccountStopOutcome>;
 };
-
-async function waitForDeferredAccountStart(
-  deferred: Promise<void>,
-  abortSignal: AbortSignal,
-): Promise<void> {
-  if (abortSignal.aborted) {
-    return;
-  }
-  const aborted = createDeferredCore();
-  const onAbort = () => aborted.resolve();
-  abortSignal.addEventListener("abort", onAbort, { once: true });
-  try {
-    await Promise.race([deferred, aborted.promise]);
-  } finally {
-    abortSignal.removeEventListener("abort", onAbort);
-  }
-}
 
 export type ChannelManager = {
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;

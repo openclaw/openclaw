@@ -1,6 +1,7 @@
 /** In-memory binding store helpers for Codex app-server tests. */
 export * from "./session-binding.js";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { legacyCodexConversationBindingId } from "../conversation-binding-data.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -174,4 +175,39 @@ export async function clearCodexAppServerBindingForThread(
     kind: "clear",
     threadId,
   });
+}
+
+export function createCodexTestContextEngineBinding() {
+  return {
+    schemaVersion: 1 as const,
+    engineId: "lossless-claw",
+    policyFingerprint: "policy-1",
+    projection: {
+      schemaVersion: 1 as const,
+      mode: "thread_bootstrap" as const,
+      epoch: "epoch-1",
+      fingerprint: "fingerprint-1",
+    },
+  };
+}
+
+export function testConversationIdentity(sessionFile: string) {
+  return {
+    kind: "conversation" as const,
+    bindingId: legacyCodexConversationBindingId(sessionFile),
+  };
+}
+
+export async function writeTestConversationBinding(
+  sessionFile: string,
+  binding: CodexAppServerThreadBinding,
+): Promise<void> {
+  await testCodexAppServerBindingStore.mutate(testConversationIdentity(sessionFile), {
+    kind: "set",
+    binding: { clientId: "test-client", ...binding },
+  });
+}
+
+export async function readTestConversationBinding(sessionFile: string) {
+  return testCodexAppServerBindingStore.read(testConversationIdentity(sessionFile));
 }

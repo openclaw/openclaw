@@ -38,6 +38,7 @@ import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   clearCodexAppServerBindingForThread,
   createCodexTestBindingStore,
+  createCodexTestContextEngineBinding as contextEngineBinding,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
   resetCodexTestBindingStore,
@@ -73,20 +74,6 @@ function compactionParams(
     workspaceDir: tempDir,
     trigger: "manual",
     ...overrides,
-  };
-}
-
-function contextEngineBinding() {
-  return {
-    schemaVersion: 1 as const,
-    engineId: "lossless-claw",
-    policyFingerprint: "policy-1",
-    projection: {
-      schemaVersion: 1 as const,
-      mode: "thread_bootstrap" as const,
-      epoch: "epoch-1",
-      fingerprint: "fingerprint-1",
-    },
   };
 }
 
