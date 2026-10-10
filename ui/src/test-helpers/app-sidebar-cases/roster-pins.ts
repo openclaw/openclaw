@@ -75,9 +75,11 @@ describe("AppSidebar agent roster pins", () => {
         expect(avatar?.querySelector(".identity-avatar__agent-face")).not.toBeNull();
       }
     }
-    expect(sidebar.querySelectorAll("[data-agent-group] .session-row-host--pinned")).toHaveLength(
-      0,
-    );
+    expect(
+      [
+        ...sidebar.querySelectorAll<HTMLElement>("[data-agent-group] .session-row-host--pinned"),
+      ].map((row) => row.dataset.sessionKey),
+    ).toEqual(["agent:main:pinned", "agent:recent:pinned", "agent:working:pinned"]);
     expect(sessionKeys(sidebar)).not.toContain("agent:system:pinned");
     expect(
       sidebar.querySelector(
@@ -145,6 +147,7 @@ describe("AppSidebar agent roster pins", () => {
       const rows = sidebar.querySelectorAll(`[data-session-key="${key}"]`);
       expect(rows).toHaveLength(1);
       expect(rows[0]?.closest('[data-agent-group="working"]')).not.toBeNull();
+      expect(rows[0]?.classList.contains("session-row-host--pinned")).toBe(pinned);
       expect(context.agentSelection.state.selectedId).toBe("main");
     }
     expect(onUpdate).toHaveBeenLastCalledWith(["route:usage", "route:plugins"]);

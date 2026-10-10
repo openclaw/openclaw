@@ -87,8 +87,9 @@ export async function activateSessionMenuValue(sidebar: SessionMenuHost, value: 
     }
     // Lit's Node export disables Web Awesome's click listener in jsdom.
     // Browser tests cover that listener; this harness drives its change boundary.
-    group.value = input.getAttribute("value");
     await group.updateComplete;
+    // Author the value and its change event together; an intervening render can restore the old value.
+    group.value = input.getAttribute("value");
     group.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   }
   await sidebar.updateComplete;
