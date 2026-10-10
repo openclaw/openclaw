@@ -1664,7 +1664,7 @@ src/cli/cron-cli/register.cron-edit.ts	1
 src/cli/cron-cli/register.cron-scratch.ts	2
 src/cli/cron-cli/register.cron-simple.ts	2
 src/cli/cron-cli/shared.ts	7
-src/cli/devices-cli.runtime.ts	10
+src/cli/devices-cli.runtime.ts	9
 src/cli/directory-cli.ts	2
 src/cli/dns-cli.ts	3
 src/cli/exec-approvals-cli.ts	9

@@ -746,7 +746,7 @@ describe("sessions.dispatch device targets", () => {
         declaredCommands: ["system.run"],
         commandPolicy: { allow: ["codex.exec-server.stdio.v1"] },
         expectedMessage:
-          "paired-device command codex.exec-server.stdio.v1 is not advertised by node device-1; enable the plugin or node capability that provides this command on that node, then restart the node (openclaw node restart) and approve its updated command surface",
+          "This model runs on the Codex harness, which isn't installed on this device. Choose a model that uses the OpenClaw harness, or install Codex on the device.",
       },
       {
         name: "declared but denied",

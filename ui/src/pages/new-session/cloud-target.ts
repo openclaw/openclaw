@@ -73,7 +73,7 @@ type SessionMenuItemOptions = {
   capabilityLabels?: readonly string[];
   hardware?: string;
   hideDetails?: boolean;
-  remediation?: "enable-session-hosting" | "update-device";
+  remediation?: "enable-session-hosting" | "update-device" | "install-codex";
   provider?: string;
   trust?: "persistent" | "disposable";
   onSelect: () => void;
@@ -85,13 +85,28 @@ function formatUnavailableReason(
 ) {
   if (remediation === "enable-session-hosting") {
     return html`<div>${t("newSession.sessionHostingAction")}</div>
-      <code class="new-session-page__command">openclaw connect --service --session-host</code>`;
+      <code class="new-session-page__command"
+        >openclaw config set nodeHost.workerRuns.enabled true</code
+      >
+      <code class="new-session-page__command">openclaw node install --force</code>`;
   }
   if (remediation === "update-device") {
     return html`<div>${t("newSession.updateAction")}</div>
       <code class="new-session-page__command">openclaw update</code>
       <div>${t("newSession.reconnectAction")}</div>
       <code class="new-session-page__command">openclaw node restart</code>`;
+  }
+  if (remediation === "install-codex") {
+    return html`<div>${reason}</div>
+      <details>
+        <summary>${t("newSession.codexInstallAction")}</summary>
+        <code class="new-session-page__command">openclaw plugins install @openclaw/codex</code>
+        <code class="new-session-page__command">openclaw plugins enable codex</code>
+        <code class="new-session-page__command">openclaw node restart</code>
+        <div>${t("newSession.codexApproveAction")}</div>
+        <code class="new-session-page__command">openclaw nodes pending</code>
+        <code class="new-session-page__command">openclaw nodes approve &lt;requestId&gt;</code>
+      </details>`;
   }
   return reason;
 }

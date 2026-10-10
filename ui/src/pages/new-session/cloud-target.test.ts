@@ -3,9 +3,13 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import {
+  projectDevicePlacements,
+  resolveAutomaticDevicePlacementDisabledReason,
+} from "./device-placement.ts";
 
 describe("cloud target menu", () => {
-  it("renders explicit remediation commands on separate lines", () => {
+  it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
     const container = document.createElement("div");
     render(
       renderSessionMenuItem(
@@ -23,9 +27,97 @@ describe("cloud target menu", () => {
       ),
       container,
     );
-    expect(container.querySelector("code.new-session-page__command")?.textContent).toBe(
-      "openclaw connect --service --session-host",
+    const card = container.querySelector('[slot="content"]');
+    expect(card?.textContent).toContain(
+      "Session hosting is disabled. Run these commands on the paired device:",
     );
+    expect(Array.from(card!.querySelectorAll("code"), (command) => command.textContent)).toEqual([
+      "openclaw config set nodeHost.workerRuns.enabled true",
+      "openclaw node install --force",
+    ]);
+  });
+
+  it("explains missing hosting without claiming a connected device is unpaired", () => {
+    const environments = [
+      {
+        id: "node:paired",
+        type: "node" as const,
+        status: "available" as const,
+        sessionHost: false,
+      },
+    ];
+    const devices = projectDevicePlacements(environments);
+    const container = document.createElement("div");
+    render(
+      renderSessionMenuItem(
+        {
+          value: "auto",
+          label: "Auto",
+          compact: true,
+          disabled: true,
+          checked: false,
+          title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
+          onSelect: vi.fn(),
+        },
+        false,
+      ),
+      container,
+    );
+    expect(container.querySelector('[slot="content"]')?.textContent?.trim()).toBe(
+      "No devices have session hosting enabled. Connect a machine with session hosting enabled, or enable it on a paired device.",
+    );
+  });
+
+  it("keeps the Codex harness explanation primary and renders install and consent steps in details", () => {
+    const reason =
+      "This model runs on the Codex harness, which isn't installed on this device. Choose a model that uses the OpenClaw harness, or install Codex on the device.";
+    const [device] = projectDevicePlacements(
+      [
+        {
+          id: "node:paired",
+          type: "node",
+          status: "available",
+          sessionHost: true,
+          requiredNodeCommand: {
+            command: "codex.exec-server.stdio.v1",
+            state: "undeclared",
+            message: reason,
+          },
+        },
+      ],
+      { requiredNodeCommands: ["codex.exec-server.stdio.v1"], consumesWorkerSlot: false },
+    );
+    const onSelect = vi.fn();
+    const container = document.createElement("div");
+    render(
+      renderSessionMenuItem(
+        {
+          value: "device:paired",
+          label: "Paired device",
+          compact: true,
+          disabled: !device.selectable,
+          checked: false,
+          title: device.disabledReason,
+          remediation: device.remediation,
+          onSelect,
+        },
+        false,
+      ),
+      container,
+    );
+    const card = container.querySelector('[slot="content"]');
+    expect(card?.querySelector("div")?.textContent).toBe(reason);
+    expect(card?.querySelector("details")?.open).toBe(false);
+    expect(card?.querySelector("summary")?.textContent).toBe("Install Codex on this device");
+    expect(Array.from(card!.querySelectorAll("code"), (command) => command.textContent)).toEqual([
+      "openclaw plugins install @openclaw/codex",
+      "openclaw plugins enable codex",
+      "openclaw node restart",
+      "openclaw nodes pending",
+      "openclaw nodes approve <requestId>",
+    ]);
+    container.querySelector<HTMLButtonElement>('[data-value="device:paired"]')!.click();
+    expect(onSelect).not.toHaveBeenCalled();
   });
 
   it("anchors selected cloud configuration beside its profile row", () => {

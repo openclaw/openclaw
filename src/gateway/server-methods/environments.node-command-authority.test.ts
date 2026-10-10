@@ -147,23 +147,16 @@ describe("node environment command authority", () => {
       });
       if (state === "invocable") {
         expect(listed?.requiredNodeCommand).not.toHaveProperty("message");
+      } else if (state === "undeclared") {
+        expect(listed?.requiredNodeCommand?.message).toBe(
+          "This model runs on the Codex harness, which isn't installed on this device. Choose a model that uses the OpenClaw harness, or install Codex on the device.",
+        );
       } else {
-        const remediation =
+        expect(listed?.requiredNodeCommand?.message).toContain(
           state === "pending-approval"
             ? "openclaw nodes approve <requestId>"
-            : state === "unauthorized"
-              ? "gateway.nodes.commands.deny"
-              : "openclaw plugins enable codex";
-        expect(listed?.requiredNodeCommand?.message).toContain(remediation);
-        if (state === "undeclared") {
-          expect(listed?.requiredNodeCommand?.message).toContain(
-            "openclaw plugins install @openclaw/codex",
-          );
-          expect(listed?.requiredNodeCommand?.message).toContain("on that node");
-          expect(listed?.requiredNodeCommand?.message).not.toContain(
-            "gateway.nodes.commands.allow",
-          );
-        }
+            : "gateway.nodes.commands.deny",
+        );
       }
       for (const effectiveCommand of node.commands) {
         expect(listed?.capabilities).toContain(effectiveCommand);

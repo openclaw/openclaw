@@ -426,14 +426,49 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target.ts",
-      "text": "openclaw connect --service --session-host"
+      "text": "openclaw config set nodeHost.workerRuns.enabled true"
     },
     {
       "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw node install --force"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
       "text": "openclaw node restart"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw nodes approve &lt;requestId&gt;"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw nodes pending"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw plugins enable codex"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/new-session/cloud-target.ts",
+      "text": "openclaw plugins install @openclaw/codex"
     },
     {
       "count": 1,

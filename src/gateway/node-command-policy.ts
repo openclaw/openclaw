@@ -445,11 +445,14 @@ function formatRequiredNodeCommandUnavailable(
 ): string {
   const prefix = `paired-device command ${command}`;
   if (state === "undeclared") {
+    if (command === "codex.exec-server.stdio.v1") {
+      return "This model runs on the Codex harness, which isn't installed on this device. Choose a model that uses the OpenClaw harness, or install Codex on the device.";
+    }
     const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
       (entry) => entry.command.command === command,
     )?.pluginId;
     const enable = pluginId
-      ? `${pluginId === "codex" ? "install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then " : ""}enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
+      ? `enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
       : "enable the plugin or node capability that provides this command on that node";
     return `${prefix} is not advertised by node ${nodeId}; ${enable}, then restart the node (openclaw node restart) and approve its updated command surface`;
   }

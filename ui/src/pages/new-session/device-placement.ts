@@ -13,7 +13,7 @@ export type DevicePlacementOption = Readonly<
     label: string;
     subtitle?: string;
     hideDetails?: boolean;
-    remediation?: "enable-session-hosting" | "update-device";
+    remediation?: "enable-session-hosting" | "update-device" | "install-codex";
     facts: readonly string[];
     selectable: boolean;
     disabledReason?: string;
@@ -118,7 +118,14 @@ export function projectDevicePlacements(
                   environment.sessionHost !== true &&
                   !environment.issues?.length
                 ? "enable-session-hosting"
-                : undefined,
+                : environment.status === "available" &&
+                    environment.sessionHost === true &&
+                    !environment.issues?.length &&
+                    requirement.requiredNodeCommands.includes("codex.exec-server.stdio.v1") &&
+                    environment.requiredNodeCommand?.command === "codex.exec-server.stdio.v1" &&
+                    environment.requiredNodeCommand.state === "undeclared"
+                  ? "install-codex"
+                  : undefined,
           facts: placementDisabledReason ? [placementDisabledReason] : visibleFacts,
           workerSlots: environment.workerSlots,
           capabilities: environment.capabilities,

@@ -323,7 +323,7 @@ describe("device worker placement dispatch", () => {
       node: deviceProof(0, ["system.run"]),
       deniedByGateway: false,
       expectedProvisionCalls: 1,
-      expectedMessage: "is not advertised by node device-1; enable the plugin or node capability",
+      expectedMessage: "This model runs on the Codex harness",
     },
     {
       name: "required node command denied by Gateway policy",
@@ -645,14 +645,14 @@ describe("device worker placement dispatch", () => {
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
       providerId: "device",
-      expectedMessage: "not advertised by node",
+      expectedMessage: "This model runs on the Codex harness",
     },
     {
       name: "non-device remote-exec cloud node missing its required command",
       executionMode: "remote-exec" as const,
       node: deviceProof(0, ["system.run"]),
       providerId: "generic-cloud-node",
-      expectedMessage: "not advertised by node",
+      expectedMessage: "This model runs on the Codex harness",
     },
     {
       name: "saturated non-device worker-turn cloud node",
