@@ -21,18 +21,8 @@ if (role === "launcher") {
   await once(child, "message");
   process.send?.({ descendantPid: child.pid }, () => process.exit(0));
 } else if (role === "candidate") {
-  const { default: koffi } = await import("koffi");
-  const kernel32 = koffi.load("kernel32.dll");
-  const currentProcess = kernel32.func("__stdcall", "GetCurrentProcess", "void *", []);
-  const isProcessInJob = kernel32.func("__stdcall", "IsProcessInJob", "int32_t", [
-    "void *",
-    "void *",
-    koffi.out(koffi.pointer("int32_t")),
-  ]);
-  const wasInJob = [0];
-  if (!isProcessInJob(currentProcess(), null, wasInJob)) {
-    throw new Error("Could not inspect inherited Job membership");
-  }
+  const { isCurrentProcessInJob } = await import("@openclaw/proc-safe/windows-job");
+  const wasInJob = isCurrentProcessInJob();
   if (ownership === "borrowed") {
     await retainCliProcessJobUntilExit();
   } else {
@@ -47,10 +37,7 @@ if (role === "launcher") {
   const exited = once(launcher, "exit");
   const [message] = await once(launcher, "message");
   await exited;
-  writeSync(
-    1,
-    `${JSON.stringify({ ...message, inheritedJob: wasInJob[0] === 1, launcherExited: true })}\n`,
-  );
+  writeSync(1, `${JSON.stringify({ ...message, inheritedJob: wasInJob, launcherExited: true })}\n`);
   process.exit(Number(requestedCode));
 } else {
   if (inherited === "true") {
