@@ -39,7 +39,6 @@ import {
   isClaudeCliBackend,
   resolveCliSourceReplyMirror,
   settleCliPreparationError,
-  settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import {
   buildCliHookAssistantMessage,
@@ -65,6 +64,7 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import { settlePreparedCliRunWithTrajectory } from "./cli-runner/trajectory.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -199,11 +199,11 @@ async function runCliAgentInternal(
     // Preparation resolves the execution owner and effective capture config;
     // publish both before commentary can arrive from the prepared run.
     diagnosticLifecycle?.setExecutionContext(context.params);
-    const result = await settlePreparedCliRun({
+    const result = await settlePreparedCliRunWithTrajectory(
       context,
       diagnosticLifecycle,
-      run: async () => await runPreparedCliAgent(context, diagnosticLifecycle),
-    });
+      runPreparedCliAgent,
+    );
     modelExecution?.assertCurrent();
     return result;
   } finally {

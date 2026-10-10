@@ -294,4 +294,11 @@ export type PreparedCliRunContext = {
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
+  /**
+   * Runtime trajectory for this prepared CLI turn. Absent when capture is
+   * disabled or this run is intentionally excluded.
+   */
+  trajectoryRecorder?: {
+    recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  } | null;
 };
