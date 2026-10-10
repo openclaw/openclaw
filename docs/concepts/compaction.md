@@ -186,6 +186,10 @@ essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
 Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Native compaction that leaves the host transcript unchanged preserves retry
+suppression. Host compaction clears or refreshes it; changing the session or
+limit, falling below the limit, or growing by another full threshold also rearms
+the guard.
 Retained history remains available on disk and may continue growing; this is not
 a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and
@@ -269,6 +273,8 @@ When an embedded Responses provider returns a compacted window, OpenClaw preserv
 After a successful continuation, OpenClaw uses the provider's measured context usage when the saved request prefix still matches the current checkpoint, conversation, and provider identity. New content and current request overhead still receive a local estimate. Edited or incompatible history falls back to estimation without changing the saved conversation.
 
 The native ChatGPT sign-in route uses streamed Codex V2 compaction at the next normal model-request boundary, including between settled tool rounds. It preserves the normal request surface and saves retained user messages plus an opaque checkpoint through the existing session owner. Failed or cancelled streams do not install a checkpoint. On this route, manual `/compact` (with or without focus instructions) and provider-confirmed overflow use client-side compaction, not V2. See [OpenAI advanced configuration](/providers/openai/advanced#server-side-compaction-responses-api) for controls and fallback behavior.
+
+For V2-eligible requests, the optional mid-turn precheck defers local recovery to this boundary so it cannot preempt provider compaction. Other requests keep the provider-bound precheck, including saved checkpoint pressure when no matching current-run usage is available.
 
 Predicted context pressure uses budget compaction before the next request. The public OpenAI Responses API and native xAI can use their compact endpoint by default; `params.responsesCompactEndpoint: false` disables that endpoint for a model. A provider-confirmed overflow keeps the client recovery path because compact endpoints also require their input to fit. Endpoint failures fall back to client-side summarization.
 

@@ -4,11 +4,12 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { makeZeroUsageSnapshot } from "../../usage.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import type { MidTurnPrecheckRequest } from "./midturn-precheck.js";
+import { MidTurnPrecheckSignal } from "./midturn-precheck.js";
 
 const hoisted = vi.hoisted(() => ({
   installContextEngineLoopHook: vi.fn(),
@@ -134,27 +135,18 @@ describe("installEmbeddedAttemptContextGuards", () => {
     const input = createInput();
     const originalTransform = input.activeSession.agent.transformContext;
     const guards = installEmbeddedAttemptContextGuards(input as never);
-    const guardOptions = hoisted.installToolResultContextGuard.mock.calls[0]?.[0];
-    const request: MidTurnPrecheckRequest = {
-      route: "compact_then_truncate",
-      estimatedPromptTokens: 1_200,
-      promptBudgetBeforeReserve: 1_024,
-      overflowTokens: 176,
-      toolResultReducibleChars: 800,
-      effectiveReserveTokens: 64,
-    };
-    guardOptions.midTurnPrecheck.onMidTurnPrecheck(request);
-
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBe(request);
-    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
-    expect(guardOptions).toMatchObject({
-      contextWindowTokens: 1_024,
-      midTurnPrecheck: {
-        enabled: true,
-        contextTokenBudget: 1_024,
-        toolResultMaxChars: expect.any(Number),
-      },
+    expect(() =>
+      guards.checkMidTurnPrecheck({
+        context: {
+          messages: [{ role: "user", content: "x".repeat(8_000), timestamp: 1 }],
+        },
+      }),
+    ).toThrow(MidTurnPrecheckSignal);
+    expect(guards.takePendingMidTurnPrecheckRequest()).toMatchObject({
+      route: "compact_only",
+      promptBudgetBeforeReserve: 960,
     });
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
 
     const messages: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "hello" }], timestamp: 1 },
@@ -173,6 +165,20 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(input.activeSession.agent.transformContext).toBe(originalTransform);
     expect(removeHistoryGuard).toHaveBeenCalledOnce();
     expect(removeToolResultGuard).toHaveBeenCalledOnce();
+  });
+
+  it("defers local pressure recovery while the provider request boundary owns compaction", () => {
+    const input = createInput();
+    input.activeSession[agentSessionDeferThresholdCompaction] = true;
+    const guards = installEmbeddedAttemptContextGuards(input as never);
+    const request = {
+      context: { messages: [{ role: "user" as const, content: "x".repeat(8_000), timestamp: 1 }] },
+    };
+    expect(() => guards.checkMidTurnPrecheck(request)).not.toThrow();
+    expect(guards.takePendingMidTurnPrecheckRequest()).toBeNull();
+    input.activeSession[agentSessionDeferThresholdCompaction] = false;
+    expect(() => guards.checkMidTurnPrecheck(request)).toThrow(MidTurnPrecheckSignal);
+    guards.remove();
   });
 
   it("composes context-engine and tool-result cleanup while exposing checkpoints", () => {

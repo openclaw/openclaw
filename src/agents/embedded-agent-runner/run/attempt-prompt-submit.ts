@@ -95,6 +95,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | undefined;
   /** Observes only the first admitted foreground dispatch, not preflight/compaction. */
   onPrimaryModelRequest?: (tools: NonNullable<Parameters<StreamFn>[1]["tools"]>) => void;
+  onModelRequest?: (model: Parameters<StreamFn>[0], context: Parameters<StreamFn>[1]) => void;
   onSteeringAcknowledged: () => void;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
@@ -221,7 +222,10 @@ export async function submitEmbeddedAttemptPrompt(input: {
       }
       if (foregroundRequest && input.compactBeforeRequest) {
         const checkpoint = await input.compactBeforeRequest(
-          baseStreamFn,
+          (compactionModel, compactionContext, compactionOptions) => {
+            input.onModelRequest?.(compactionModel, compactionContext);
+            return baseStreamFn(compactionModel, compactionContext, compactionOptions);
+          },
           model,
           requestContext,
           options,
@@ -236,6 +240,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
             messages: [...requestContext.messages, checkpoint],
           };
         }
+      }
+      if (foregroundRequest) {
+        input.onModelRequest?.(model, requestContext);
       }
       if (foregroundRequest && !primaryRequestObserved) {
         primaryRequestObserved = true;

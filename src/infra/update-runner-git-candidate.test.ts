@@ -181,6 +181,31 @@ describe("Git candidate activation", () => {
     await expectNoRuntimeStagingPaths();
   });
 
+  it("reports candidate checks and runtime activation among the Git update steps", async () => {
+    await advanceRemote();
+    const cleanup = {
+      name: "candidate-state-cleanup",
+      command: "rm -rf -- /synthetic/openclaw-update-canary",
+      cwd: root,
+      durationMs: 900,
+      exitCode: 0,
+    };
+    const result = await update({ validateCandidate: async () => [cleanup] });
+    expect(result.status).toBe("ok");
+    const names = result.steps.map((step) => step.name);
+    expect(result.steps).toContainEqual(cleanup);
+    // Candidate checks keep their place between the build and the activation checks.
+    expect(names.indexOf("candidate-state-cleanup")).toBeGreaterThanOrEqual(0);
+    expect(names.indexOf("candidate-state-cleanup")).toBeLessThan(
+      names.indexOf("preflight-update-clean-check"),
+    );
+    expect(result.steps.find((step) => step.name === "git-runtime-activation")).toMatchObject({
+      exitCode: 0,
+      durationMs: expect.any(Number),
+    });
+    expect(names.indexOf("git-runtime-activation")).toBeGreaterThan(names.indexOf("git-checkout"));
+  });
+
   registerGitActivationDoctorOutcomeTests(() => ({
     root,
     beforeSha,

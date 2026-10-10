@@ -9,6 +9,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
@@ -176,6 +177,78 @@ async function createAcceptedTurnFixture(
 }
 
 describe("accepted context-engine turn finalization", () => {
+  it("commits a running turn once after confirming a persisted steer", async () => {
+    const target = {
+      agentId: "main",
+      sessionId: "steered-turn",
+      sessionKey: "agent:main:steered-turn",
+      storePath: path.join(sessionDirs.make(), "sessions.json"),
+      sessionEntry: undefined,
+    };
+    await seedTurnSession(target);
+    const recorder = createUserTurnTranscriptRecorder({
+      target,
+      input: { text: "Start the answer" },
+      updateMode: "none",
+    });
+    const { commitTurn, lease } = createDurableLease();
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      recorder,
+      sessionTarget: target,
+      lease,
+    });
+    await recorder.persistApproved();
+    recorder.markSentToProvider?.();
+    const admission = recorder.getAdmissionReceipt();
+    if (!admission) {
+      throw new Error("expected running turn admission");
+    }
+    const steer = createUserTurnTranscriptRecorder({
+      target,
+      input: { text: "Include the correction" },
+      updateMode: "none",
+    });
+    await steer.persistApproved();
+    await steer.confirmSteerTargetRunIdForPersistence?.("running-turn");
+    const terminal = await appendTranscriptMessage(target, {
+      message: { role: "assistant", content: "Corrected answer" },
+    });
+    if (!terminal?.anchor) {
+      throw new Error("expected terminal transcript anchor");
+    }
+    const facts: ContextEngineTurnAttemptFacts = {
+      boundary: { admission, terminal: terminal.anchor },
+      sessionIdUsed: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+    };
+    const warn = vi.fn();
+    await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+    await drainPendingContextEngineTurnsBeforeRun({
+      admission: undefined,
+      recorder,
+      lease,
+      sessionTarget: target,
+      warn,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(commitTurn).toHaveBeenCalledOnce();
+    expect(commitTurn.mock.calls[0]?.[0].messages).toEqual([
+      expect.objectContaining({ role: "user", content: "Start the answer" }),
+      expect.objectContaining({
+        role: "user",
+        content: "Include the correction",
+        __openclaw: expect.objectContaining({ steerTargetRunId: "running-turn" }),
+      }),
+      expect.objectContaining({ role: "assistant", content: "Corrected answer" }),
+    ]);
+  });
+
   it("commits the accepted session first and preserves bounded retries for other sessions", async () => {
     const { database, facts } = await createAcceptedTurnFixture({
       answer: "answer",
@@ -303,7 +376,7 @@ describe("accepted context-engine turn finalization", () => {
           { role: "assistant", content: "answer" },
         ],
       });
-      expect(reads.counts.freshness).toBe(1);
+      expect(reads.counts.freshness).toBe(0);
       expect(reads.counts.read).toBeLessThanOrEqual(8);
     } finally {
       reads.restore();

@@ -250,7 +250,10 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
           setCurrentUserTimestampOverride: vi.fn(),
         },
         cacheTrace: null,
-        contextGuards: { takePendingMidTurnPrecheckRequest: () => undefined },
+        contextGuards: {
+          checkMidTurnPrecheck: vi.fn(),
+          takePendingMidTurnPrecheckRequest: () => undefined,
+        },
         preparedUserTurnMessage: {
           role: "user",
           content: "hello",

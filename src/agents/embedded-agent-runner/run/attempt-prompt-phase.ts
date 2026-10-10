@@ -303,11 +303,6 @@ export async function runEmbeddedAttemptPromptPhase(
       if (googlePromptCacheStreamFn) {
         activeSession.agent.streamFn = googlePromptCacheStreamFn;
       }
-      const { onModelRequest } = preparedStreamRuntime.cache;
-      if (onModelRequest) {
-        // Observe canonical inputs before managed caches consume system/tools.
-        observeForegroundRequests(onModelRequest);
-      }
     }
 
     const imageResult = await prepareEmbeddedAttemptPromptExecution({
@@ -492,6 +487,7 @@ export async function runEmbeddedAttemptPromptPhase(
               }),
             }
           : {}),
+        onModelRequest: preparedStreamRuntime.cache.onModelRequest,
         images: imageResult.images,
         ...(leasedSteering ? { leasedSteering } : {}),
         modelPrompt: promptContext.promptForModel,

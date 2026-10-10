@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
   withOpenClawTestState,
@@ -14,6 +16,7 @@ import type {
 import { materializePreparedRuntimeModel } from "../runtime-plan/materialize-model.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
+import { makeModel } from "./model.test-harness.js";
 
 const PROVIDER = "configured-index-fixture";
 const BASE_URL = "https://configured-index.example.invalid/v1";
@@ -267,6 +270,70 @@ describe("selected model materialization", () => {
             ),
         });
         expect(model?.id).toBe("middle");
+      });
+    },
+  );
+});
+
+describe("configured model discovery facts", () => {
+  it.each([
+    { configuredContext: undefined, supportsTools: false },
+    { configuredContext: undefined, supportsTools: true },
+    { configuredContext: 16_384, supportsTools: false },
+  ])(
+    "inherits admitted facts with context pin $configuredContext and tools $supportsTools",
+    async ({ configuredContext, supportsTools }) => {
+      const provider = "router-fixture";
+      const modelId = "unloaded-at-setup";
+      const baseUrl = "http://127.0.0.1:19288/v1";
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            [provider]: {
+              api: "openai-completions",
+              baseUrl,
+              models: [
+                {
+                  ...makeModel(modelId),
+                  contextWindow: configuredContext,
+                  contextTokens: configuredContext,
+                },
+              ],
+            },
+          },
+        },
+      };
+      const stores = createEmptyAgentDiscoveryStores();
+      const catalogModel = {
+        ...makeProviderModelFixture({
+          provider,
+          id: modelId,
+          api: "openai-completions",
+          baseUrl,
+        }),
+        contextWindow: 32_768,
+        contextTokens: 32_768,
+        compat: { supportsTools, supportsUsageInStreaming: true },
+      } satisfies ProviderRuntimeModel;
+      stores.modelRegistry.registerProvider(provider, {
+        api: "openai-completions",
+        baseUrl,
+        models: [catalogModel],
+      });
+      await withPluginRuntimeGenerationScope({ metadataSnapshot: metadata() }, async () => {
+        const result = await resolveModelAsync(provider, modelId, undefined, config, {
+          ...stores,
+          skipAgentDiscovery: true,
+          skipProviderRuntimeHooks: true,
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.model).toMatchObject({
+          contextWindow: configuredContext ?? 32_768,
+          contextTokens: configuredContext ?? 32_768,
+          compat: { supportsTools },
+          api: "openai-completions",
+          baseUrl,
+        });
       });
     },
   );

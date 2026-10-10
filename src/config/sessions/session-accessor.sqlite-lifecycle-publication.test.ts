@@ -1,8 +1,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -84,7 +84,7 @@ afterEach(async () => {
   resetConfigRuntimeState();
 });
 
-it("publishes history changes only after deletion while fresh reads observe foreign protection", async () => {
+it("publishes history changes only after deletion while fresh reads observe sibling protection", async () => {
   const stateDir = tempDirs.make("session-history-publication-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const database = openOpenClawAgentDatabase({ agentId: "main" });
@@ -143,7 +143,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
       changes.push(change);
     }
   });
-  const peer = new DatabaseSync(database.path);
+  const peer = openNodeSqliteDatabase(database.path);
   const writeProtection = (updatedAt: number) => {
     peer.exec("BEGIN IMMEDIATE");
     try {
@@ -151,7 +151,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
         .prepare("UPDATE session_nodes SET updated_at = ?, entry_json = ? WHERE session_key = ?")
         .run(
           updatedAt,
-          JSON.stringify({ ...successor, updatedAt, label: "foreign protection" }),
+          JSON.stringify({ ...successor, updatedAt, label: "sibling protection" }),
           sessionKey,
         );
       peer
@@ -175,7 +175,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       ...successor,
       updatedAt,
-      label: "foreign protection",
+      label: "sibling protection",
     });
     await expect(loadTranscriptEvents(scope)).resolves.toEqual(events);
 
@@ -190,7 +190,7 @@ it("publishes history changes only after deletion while fresh reads observe fore
     await expect(loadTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionEntryReadOnly(scope)).toMatchObject({
       ...successor,
-      label: "foreign protection",
+      label: "sibling protection",
     });
   } finally {
     stop();

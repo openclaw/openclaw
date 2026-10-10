@@ -792,7 +792,7 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.
-- Dreaming writes human-readable narrative output to `DREAMS.md` (or existing `dreams.md`).
+- Dreaming combines Light, REM, and promoted Deep memories into at most one diary entry per workspace per sweep in `DREAMS.md` (or existing `dreams.md`). Phase reports remain separate, and sweeps without new material produce no diary entry.
 - Deep consolidation stores the prior `MEMORY.md` in SQLite-backed plugin state and records rewrite counts and highlights in `DREAMS.md`.
 - Untrusted and system-derived candidates are structurally excluded before consolidation and durable promotion.
 - `dreaming.model` uses the existing plugin subagent trust gate; set `plugins.entries.memory-core.subagent.allowModelOverride: true` before enabling it.

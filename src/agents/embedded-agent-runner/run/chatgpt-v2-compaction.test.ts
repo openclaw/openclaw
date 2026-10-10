@@ -210,6 +210,8 @@ async function fixture(
     withTranscriptWrite,
     onFallback,
   };
+  const onModelRequest =
+    vi.fn<NonNullable<Parameters<typeof submitEmbeddedAttemptPrompt>[0]["onModelRequest"]>>();
   const boundary = createChatGPTV2CompactionBoundary(boundaryParams);
   const submit = (prompt = "current request") =>
     submitEmbeddedAttemptPrompt({
@@ -217,6 +219,7 @@ async function fixture(
       activeSession: session,
       contextTokenBudget: 8_000,
       compactBeforeRequest: boundary,
+      onModelRequest,
       images: [],
       modelPrompt: prompt,
       transcriptPrompt: prompt,
@@ -236,7 +239,17 @@ async function fixture(
         buildRuntimeContextCustomMessage("per-turn developer context") ?? undefined,
       promptActiveSession: (text, options) => session.prompt(text, options),
     });
-  return { session, sessionManager, execute, events, onFallback, boundary, boundaryParams, submit };
+  return {
+    session,
+    sessionManager,
+    execute,
+    events,
+    onFallback,
+    onModelRequest,
+    boundary,
+    boundaryParams,
+    submit,
+  };
 }
 
 const realUserText = (body: Body) =>
@@ -259,6 +272,15 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
     expect(f.onFallback).not.toHaveBeenCalled();
     expect(f.execute).toHaveBeenCalledOnce();
     expect(requests).toHaveLength(4);
+    expect(f.onModelRequest).toHaveBeenCalledTimes(4);
+    expect(
+      f.onModelRequest.mock.calls.map(
+        ([, context]) =>
+          context.messages.filter(
+            (message) => message.role === "assistant" && message.providerReplay,
+          ).length,
+      ),
+    ).toEqual([0, 1, 1, 2]);
     const [firstCompact, firstNormal, secondCompact, secondNormal] = requests;
     if (!firstCompact || !firstNormal || !secondCompact || !secondNormal) {
       throw new Error("Expected compaction and continuation at both boundaries");
