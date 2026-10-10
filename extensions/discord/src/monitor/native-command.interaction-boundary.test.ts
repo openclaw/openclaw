@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import {
   ApplicationCommandOptionType,
   ChannelType,
@@ -6,17 +7,25 @@ import {
   InteractionType,
 } from "discord-api-types/v10";
 import * as channelInbound from "openclaw/plugin-sdk/channel-inbound";
+import { withRegisteredChannelIngress } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import * as commandStatus from "openclaw/plugin-sdk/command-status-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as runtimeConfig from "openclaw/plugin-sdk/runtime-config-snapshot";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordPlugin } from "../channel.js";
 import {
   attachRestMock,
   createInternalInteractionPayload,
   createInternalComponentInteractionPayload,
   createInternalTestClient,
 } from "../internal/test-builders.test-support.js";
+import { setDiscordRuntime } from "../runtime.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { clearDiscordChannelInfoCacheForTest } from "./message-channel-info.test-support.js";
@@ -34,6 +43,15 @@ const CHANNEL = "100000000000000002";
 const THREAD = "100000000000000003";
 const USER = "100000000000000004";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+    }
+    cleanup();
+  }),
+);
+
 function createConfig(): OpenClawConfig {
   return {
     commands: { allowFrom: { discord: [`user:${USER}`] } },
@@ -47,9 +65,9 @@ function createConfig(): OpenClawConfig {
   };
 }
 
-function createHarness() {
-  const cfg = createConfig();
+function createHarness(cfg = createConfig()) {
   let currentConfig = cfg;
+  vi.spyOn(runtimeConfig, "getRuntimeConfigSnapshot").mockImplementation(() => currentConfig);
   const readPolicy = createDiscordLivePolicyReader({
     cfg,
     accountId: "default",
@@ -67,6 +85,11 @@ function createHarness() {
     threadBindings: createNoopThreadBindingManager("default"),
   };
   const client = createInternalTestClient([
+    createDiscordNativeCommand({
+      ...commandContext,
+      ephemeralDefault: true,
+      command: { name: "compact", description: "Compact", acceptsArgs: false },
+    }),
     createDiscordNativeCommand({
       ...commandContext,
       ephemeralDefault: true,
@@ -226,6 +249,87 @@ function expectVisibleStatus(harness: ReturnType<typeof createHarness>, channelI
 describe("Client.handleInteraction native command channel identity", () => {
   beforeEach(() => clearDiscordChannelInfoCacheForTest());
   afterEach(() => vi.restoreAllMocks());
+
+  it("provides recovery guidance for an archived slash source without changing its history", async () => {
+    const storePath = join(tempDirs.make("openclaw-discord-archived-"), "sessions.json");
+    const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
+    const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
+    const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+    const sessionId = "archived-command-session";
+    await sessionStore.upsertSessionEntry({
+      ...source,
+      entry: { sessionId, updatedAt: 1 },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      ...source,
+      sessionId,
+      message: { role: "user", content: "Synthetic archived history", timestamp: 1 },
+    });
+    await sessionStore.patchSessionEntry({
+      ...source,
+      update: () => ({ archivedAt: 2, archivedBy: { type: "human", id: "test-operator" } }),
+    });
+    await sessionStore.upsertSessionEntry({
+      ...target,
+      entry: { sessionId: "active-channel-session", updatedAt: Date.now() },
+    });
+    const activeTarget = sessionStore.getSessionEntry(target);
+    expect(activeTarget).toMatchObject({ sessionId: "active-channel-session" });
+    expect(activeTarget?.archivedAt).toBeUndefined();
+    const archived = sessionStore.getSessionEntry(source);
+    if (!archived) {
+      throw new Error("Expected the archived command session fixture to exist");
+    }
+    expect(archived).toMatchObject({ sessionId, archivedAt: 2 });
+    const transcript = sessionStore.loadTranscriptEventsSync({ ...source, sessionId });
+    expect(JSON.stringify(transcript)).toContain("Synthetic archived history");
+    const harness = createHarness(cfg);
+    harness.dispatch.mockRestore();
+    harness.session.mockRestore();
+    await withRegisteredChannelIngress(
+      { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
+      async () => {
+        await expect(
+          harness.client.handleInteraction(
+            createInternalInteractionPayload({
+              ...payload(CHANNEL),
+              type: InteractionType.ApplicationCommand,
+              data: { id: "compact-command", name: "compact", type: 1 },
+            }),
+          ),
+        ).rejects.toThrow(/is archived/);
+      },
+    );
+    expect(harness.post).toHaveBeenCalledExactlyOnceWith(
+      "/interactions/interaction1/test-token/callback",
+      {
+        body: {
+          type: InteractionResponseType.DeferredChannelMessageWithSource,
+          data: { flags: 64 },
+        },
+      },
+    );
+    expect(harness.patch).toHaveBeenCalledExactlyOnceWith(
+      "/webhooks/app1/test-token/messages/%40original",
+      {
+        body: {
+          content:
+            "Command failed. Ask an operator to check the Gateway logs. If your command session is archived, ask them to restore it, then retry the command.",
+          allowed_mentions: { parse: [] },
+        },
+      },
+    );
+    // Inbound routing can enrich delivery facts before admission rejects the command.
+    const after = sessionStore.getSessionEntry(source);
+    expect(after).toMatchObject({
+      sessionId: archived.sessionId,
+      archivedAt: archived.archivedAt,
+      archivedBy: archived.archivedBy,
+    });
+    expect(after?.archiveReason).toBe(archived.archiveReason);
+    expect(sessionStore.loadTranscriptEventsSync({ ...source, sessionId })).toEqual(transcript);
+    expect(sessionStore.getSessionEntry(target)).toEqual(activeTarget);
+  });
 
   it.each([THREAD])("delivers status for raw channel %s without hydration", async (channelId) => {
     const harness = createHarness();
