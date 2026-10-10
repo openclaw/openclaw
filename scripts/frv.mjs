@@ -25,15 +25,18 @@ import {
 import {
   classifyReleaseGhTransportError,
   composeReleaseChildAttemptEvidence,
+  formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
   planReleaseChildRerun,
   releaseChildSpec,
   releaseChildSpecs,
+  releaseGhRateLimitRetryAt,
   terminalPolicyPass,
   validateReleaseChildDispatchBinding,
   validateReleaseChildRunProvenance,
   validateReleaseExecutionPlanArtifact,
+  validateReleaseStateArtifact,
 } from "./full-release-validation-policy.mjs";
 import {
   inspectActionsArtifactZipWithPolicy,
@@ -55,6 +58,7 @@ import {
   createReleaseEvidenceClient,
   releaseExecutionPlanRestoreContract,
   restoreOriginalPublicationAdmission,
+  tryReadReleaseDecisionArtifact,
 } from "./release-ci-summary.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -237,7 +241,7 @@ async function execCommand(command, args, options = {}) {
     maxBuffer: 64 * 1024 * 1024,
     timeout: options.timeoutMs ?? 60_000,
   });
-  return result.stdout.trim();
+  return result.stdout;
 }
 
 function execGh(args, options = {}) {
@@ -281,7 +285,11 @@ async function execGhRead(args, options = {}) {
         timeoutMs: Math.min(options.timeoutMs ?? 60_000, remaining),
       });
     } catch (error) {
-      if (attempt === 4 || classifyReleaseGhTransportError(error) !== "transient") {
+      if (
+        attempt === 4 ||
+        releaseGhRateLimitRetryAt(error) !== undefined ||
+        classifyReleaseGhTransportError(error) !== "transient"
+      ) {
         throw error;
       }
       await sleep(
@@ -297,18 +305,25 @@ async function execGhRead(args, options = {}) {
   }
 }
 
-function readGhApi(repository, path, args = [], options = {}, fresh = true) {
+async function readGhApi(repository, path, args = [], options = {}, fresh = true) {
   // Rerun decisions require current attempts and jobs, not a relay's earlier snapshot.
   // Polling watchers keep the relay's own freshness policy.
-  return execGhRead(
+  const include = !path.endsWith("/logs");
+  const output = await execGhRead(
     [
       "api",
+      ...(include ? ["--include"] : []),
       `repos/${repository}/${path}`,
       ...(fresh ? ["-H", "Cache-Control: max-age=0"] : []),
       ...args,
     ],
     options,
   );
+  // gh emits a header block for each paginated response, even with --jq.
+  // Keep successful JSON rows intact while retaining failed-response retry headers.
+  return include
+    ? output.replace(/^HTTP\/\d+(?:\.\d+)? [^\r\n]+\r?\n(?:[^\r\n]+\r?\n)*\r?\n/gmu, "").trim()
+    : output.trim();
 }
 
 async function ghJson(repository, path, options, fresh) {
@@ -823,6 +838,138 @@ export async function inspectContinuation(plan, client, options = {}) {
   return continuationStatus(children);
 }
 
+async function inspectQualificationStatus(plan, runId, client) {
+  const operationDeadline = createOperationDeadline();
+  let status;
+  let parent;
+  let jobs;
+  try {
+    status = await inspectContinuation(plan, client, { operationDeadline });
+    [parent, jobs] = await Promise.all([
+      client.getRun(runId, { operationDeadline }),
+      client.getParentJobs(runId, { operationDeadline }),
+    ]);
+  } catch (error) {
+    return {
+      ...(status ?? continuationStatus([])),
+      collectionComplete: false,
+      qualification: { state: "observation-unavailable", evidence: "unavailable" },
+      drain: {
+        status: "unknown",
+        conclusion: "",
+        activeRunIds: status?.active.map((child) => child.runId) ?? [],
+      },
+      decision: null,
+      candidate: { sha: plan.targetSha, ref: null, tipSha: null, state: "unknown" },
+      observationErrors: [
+        `GitHub observation unavailable (${classifyReleaseGhTransportError(error)})`,
+      ],
+      nextCommand: `pnpm frv watch --run ${runId} --once`,
+    };
+  }
+  if (String(parent.id) !== runId || parent.head_sha !== plan.workflowSha) {
+    throw new Error("status parent identity differs from the immutable execution plan");
+  }
+  const currentJobs = jobs.filter((job) => Number(job.run_attempt) === Number(parent.run_attempt));
+  const drainJobs = currentJobs.filter((job) => job.name === "Diagnostic Drain");
+  const drainJob = drainJobs.length === 1 ? drainJobs[0] : undefined;
+  const drain = {
+    status: drainJob?.status ?? "unknown",
+    conclusion: drainJob?.conclusion ?? "",
+    activeRunIds: status.active.map((child) => child.runId),
+  };
+  const observationErrors = [];
+  if (parent.status === "completed" && !drainJob) {
+    observationErrors.push("Diagnostic Drain observation unavailable");
+  }
+  let decision;
+  try {
+    const artifact = tryReadReleaseDecisionArtifact(
+      { attempt: parent.run_attempt, headSha: parent.head_sha },
+      runId,
+      client.repository,
+    );
+    if (artifact) {
+      decision = validateReleaseStateArtifact(artifact, { executionPlan: plan }, "decision");
+    } else if (
+      parent.status === "completed" ||
+      currentJobs.some((job) => job.name === "Release Decision" && job.status === "completed")
+    ) {
+      observationErrors.push("Decision evidence unavailable");
+    }
+  } catch {
+    observationErrors.push("Decision evidence unavailable or invalid");
+  }
+  let evidence = "pending";
+  if (parent.status === "completed") {
+    evidence = "not-accepted";
+    if (parent.conclusion === "success") {
+      try {
+        const attempts = await freezeVerificationAttempts(
+          plan,
+          runId,
+          status,
+          client,
+          operationDeadline,
+        );
+        evidence = (await client.verifySeal(runId, plan, operationDeadline, attempts))
+          ? "accepted"
+          : "needs-refresh";
+      } catch {
+        evidence = "unavailable";
+        observationErrors.push("Seal verification unavailable; run frv verify for details");
+      }
+    }
+  }
+  const qualification = {
+    state:
+      evidence === "accepted"
+        ? "passed"
+        : evidence === "unavailable"
+          ? "observation-unavailable"
+          : decision && !["qualifying", "passed"].includes(decision.state)
+            ? "blocked"
+            : parent.status === "completed" || status.failed.length || status.missing.length
+              ? "blocked"
+              : "running",
+    evidence,
+  };
+  const ref =
+    plan.sourceAdmission?.targetContextRef ?? plan.qualificationInputs?.target_context_ref;
+  let candidate = { sha: plan.targetSha, ref: ref ?? null, tipSha: null, state: "unknown" };
+  if (ref && !/^[a-f0-9]{40}$/u.test(ref)) {
+    try {
+      const fullRef = ref.startsWith("refs/") ? ref : `refs/heads/${ref}`;
+      const tip = await client.getRef(fullRef, { operationDeadline });
+      candidate = {
+        sha: plan.targetSha,
+        ref,
+        tipSha: tip.object.sha,
+        state: tip.object.sha === plan.targetSha ? "current" : "superseded",
+      };
+    } catch {
+      observationErrors.push("Candidate tip observation unavailable");
+    }
+  }
+  const nextCommand = `pnpm frv ${
+    status.active.length || parent.status !== "completed"
+      ? "watch"
+      : qualification.state === "blocked"
+        ? "continue --failed --dry-run"
+        : "verify"
+  } --run ${runId}`;
+  return {
+    ...status,
+    collectionComplete: observationErrors.length === 0,
+    qualification,
+    drain,
+    decision: decision ?? null,
+    candidate,
+    observationErrors,
+    nextCommand,
+  };
+}
+
 export function createClient(repository, dependencies = {}) {
   let releaseEvidenceClient;
   const fresh = dependencies.cachedReads !== true;
@@ -894,6 +1041,14 @@ export function createClient(repository, dependencies = {}) {
       dependencies.getAttemptJobs ??
       ((runId, runAttempt, options) =>
         readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
+    getRef(fullRef, options) {
+      const ref = fullRef
+        .replace(/^refs\//u, "")
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/");
+      return apiJson(`git/ref/${ref}`, options);
+    },
     getRun(runId, options) {
       return apiJson(`actions/runs/${runId}`, options);
     },
@@ -2370,6 +2525,9 @@ function readWatchState(path, repository, parentRunId) {
   return {
     children: saved?.children ?? {},
     parentRunId,
+    nextCheckAt: saved?.nextCheckAt ?? 0,
+    rateLimitFailures: saved?.rateLimitFailures ?? 0,
+    failedReadFingerprint: saved?.failedReadFingerprint ?? "",
     reported: new Set(saved?.reported),
     repository,
   };
@@ -2422,9 +2580,17 @@ async function pollRelease(state, client, pending, readOptions) {
   };
   // Transient GitHub failures, including HTML 5xx bodies, never become job results.
   const read = async (label, operation) => {
+    if (state.nextCheckAt > Date.now()) {
+      return undefined;
+    }
     try {
       return await operation();
     } catch (error) {
+      const retryAt = releaseGhRateLimitRetryAt(error, Date.now(), state.rateLimitFailures);
+      if (retryAt !== undefined) {
+        state.nextCheckAt = Math.max(state.nextCheckAt, retryAt);
+        state.rateLimitFailures += 1;
+      }
       const text = String(error?.stderr ?? error?.message ?? error);
       if (classifyReleaseGhTransportError(error) === "hard" && !/HTTP 404\b/u.test(text)) {
         throw error;
@@ -2560,15 +2726,29 @@ export async function watchRelease(parentRunId, client, options = {}) {
   const state = readWatchState(statePath, repository, String(parentRunId));
   const pending = new Set();
   while (true) {
-    const { complete, events, failedReads } = await pollRelease(state, client, pending, {
-      operationDeadline,
-    });
+    const { complete, events, failedReads } =
+      state.nextCheckAt > Date.now()
+        ? { complete: false, events: [], failedReads: [] }
+        : await pollRelease(state, client, pending, { operationDeadline });
+    if (failedReads.length > 0) {
+      const fingerprint = `${failedReads.join(", ")}:${state.nextCheckAt}`;
+      if (state.failedReadFingerprint !== fingerprint) {
+        events.push({
+          message:
+            state.nextCheckAt > Date.now()
+              ? `GitHub rate limited (${failedReads.join(", ")}); next check at ${new Date(state.nextCheckAt).toISOString()}`
+              : `GitHub reads failed (${failedReads.join(", ")}); retrying next poll`,
+        });
+        state.failedReadFingerprint = fingerprint;
+      }
+    } else if (state.nextCheckAt <= Date.now()) {
+      state.nextCheckAt = 0;
+      state.rateLimitFailures = 0;
+      state.failedReadFingerprint = "";
+    }
     writeWatchState(statePath, state);
     for (const event of events) {
       emit(event);
-    }
-    if (failedReads.length > 0) {
-      emit({ message: `GitHub reads failed (${failedReads.join(", ")}); retrying next poll` });
     }
     if (complete) {
       emit({ message: `parent ${parentRunId} and every dispatched child are terminal` });
@@ -2578,7 +2758,7 @@ export async function watchRelease(parentRunId, client, options = {}) {
     if (options.once || remaining < 1) {
       return { complete, statePath };
     }
-    await sleep(Math.min(intervalMs, remaining));
+    await sleep(Math.min(Math.max(intervalMs, state.nextCheckAt - Date.now()), remaining));
   }
 }
 
@@ -2595,9 +2775,28 @@ function print(value, json) {
     console.log(JSON.stringify(value, null, 2));
     return;
   }
+  if (value.qualification) {
+    console.log(
+      `qualification: ${value.qualification.state}; evidence: ${value.qualification.evidence}`,
+    );
+    console.log(
+      `drain: ${value.drain.status} ${value.drain.conclusion}; active children: ${value.drain.activeRunIds.join(", ") || "none"}`,
+    );
+    console.log(
+      `workloads: ${value.failed.length} failed, ${value.active.length} active, ${value.missing.length} missing`,
+    );
+    console.log(`candidate: ${value.candidate.sha}; tip: ${value.candidate.state}`);
+    if (value.decision) {
+      console.log(formatReleaseStateOutcome(value.decision));
+    }
+    for (const error of value.observationErrors) {
+      console.log(`observation: ${error}`);
+    }
+    console.log(`next: ${value.nextCommand}`);
+  }
   for (const child of value.status?.children ?? value.children ?? []) {
     console.log(
-      `${child.key}: ${child.status} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
+      `${child.key}: ${child.status}${child.conclusion && child.conclusion !== "success" ? ` (${child.conclusion})` : ""} attempt=${child.effectiveRunAttempt} planned=${child.plannedRunAttempt} run=${child.runId}`,
     );
   }
   for (const run of value.rerun ?? []) {
@@ -2676,7 +2875,7 @@ async function main() {
   }
   const plan = await loadPlan(options);
   if (options.command === "status") {
-    print(await inspectContinuation(plan, client), options.json);
+    print(await inspectQualificationStatus(plan, options.runId, client), options.json);
     return;
   }
   const result = await continueFailed(plan, options.runId, client, {
