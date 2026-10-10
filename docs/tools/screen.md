@@ -9,7 +9,7 @@ read_when:
 ---
 
 The `screen` tool lets an agent arrange the browser-based Control UI. It is a
-typed layout and navigation surface, not screenshot capture or browser
+typed layout, navigation, and visual guidance surface, not screenshot capture or browser
 automation.
 
 The tool is exposed only when the originating client advertises the
@@ -60,6 +60,71 @@ application from the portal list.
 
 A successful command returns `{ "ok": true }` after the Gateway sends
 the typed `ui.command` event to the requesting browser.
+
+## Visual guidance
+
+Use `annotate` when someone asks where a control is or how to complete a task.
+It points; the person still clicks. An annotation never types, navigates, opens a
+panel, or moves keyboard focus. Calls replace the previous guide in that browser.
+
+```json
+{
+  "action": "annotate",
+  "annotations": [
+    { "target": { "control": "side-panel" }, "text": "Start here. Open your side panel." }
+  ]
+}
+```
+
+After the person opens an empty side panel, point at `terminal-new`. If the
+panel already contains tabs, point at `panel-new` first, then `terminal-new`
+in that menu. Do not treat delivery as evidence that the person clicked.
+
+Each call accepts 1–4 annotations, each with:
+
+- `target`: exactly one of `{ control }`, `{ sessionKey }`, or `{ text }`.
+- `text`: a plain-text label, 1–200 characters. No HTML or Markdown execution.
+- `style`: `arrow` (default), `outline`, or `note` (a label with a connector).
+- `color`: `coral` (default), `teal`, or `purple`.
+
+Known controls are `side-panel`, `panel-new`, `terminal-new`, `settings`,
+`agent-menu`, `agent-new`, and `session-new`. A session target matches its
+visible sidebar row, including pinned rows. Text matches exact normalized visible
+copy or an accessible label. Targets do not search unloaded history, hidden menus,
+other browser tabs, native desktop windows, or content inside embedded frames.
+The target must be unique and visible; otherwise a waiting label appears without
+an arrow. Reveal it before the guide expires to resolve it. No coordinates or
+arbitrary selectors are accepted.
+
+```json
+{
+  "action": "annotate",
+  "annotations": [
+    {
+      "target": { "sessionKey": "agent:main:website-launch" },
+      "text": "Your launch conversation is pinned here.",
+      "style": "outline",
+      "color": "teal"
+    }
+  ],
+  "durationSeconds": 45
+}
+```
+
+Guides expire after 30 seconds by default (`durationSeconds`: 3–120). Escape,
+**Dismiss guide**, a click on a target, changing conversations, leaving the tab,
+or disconnecting clears them. `{ "action": "annotations_clear" }` clears them
+explicitly. Guides are never persisted in history or replayed after reconnect.
+They follow scrolling and resizing without animation, including reduced-motion
+settings. Their arrows and labels let clicks through; only Dismiss is interactive.
+When the labels cannot fit without overlapping, a scrollable compact list replaces
+the arrows so every instruction stays reachable.
+
+Annotation commands return `{ "ok": true, "status": "dispatched" }`. This is a
+**delivery acknowledgment, not a rendered-target or user-action acknowledgment**.
+The browser owns target resolution; this draft does not return a DOM inventory
+or target-resolution receipt to the agent. Keep verbal guidance alongside the
+visual hint, and ask the person what they see when the target is unavailable.
 
 ## Routing and security
 

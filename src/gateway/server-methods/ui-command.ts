@@ -103,7 +103,13 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
       assertActiveAgentRuntimeAuthority(options.client, options.context);
       const result = dispatchUiCommandToRequester(options);
       if (result.ok) {
-        options.respond(true, { ok: true });
+        options.respond(true, {
+          ok: true,
+          ...(options.params.command.kind === "annotate" ||
+          options.params.command.kind === "annotations-clear"
+            ? { status: "dispatched" }
+            : {}),
+        });
       } else {
         options.respond(false, undefined, result.error);
       }

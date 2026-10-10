@@ -1,4 +1,10 @@
 :root {
+  /* Fixed annotation palette preserves white text/keyline contrast across themes. */
+  --guide-coral: #bc4438;
+  --guide-teal: #087f82;
+  --guide-purple: #7551b8;
+  --guide-keyline: #ffffff;
+  --guide-shadow: #00000055;
   --bg: #0e1015;
   --bg-accent: #13151b;
   --bg-elevated: #191c24;

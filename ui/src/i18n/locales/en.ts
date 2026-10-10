@@ -1639,6 +1639,11 @@ export const en: TranslationMap & {
     customizeReset: "Reset pinned items",
     workboardGroup: "WorkBoard",
   },
+  uiGuide: {
+    title: "Your guide · Esc to dismiss",
+    dismiss: "Dismiss guide",
+    waiting: "Waiting for one visible target. Open or reveal it to continue.",
+  },
   terminal: {
     title: "Terminal",
     copiedToClipboard: "Copied to clipboard",

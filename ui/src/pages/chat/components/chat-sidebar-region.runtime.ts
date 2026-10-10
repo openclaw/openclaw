@@ -270,6 +270,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             (type) => html`
               <wa-dropdown-item
                 class="side-panel-type-menu__item session-menu__item"
+                data-guide-target=${type.slot === "terminal" ? "terminal-new" : nothing}
                 .value=${type.slot}
               >
                 ${renderPanelTypeOption(type, true)}
@@ -485,6 +486,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ${this.panelTypes().map(
           (type) => html`<button
             class="side-panel-empty__type"
+            data-guide-target=${type.slot === "terminal" ? "terminal-new" : nothing}
             type="button"
             @click=${() => this.callbacks?.openSlot(type.slot)}
           >

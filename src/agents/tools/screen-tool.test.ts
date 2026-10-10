@@ -19,6 +19,32 @@ function createGatewayRecorder() {
 }
 
 describe("screen tool", () => {
+  it("validates annotation payloads before dispatch and preserves semantic targets", async () => {
+    const { callGateway, calls } = createGatewayRecorder();
+    const tool = createScreenTool({ agentSessionKey: "agent:main:main", callGateway });
+    const annotations = [{ target: { control: "side-panel" }, text: "Open your side panel." }];
+    await tool.execute("point", { action: "annotate", annotations });
+    expect(calls[0]).toEqual([
+      "ui.command",
+      { sessionKey: "agent:main:main", command: { kind: "annotate", annotations } },
+    ]);
+    for (const invalid of [
+      [],
+      Array(5).fill(annotations[0]),
+      [{ target: { selector: "body" }, text: "No" }],
+      [{ target: { text: "Save" }, text: "x".repeat(201) }],
+    ]) {
+      await expect(
+        tool.execute("invalid", { action: "annotate", annotations: invalid }),
+      ).rejects.toThrow("annotate requires");
+    }
+    await expect(
+      tool.execute("invalid-duration", { action: "annotate", annotations, durationSeconds: 0 }),
+    ).rejects.toThrow("annotate requires");
+    expect(calls).toHaveLength(1);
+    await tool.execute("clear", { action: "annotations_clear" });
+    expect(calls[1]?.[1].command).toEqual({ kind: "annotations-clear" });
+  });
   it("declares the exact ui.command result contract", async () => {
     const { callGateway } = createGatewayRecorder();
     const tool = createScreenTool({ callGateway });
@@ -26,7 +52,7 @@ describe("screen tool", () => {
 
     expect(tool.outputSchema).toBe(UiCommandResultSchema);
     expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-    expect(compactToolOutputHint(tool.outputSchema)).toBe("{ ok: boolean }");
+    expect(compactToolOutputHint(tool.outputSchema)).toBe('{ ok: boolean; status?: "dispatched" }');
   });
 
   it("uses a flat action enum and requires the UI capability", () => {

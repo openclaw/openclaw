@@ -83,6 +83,8 @@ function diffAgentRoster(
 }
 
 export class ShellGatewayOwner {
+  private annotations: import("./ui-annotations.ts").UiAnnotations | null = null;
+  private annotationGeneration = 0;
   private agentsListClient: GatewayBrowserClient | null = null;
   private agentsListSource: ApplicationContext["agents"] | null = null;
   private sessionKeyClient: GatewayBrowserClient | null = null;
@@ -96,7 +98,15 @@ export class ShellGatewayOwner {
     profileId: string;
   } | null = null;
 
-  constructor(private readonly host: ShellGatewayHost) {}
+  private readonly onAnnotationVisibility = () => {
+    if (document.hidden) {
+      this.clearAnnotations();
+    }
+  };
+
+  constructor(private readonly host: ShellGatewayHost) {
+    document.addEventListener("visibilitychange", this.onAnnotationVisibility);
+  }
 
   observeSessions(
     sessions: ApplicationContext["sessions"],
@@ -243,6 +253,42 @@ export class ShellGatewayOwner {
     if (!command) {
       return;
     }
+    if (command.kind === "annotate" || command.kind === "annotations-clear") {
+      if (
+        commandParams.sessionKey &&
+        !areUiSessionKeysEquivalent(commandParams.sessionKey, this.host.activeSessionKey)
+      ) {
+        return;
+      }
+      this.clearAnnotations();
+      if (command.kind === "annotate") {
+        const generation = this.annotationGeneration;
+        const expiresAt = Date.now() + (command.durationSeconds ?? 30) * 1000;
+        const sessionKey = this.host.activeSessionKey;
+        const profileId = context.gateway.snapshot.selfUser?.id;
+        const current = () =>
+          !document.hidden &&
+          Date.now() < expiresAt &&
+          this.annotationGeneration === generation &&
+          this.host.context === context &&
+          context.gateway.snapshot.client === client &&
+          context.gateway.snapshot.phase === "connected" &&
+          context.gateway.snapshot.selfUser?.id === profileId &&
+          this.host.activeSessionKey === sessionKey;
+        void import("./ui-annotations.ts").then(({ UiAnnotations }) => {
+          const root = this.host instanceof HTMLElement ? this.host : null;
+          if (current() && root) {
+            this.annotations = new UiAnnotations(
+              root,
+              command.annotations,
+              (expiresAt - Date.now()) / 1000,
+              current,
+            );
+          }
+        });
+      }
+      return;
+    }
     if (command.kind === "sidebar") {
       this.host.desktopNavigationExpanded = false;
       context.navigation.update({ navCollapsed: !command.visible });
@@ -356,6 +402,9 @@ export class ShellGatewayOwner {
   }
 
   synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
+    if (snapshot.phase !== "connected") {
+      this.clearAnnotations();
+    }
     const previousPhase = this.previousGatewayPhase;
     this.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
@@ -500,7 +549,14 @@ export class ShellGatewayOwner {
       });
   }
 
+  private clearAnnotations(): void {
+    this.annotationGeneration++;
+    this.annotations?.dispose();
+    this.annotations = null;
+  }
+
   reset(): void {
+    this.clearAnnotations();
     this.agentsListClient = null;
     this.agentsListSource = null;
     this.sessionKeyClient = null;
@@ -517,6 +573,7 @@ export class ShellGatewayOwner {
   }
 
   dispose(): void {
+    document.removeEventListener("visibilitychange", this.onAnnotationVisibility);
     this.host.lastLocalePrefSignature = null;
     this.reset();
   }

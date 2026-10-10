@@ -59,7 +59,43 @@ export const UiNavigateCommandSchema = closedObject({
   sessionKey: NonEmptyString,
 });
 
+// Annotation targets are semantic UI identities, never executable selectors or HTML.
+export const UiAnnotationSchema = closedObject({
+  target: Type.Union([
+    closedObject({
+      control: Type.Union([
+        Type.Literal("side-panel"),
+        Type.Literal("panel-new"),
+        Type.Literal("terminal-new"),
+        Type.Literal("settings"),
+        Type.Literal("agent-menu"),
+        Type.Literal("agent-new"),
+        Type.Literal("session-new"),
+      ]),
+    }),
+    closedObject({ sessionKey: Type.String({ minLength: 1, maxLength: 512 }) }),
+    closedObject({ text: Type.String({ minLength: 1, maxLength: 200 }) }),
+  ]),
+  text: Type.String({ minLength: 1, maxLength: 200 }),
+  style: Type.Optional(
+    Type.Union([Type.Literal("arrow"), Type.Literal("outline"), Type.Literal("note")]),
+  ),
+  color: Type.Optional(
+    Type.Union([Type.Literal("coral"), Type.Literal("teal"), Type.Literal("purple")]),
+  ),
+});
+export const UiAnnotateCommandSchema = closedObject({
+  kind: Type.Literal("annotate"),
+  annotations: Type.Array(UiAnnotationSchema, { minItems: 1, maxItems: 4 }),
+  durationSeconds: Type.Optional(Type.Integer({ minimum: 3, maximum: 120 })),
+});
+export const UiAnnotationsClearCommandSchema = closedObject({
+  kind: Type.Literal("annotations-clear"),
+});
+
 export const UiCommandSchema = Type.Union([
+  UiAnnotateCommandSchema,
+  UiAnnotationsClearCommandSchema,
   UiSplitCommandSchema,
   UiClosePaneCommandSchema,
   UiFocusCommandSchema,
@@ -76,5 +112,8 @@ export const UiCommandParamsSchema = closedObject({
 });
 export type UiCommandParams = Static<typeof UiCommandParamsSchema>;
 
-export const UiCommandResultSchema = closedObject({ ok: Type.Boolean() });
+export const UiCommandResultSchema = closedObject({
+  ok: Type.Boolean(),
+  status: Type.Optional(Type.Literal("dispatched")),
+});
 export type UiCommandResult = Static<typeof UiCommandResultSchema>;

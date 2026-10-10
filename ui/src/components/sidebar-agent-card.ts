@@ -46,6 +46,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
         <button
           type="button"
           class="sidebar-agent-card__main"
+          data-guide-target="agent-menu"
           aria-haspopup="menu"
           aria-expanded=${String(this.menuOpen)}
           aria-label="${this.agentName} · ${menuLabel}"
