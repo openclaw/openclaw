@@ -326,7 +326,11 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
         (item) => item.type === "compaction" && item.encrypted_content === "opaque2",
       ),
     ).toBe(true);
-    expect(realUserText(resumed)).toEqual([...realUserText(firstNormal), "after restart"]);
+    expect(realUserText(resumed)).toEqual([
+      ...realUserText(firstNormal),
+      "after restart",
+      expect.stringContaining("per-turn developer context"),
+    ]);
     expect(reopened.execute).not.toHaveBeenCalled();
   });
 
@@ -338,6 +342,23 @@ describe("ChatGPT V2 at the embedded normal request boundary", () => {
       "compaction_trigger",
       "compaction",
     ]);
+  });
+
+  it("falls back before transport dispatch when the outgoing input exceeds the hard model budget", async () => {
+    const f = await fixture();
+    await f.submit("Oversized current input. ".repeat(10_000));
+    expect(f.onFallback).toHaveBeenCalledOnce();
+    expect(f.onFallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: "compact_only",
+        estimatedPromptTokens: expect.any(Number),
+      }),
+    );
+    expect(f.onFallback.mock.calls[0]?.[0].estimatedPromptTokens).toBeGreaterThan(
+      model.contextWindow,
+    );
+    expect(requests).toHaveLength(0);
+    expect(f.execute).not.toHaveBeenCalled();
   });
 
   it("falls back once on an invalid checkpoint without persisting or dispatching foreground work", async () => {

@@ -173,6 +173,11 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     return { ...input.state };
   }
   if ((input.pendingInputTokens ?? 0) >= input.contextTokenBudget) {
+    if (input.providerCompactionAtRequestBoundary) {
+      log.warn(
+        "ChatGPT V2 compaction unavailable; falling back to client compaction: pending input exceeds the context budget",
+      );
+    }
     return {
       ...input.state,
       preflightRecovery: { route: "compact_only" },
