@@ -64,6 +64,7 @@ vi.mock("./session-row-projection-access.js", () => ({
 }));
 vi.mock("./session-utils-model-selection.js", () => ({
   resolveSessionSelectedModelRef: mocks.model,
+  resolveSessionSelectedModelRefAsync: async (...args: unknown[]) => mocks.model(...args),
 }));
 const config = { mcp: { apps: { enabled: true } } };
 let entry: { sessionId: string } & Partial<SessionEntry>;

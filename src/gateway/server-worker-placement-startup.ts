@@ -195,11 +195,12 @@ export function createGatewayWorkerPlacementRuntime(
       errorMessage: `Session ${identity.sessionKey} changed before node-backed placement recovery`,
     });
     assertCurrent(getRuntimeConfig());
-    const runtime = sessionRuntime.resolveWorkerPlacementSessionRuntime({
+    const runtime = await sessionRuntime.resolveWorkerPlacementSessionRuntimeAsync({
       cfg: config,
       entry,
       agentId: target.agentId,
       sessionKey: target.canonicalKey,
+      assertCurrent: () => assertCurrent(getRuntimeConfig()),
     });
     const { executionMode, devicePlacement } =
       sessionRuntime.resolveWorkerPlacementCapabilities(runtime);

@@ -442,7 +442,7 @@ async function sendReceiptAck(params: {
   to: string;
   text: string;
 }) {
-  const resolved = resolveOutboundTarget({
+  const resolved = await resolveOutboundTarget({
     channel: params.channel,
     to: params.to,
     cfg: params.cfg,

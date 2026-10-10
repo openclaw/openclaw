@@ -27,6 +27,7 @@ import {
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../agents/embedded-agent-runner/runs.js";
 import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
+import { readSessionRuntimeOwnershipAsync } from "../agents/harness/session-runtime-ownership.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
@@ -556,6 +557,16 @@ export class EmbeddedTuiBackend implements TuiBackend {
           entries: [{ agentId: sessionAgentId, sessionKey: canonicalKey, entry }],
         })
       : [];
+    const privateRuntimeOwnership = privateEntry
+      ? await readSessionRuntimeOwnershipAsync({
+          config: cfg,
+          agentId: sessionAgentId,
+          sessionKey: canonicalKey,
+          storePath: target.storePath,
+          sessionEntry: entry,
+          readPreparedPreviousSessionId: () => entry.previousSessionId,
+        })
+      : undefined;
     const sessionInfo = privateEntry
       ? buildGatewaySessionRow({
           cfg,
@@ -564,6 +575,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           key: canonicalKey,
           entry,
           preparedAcpMeta: privateAcpMeta ?? null,
+          preparedRuntimeOwnership: privateRuntimeOwnership ?? null,
           agentId: sessionAgentId,
           modelSource: { entry, readSourceEntry: createGatewaySessionEntryReader(selected) },
           lightweightListRow: true,

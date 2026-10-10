@@ -4,6 +4,10 @@ import { createSubagentSessionListReadView } from "../agents/subagents/registry/
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import {
+  pluginStatePublication,
+  pluginStateReadDependenciesAffected,
+} from "../plugin-state/plugin-state-publication.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
   onSessionIdentityMutation,
@@ -513,6 +517,39 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     ensureMaterialized,
   });
   const stop = [
+    pluginStatePublication.subscribeFacts((change) => {
+      const changed: records.Row[] = [];
+      for (const row of rows.values()) {
+        if (
+          !row.runtimeOwnershipDependencies ||
+          !pluginStateReadDependenciesAffected(row.runtimeOwnershipDependencies, change)
+        ) {
+          continue;
+        }
+        row.databaseFactsRevision++;
+        row.pendingDatabaseFacts = undefined;
+        if (row.retainedDatabaseFacts) {
+          row.retainedDatabaseFacts = {
+            ...row.retainedDatabaseFacts,
+            runtimeOwnership: undefined,
+            runtimeOwnershipDependencies: undefined,
+          };
+        }
+        row.preparedRuntimeOwnership = undefined;
+        row.runtimeOwnershipDependencies = undefined;
+        dirty.add(records.identity(row));
+        changed.push(row);
+      }
+      if (changed.length > 0) {
+        epoch++;
+        revisions.invalidate(true);
+        for (const row of changed) {
+          revisions.publishFacts(row);
+        }
+        // Facts install synchronously; preparation starts after the publication frame.
+        queueMicrotask(() => void ensureMaterialized().catch(() => {}));
+      }
+    }),
     sessionChanges.subscribeFacts(membership.invalidate),
     sessionChanges.subscribeProjection(mark),
     // Participant writers publish facts before their display-only lifecycle notice.

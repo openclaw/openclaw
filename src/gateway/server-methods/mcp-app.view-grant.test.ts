@@ -80,6 +80,7 @@ vi.mock("../../plugins/current-plugin-metadata-state.js", () => ({
 }));
 vi.mock("../session-utils-model-selection.js", () => ({
   resolveSessionSelectedModelRef: () => ({ provider: "openai", model: "model" }),
+  resolveSessionSelectedModelRefAsync: async () => ({ provider: "openai", model: "model" }),
 }));
 vi.mock("../session-row-projection-access.js", () => ({
   getSessionRowProjection: mocks.projection,

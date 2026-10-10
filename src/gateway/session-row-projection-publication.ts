@@ -46,6 +46,8 @@ export function createSessionRowPublication(owner: {
       if (next && databaseFacts) {
         next.retainedDatabaseFacts = databaseFacts;
         next.preparedAcpMeta = databaseFacts.acpMeta;
+        next.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
+        next.runtimeOwnershipDependencies = databaseFacts.runtimeOwnershipDependencies;
         next.hasBoard = databaseFacts.hasBoard;
       }
       owner.enqueue(next);
@@ -125,6 +127,12 @@ export function createSessionRowPublication(owner: {
       entry &&
       previousFacts?.entry.sessionId === entry.sessionId &&
       previousFacts.entry.lifecycleRevision === entry.lifecycleRevision;
+    const sameRuntimeOwner =
+      sameSession &&
+      previousFacts.entry.agentHarnessId === entry.agentHarnessId &&
+      previousFacts.entry.modelSelectionLocked === entry.modelSelectionLocked &&
+      previousFacts.entry.pluginOwnerId === entry.pluginOwnerId &&
+      previousFacts.entry.previousSessionId === entry.previousSessionId;
     // Agent receipts certify only their own store. Shared facets keep their independent
     // publication lifetime; a changed binding requires preparation by that owner.
     const databaseFacts: records.RetainedSessionRowDatabaseFacts | undefined =
@@ -134,6 +142,10 @@ export function createSessionRowPublication(owner: {
             entry,
             hasBoard: committed.hasBoard,
             activitySummaryWatermark: committed.activitySummaryWatermark,
+            runtimeOwnership: sameRuntimeOwner ? previousFacts.runtimeOwnership : undefined,
+            runtimeOwnershipDependencies: sameRuntimeOwner
+              ? previousFacts.runtimeOwnershipDependencies
+              : undefined,
             acpMeta:
               sameSession && previousFacts.entry.sessionStartedAt === entry.sessionStartedAt
                 ? previousFacts.acpMeta

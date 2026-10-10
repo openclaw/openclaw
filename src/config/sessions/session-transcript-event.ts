@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type {
   SessionTranscriptAccessScope,
@@ -10,7 +11,10 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { assertNonMessageTranscriptEvent } from "./session-accessor.sqlite-transcript-write-guard.js";
+import {
+  assertLockedTranscriptWriteAllowed,
+  assertNonMessageTranscriptEvent,
+} from "./session-accessor.sqlite-transcript-write-guard.js";
 import { appendTranscriptEvent } from "./session-accessor.sqlite-transcript-write.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
@@ -68,8 +72,11 @@ export async function appendPreparedTranscriptEvent(
   }
   if (!isMainThread || !supportsOpenClawAgentDatabaseExecution(database)) {
     // Maintenance and process-held incognito retain their existing transaction owner.
-    return appendTranscriptEvent(requested, JSON.parse(eventJson), {
-      beforeCommitInTransaction: assertCurrent,
+    return appendTranscriptEvent(fenced, JSON.parse(eventJson), {
+      beforeCommitInTransaction() {
+        assertCurrent();
+        assertLockedTranscriptWriteAllowed(openOpenClawAgentDatabase(database), scope, fenced);
+      },
     });
   }
   await runSessionEntryWorkerOperation<SessionTranscriptEventCommitted, boolean>({
@@ -89,7 +96,7 @@ export async function appendPreparedTranscriptEvent(
       commit(() =>
         executeSessionMessageRewriteOperation(worker, database.agentId, {
           type: "session.transcript.event.append",
-          input: { scope, eventJson },
+          input: { scope, eventJson, fence: fenced },
         }),
       ),
     onCommitted: ({ projectionNeedsReconcile }) => {
