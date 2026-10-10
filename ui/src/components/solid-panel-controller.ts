@@ -1,5 +1,9 @@
-import { createEffect, createRenderEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createRenderEffect, onCleanup, onSettled } from "solid-js";
 import { i18n } from "../i18n/lib/translate.ts";
+import {
+  createSolidRenderLifecycle,
+  type SolidRenderLifecycle,
+} from "../pages/chat/solid-render-lifecycle.ts";
 
 /** Structural lifecycle used by the existing imperative panel owners. */
 export interface PanelLifecycleController {
@@ -12,7 +16,9 @@ export interface PanelLifecycleController {
 /** Keeps synchronous panel state separate from Solid's rendering notification. */
 export class SolidPanelController {
   private readonly controllers = new Set<PanelLifecycleController>();
-  private readonly version = createSignal(0);
+  private version = 0;
+  private rendering: SolidRenderLifecycle<number> | undefined;
+  private cancelCommit: (() => void) | undefined;
   private changes = new Map<string, unknown>();
   private completion: Promise<boolean> = Promise.resolve(true);
   private complete: ((value: boolean) => void) | undefined;
@@ -58,12 +64,21 @@ export class SolidPanelController {
   }
 
   read(): this {
-    this.version[0]();
+    this.rendering?.snapshot();
     return this;
   }
 
   revision(): number {
-    return this.version[0]();
+    return this.rendering?.snapshot() ?? this.version;
+  }
+
+  bindRendering(): void {
+    this.rendering = createSolidRenderLifecycle({
+      host: this.element,
+      // The panel owner still processes disconnect/suppression while its view is hidden.
+      presented: () => true,
+      read: () => this.version,
+    });
   }
 
   requestUpdate(name?: string, oldValue?: unknown): void {
@@ -75,7 +90,15 @@ export class SolidPanelController {
         this.complete = resolve;
       });
     }
-    this.version[1]((value) => value + 1);
+    this.version += 1;
+    if (this.rendering && this.connected && !this.cancelCommit) {
+      this.cancelCommit = this.rendering.afterCommit(() => {
+        this.cancelCommit = undefined;
+        this.commit();
+      });
+    } else {
+      this.rendering?.invalidate();
+    }
   }
 
   connectedCallback(): void {}
@@ -122,6 +145,9 @@ export class SolidPanelController {
 
   disconnect(): void {
     this.connected = false;
+    this.cancelCommit?.();
+    this.cancelCommit = undefined;
+    this.rendering = undefined;
     this.stopLocale?.();
     this.stopLocale = undefined;
     this.disconnectedCallback();
@@ -135,13 +161,10 @@ export class SolidPanelController {
 
 /** Connect after mount, and publish completion only after Solid commits the DOM. */
 export function usePanelController(controller: SolidPanelController): void {
+  controller.bindRendering();
   createRenderEffect(
     () => controller.revision(),
     () => controller.prepare(),
-  );
-  createEffect(
-    () => controller.revision(),
-    () => controller.commit(),
   );
   onSettled(() => controller.connect());
   onCleanup(() => controller.disconnect());
