@@ -239,14 +239,18 @@ describe("handleCompactCommand lifecycle authority", () => {
       vi.mocked(resolveCurrentSessionEntry).mockImplementation(({ expected }) =>
         expected.sessionId === currentSessionId ? { updatedAt: 1, ...expected } : undefined,
       );
-      vi.mocked(incrementCompactionCount).mockImplementationOnce(async ({ expectedSession }) => {
-        expect(expectedSession?.sessionId).toBe("successor-session");
-        if (replaceBeforeAccounting) {
-          currentSessionId = "replacement-session";
-          return undefined;
-        }
-        return 1;
-      });
+      vi.mocked(incrementCompactionCount).mockImplementationOnce(
+        async ({ expectedSession, transcriptByteLatch }) => {
+          expect(expectedSession?.sessionId).toBe("successor-session");
+          // Manual host-rewrite accounting must lift byte-preflight suppression.
+          expect(transcriptByteLatch).toEqual({ kind: "clear" });
+          if (replaceBeforeAccounting) {
+            currentSessionId = "replacement-session";
+            return undefined;
+          }
+          return 1;
+        },
+      );
       vi.mocked(compactEmbeddedAgentSession).mockImplementationOnce(async (params, host) => {
         host?.assertActive?.();
         const storePath = params.sessionTarget?.storePath;

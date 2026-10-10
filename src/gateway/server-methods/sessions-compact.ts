@@ -398,6 +398,10 @@ export const sessionCompactHandlers: GatewayRequestHandlers = {
                       ...projectCompactionAccountingPatch(existingEntry, {
                         compactionKind: result.compactionKind,
                         tokensAfter: result.result?.tokensAfter,
+                        // A manual compact acts on the host transcript, so it must lift
+                        // byte-preflight suppression instead of inheriting the
+                        // accounting-only keep default.
+                        transcriptByteLatch: { kind: "clear" },
                       }),
                     },
                   };

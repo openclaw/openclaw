@@ -333,6 +333,45 @@ test("sessions.compact accounts against the host-accepted successor before retur
   }
 });
 
+test("sessions.compact accounting clears the transcript-byte latch after a manual host rewrite", async () => {
+  const sessionScope = await createCompactionSession("sess-latch", {
+    totalLines: 3,
+    entry: {
+      transcriptByteCompactionLatch: {
+        activeBytes: 60_000,
+        sessionId: "sess-latch",
+        maxBytes: 50_000,
+      },
+    },
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+    ok: true,
+    compacted: true,
+    compactionKind: "context-engine",
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "entry-1",
+      sessionId: "sess-latch",
+      tokensBefore: 120,
+      tokensAfter: 80,
+    },
+  });
+
+  const { ws } = await openClient();
+  try {
+    const response = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+    expectMainCompactionResult(response, true);
+    // Manual host-rewrite accounting must lift byte-preflight suppression instead of
+    // inheriting the accounting-only keep default.
+    const storedEntry = loadSessionEntry(sessionScope);
+    expect(storedEntry).toMatchObject({ compactionCount: 1, totalTokens: 80 });
+    expect(storedEntry?.transcriptByteCompactionLatch).toBeUndefined();
+  } finally {
+    ws.close();
+  }
+});
+
 test("sessions.compact records terminal Codex native compaction with a stale negative estimate", async () => {
   const scope = await createCompactionSession("sess-codex", {
     totalLines: 2,

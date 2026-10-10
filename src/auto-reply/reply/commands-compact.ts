@@ -406,6 +406,9 @@ export async function handleCompactCommand(
       tokensAfter: result.result?.tokensAfter,
       compactionKind: result.compactionKind,
       expectedSession,
+      // A manual compact acts on the host transcript, so it must lift byte-preflight
+      // suppression instead of inheriting the accounting-only keep default.
+      transcriptByteLatch: { kind: "clear" },
     });
     if (compactionCount === undefined) {
       return (
