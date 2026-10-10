@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { acquireWorktreeRunLease } from "../agents/worktrees/run-lease.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -145,7 +146,11 @@ describe("personal publication authority and recovery", () => {
     });
     const pending = rpc("sessions.github.publish", request());
     try {
-      await entered.promise;
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        pending,
+        "Personal publication settled before reaching the in-flight push reset gate.",
+      );
       await session.reset(placements);
     } finally {
       release.resolve();
@@ -336,10 +341,11 @@ describe("personal publication authority and recovery", () => {
 
   it("exposes a stopped pre-claim admission for explicit confirmation and reports only a live execution as publishing", async () => {
     const controller = new AbortController();
+    const stopReason = new Error("Publication admission stopped.");
     const db = openOpenClawStateDatabase().db;
     ensurePersonalGitHubPublicationSchema(db);
     db.function("stop_personal_admission", () => {
-      controller.abort();
+      controller.abort(stopReason);
       return 1;
     });
     db.exec(`CREATE TEMP TRIGGER stop_personal_admission AFTER INSERT ON ${table}
@@ -348,8 +354,8 @@ describe("personal publication authority and recovery", () => {
       { client, context },
       controller.signal,
     );
-    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toThrow(
-      "current",
+    await expect(coordinator.requestPersonalForSession(request(), stopped)).rejects.toBe(
+      stopReason,
     );
     db.exec("DROP TRIGGER stop_personal_admission");
     const discovered = (await rpc("sessions.github.options"))[1].pendingPersonal;

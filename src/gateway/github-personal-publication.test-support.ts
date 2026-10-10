@@ -77,7 +77,12 @@ export function readPersonalPublicationFixtureStatus(
 ) {
   return fixture.coordinator.personalStatus(
     fixture.action,
-    { sessionKey: SESSION_KEY, agentId: "main", sessionId: SESSION_ID },
+    {
+      sessionKey: SESSION_KEY,
+      agentId: "main",
+      sessionId: SESSION_ID,
+      lifecycleRevision: fixture.action.lifecycleRevision,
+    },
     requestId,
     undefined,
   );
