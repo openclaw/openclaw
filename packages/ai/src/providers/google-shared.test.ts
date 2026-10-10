@@ -275,17 +275,22 @@ describe("Google stream projection", () => {
     expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
   });
 
-  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
-    const { output, events } = await runFixture([
-      response({
-        parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
-        finishReason: FinishReason.MAX_TOKENS,
-      }),
-    ]);
-    expect(events.find((event) => event.type === "done")?.reason).toBe("length");
-    expect(output.stopReason).toBe("length");
-    expect(output.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
-  });
+  it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
+    "preserves %s when the partial response contains a function call",
+    async (finishReason) => {
+      const { output, events } = await runFixture([
+        response({
+          parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
+          finishReason,
+        }),
+      ]);
+      expect(events.find((event) => event.type === "done")?.reason).toBe("length");
+      expect(output.stopReason).toBe("length");
+      expect(output.content).toEqual([
+        expect.objectContaining({ type: "toolCall", name: "lookup" }),
+      ]);
+    },
+  );
 
   it.each([
     {

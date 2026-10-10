@@ -169,7 +169,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
     });
 
     const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
-    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.85.0"');
+    expect(wrapper).toContain('"@agentclientprotocol/claude-agent-acp@0.85.1"');
     expect(wrapper).toContain('"--", "claude-agent-acp"');
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@^0.31.0");
     expect(wrapper).not.toContain("@agentclientprotocol/claude-agent-acp@0.31.0");
@@ -188,7 +188,7 @@ describe("prepareAcpxCodexAuthConfig", () => {
 
   it.each([
     { agent: "codex", packageName: "codex-acp", version: "2.1.1" },
-    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.0" },
+    { agent: "claude", packageName: "claude-agent-acp", version: "0.85.1" },
   ] as const)(
     "launches $agent after its captured adapter is removed",
     async ({ agent, packageName, version }) => {

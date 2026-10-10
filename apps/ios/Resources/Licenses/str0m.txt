@@ -1,6 +1,6 @@
 str0m and native realtime audio dependency notices
 
-The component index identifies the versions pinned by Cargo.lock. Build-time dependencies are included conservatively. Identical license texts are reproduced once and referenced by their identifiers below. The Rust standard library notices correspond to nightly-2026-10-01.
+The component index identifies the versions pinned by Cargo.lock. Build-time dependencies are included conservatively. Identical license texts are reproduced once and referenced by their identifiers below. The Rust standard library notices correspond to nightly-2026-10-02.
 
 COMPONENT INDEX
 
@@ -353,7 +353,7 @@ Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L005
 LICENSE-MIT: L054
 
-libc 0.2.189
+libc 0.2.190
 Source: https://github.com/rust-lang/libc
 Declared license: MIT OR Apache-2.0
 LICENSE-APACHE: L055
