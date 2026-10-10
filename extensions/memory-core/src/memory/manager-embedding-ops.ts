@@ -10,6 +10,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
+  createMemorySearchDeadlineControl,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   runWithConcurrency,
   type MemorySearchDeadlineControl,
@@ -34,7 +35,6 @@ import {
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   runBatchWithTimeoutRetry,
-  runEmbeddingOperationWithTimeout,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -45,9 +45,10 @@ import {
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
 import {
-  memoryChunkRowId,
-  type MemorySourceIndexReplacement,
-} from "./manager-source-index-kernel.js";
+  retainIndexedSessionChunks,
+  type PreparedMemoryIndexEntry,
+} from "./manager-session-delta.js";
+import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 import type {
   MemoryIndexWorkItem,
   MemorySemanticProviderGeneration,
@@ -55,6 +56,7 @@ import type {
 } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
+import { runEmbeddingOperationWithTimeout } from "./paused-deadline.js";
 
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
@@ -68,16 +70,6 @@ const SOURCE_WIDE_BATCH_MAX_REQUESTS = 50000;
 const log = createSubsystemLogger("memory");
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
-
-type PreparedMemoryIndexEntry = {
-  entry: MemoryIndexEntry;
-  source: MemorySource;
-  /** Chunks to embed and write; a session delta leaves out retained chunks. */
-  chunks: IndexedMemoryChunk[];
-  /** Indexed session chunks whose rows publication keeps in place. */
-  retained?: IndexedMemoryChunk[];
-  structuredInputBytes?: number;
-};
 
 function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
   const counts: Record<string, number> = {};
@@ -412,6 +404,34 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       : defaults[provider?.id === "local" ? "local" : "remote"];
   }
 
+  protected async probeEmbeddingProvider(
+    provider: EmbeddingProvider,
+    providerRuntime: MemoryEmbeddingProviderRuntime | undefined,
+  ): Promise<void> {
+    const timeoutMs = this.resolveEmbeddingTimeout("query", provider, providerRuntime);
+    const deadlineControl = createMemorySearchDeadlineControl();
+    try {
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs,
+        message: `memory embedding probe timed out after ${Math.round(timeoutMs / 1000)}s`,
+        deadlineControl,
+        run: (signal) =>
+          this.withProviderUse(provider, () =>
+            provider.embed("ping", {
+              signal,
+              inputType: "query",
+              [MEMORY_SEARCH_DEADLINE_CONTROL]: deadlineControl,
+            }),
+          ),
+      });
+    } catch (error) {
+      if (provider === this.provider) {
+        this.markLocalEmbeddingProviderDegraded(error);
+      }
+      throw error;
+    }
+  }
+
   protected async embedQueryWithRetry(
     text: string,
     signal?: AbortSignal,
@@ -585,54 +605,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     });
   }
 
-  /**
-   * Keep indexed session rows whose content-addressed ids are unchanged, so a
-   * growing transcript embeds and writes only its new chunks. The worker
-   * revalidates retained rows under its write lock.
-   */
   private async retainIndexedSessionChunks(
     prepared: PreparedMemoryIndexEntry,
     generation: MemorySyncProviderGeneration | null,
   ): Promise<PreparedMemoryIndexEntry> {
-    const { entry, source, chunks } = prepared;
     const database = this.database;
-    // A full reindex fills an empty shadow, which has no rows to retain.
-    if (
-      source !== "sessions" ||
-      entry.kind === "multimodal" ||
-      chunks.length === 0 ||
-      database.isShadow
-    ) {
-      return prepared;
-    }
-    const indexed = await database.read(
-      { type: "source.chunks", input: { source, path: entry.path } },
-      () => {
-        if (this.closed || database.closed || this.database !== database) {
-          throw new Error("Memory source owner changed before session delta planning");
-        }
-      },
-    );
-    // Rows without stored embeddings are rewritten once a provider is available.
-    const semantic = generation?.kind === "semantic";
-    const keep = new Set(indexed.filter((row) => row.embedded || !semantic).map((row) => row.id));
-    if (keep.size === 0) {
-      return prepared;
-    }
-    const model = generation?.provider?.model ?? "fts-only";
-    const written: IndexedMemoryChunk[] = [];
-    const retained: IndexedMemoryChunk[] = [];
-    // Repeated transcript text yields identical rows under one id. Plan each id
-    // once so a duplicate cannot rewrite the row this delta retains.
-    const planned = new Set<string>();
-    for (const chunk of chunks) {
-      const id = memoryChunkRowId(source, entry.path, chunk, model);
-      if (!planned.has(id)) {
-        planned.add(id);
-        (keep.has(id) ? retained : written).push(chunk);
+    return await retainIndexedSessionChunks(prepared, database, generation, () => {
+      if (this.closed || database.closed || this.database !== database) {
+        throw new Error("Memory source owner changed before session delta planning");
       }
-    }
-    return retained.length > 0 ? { ...prepared, chunks: written, retained } : prepared;
+    });
   }
 
   private async prepareIndexEntry(

@@ -158,15 +158,19 @@ which support selective deletion after promotion. For coverage and limits, see
   See [provider selection](/reference/memory-config#provider-selection).
 - **Reindex on demand:** `openclaw memory index --force --agent <id>`
 
-When Memory Core owns the memory slot, its Gateway service opens each configured
-agent's memory manager at startup and after plugin replacement. Watched file
-changes can then update the index without a search or agent turn. Retiring an
+When Memory Core owns the memory slot, its Gateway service schedules each configured
+agent's memory manager to open at startup and after plugin replacement. This
+background activation waits for that agent's database preparation, including
+after an upgrade or restart, without delaying Gateway readiness. Failed
+preparation reports the database's repair guidance. Watched file changes can
+then update the index without a search or agent turn. Retiring an
 instance closes its managers, including file watchers, timers, and session
 listeners. Plugin reload also stops and restarts the retained Memory Core
 service around publication, so its managers use the current embedding providers,
 including providers loaded on demand, without waiting for a search or turn. If
 reload fails after draining managers, recovery restarts their previous services
-before reporting the previous runtime restored. Memory Core running only as
+and schedules their index activation before reporting the previous runtime restored.
+Service stop joins pending activation before closing its managers. Memory Core running only as
 another memory plugin's consolidation sidecar does not start these indexes automatically.
 
 When the index identity reports an OpenClaw chunking-implementation change,

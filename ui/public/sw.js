@@ -230,10 +230,6 @@ async function fetchControlUiRequest(event, cacheable) {
     }
     return response;
   } catch {
-    const cached = cacheable ? await matchControlUiAsset(event.request) : undefined;
-    if (cached) {
-      return cached;
-    }
     await reportControlUiHttpFailure(event);
     return Response.error();
   }
@@ -345,23 +341,14 @@ self.addEventListener("fetch", (event) => {
   const permitsCache =
     event.request.cache !== "no-store" && !event.request.headers.has("Authorization");
 
-  // Cache-first for hashed assets; network-first for other paths. Versioned
-  // public URLs reuse the HTTP immutable cache; unversioned/custom files revalidate.
-  if (permitsCache && hashedAsset) {
-    event.respondWith(
-      matchControlUiAsset(event.request).then(
-        (cached) => cached || fetchControlUiRequest(event, true),
-      ),
-    );
-  } else {
-    event.respondWith(
-      (async () =>
-        fetchControlUiRequest(
-          event,
-          permitsCache && (await isVersionedPublicAsset(url, pathname)),
-        ))(),
-    );
-  }
+  event.respondWith(
+    (async () => {
+      const cacheable =
+        permitsCache && (hashedAsset || (await isVersionedPublicAsset(url, pathname)));
+      const cached = cacheable ? await matchControlUiAsset(event.request) : undefined;
+      return cached || fetchControlUiRequest(event, cacheable);
+    })(),
+  );
 });
 
 // --- Web Push ---

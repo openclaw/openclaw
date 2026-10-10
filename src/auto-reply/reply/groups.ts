@@ -173,6 +173,18 @@ export function buildDirectChatContext(params: {
   ].join(" ");
 }
 
+/** Selects the conversation guidance shared by incoming and continuation turns. */
+export function buildSourceConversationContext(
+  params: Parameters<typeof buildGroupChatContext>[0],
+): string {
+  const chatType = normalizeOptionalLowercaseString(params.sessionCtx.ChatType);
+  return chatType === "direct" || chatType === "dm"
+    ? buildDirectChatContext(params)
+    : chatType === "group" || chatType === "channel"
+      ? buildGroupChatContext(params)
+      : "";
+}
+
 /** Builds the channel-specific group intro injected into the system prompt. */
 export function buildGroupIntro(params: {
   activation?: PreparedReplyConversation["activation"];

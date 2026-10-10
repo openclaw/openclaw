@@ -80,6 +80,7 @@ export function createProgressState(
     reasoningGate: draftState.streamReasoningInProgressDraft,
     reasoningLinePrefix: "🧠 ",
     commentaryLinePrefix: "💬 ",
+    toolIcons: true,
     commentaryItalics: false,
     updateOnLineChange: true,
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
@@ -223,6 +224,7 @@ export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
     active: true,
     seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
     reasoningGate: false,
+    toolIcons: true,
     updateOnLineChange: true,
     initialSnapshot: turn.progressCompositor.getSnapshot(),
     update: (_text, options) => {

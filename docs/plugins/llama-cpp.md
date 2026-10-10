@@ -135,6 +135,21 @@ update their owned settings while preserving the header, `[*]` defaults,
 comments, and additional options on retained models. Embedding-only setup uses
 a fresh preset.
 
+Managed embeddings default to one server slot (`parallel = 1`), a 2,048-token
+context, and a 2,048-token physical batch (`ubatch-size`). Memory indexing reserves
+four positions for tokenizer overhead and the server's context boundary. These defaults also apply to custom
+GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
+embedding output buffer to one input; the context bound avoids reserving a custom
+model's full training context for short memory chunks.
+
+Existing context, batch, and slot settings in the embedding section, `[*]`, or
+the managed service's arguments or environment remain authoritative. OpenClaw adds
+the context bound only when no slot count or per-slot context is configured,
+because llama.cpp can divide total context across slots. If you choose a different
+slot count, size its context too. Long queries or direct embedding requests may
+need larger native capacity settings on models that support them.
+Missing defaults are added on the next managed preset preparation.
+
 ### Set up only local embeddings
 
 When `memory.search.provider` is `local` and chat setup cannot proceed or is

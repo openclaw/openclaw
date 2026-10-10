@@ -1,18 +1,14 @@
-import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   estimateStructuredEmbeddingInputBytes,
   estimateUtf8Bytes,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { MemorySearchDeadlineControl } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createPausedDeadline } from "./paused-deadline.js";
 
 type MemoryEmbeddingChunk = {
   text: string;
@@ -199,51 +195,6 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;
-}
-
-export async function runEmbeddingOperationWithTimeout<T>(params: {
-  timeoutMs: number;
-  message: string;
-  /** Caller-owned cancellation, merged with the per-call watchdog abort. */
-  signal?: AbortSignal;
-  /** Managed readiness pauses this watchdog, while caller cancellation stays active. */
-  deadlineControl?: MemorySearchDeadlineControl;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  const controller = new AbortController();
-  const signal = params.signal
-    ? AbortSignal.any([params.signal, controller.signal])
-    : controller.signal;
-  if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
-    return await params.run(signal);
-  }
-  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
-  const timeoutError = new Error(params.message);
-  const timeout = createDeferred<never>();
-  const deadline = createPausedDeadline({
-    kind: "embedding",
-    timeoutMs,
-    signal,
-    control: params.deadlineControl,
-    expire: () => {
-      timeout.reject(timeoutError);
-      controller.abort(timeoutError);
-    },
-  });
-  deadline.start();
-  try {
-    const operation = params.run(signal);
-    const result = await Promise.race([operation, timeout.promise]);
-    params.signal?.throwIfAborted();
-    // An overdue watchdog can run after provider success following an event-loop stall.
-    if (deadline.isExpired()) {
-      controller.abort(timeoutError);
-      throw timeoutError;
-    }
-    return result;
-  } finally {
-    deadline.close();
-  }
 }
 
 // Retry attempts are host control state. Provider-thrown values stay opaque so

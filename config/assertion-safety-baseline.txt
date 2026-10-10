@@ -2105,7 +2105,7 @@ src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-runtime.ts	10
 src/infra/approval-presentation.ts	3
-src/infra/backup-archive-publication.ts	6
+src/infra/backup-archive-publication.ts	5
 src/infra/backup-create-stream.ts	3
 src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	2
