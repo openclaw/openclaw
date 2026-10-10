@@ -200,11 +200,11 @@ export async function cancelReleaseTree(runId, client, options = {}) {
           });
           return;
         }
-        const title = new RegExp(
-          `^Plugin NPM Artifact Preflight \\[[a-zA-Z0-9._-]{1,128}\\] ${plan.targetSha} \\(${dispatchId}\\)$`,
-          "u",
-        );
-        if (!title.test(run.display_title)) {
+        const title =
+          /^Plugin NPM Artifact Preflight \[[a-zA-Z0-9._-]{1,128}\] ([a-f0-9]{40}) \(([^()\r\n]+)\)$/u.exec(
+            run.display_title,
+          );
+        if (title?.[1] !== plan.targetSha || title[2] !== dispatchId) {
           throw new Error("plugin npm producer dispatch provenance changed");
         }
         validateReleaseChildRunProvenance(run, {
@@ -251,6 +251,10 @@ export async function cancelReleaseTree(runId, client, options = {}) {
           `${owner.key}:telegram:${attempt}`,
           links[0][2],
           (run) => {
+            const title =
+              /^OpenClaw Release Telegram QA release-checks-([1-9][0-9]*)-([1-9][0-9]*)-[a-f0-9]{32}$/u.exec(
+                run.display_title,
+              );
             if (
               String(run.id) !== links[0][2] ||
               run.repository?.full_name !== repository ||
@@ -260,10 +264,8 @@ export async function cancelReleaseTree(runId, client, options = {}) {
                 ".github/workflows/openclaw-release-telegram-qa.yml" ||
               run.head_sha !== owner.run.head_sha ||
               run.head_branch !== owner.run.head_branch ||
-              !new RegExp(
-                `^OpenClaw Release Telegram QA release-checks-${owner.runId}-${attempt}-[a-f0-9]{32}$`,
-                "u",
-              ).test(run.display_title)
+              title?.[1] !== owner.runId ||
+              title[2] !== String(attempt)
             ) {
               throw new Error(`${owner.key}: Telegram descendant provenance changed`);
             }

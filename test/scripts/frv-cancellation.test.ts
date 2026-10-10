@@ -356,9 +356,7 @@ describe("FRV cancellation tree", () => {
     "executes cancellation through the real CLI with a secretless controlled GitHub transport (force=%s)",
     async (force) => {
       const fixture = cancellationFixture();
-      const retained = await fixture.client
-        .getReleaseEvidenceClient()
-        .loadExecutionPlanEvidence("77");
+      const retained = fixture.client.getReleaseEvidenceClient().loadExecutionPlanEvidence("77");
       const directory = mkdtempSync(join(tmpdir(), "frv-cancel-cli-"));
       const script = join(directory, "gh");
       const zip = new JSZip();
