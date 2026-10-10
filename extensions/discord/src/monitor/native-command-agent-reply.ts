@@ -137,7 +137,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
       await safeDiscordInteractionCall("interaction command failure", () =>
         params.interaction.editDeferredPlaceholderIfUnanswered({
           content:
-            "Command failed. Ask an operator to check the Gateway logs. If your command session is archived, ask them to restore it, then retry the command.",
+            "Command failed. Please retry. If this conversation is archived, use /new or /reset to start again. If it still fails, ask an operator to check the Gateway logs.",
           allowed_mentions: { parse: [] },
         }),
       );
