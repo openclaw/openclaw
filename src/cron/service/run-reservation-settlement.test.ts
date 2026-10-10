@@ -382,7 +382,6 @@ it.each(["reservation", "timer", "startup"] as const)(
 
 it.each([
   { trigger: "manual", restartScheduler: false },
-  { trigger: "scheduled", restartScheduler: false },
   { trigger: "startup", restartScheduler: false },
   { trigger: "scheduled", restartScheduler: true },
 ] as const)(

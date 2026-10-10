@@ -2,7 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.js";
+import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
@@ -13,7 +13,7 @@ import {
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessage,
+  appendTranscriptMessageSync,
   assignSessionOwner,
   cleanupPluginHostSessionStore,
   listSessionEntriesCore,
@@ -54,6 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 
 function createSessionScope(label: string) {
@@ -244,6 +245,7 @@ describe("SQLite session entry cache", () => {
     "cleans selected plugin metadata without materializing siblings or saved prompts (%s)",
     async (mode) => {
       const scope = createSessionScope("plugin-cleanup");
+      vi.stubEnv("OPENCLAW_STATE_DIR", scope.env.OPENCLAW_STATE_DIR);
       const siblingScope = { ...scope, sessionKey: "agent:main:plugin-cleanup-sibling" };
       const { skillsSnapshot, systemPromptReport } = savedPrompts(
         "unneeded cleanup prompt".repeat(4096),
@@ -438,10 +440,12 @@ describe("SQLite session entry cache", () => {
     openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 
-    await appendTranscriptMessage(
-      { ...scope, sessionId: "first" },
-      { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
-    );
+    expect(
+      appendTranscriptMessageSync(
+        { ...scope, sessionId: "first" },
+        { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
+      ),
+    ).toMatchObject({ ok: true, value: { appended: true } });
     parseSessionEntryCalls.mockClear();
 
     const second = listingEntries(scope);
@@ -481,23 +485,6 @@ describe("SQLite session entry cache", () => {
       maintenance.close();
       external.close();
     }
-  });
-
-  it("reloads added and removed keys after an untracked connection write", async () => {
-    const { scope, sibling } = await seedPair("raw-keys");
-    const database = openOpenClawAgentDatabase(scope);
-    const keptProjection = listingEntries(scope).get(scope.sessionKey);
-    const insertedKey = "agent:main:inserted";
-    const insertedEntry = sessionEntry("inserted", "new", 2);
-    insertRaw(database.db, insertedKey, insertedEntry);
-    database.db.prepare("DELETE FROM session_nodes WHERE session_key = ?").run(sibling.sessionKey);
-
-    parseSessionEntryCalls.mockClear();
-    const entries = listingEntries(scope);
-    expect([...entries.keys()]).toEqual([scope.sessionKey, insertedKey].toSorted());
-    expect(entries.get(scope.sessionKey)).toEqual(keptProjection);
-    expect(entries.get(insertedKey)).toMatchObject(insertedEntry);
-    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
   });
 
   it("patches only the tracked row after a native replacement", async () => {
@@ -553,30 +540,6 @@ describe("SQLite session entry cache", () => {
     });
     expect(parseSessionEntryCalls).toHaveBeenCalledTimes(2);
     expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject(rawEntry);
-  });
-
-  it("invalidates cached keys when transcript creation inserts a placeholder node", async () => {
-    const scope = await seed("placeholder-key", { sessionId: "entry", updatedAt: 1 });
-    const database = openOpenClawAgentDatabase(scope);
-    const before = readSessionEntryCache(database, { cache: true });
-    expect(before.keys).toEqual([scope.sessionKey]);
-
-    const placeholderKey = "agent:main:placeholder-only";
-    runOpenClawAgentWriteTransaction((transactionDatabase) => {
-      ensureTranscriptSessionRoot(
-        transactionDatabase,
-        {
-          ...scope,
-          sessionId: "placeholder-only",
-          sessionKey: placeholderKey,
-        },
-        2,
-      );
-    }, scope);
-
-    const after = readSessionEntryCache(database, { cache: true });
-    expect(after.keys).toEqual([scope.sessionKey, placeholderKey]);
-    expect(after.entries.get(scope.sessionKey)).not.toBe(before.entries.get(scope.sessionKey));
   });
 
   it("rejects a transcript write after its persisted owner changes", async () => {

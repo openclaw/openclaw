@@ -8,7 +8,7 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
 import "./chat-session-activity.css";
 
-export function renderInterSessionActivity(
+export function renderSessionActivity(
   group: MessageGroup,
   opts: RenderMessageGroupOptions,
   renderEntry: (
@@ -16,7 +16,7 @@ export function renderInterSessionActivity(
     index: number,
   ) => { content: unknown; actions: unknown },
 ) {
-  const disclosureId = "inter-session:" + group.key;
+  const disclosureId = "session-activity:" + group.key;
   const expanded =
     Boolean(opts.searchResult) || (opts.isToolMessageExpanded?.(disclosureId) ?? false);
   const count = group.messages.reduce((total, message) => total + (message.duplicateCount ?? 1), 0);
@@ -45,16 +45,22 @@ export function renderInterSessionActivity(
             aria-disabled=${opts.searchResult ? "true" : nothing}
             tabindex=${opts.searchResult ? "-1" : nothing}
             @click=${(event: MouseEvent) => {
-              if (opts.searchResult) {
+              const target = event.target;
+              if (
+                opts.searchResult &&
+                !(target instanceof Element && target.closest("a.markdown-session-link"))
+              ) {
                 event.preventDefault();
               }
             }}
           >
-            ${renderForwardedAttribution(group, { ...opts, updateCount: count, linkSource: false })}
+            ${renderForwardedAttribution(group, {
+              ...opts,
+              ...(expanded ? { showAvatar: false } : { updateCount: count, linkSource: false }),
+            })}
             ${opts.searchResult ? nothing : html`<span class="chat-session-activity__chevron" aria-hidden="true">${icons.chevronRight}</span>`}
           </summary>
           <div class="chat-session-activity__body">
-            ${expanded ? renderForwardedAttribution(group, { ...opts, showAvatar: false }) : nothing}
             ${
               expanded || !opts.onToggleToolMessageExpanded
                 ? repeat(

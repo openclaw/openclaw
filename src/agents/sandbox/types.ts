@@ -1,3 +1,5 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { AgentSandboxConfig } from "../../config/types.agents-shared.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge } from "./fs-bridge.types.js";
@@ -32,34 +34,20 @@ export type SandboxToolPolicyResolved = SandboxToolPolicy & {
   };
 };
 
-export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
+export type SandboxWorkspaceAccess = NonNullable<AgentSandboxConfig["workspaceAccess"]>;
 
 /** Prepared resource ownership; only proven profiles retain cross-session workspaces. */
 export type SandboxIsolationSubject =
   | { kind: "profile"; profileId: string }
   | { kind: "session"; sessionKey: string };
 
-export type SandboxBrowserConfig = {
-  enabled: boolean;
-  image: string;
-  containerPrefix: string;
-  network: string;
-  cdpPort: number;
-  cdpSourceRange?: string;
-  vncPort: number;
-  noVncPort: number;
-  headless: boolean;
-  noVncEnabled: boolean;
-  allowHostControl: boolean;
-  autoStart: boolean;
-  autoStartTimeoutMs: number;
-  binds?: string[];
-};
+type SandboxBrowserSettings = SchemaContract<NonNullable<AgentSandboxConfig["browser"]>>;
+export type SandboxBrowserConfig = Required<
+  Omit<SandboxBrowserSettings, "cdpSourceRange" | "binds">
+> &
+  Pick<SandboxBrowserSettings, "cdpSourceRange" | "binds">;
 
-export type SandboxPruneConfig = {
-  idleHours: number;
-  maxAgeDays: number;
-};
+export type SandboxPruneConfig = Required<SchemaContract<NonNullable<AgentSandboxConfig["prune"]>>>;
 
 export type SandboxSshConfig = {
   target?: string;
@@ -75,7 +63,7 @@ export type SandboxSshConfig = {
   knownHostsData?: string;
 };
 
-export type SandboxScope = "session" | "agent" | "shared";
+export type SandboxScope = NonNullable<AgentSandboxConfig["scope"]>;
 
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";

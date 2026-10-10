@@ -225,30 +225,18 @@ export async function consumeAcpTurnStream(params: {
       await params.onPromptStarted?.({ authoritative: false });
     }
 
-    let eventOutcome: AcpTurnStreamOutcome | null = null;
-    let result: AcpRuntimeTurnResult | null = null;
     const firstOutcome = await Promise.race([eventsPromise, resultPromise]);
     if (firstOutcome.kind === "event-error") {
       throw firstOutcome.error;
     }
-    if (firstOutcome.kind === "events") {
-      eventOutcome = firstOutcome.outcome;
-    } else if (firstOutcome.kind === "result-error") {
+    const terminalOutcome = firstOutcome.kind === "events" ? await resultPromise : firstOutcome;
+    if (terminalOutcome.kind === "result-error") {
       await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-      throw firstOutcome.error;
-    } else {
-      result = firstOutcome.result;
+      throw terminalOutcome.error;
     }
+    const result = terminalOutcome.result;
 
-    if (!result) {
-      const terminalOutcome = await resultPromise;
-      if (terminalOutcome.kind === "result-error") {
-        await turn.closeStream({ reason: "turn-result-error" }).catch(() => {});
-        throw terminalOutcome.error;
-      }
-      result = terminalOutcome.result;
-    }
-
+    let eventOutcome = firstOutcome.kind === "events" ? firstOutcome.outcome : null;
     let closedTerminalStream = false;
     while (!eventOutcome) {
       // Channel delivery can outlive the backend result. Only an idle event

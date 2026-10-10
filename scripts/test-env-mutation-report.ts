@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-// Test Env Mutation Report script supports OpenClaw repository automation.
-
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";

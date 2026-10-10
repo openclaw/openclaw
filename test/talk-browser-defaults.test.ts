@@ -1,5 +1,6 @@
 // @vitest-environment node
 import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../extensions/openai/api.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -81,10 +82,26 @@ vi.mock("../src/gateway/talk/client-gateway-control.js", async (importOriginal) 
     close: async () => undefined,
   }),
 }));
+vi.mock("../src/talk/client-voice-session-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/talk/client-voice-session-read.js")>()),
+  resolveClientVoiceAgentSessionId: () => undefined,
+}));
+vi.mock("../src/talk/client-voice-session-write.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/talk/client-voice-session-write.js")>();
+  return {
+    ...actual,
+    ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",
+    // Creation is mocked here; preserve its source without acquiring a database writer.
+    captureClientVoiceSessionWriter: ({
+      physicalSource,
+    }: Parameters<typeof actual.captureClientVoiceSessionWriter>[0]) => ({
+      source: expectDefined(physicalSource, "Mocked voice creation requires its admitted source"),
+      release: () => {},
+    }),
+  };
+});
 vi.mock("../src/talk/client-voice-session.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/talk/client-voice-session.js")>()),
-  resolveClientVoiceAgentSessionId: () => undefined,
-  ensureClientVoiceAgentSessionEntry: async () => "test-agent-session",
   createOrResumeClientVoiceSession: () => "test-voice-session",
   closeStaleClientVoiceSessions: async () => 0,
 }));
@@ -139,7 +156,7 @@ describe("OpenAI browser Talk catalog defaults", () => {
       await withOpenClawTestState({ prefix: "talk-browser-defaults-" }, async (state) => {
         const cfg: OpenClawConfig = {
           agents: {
-            list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+            entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
           },
           talk: {
             agentId: "main",

@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeOptionalAccountId } from "../../routing/session-key.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { withEffectPreparation } from "../../shared/effect-authority.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -16,6 +17,7 @@ import {
   runGatewayInflightWork,
   type GatewayInflightResult as InflightResult,
 } from "./inflight.js";
+import type { createMessageActionRuntimeAuthority } from "./message-action-context.js";
 import { resolveMessageOperationAccountRoute } from "./send-account-route.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -41,11 +43,19 @@ type MessageOperationRouteBindingEntry = {
 // Send and poll callers can spell one canonical route four ways by omitting or
 // supplying channel/account defaults. Preserve every alias for the full result budget.
 const MESSAGE_OPERATION_ROUTE_BINDING_MAX = DEDUPE_MAX * 4;
-const messageOperationRouteBindings = new WeakMap<
+const messageOperationRouteState = new WeakMap<
   GatewayRequestContext,
-  Map<string, MessageOperationRouteBindingEntry>
+  { bindings: Map<string, MessageOperationRouteBindingEntry>; queue: KeyedAsyncQueue }
 >();
-const messageOperationRouteBindingQueues = new WeakMap<GatewayRequestContext, KeyedAsyncQueue>();
+
+function getMessageOperationRouteState(context: GatewayRequestContext) {
+  let state = messageOperationRouteState.get(context);
+  if (!state) {
+    state = { bindings: new Map(), queue: new KeyedAsyncQueue() };
+    messageOperationRouteState.set(context, state);
+  }
+  return state;
+}
 
 function pruneMessageOperationRouteBindings(
   bindings: Map<string, MessageOperationRouteBindingEntry>,
@@ -73,22 +83,9 @@ function pruneMessageOperationRouteBindings(
 function getMessageOperationRouteBindings(
   context: GatewayRequestContext,
 ): Map<string, MessageOperationRouteBindingEntry> {
-  let bindings = messageOperationRouteBindings.get(context);
-  if (!bindings) {
-    bindings = new Map();
-    messageOperationRouteBindings.set(context, bindings);
-  }
+  const { bindings } = getMessageOperationRouteState(context);
   pruneMessageOperationRouteBindings(bindings, Date.now());
   return bindings;
-}
-
-function getMessageOperationRouteBindingQueue(context: GatewayRequestContext): KeyedAsyncQueue {
-  let queue = messageOperationRouteBindingQueues.get(context);
-  if (!queue) {
-    queue = new KeyedAsyncQueue();
-    messageOperationRouteBindingQueues.set(context, queue);
-  }
-  return queue;
 }
 
 async function acquireMessageOperationRouteBindingLock(params: {
@@ -103,13 +100,10 @@ async function acquireMessageOperationRouteBindingLock(params: {
   const held = createDeferredCore();
   // The lock covers mutable route selection through canonical in-flight registration.
   // Otherwise a later retry can bind newer defaults while the first request is resolving.
-  void getMessageOperationRouteBindingQueue(params.context).enqueue(
-    params.binding.key,
-    async () => {
-      acquired.resolve();
-      await held.promise;
-    },
-  );
+  void getMessageOperationRouteState(params.context).queue.enqueue(params.binding.key, async () => {
+    acquired.resolve();
+    await held.promise;
+  });
   await acquired.promise;
   return held.resolve;
 }
@@ -124,19 +118,20 @@ function resolveMessageOperationAuthorityScope(params: {
     : "";
 }
 
-function resolveGatewayInflightRequest(params: {
-  context: GatewayRequestContext;
-  prefix: MessageOperationPrefix;
-  idempotencyKey: string;
-  respond: RespondFn;
-  conversationReadOrigin?: ConversationReadInvocationOrigin;
-  operation?: string;
-  requestScope?: string;
-}) {
+function resolveGatewayInflightRequest(
+  params: {
+    context: GatewayRequestContext;
+    prefix: MessageOperationPrefix;
+    idempotencyKey: string;
+    respond: RespondFn;
+    conversationReadOrigin?: ConversationReadInvocationOrigin;
+    operation?: string;
+  },
+  requestScope: string,
+) {
   const idem = params.idempotencyKey;
   const authorityScope = resolveMessageOperationAuthorityScope(params);
-  const requestScope = params.requestScope ? `:${params.requestScope}` : "";
-  const dedupeKey = `${params.prefix}${authorityScope}${requestScope}:${idem}`;
+  const dedupeKey = `${params.prefix}${authorityScope}:${requestScope}:${idem}`;
   return resolveIdempotentGatewayRequest({
     context: params.context,
     dedupeKey,
@@ -250,7 +245,10 @@ export async function withMessageOperationRoute<
   bindingAccountIds: readonly unknown[];
   routeAccountIds: (binding: MessageOperationRouteBinding | undefined) => readonly unknown[];
   conflictMessage: string;
-  authorize?: () => boolean;
+  authority: Pick<
+    ReturnType<typeof createMessageActionRuntimeAuthority>,
+    "agentRuntimeAuthority" | "prepareEffect"
+  >;
   /** Input-only policy never replaces an already accepted receipt. */
   assertNewInputAllowed?: () => void;
   /** Ephemeral scheduled reads must consult current provider policy on every invocation. */
@@ -265,6 +263,8 @@ export async function withMessageOperationRoute<
     },
   ) => Promise<InflightResult>;
 }): Promise<void> {
+  const authorize = params.authority.agentRuntimeAuthority.hasActive;
+  const prepareEffect = params.authority.prepareEffect;
   if (params.replayResults === false) {
     const resolved = await params.resolveChannel(params.requestChannel);
     if (!resolved) {
@@ -276,7 +276,6 @@ export async function withMessageOperationRoute<
         accountIds: params.routeAccountIds(undefined),
         conflictMessage: params.conflictMessage,
       });
-      const authorize = params.authorize ?? (() => true);
       const assertCurrent = () => {
         if (!authorize()) {
           throw new Error("agent runtime authority is no longer active");
@@ -284,13 +283,15 @@ export async function withMessageOperationRoute<
       };
       assertCurrent();
       params.assertNewInputAllowed?.();
-      const result = await params.work({
-        ...resolved,
-        accountId: accountRoute.effectiveAccountId,
-        idem: params.idempotencyKey,
-        dedupeKey: undefined,
-        authorize,
-      });
+      const result = await withEffectPreparation(prepareEffect, () =>
+        params.work({
+          ...resolved,
+          accountId: accountRoute.effectiveAccountId,
+          idem: params.idempotencyKey,
+          dedupeKey: undefined,
+          authorize,
+        }),
+      );
       assertCurrent();
       params.respond(result.ok, result.payload, result.error, result.meta);
     } catch (error) {
@@ -321,15 +322,7 @@ export async function withMessageOperationRoute<
     // releases first because awaiting while locked would deadlock concurrent retries.
     binding = resolveMessageOperationRouteBinding(bindingParams);
     const reservedReplay = binding?.reservedRoute
-      ? resolveGatewayInflightRequest({
-          context: params.context,
-          prefix: params.prefix,
-          idempotencyKey: params.idempotencyKey,
-          respond: params.respond,
-          conversationReadOrigin: params.conversationReadOrigin,
-          operation: params.operation,
-          requestScope: binding.reservedRoute.requestScope,
-        })
+      ? resolveGatewayInflightRequest(params, binding.reservedRoute.requestScope)
       : undefined;
     if (reservedReplay?.kind === "handled") {
       releaseLock();
@@ -374,15 +367,7 @@ export async function withMessageOperationRoute<
       });
       return;
     }
-    const inflight = resolveGatewayInflightRequest({
-      context: params.context,
-      prefix: params.prefix,
-      idempotencyKey: params.idempotencyKey,
-      respond: params.respond,
-      conversationReadOrigin: params.conversationReadOrigin,
-      operation: params.operation,
-      requestScope: accountRoute.requestScope,
-    });
+    const inflight = resolveGatewayInflightRequest(params, accountRoute.requestScope);
     if (inflight.kind === "handled") {
       publishBinding();
       releaseLock();
@@ -391,7 +376,7 @@ export async function withMessageOperationRoute<
     }
     // Routing and attachment preparation may yield while the admitted run
     // closes. Revalidate before any provider-visible message side effect.
-    if (params.authorize && !params.authorize()) {
+    if (!authorize()) {
       params.respond(
         false,
         undefined,
@@ -416,22 +401,22 @@ export async function withMessageOperationRoute<
       requestScope: accountRoute.requestScope,
       retainUntilSettled: true,
     });
-    const work = params
-      .work({
+    const work = withEffectPreparation(prepareEffect, () =>
+      params.work({
         ...resolved,
         accountId: accountRoute.accountId,
         idem: inflight.idem,
         dedupeKey: inflight.dedupeKey,
-        authorize: params.authorize ?? (() => true),
-      })
-      .finally(() => {
-        updateMessageOperationRouteBinding({
-          context: params.context,
-          binding,
-          requestScope: accountRoute.requestScope,
-          retainUntilSettled: false,
-        });
+        authorize,
+      }),
+    ).finally(() => {
+      updateMessageOperationRouteBinding({
+        context: params.context,
+        binding,
+        requestScope: accountRoute.requestScope,
+        retainUntilSettled: false,
       });
+    });
     const inflightWork = runGatewayInflightWork({ ...inflight, work, respond: params.respond });
     releaseLock();
     await inflightWork;

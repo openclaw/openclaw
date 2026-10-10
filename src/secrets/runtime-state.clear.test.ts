@@ -71,8 +71,8 @@ it("retires migration refusals and the provider publisher before the resolver ru
 it("isolates snapshot owners while exposing the active config pair for hot paths", () => {
   const resolvedValue = { nested: ["synthetic-value"] };
   const snapshot = preparedSnapshot({
-    sourceConfig: { agents: { list: [{ id: "source" }] } },
-    config: { agents: { list: [{ id: "runtime" }] } },
+    sourceConfig: { agents: { entries: { source: {} } } },
+    config: { agents: { entries: { runtime: {} } } },
     authStores: [],
     degradedOwners: [
       {

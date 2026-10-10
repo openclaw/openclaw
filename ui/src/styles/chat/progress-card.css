@@ -64,7 +64,8 @@
   color: var(--muted);
 }
 
-.session-progress-card__chevron svg {
+.session-progress-card__chevron svg,
+.session-progress-card__refresh svg {
   width: 14px;
   height: 14px;
 }
@@ -151,20 +152,16 @@
   outline-offset: 2px;
 }
 
-.session-progress-card__refresh svg {
-  width: 14px;
-  height: 14px;
-}
-
 .session-progress-card__refresh[data-state="pending"] svg {
-  animation: session-progress-refresh-spin 1.2s linear infinite;
+  animation: btn-spinner-spin 1.2s linear infinite;
 }
 
 .session-progress-card__refresh[data-state="updated"] {
   color: var(--ok);
 }
 
-.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]) {
+.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]),
+.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
   color: var(--warn);
 }
 
@@ -177,10 +174,6 @@
   overflow-wrap: anywhere;
 }
 
-.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
-  color: var(--warn);
-}
-
 /* Keep live announcements accessible; the button carries the visible feedback. */
 .session-progress-card__refresh-status:is([data-state="pending"], [data-state="updated"]) {
   position: absolute;
@@ -188,12 +181,6 @@
   height: 1px;
   overflow: hidden;
   clip-path: inset(50%);
-}
-
-@keyframes session-progress-refresh-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

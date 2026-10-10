@@ -2,6 +2,7 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
   lifecycleRevision?: unknown;
@@ -13,8 +14,10 @@ export type SessionEntryCurrentFacts = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   inheritedToolPolicyVersion?: unknown;
+  inheritedToolPolicySource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
+  delegatedToolPolicy?: unknown;
   subagentRecovery?: {
     lastRunId?: unknown;
     sessionLifecycleRunId?: unknown;
@@ -60,7 +63,7 @@ export type CapturedSessionEntryCurrentRead =
       readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
     }
   | {
-      kind: "native" | "missing";
+      kind: "native" | "incognito" | "missing";
       source?: undefined;
       assertSourceCurrent(this: void): void;
       readCurrent(): SessionEntryCurrentFacts | undefined;

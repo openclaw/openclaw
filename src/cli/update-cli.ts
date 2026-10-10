@@ -9,6 +9,7 @@ import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
+import type { UpdateCommandOptions } from "./update-cli/shared.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
   UpdateCommandOptions,
@@ -30,29 +31,16 @@ function handleUpdateCommandError(error: unknown): void {
 }
 
 function inheritedUpdateTimeout(
-  opts: { timeout?: unknown },
+  opts: { timeout?: unknown; drainTimeout?: unknown },
   command?: Command,
+  option: "timeout" | "drainTimeout" = "timeout",
 ): string | undefined {
-  const timeout = opts.timeout as string | undefined;
-  if (timeout !== undefined) {
-    return timeout;
-  }
-  return inheritOptionFromParent<string>(command, "timeout");
+  const timeout = opts[option] as string | undefined;
+  return timeout !== undefined ? timeout : inheritOptionFromParent<string>(command, option);
 }
 
-type CommanderUpdateOptions = Record<string, unknown> & {
-  acceptCapabilities?: boolean;
-  admission?: string;
-  channel?: string;
-  dryRun?: boolean;
-  json?: boolean;
-  restart?: boolean;
-  reapplyLocalOverrides?: boolean;
-  tag?: string;
-  sha?: string;
-  timeout?: string;
-  yes?: boolean;
-};
+type CommanderUpdateOptions = Record<string, unknown> &
+  Omit<UpdateCommandOptions, "admission"> & { admission?: string };
 
 function requiredUpdateLeafString(opts: Record<string, unknown>, key: string): string {
   const value = opts[key];
@@ -78,6 +66,14 @@ function createUpdateLeafAction(
       }
       if (inheritOptionFromParent<string>(command, "sha") !== undefined) {
         throw new Error("--sha is supported only for openclaw update, not update subcommands.");
+      }
+      if (
+        command.name() !== "recover" &&
+        inheritOptionFromParent<string>(command, "drainTimeout") !== undefined
+      ) {
+        throw new Error(
+          "--drain-timeout is supported only for immutable update and update recover.",
+        );
       }
       if (!options.supportsDryRun && inheritOptionFromParent<boolean>(command, "dryRun")) {
         throw new Error(
@@ -172,7 +168,7 @@ export function registerUpdateCli(program: Command) {
 ${theme.heading("What this does:")}
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
   - npm installs: updates via detected package manager
-  - Adopted immutable installs: prepares a sealed generation; activation is unavailable
+  - Adopted immutable installs: prepares sealed generations and activates only when adoption enables it
 
 ${theme.heading("Switch channels:")}
   - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
@@ -217,6 +213,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           tag: opts.tag,
           sha: opts.sha,
           timeout: opts.timeout,
+          drainTimeout: opts.drainTimeout,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
           admission: opts.admission,
@@ -236,6 +233,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .requiredOption("--config <path>", "Existing Gateway configuration file")
     .requiredOption("--runtime <path>", "Pinned external Node executable")
     .option("--profile <name>", "Existing Gateway profile")
+    .option(
+      "--enable-activation",
+      "Enable native activation and recovery in the adoption record",
+      false,
+    )
     .option(
       "--previous-updater-stopped",
       "Confirm the previous updater has settled and stopped scheduling",
@@ -271,6 +273,38 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           },
           runtime: requiredUpdateLeafString(opts, "runtime"),
           previousUpdaterStopped: true,
+          enableActivation: opts.enableActivation === true,
+          json: Boolean(opts.json) || inheritedUpdateJson(command),
+        });
+      }),
+    );
+
+  update
+    .command("recover")
+    .description("Resume a retained immutable activation without restarting a healthy Gateway")
+    .requiredOption("--root <path>", "Stable adopted installation root")
+    .option("--timeout <seconds>", "Bound readiness verification in seconds")
+    .option(
+      "--drain-timeout <seconds>",
+      "Set the drain budget if recovery must stop an unhealthy service",
+    )
+    .option("--json", "Output result as JSON", false)
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        for (const key of ["channel", "tag", "restart", "acceptCapabilities", "yes"]) {
+          const source = update.getOptionValueSource(key);
+          if (source && source !== "default") {
+            throw new Error(
+              `The parent option ${key} is not supported for openclaw update recover.`,
+            );
+          }
+        }
+        const { updateRecoverImmutableCommand } =
+          await import("./update-cli/update-command-immutable.js");
+        await updateRecoverImmutableCommand({
+          root: requiredUpdateLeafString(opts, "root"),
+          timeout: inheritedUpdateTimeout(opts, command),
+          drainTimeout: inheritedUpdateTimeout(opts, command, "drainTimeout"),
           json: Boolean(opts.json) || inheritedUpdateJson(command),
         });
       }),

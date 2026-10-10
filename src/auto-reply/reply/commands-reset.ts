@@ -117,19 +117,11 @@ export async function maybeHandleResetCommand(
     }
 
     await emitResetCommandHooks({
+      ...params,
       action: "reset",
-      agentId: params.agentId,
-      ctx: params.ctx,
-      cfg: params.cfg,
-      command: params.command,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
       sessionEntry: targetSessionEntry,
       previousSessionEntry,
-      previousSessionMemory: params.previousSessionMemory,
-      previousSessionResetMessages: params.previousSessionResetMessages,
       onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
-      workspaceDir: params.workspaceDir,
     });
     params.command.softResetTriggered = true;
     params.command.softResetTail = softReset.tail;
@@ -151,6 +143,7 @@ export async function maybeHandleResetCommand(
         (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
           sessionKey: resetResult.sessionKey ?? boundAcpKey,
           sessionId: resetResult.sessionId,
+          lifecycleRevision: resetResult.lifecycleRevision,
           storePath: resetResult.storePath,
         });
       }
@@ -162,49 +155,30 @@ export async function maybeHandleResetCommand(
         }
         return { shouldContinue: false };
       }
-      return {
-        shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
-      };
     }
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
-        isStatusNotice: true,
-      },
-    };
+    return commandReply({
+      text: resetResult.ok
+        ? "✅ ACP session reset in place."
+        : "⚠️ ACP session reset failed. Check /acp status and try again.",
+      isStatusNotice: true,
+    });
   }
 
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
 
   const hookResult = await emitResetCommandHooks({
+    ...params,
     action: commandAction,
-    agentId: params.agentId,
-    ctx: params.ctx,
-    cfg: params.cfg,
-    command: params.command,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
     sessionEntry: targetSessionEntry,
-    previousSessionEntry: params.previousSessionEntry,
-    previousSessionMemory: params.previousSessionMemory,
-    previousSessionResetMessages: params.previousSessionResetMessages,
     onObservedReplyDelivery: params.opts?.onObservedReplyDelivery,
-    workspaceDir: params.workspaceDir,
   });
   if (!resetTail) {
-    return {
-      shouldContinue: false,
-      ...(hookResult.routedReply
-        ? {}
-        : {
-            reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
-              isStatusNotice: true,
-            },
-          }),
-    };
+    return hookResult.routedReply
+      ? { shouldContinue: false }
+      : commandReply({
+          text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+          isStatusNotice: true,
+        });
   }
   return null;
 }

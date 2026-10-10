@@ -7,9 +7,11 @@ import { wrapCurrentPluginInstance } from "./plugin-instance-scope.js";
 import type {
   MemoryCorpusSupplement,
   MemoryCorpusSupplementRegistration,
-  MemoryFlushPlan,
+  MemoryFlushFilePlanDraft,
+  MemoryFlushToolsPlan,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
+  MemoryProviderFlushPlanResolver,
   MemoryPluginPublicArtifact,
   MemoryPluginRuntime,
   MemoryPromptPreparationRegistration,
@@ -32,11 +34,14 @@ const log = createSubsystemLogger("plugins/memory-state");
 export type {
   MemoryCorpusSearchResult,
   MemoryCorpusSupplement,
+  MemoryFlushFilePlanDraft,
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
+  MemoryFlushToolsPlan,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
+  MemoryProviderFlushPlanResolver,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
   MemoryPromptSectionParams,
@@ -44,14 +49,44 @@ export type {
   RegisteredMemorySearchManager,
 } from "./registry-contribution-types.js";
 
+/** The flush plan resolver a registration supplies, bound to the plugin that supplied it. */
+type MemoryFlushPlanSource = {
+  resolve: MemoryProviderFlushPlanResolver;
+  pluginId: string;
+};
+
+type ResolvedMemoryCapabilityRegistration = MemoryPluginCapabilityRegistration & {
+  flushPlanSource?: MemoryFlushPlanSource;
+};
+
+// A registration's own flush resolver: the provider resolver when declared, else the released one.
+// A complete released plan is a valid file draft, so both resolve through one signature.
+function ownFlushPlanSource(
+  registration: MemoryPluginCapabilityRegistration,
+): MemoryFlushPlanSource | undefined {
+  const resolve =
+    registration.capability.providerFlushPlanResolver ?? registration.capability.flushPlanResolver;
+  return resolve ? { resolve, pluginId: registration.pluginId } : undefined;
+}
+
+// Merged capabilities retain the resolver's original supplier across later sidecars.
+function flushPlanSourceOf(
+  registration: MemoryPluginCapabilityRegistration | ResolvedMemoryCapabilityRegistration,
+): MemoryFlushPlanSource | undefined {
+  return "flushPlanSource" in registration
+    ? registration.flushPlanSource
+    : ownFlushPlanSource(registration);
+}
+
 export function resolveMemoryCapabilityRegistration(
   registrations: readonly MemoryPluginCapabilityRegistration[],
-): MemoryPluginCapabilityRegistration | undefined {
-  let effective: MemoryPluginCapabilityRegistration | undefined;
+): ResolvedMemoryCapabilityRegistration | undefined {
+  let effective: ResolvedMemoryCapabilityRegistration | undefined;
   for (const registration of registrations) {
     const existing = effective;
     if (!existing) {
-      effective = registration;
+      const flushPlanSource = ownFlushPlanSource(registration);
+      effective = { ...registration, ...(flushPlanSource ? { flushPlanSource } : {}) };
       continue;
     }
     const existingOwnsSlot = existing.memorySlotSelected === true;
@@ -61,6 +96,8 @@ export function resolveMemoryCapabilityRegistration(
       // plugin keeps every field it declares regardless of registration order.
       const owner = existingOwnsSlot ? existing : registration;
       const contributor = existingOwnsSlot ? registration : existing;
+      // The owner's flush resolver, when it has one, wins as a unit over the contributor's.
+      const flushPlanSource = flushPlanSourceOf(owner) ?? flushPlanSourceOf(contributor);
       effective = {
         pluginId: owner.pluginId,
         capability: {
@@ -68,6 +105,7 @@ export function resolveMemoryCapabilityRegistration(
           ...owner.capability,
         },
         memorySlotSelected: true,
+        ...(flushPlanSource ? { flushPlanSource } : {}),
       };
       continue;
     }
@@ -75,8 +113,11 @@ export function resolveMemoryCapabilityRegistration(
       Boolean(registration.capability.publicArtifacts) &&
       !registration.capability.promptBuilder &&
       !registration.capability.flushPlanResolver &&
+      !registration.capability.providerFlushPlanResolver &&
       !registration.capability.runtime &&
       !registration.capability.providerRuntime;
+    const flushPlanSource =
+      ownFlushPlanSource(registration) ?? (preserveExisting ? existing.flushPlanSource : undefined);
     effective = {
       pluginId: registration.pluginId,
       capability: {
@@ -84,6 +125,7 @@ export function resolveMemoryCapabilityRegistration(
         ...registration.capability,
       },
       memorySlotSelected: registration.memorySlotSelected,
+      ...(flushPlanSource ? { flushPlanSource } : {}),
     };
   }
   return effective;
@@ -355,9 +397,44 @@ export function resolveMemoryFlushPlan(params: {
   cfg?: OpenClawConfig;
   nowMs?: number;
   contextWindowTokens?: number;
-}): MemoryFlushPlan | null {
-  return getMemoryCapability()?.capability.flushPlanResolver?.(params) ?? null;
+}): MemoryFlushPlanResolution | null {
+  const registration = getMemoryCapability();
+  const source = registration?.flushPlanSource;
+  if (!registration || !source) {
+    return null;
+  }
+  const plan = source.resolve(params);
+  if (!plan) {
+    return null;
+  }
+  return {
+    plan,
+    pluginId: source.pluginId,
+    selectedSlotOwner:
+      registration.memorySlotSelected === true && source.pluginId === registration.pluginId,
+  };
 }
+
+/**
+ * Whether the flush plan resolver belongs to a selected slot owner that registers the
+ * provider-neutral runtime. Such a provider may persist through its own tools, so its
+ * flush does not depend on a writable workspace; it is answered without calling the resolver.
+ */
+export function isMemoryFlushPlanNativeProviderOwned(): boolean {
+  const registration = getMemoryCapability();
+  return Boolean(
+    registration?.flushPlanSource &&
+    registration.capability.providerRuntime &&
+    registration.memorySlotSelected === true &&
+    registration.flushPlanSource.pluginId === registration.pluginId,
+  );
+}
+
+export type MemoryFlushPlanResolution = {
+  plan: MemoryFlushFilePlanDraft | MemoryFlushToolsPlan;
+  pluginId: string;
+  selectedSlotOwner: boolean;
+};
 export function getMemoryRuntime(): MemoryPluginRuntime | undefined {
   return getMemoryCapability()?.capability.runtime;
 }

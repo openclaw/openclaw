@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
+import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
 import type { UpdateRequester } from "./update-requester-authority.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
@@ -62,7 +62,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   updaterResult?: unknown;
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
-  updaterNotification?: "published" | "consumed";
+  updaterNotification?: "published" | "consumed" | "consumed-before-exit";
   gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited" | "throw";
   diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
@@ -449,18 +449,16 @@ export function createManagedServiceUpdaterFixtureScript(params: {
             steps: updaterResult.steps ?? [],
             durationMs: updaterResult.durationMs ?? 0,
           },
-          meta: { root, handoffId: `${kind}-boundary` },
+          meta: {
+            root,
+            handoffId: `${kind}-boundary`,
+            note: "Preserve this updater notification across handoff.",
+          },
         })
       : null;
   // Use the canonical row shape without moving publication ahead of the child.
-  const notificationEnvelope = notification
-    ? parseRestartSentinelEnvelope({ version: 1, payload: notification })
-    : null;
-  if (notification && !notificationEnvelope) {
-    throw new Error("Expected a valid updater notification fixture");
-  }
-  const notificationRow = notificationEnvelope
-    ? buildRestartSentinelRow(notificationEnvelope.payload, notificationEnvelope.payload.ts)
+  const notificationRow = notification
+    ? buildRestartSentinelRow(notification, notification.ts)
     : null;
   return [
     `void (async () => {`,
@@ -472,16 +470,17 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         ]
       : []),
     `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
-    ...(notificationEnvelope && notificationRow
+    ...(notification && notificationRow
       ? [
-          `const notification = ${JSON.stringify(notificationEnvelope.payload)};`,
+          `const notification = ${JSON.stringify(notification)};`,
           `const row = ${JSON.stringify(notificationRow)};`,
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
           `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
           `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
-          ...(options?.updaterNotification === "consumed" &&
-          (updaterResult?.status === "ok" ||
-            (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
+          ...(options?.updaterNotification === "consumed-before-exit" ||
+          (options?.updaterNotification === "consumed" &&
+            (updaterResult?.status === "ok" ||
+              (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service)))
             ? [`{ ${consumeNotification} }`]
             : []),
         ]

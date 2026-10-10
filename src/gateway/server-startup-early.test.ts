@@ -78,11 +78,12 @@ const log = {
 function earlyRuntimeInput(
   overrides: Partial<StartGatewayEarlyRuntimeInput> = {},
 ): StartGatewayEarlyRuntimeInput {
-  const maintenanceState = createGatewayMaintenanceStateForTest({
-    healthSummary: {} as never,
-    healthVersion: 0,
-    presenceVersion: 0,
-  });
+  const { runDeliveryQueueMediaGc: _runDeliveryQueueMediaGc, ...maintenanceState } =
+    createGatewayMaintenanceStateForTest({
+      healthSummary: {} as never,
+      healthVersion: 0,
+      presenceVersion: 0,
+    });
   const scheduler = overrides.scheduler ?? createTestGatewayScheduler();
   onTestFinished(() => scheduler.stop());
   return {
@@ -101,7 +102,8 @@ function earlyRuntimeInput(
       getServices: () => null,
       setServices: () => {},
     }).currentClaim(),
-    ...maintenanceState,
+    maintenance: maintenanceState,
+    broadcast: maintenanceState.broadcast,
     scheduler,
     getRuntimeConfig: () => ({}) as never,
     ...overrides,

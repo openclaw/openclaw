@@ -14,10 +14,12 @@ import {
 import { hashWorkerBundleManifest } from "../../shared/worker-bundle-hash.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { NODE_WORKER_BUNDLE_TRANSFER_PATH } from "../../worker/node-bundle-install-protocol.js";
-import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
-import { handleNodeWorkerBundleTransferHttpRequest } from "./node-worker-bundle-transfer-http.js";
+import { classifyNodeWorkerBundleTransferPath } from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
-import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 
 describe("node worker bundle transfer", () => {
   let root: string;
@@ -58,10 +60,8 @@ describe("node worker bundle transfer", () => {
       generateToken: () => "A".repeat(43),
     });
     onTestFinished(() => service.closeAll());
-    const node = createNodeWorkerBundleTestNode();
     const progress: number[] = [];
     const prepared = service.prepare({
-      node,
       gatewayNamespace: "gateway-test",
       artifact: {
         install: "bundle",
@@ -88,7 +88,9 @@ describe("node worker bundle transfer", () => {
       offsets: [0],
       createListener: () =>
         http.createServer((req, res) => {
-          void handleNodeWorkerBundleTransferHttpRequest({
+          void handleArtifactTransferHttpRequest({
+            classifyPath: classifyNodeWorkerBundleTransferPath,
+            routePrefix: `${NODE_WORKER_BUNDLE_TRANSFER_PATH}/bundles/`,
             req,
             res,
             clientIp: "127.0.0.1",

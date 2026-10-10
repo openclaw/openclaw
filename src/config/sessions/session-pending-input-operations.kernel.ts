@@ -18,6 +18,7 @@ import {
 } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
+import { readSessionPendingInputAuthorityFacts } from "./session-pending-input-authority.kernel.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type {
   PendingInputCustodyGrant,
@@ -26,10 +27,11 @@ import type {
   PendingInputRead,
   PendingInputSnapshot,
 } from "./session-pending-input-operations.types.js";
+import { readPendingInputSourceInDatabase } from "./session-pending-input-source.kernel.js";
 
-export function readPendingInputStage(
+function readPendingInputStage(
   database: OpenClawAgentDatabase,
-  input: PendingInputRead,
+  input: Extract<PendingInputRead, { kind: "stage" }>,
 ): PendingInputSnapshot {
   if (readSessionEntryRow(database, input.sessionKey)?.entry.sessionId !== input.sessionId) {
     return { kind: "stage", current: false };
@@ -68,6 +70,12 @@ export function readPendingInputStage(
   };
 }
 
+export function readPendingInput(database: OpenClawAgentDatabase, input: PendingInputRead) {
+  return input.kind === "stage"
+    ? readPendingInputStage(database, input)
+    : readPendingInputSourceInDatabase(database, input);
+}
+
 /** Incognito uses this same kernel in its process-held owner until the actor cutover. */
 export function mutatePendingInput(
   input: PendingInputMutation,
@@ -90,6 +98,15 @@ export function mutatePendingInput(
       kind: "pending-input-settlement-custody",
       candidate: row,
       receipt,
+      ...(input.kind !== "finish" && input.authorityAgentId
+        ? {
+            authority: readSessionPendingInputAuthorityFacts(
+              current,
+              input.sessionKey,
+              input.authorityAgentId,
+            ),
+          }
+        : {}),
     };
     if (input.kind !== "finish") {
       if (readSessionEntryRow(current, input.sessionKey)?.entry.sessionId !== input.sessionId) {
@@ -164,7 +181,7 @@ export function mutatePendingInput(
       }
       receipt.outcome = writeSessionInputCompletion(current, input, input.outcome);
     } else if (row) {
-      executeSqliteQuerySync(
+      const result = executeSqliteQuerySync(
         current.db,
         getSessionKysely(current.db)
           .updateTable("session_pending_inputs")
@@ -173,6 +190,9 @@ export function mutatePendingInput(
           .where("state", "=", "queued")
           .where("consumed_event_id", "is", null),
       );
+      if (input.disposition === "cancelled" && result.numAffectedRows === 1n) {
+        receipt.withdrawnInputId = input.inputId;
+      }
     }
     publish(current.db, receipt);
     admit("commit", grant);

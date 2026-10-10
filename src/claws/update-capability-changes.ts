@@ -79,6 +79,7 @@ function compareRankedCapability(
 function classifyToolSet(
   current: unknown[],
   desired: unknown[],
+  wildcardGrant = true,
 ): ClawUpdateCapabilityChange["classification"] {
   const currentTools = new Set(
     current.filter((value): value is string => typeof value === "string"),
@@ -86,10 +87,10 @@ function classifyToolSet(
   const desiredTools = new Set(
     desired.filter((value): value is string => typeof value === "string"),
   );
-  if (currentTools.has("*") !== desiredTools.has("*")) {
+  if (wildcardGrant && currentTools.has("*") !== desiredTools.has("*")) {
     return desiredTools.has("*") ? "escalation" : "reduction";
   }
-  if (desiredTools.has("*")) {
+  if (wildcardGrant && desiredTools.has("*")) {
     return "neutral";
   }
   if ([...desiredTools].some((tool) => !currentTools.has(tool))) {
@@ -209,18 +210,8 @@ function classifyAgentCapability(
     if (!Array.isArray(current) || !Array.isArray(desired)) {
       return "escalation";
     }
-    const desiredTools = new Set(
-      desired.filter((value): value is string => typeof value === "string"),
-    );
-    if (current.some((value) => typeof value === "string" && !desiredTools.has(value))) {
-      return "escalation";
-    }
-    const currentTools = new Set(
-      current.filter((value): value is string => typeof value === "string"),
-    );
-    return desired.some((value) => typeof value === "string" && !currentTools.has(value))
-      ? "reduction"
-      : "neutral";
+    // Removing a denial grants capability; deny entries do not expand wildcards.
+    return classifyToolSet(desired, current, false);
   }
   if (
     (path === "tools.profile" || path === "tools.allow" || path === "tools.alsoAllow") &&
@@ -241,16 +232,8 @@ function classifyAgentCapability(
 function pushAgentCapabilityChanges(params: {
   changes: ClawUpdateCapabilityChange[];
   agentId: string;
-  currentAgent: unknown;
-  desiredAgent: unknown;
-  currentSandbox?: unknown;
-  desiredSandbox?: unknown;
-  currentHeartbeat?: unknown;
-  desiredHeartbeat?: unknown;
-  currentMemorySearch?: unknown;
-  desiredMemorySearch?: unknown;
-  currentTools?: unknown;
-  desiredTools?: unknown;
+  current: unknown;
+  desired: unknown;
 }): void {
   const fields = [
     ["model"],
@@ -273,20 +256,8 @@ function pushAgentCapabilityChanges(params: {
     ["heartbeat", "timeoutSeconds"],
   ] as const;
   for (const field of fields) {
-    const [currentRoot, desiredRoot, offset]: [unknown, unknown, number] =
-      field[0] === "sandbox"
-        ? [params.currentSandbox, params.desiredSandbox, 1]
-        : field[0] === "heartbeat"
-          ? [params.currentHeartbeat, params.desiredHeartbeat, 1]
-          : field[0] === "memory" && field[1] === "search"
-            ? [params.currentMemorySearch, params.desiredMemorySearch, 2]
-            : field[0] === "tools" &&
-                (field[1] === "profile" || field[1] === "alsoAllow" || field[1] === "fs")
-              ? [params.currentTools, params.desiredTools, 1]
-              : [params.currentAgent, params.desiredAgent, 0];
-    const valuePath = field.slice(offset);
-    const currentValue = getPath(currentRoot, valuePath);
-    const desiredValue = getPath(desiredRoot, valuePath);
+    const currentValue = getPath(params.current, field);
+    const desiredValue = getPath(params.desired, field);
     const profileField = field[0] === "tools" && field[1] === "profile";
     const current = profileField ? resolveClawProfileCapabilities(currentValue) : currentValue;
     const desired = profileField ? resolveClawProfileCapabilities(desiredValue) : desiredValue;
@@ -298,7 +269,7 @@ function pushAgentCapabilityChanges(params: {
       path,
       current,
       desired,
-      params.currentAgent !== undefined,
+      params.current !== undefined,
     );
     params.changes.push({
       kind: "agent",
@@ -412,7 +383,7 @@ function prepareCapabilityComparisonConfig(
   entries: AgentConfig[],
   preferredDefaultAgentId: string,
 ): OpenClawConfig {
-  const { list: _legacyList, ...agents } = config.agents ?? {};
+  const agents = config.agents ?? {};
   const systemAgentId =
     agents.ownership !== "explicit" && entries.some((entry) => entry.id === preferredDefaultAgentId)
       ? (tryResolveAmbientOwnerAgentId(config) ?? preferredDefaultAgentId)
@@ -464,23 +435,23 @@ export function pushResolvedAgentCapabilityChanges(params: {
     desiredAgents,
     params.agentId,
   );
+  const resolveCapabilities = (
+    config: OpenClawConfig,
+    agent: AgentConfig | undefined,
+    memoryConfig = config,
+  ) =>
+    agent && {
+      ...agent,
+      sandbox: resolveSandboxConfigForAgent(config, params.agentId),
+      heartbeat: resolveHeartbeat(config, params.agentId),
+      memory: { search: resolvePortableMemorySearch(memoryConfig, params.agentId) },
+      tools: { ...agent.tools, ...resolvePortableTools(config, params.agentId) },
+    };
   pushAgentCapabilityChanges({
     changes: params.changes,
     agentId: params.agentId,
-    currentAgent,
-    desiredAgent: params.desiredAgent,
-    currentSandbox: currentAgent
-      ? resolveSandboxConfigForAgent(currentConfig, params.agentId)
-      : undefined,
-    desiredSandbox: resolveSandboxConfigForAgent(desiredConfig, params.agentId),
-    currentHeartbeat: currentAgent ? resolveHeartbeat(currentConfig, params.agentId) : undefined,
-    desiredHeartbeat: resolveHeartbeat(desiredConfig, params.agentId),
-    currentMemorySearch: currentAgent
-      ? resolvePortableMemorySearch(params.config, params.agentId)
-      : undefined,
-    desiredMemorySearch: resolvePortableMemorySearch(desiredConfig, params.agentId),
-    currentTools: currentAgent ? resolvePortableTools(currentConfig, params.agentId) : undefined,
-    desiredTools: resolvePortableTools(desiredConfig, params.agentId),
+    current: resolveCapabilities(currentConfig, currentAgent, params.config),
+    desired: resolveCapabilities(desiredConfig, params.desiredAgent),
   });
 }
 

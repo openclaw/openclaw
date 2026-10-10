@@ -9,6 +9,7 @@ import {
   createChatFlowE2eSuite,
   captureUiProof,
   installMockGateway,
+  scrollChatThreadToTop,
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 
@@ -160,7 +161,7 @@ suite.define(() => {
               content: [
                 {
                   type: "text",
-                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
+                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.${count <= 8 && index === count - 1 ? "\n\nSupporting context keeps this small set of turns scrollable while testing the rail anchor.".repeat(16) : ""}`,
                 },
               ],
             })),
@@ -188,6 +189,10 @@ suite.define(() => {
           }
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
+          if (count === 1) {
+            // A single folded user bubble still fits; expand it before testing its rail.
+            await page.getByRole("button", { name: "Show more", exact: true }).click();
+          }
           const card = page.locator(".session-progress-card--composer");
           await card.waitFor();
           // Let the transcript settle before measuring the rail and toggling the card.
@@ -522,10 +527,8 @@ suite.define(() => {
           await page.setViewportSize({ width: 390, height: 844 });
           await track.waitFor({ state: "hidden" });
           if (count === 80 && direction === "ltr") {
-            const transcript = page.locator(".chat-thread");
-            await transcript.hover();
-            await page.mouse.wheel(0, -30000);
-            await expect.poll(() => transcript.evaluate((element) => element.scrollTop)).toBe(0);
+            await waitForChatScrollIdle(page);
+            await scrollChatThreadToTop(page);
             await page.setViewportSize({ width: 1440, height: 1000 });
             await track.waitFor();
             await expect

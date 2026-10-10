@@ -3,40 +3,12 @@ import { renderUpdateRunNotice, renderUpdateRunSummary } from "./update-run-noti
 import type { UpdateRunRecord } from "./update-run-record.js";
 
 describe("update conversation notices", () => {
-  it("keeps saved diagnostics out of the completion message", () => {
-    const record = {
-      status: "succeeded" as const,
-      phase: "finished" as const,
-      reason: null,
-      before: { sha: "11111111" },
-      after: { sha: "22222222" },
-      origin: {
-        admission: { owner: "installed" },
-        nextAction: "Retain /fixture/update-backups until recovery is verified.",
-      },
-      steps: [
-        { step: "validating", status: "completed", startedAtMs: 1, endedAtMs: 1_000 },
-        {
-          step: "diagnostic:database snapshot",
-          status: "completed",
-          detail: "Databases snapshotted at /fixture/update-backups.",
-        },
-        { step: "warning", status: "completed", detail: "SecretRef-managed token warning" },
-      ],
-    };
-    const saved = structuredClone(record);
-
-    expect(renderUpdateRunNotice(record, "finished")).toBe(
-      "✅ OpenClaw updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
-    );
-    expect(record).toEqual(saved);
-  });
-
   it.each<{
     status: UpdateRunRecord["status"];
     reason: string | null;
     headline: string;
   }>([
+    { status: "succeeded", reason: null, headline: "✅ OpenClaw updated." },
     { status: "running", reason: null, headline: "⬆️ OpenClaw is updating." },
     {
       status: "failed",
@@ -69,7 +41,30 @@ describe("update conversation notices", () => {
       headline: "⚠️ OpenClaw is installed, but we couldn't confirm it's ready.",
     },
   ])("explains $status ($reason) without suggesting a repair", ({ status, reason, headline }) => {
-    const text = renderUpdateRunSummary({ status, reason });
+    const record = {
+      status,
+      phase: "finished" as const,
+      reason,
+      before: { sha: "11111111" },
+      after: { sha: "22222222" },
+      origin: {
+        admission: { owner: "installed" },
+        nextAction: "Retain /fixture/update-backups until recovery is verified.",
+      },
+      steps: [
+        { step: "validating", status: "completed", startedAtMs: 1, endedAtMs: 1_000 },
+        {
+          step: "diagnostic:database snapshot",
+          status: "completed",
+          detail: "Databases snapshotted at /fixture/update-backups.",
+        },
+        { step: "warning", status: "completed", detail: "SecretRef-managed token warning" },
+      ],
+    };
+    const saved = structuredClone(record);
+    const text = renderUpdateRunSummary(record);
+    expect(renderUpdateRunNotice(record, "finished")).toBe(status === "running" ? null : text);
+    expect(record).toEqual(saved);
     expect(text.split("\n")).toEqual([
       headline,
       "For details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",

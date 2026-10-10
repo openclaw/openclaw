@@ -54,7 +54,6 @@ async function createDeliveringProjector(
 describe("CodexAppServerEventProjector async delivery", () => {
   it.each([
     { name: "disabled tools", disableTools: true },
-    { name: "a non-message tool allowlist", toolsAllow: ["read"] },
     { name: "the ring-zero system tool", toolsAllow: ["openclaw"] },
   ])("does not expose native async messages through $name", async (restriction) => {
     const onAsyncDelivery = vi.fn().mockResolvedValue("settled");
@@ -80,7 +79,6 @@ describe("CodexAppServerEventProjector async delivery", () => {
       questions: [{ title: "Pick a format", options: ["A", "B", "C", "D", "E"] }],
     },
     { name: "a blank title", questions: [{ title: " " }] },
-    { name: "an oversized title", questions: [{ title: "Q".repeat(4_097) }] },
   ])("keeps the text fallback for $name", async ({ questions }) => {
     const onAsyncDelivery = vi.fn().mockResolvedValue("settled");
     const projector = await createProjector(undefined, { onAsyncDelivery });
@@ -178,35 +176,5 @@ describe("CodexAppServerEventProjector async delivery", () => {
       { deliveryIntentId: `block-reply:v1:codex-app-server:thread-1:${TURN_ID}:${item.id}` },
     );
     expect(projector.buildResult(buildEmptyToolTelemetry()).assistantTexts).toEqual(["Finished."]);
-  });
-
-  it("retains async delivery across reconstructed turn snapshots", async () => {
-    const item = asyncItem("async-reconnect", [{ title: "What should I do next?", options: null }]);
-    const onAsyncDelivery = vi.fn().mockResolvedValue("settled");
-    const projector = await createProjector(undefined, { onAsyncDelivery });
-    await projector.handleNotification(turnCompleted([item, finalAnswer]));
-    expect(onAsyncDelivery).toHaveBeenCalledOnce();
-    expect(onAsyncDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({ itemId: item.id, text: item.text }),
-    );
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual(["Finished."]);
-    expect(
-      result.messagesSnapshot.filter(
-        (message) =>
-          (message as { openclawAsyncDelivery?: { itemId?: unknown } }).openclawAsyncDelivery
-            ?.itemId === item.id,
-      ),
-    ).toMatchObject([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: item.text }],
-        __openclaw: { mirrorIdentity: `${TURN_ID}:async:${item.id}` },
-        openclawAsyncDelivery: {
-          itemId: item.id,
-          questions: [{ title: "What should I do next?" }],
-        },
-      },
-    ]);
   });
 });

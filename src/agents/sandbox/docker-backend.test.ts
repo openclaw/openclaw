@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { managedGitHubIdentityEnvironment } from "../github-tool-identity.js";
+import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -62,7 +62,7 @@ function createConfig(): OpenClawConfig {
           },
         },
       },
-      list: [],
+      entries: {},
     },
   };
 }
@@ -592,6 +592,7 @@ describe("docker sandbox backend manager", () => {
       fs.writeFileSync(hosts, "github.com:\n  oauth_token: synthetic-before-launch\n", {
         mode: 0o600,
       });
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
       fs.writeFileSync(
         path.join(root, engine),
         `#!${process.execPath}

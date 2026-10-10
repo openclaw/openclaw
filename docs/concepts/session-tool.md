@@ -116,7 +116,7 @@ The `sessions` tool exposes bounded self-service surfaces. Gateway owners retain
 
 Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation and session-bound MCP attach grants retain their owner gate and do not gain agent identity. Assignment without affirmative owner authority requires a live admitted agent turn, rechecked at the owner write. Tool discovery never grants access to another session; revoked authority and replaced session generations cannot be reused.
 
-- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions and ordinary Home-linked dashboard sessions can be pinned; spawned, subagent, and nested-child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
+- `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions, ordinary Home-linked dashboard sessions, and persistent children explicitly moved to the top level in the Control UI can be pinned; hidden subagent runs and still-nested child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a canonical SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
 - `action: "stop"` stops another authorized session without archiving or deleting it. Include `expectedSessionId` from session discovery to reject a replacement, and optionally `runId` to stop only that exact run. Session-wide stop clears queued follow-ups by default; pass `clearQueued: false` to retain them. Exact-run stop cannot clear unrelated queued follow-ups. To stop the calling session, finish its current reply instead. Non-interactive Swarm collectors do not receive Stop; their existing archive and other session operations are unchanged.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
@@ -175,7 +175,25 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
-Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities and normal visibility policy before admitting the target turn; target placement does not grant messaging access. Targets outside the configured visibility scope, archived targets, and replaced targets remain denied.
+Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
+
+An explicit `agents.entries.<agentId>.tools.agentToAgent.send` list can authorize
+`sessions_send` to selected agents without exposing their sessions to list,
+history, search, status, or session-control tools. Omission keeps normal global
+policy and visibility checks; `[]` denies ordinary cross-agent sends. Global
+agent-to-agent restrictions, incognito denial, and sandbox spawned-session clamps
+still apply. Same-agent visibility and requester-owned native/ACP child access
+are unchanged. See [send-only configuration](/gateway/config-tools/sessions-and-subagents#per-agent-send-only-access).
+
+The current send policy is checked again before target input is accepted, including
+when configuration changes during session resolution or dispatch preparation.
+Withdrawing access does not cancel input the target already accepted or remove
+its obligation to deliver the corresponding result.
+
+A send-only caller can receive the authorized sent turn's reply, inline or through
+normal delayed delivery. This is the run-owned result, not permission to retrieve
+arbitrary target history. The target can still disclose data or act on the
+request; send-only access is not isolation from a privileged target's behavior.
 
 During healthy worker provisioning or workspace preparation, accepted input stays queued until the intended worker is ready. It starts once after OpenClaw rechecks the session and placement. Cancellation, failed setup, or a replaced destination does not silently run that input locally or on another worker. Check the retained input and setup error before submitting another message.
 
@@ -235,6 +253,9 @@ An accepted result keeps target admission separate from reply delivery.
 `delivery.status` describes only the later reply delivery as `pending` or `skipped`.
 An inline reply has `delivery.status: "skipped"` and starts no additional requester turn.
 Neither field is a target-completion receipt.
+New turns sent to a busy chat session wait for its active reply and delivery to
+finish. They keep their order behind other agent commands; cancellation or the
+receiver's execution deadline can withdraw a waiting turn before it runs.
 Default zero-wait sends to your own running child acknowledge queue admission,
 like `mode: "steer"`; they do not confirm transcript persistence or model consumption
 and are not restart-durable. They produce no separate completion turn. Use
@@ -297,7 +318,7 @@ An operator with `operator.sessions.write` can use `mode: "notify"` for an autho
 
 Child coordination stays in agent context and raw transcripts. The receiving chat hides child reports and automatic coordination replies, while normal task-completion summaries and direct human answers remain visible. Historical messages without source provenance cannot be classified as child traffic.
 
-Pass `watch: true` to also register the sender as a state-change watcher of the target: when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
+Pass `watch: true` to also register the sender as a state-change watcher of the target. Watching additionally requires normal status visibility; a send-only rule does not authorize a subscription to otherwise hidden session state. Once registered, when another actor later sends the target a direct human message or changes its goal, the sender receives a system notice pointing at `session_status` `changesSince`. Registration happens after successful dispatch, targets the session that actually received the message, and starts at its current state version, so only later changes produce notices. The result reports `watched: true` when registration succeeded. See [Session state awareness](/concepts/session-state).
 
 Every nonblocking follow-up to your existing native child gives the current
 requester turn a completion claim before the tool returns; `watch` is not required.
@@ -375,6 +396,10 @@ cross-agent access or use `allow` to restrict permitted agent pairs; requester-o
 access, or `tree` for current plus spawned scope; its canonical main-session
 exception still covers all same-agent sessions. Set `self` for strict
 current-session access, including main.
+
+These scopes remain the read and control boundary. An explicit per-agent
+`tools.agentToAgent.send` match can permit only cross-agent sends under `self`,
+`tree`, or `agent`; it does not widen same-agent scope or authorize state watches.
 
 The `agent` scope does not include children owned by another agent.
 Keep explicit `tree` when relying on its owned native/ACP child exception, or

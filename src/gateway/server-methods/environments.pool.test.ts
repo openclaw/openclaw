@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -12,18 +12,20 @@ import {
 import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
+  createDevicePairingNodeSnapshot,
   mockContext,
   pairedNodeDevice,
   workerRecord,
   workerService,
 } from "./environments.test-support.js";
 
-vi.mock("../../infra/device-pairing.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/device-pairing.js")>()),
-  listDevicePairing: vi.fn(),
+vi.mock("../../infra/device-pairing-store-readonly.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-store-readonly.js")>()),
+  readDevicePairingNodeSnapshot: vi.fn(),
 }));
 
-vi.mock("../node-registry-private.js", () => ({
+vi.mock("../node-registry-private.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../node-registry-private.js")>()),
   collectNodeCatalogRuntimeState: vi.fn(),
 }));
 
@@ -35,24 +37,22 @@ beforeEach(() => {
     workerSlotsByNodeId: new Map(),
     workerBundleByNodeId: new Map(),
   });
-  vi.mocked(listDevicePairing).mockResolvedValue({
-    pending: [],
-    paired: [
+  vi.mocked(readDevicePairingNodeSnapshot).mockResolvedValue(
+    createDevicePairingNodeSnapshot([
       pairedNodeDevice("node-live", { commands: ["system.run"] }),
       pairedNodeDevice("node-offline", {
         displayName: "Offline Node",
         caps: ["screen"],
         commands: ["camera.snap"],
       }),
-    ],
-  });
+    ]),
+  );
 });
 
 afterEach(() => vi.restoreAllMocks());
 
 const preparationRequests = [
   { scope: "operator.write", requested: true, includeDetails: false },
-  { scope: "operator.admin", requested: undefined, includeDetails: false },
   { scope: "operator.admin", requested: true, includeDetails: true },
 ];
 
@@ -98,7 +98,7 @@ describe("prepared worker pool projection", () => {
           method,
           {
             ...(listing ? {} : { environmentId: "worker-1" }),
-            ...(requested === undefined ? {} : { includePreparedDetails: requested }),
+            includePreparedDetails: requested,
           },
           { service, scopes: [scope] },
         );
@@ -202,9 +202,9 @@ describe("prepared worker pool projection", () => {
           return undefined;
         });
       } else {
-        vi.mocked(listDevicePairing).mockImplementation(async () => {
+        vi.mocked(readDevicePairingNodeSnapshot).mockImplementation(async () => {
           await waitForDiscovery();
-          return { pending: [], paired: [] };
+          return createDevicePairingNodeSnapshot([]);
         });
       }
       const client = createOperatorClient({

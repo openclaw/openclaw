@@ -1,5 +1,4 @@
-// QA Lab mock provider output event builders.
-
+import { stripInboundMetadata } from "openclaw/plugin-sdk/qa-runtime";
 import {
   type MockAssistantMessageSpec,
   type StreamEvent,
@@ -119,70 +118,47 @@ export function buildReleaseHandoffMarkdown() {
   ].join("\n");
 }
 
-function* plannedToolItems(events: StreamEvent[]) {
-  for (const event of events) {
-    if (event.type !== "response.output_item.done") {
-      continue;
-    }
-    const item = event.item;
-    if (item.type === "function_call" || item.type === "custom_tool_call") {
-      yield item;
-    }
-  }
-}
-
-export function extractPlannedToolName(events: StreamEvent[]) {
-  for (const item of plannedToolItems(events)) {
-    if (typeof item.name === "string") {
-      return item.name;
-    }
-  }
-  return undefined;
-}
-
-export function extractPlannedToolIdentity(events: StreamEvent[]): {
-  callId?: string;
-  itemId?: string;
-} {
-  for (const item of plannedToolItems(events)) {
-    if (typeof item.call_id === "string") {
-      return {
-        callId: item.call_id,
-        itemId: typeof item.id === "string" ? item.id : undefined,
-      };
-    }
-  }
-  return {};
-}
-
-export function extractPlannedToolArgs(events: StreamEvent[]) {
-  for (const item of plannedToolItems(events)) {
-    if (item.type === "custom_tool_call") {
-      return typeof item.input === "string" ? { input: item.input } : undefined;
-    }
-    if (typeof item.arguments !== "string") {
-      continue;
-    }
+export function extractPlannedTool(events: StreamEvent[]) {
+  const items = events.flatMap((event) =>
+    event.type === "response.output_item.done" &&
+    (event.item.type === "function_call" || event.item.type === "custom_tool_call")
+      ? [event.item]
+      : [],
+  );
+  const named = items.find((item) => typeof item.name === "string");
+  const identified = items.find((item) => typeof item.call_id === "string");
+  const argumentsItem = items.find(
+    (item) => item.type === "custom_tool_call" || typeof item.arguments === "string",
+  );
+  let args: Record<string, unknown> | undefined;
+  if (argumentsItem?.type === "custom_tool_call") {
+    args = typeof argumentsItem.input === "string" ? { input: argumentsItem.input } : undefined;
+  } else if (typeof argumentsItem?.arguments === "string") {
     try {
-      const parsed = JSON.parse(item.arguments);
-      return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
+      const parsed: unknown = JSON.parse(argumentsItem.arguments);
+      args = parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
     } catch {
-      return undefined;
+      // Malformed arguments remain unavailable in the debug projection.
     }
   }
-  return undefined;
+  return {
+    name: typeof named?.name === "string" ? named.name : undefined,
+    callId: typeof identified?.call_id === "string" ? identified.call_id : undefined,
+    itemId: typeof identified?.id === "string" ? identified.id : undefined,
+    args,
+  };
 }
 
-export function splitMockStreamingText(text: string, parts = 3) {
+export function splitMockStreamingText(text: string) {
   if (text.length <= 1) {
     return [text];
   }
-  const chunkSize = Math.max(1, Math.ceil(text.length / parts));
+  const chunkSize = Math.ceil(text.length / 3);
   const chunks: string[] = [];
   for (let index = 0; index < text.length; index += chunkSize) {
     chunks.push(text.slice(index, index + chunkSize));
   }
-  return chunks.length > 1 ? chunks : [text.slice(0, 1), text.slice(1)];
+  return chunks;
 }
 
 function buildQaLongFinalText({
@@ -208,7 +184,7 @@ const QA_TELEGRAM_POLICY_HOT_RELOAD_RE =
   /^Write (40|12) numbered plain-text lines\. Every line must contain (TG-RELOAD-(?:root|account)-[0-9a-f]{8}(?:-NEXT)?) and the words ((?:hot reload|new policy) keeps this conversation connected)\. Finish with a separate final line containing \2-END\. Do not use tools, Markdown, or explicit reply tags\.$/u;
 
 function readTelegramPolicyHotReloadPrompt(prompt: string) {
-  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(prompt);
+  const match = QA_TELEGRAM_POLICY_HOT_RELOAD_RE.exec(stripInboundMetadata(prompt));
   const lineCount = Number(match?.[1]);
   const marker = match?.[2];
   const phrase = match?.[3];
@@ -222,16 +198,22 @@ function readTelegramPolicyHotReloadPrompt(prompt: string) {
   return isHeldTurn || isNextTurn ? { lineCount, marker, phrase } : undefined;
 }
 
-function buildTelegramPolicyHotReloadText(prompt: string): string | undefined {
+function buildTelegramPolicyHotReloadEvents(prompt: string): StreamEvent[] | undefined {
   const fixture = readTelegramPolicyHotReloadPrompt(prompt);
   if (!fixture) {
     return undefined;
   }
   const { lineCount, marker, phrase } = fixture;
-  return [
-    ...Array.from({ length: lineCount }, (_, index) => `${index + 1}. ${marker} ${phrase}`),
-    `${marker}-END`,
-  ].join("\n");
+  const lines = Array.from(
+    { length: lineCount },
+    (_, index) => `${index + 1}. ${marker} ${phrase}`,
+  );
+  const text = [...lines, `${marker}-END`].join("\n");
+  return buildStreamingFinalAnswerEvents(
+    "msg_mock_telegram_policy_hot_reload",
+    text,
+    lineCount === 40 ? lines[0] : text,
+  );
 }
 
 export function resolveTelegramChannelStreamingPause(
@@ -248,12 +230,9 @@ export function buildChannelStreamingFixtureEvents(params: {
   allInputText: string;
   hasCompletedToolOutput: boolean;
 }): StreamEvent[] | undefined {
-  const policyHotReloadText = buildTelegramPolicyHotReloadText(params.currentPrompt);
-  if (policyHotReloadText) {
-    return buildStreamingFinalAnswerEvents(
-      "msg_mock_telegram_policy_hot_reload",
-      policyHotReloadText,
-    );
+  const policyHotReloadEvents = buildTelegramPolicyHotReloadEvents(params.currentPrompt);
+  if (policyHotReloadEvents) {
+    return policyHotReloadEvents;
   }
   if (QA_TELEGRAM_LONG_FINAL_THREE_CHUNK_PROMPT_RE.test(params.allInputText)) {
     const text = buildQaLongFinalText({

@@ -90,10 +90,6 @@ export function normalizeDiscordObservedMessage(
   };
 }
 
-function reactionEmojiName(reaction: DiscordReaction) {
-  return reaction.emoji?.name?.trim() || reaction.emoji?.id?.trim() || "";
-}
-
 export function normalizeDiscordReactionSnapshot(params: {
   message: DiscordMessage;
   observedAt: Date;
@@ -104,7 +100,7 @@ export function normalizeDiscordReactionSnapshot(params: {
     observedAt: params.observedAt.toISOString(),
     reactions: (params.message.reactions ?? [])
       .map((reaction) => ({
-        emoji: reactionEmojiName(reaction),
+        emoji: reaction.emoji?.name?.trim() || reaction.emoji?.id?.trim() || "",
         count: Math.max(0, Math.floor(reaction.count ?? 0)),
         me: reaction.me === true,
       }))
@@ -118,17 +114,15 @@ export function collectSeenReactionSequence(
   expectedSequence: readonly string[],
 ) {
   const seen = new Set<string>();
-  const sequence: string[] = [];
   for (const snapshot of snapshots) {
     const snapshotEmojis = new Set(snapshot.reactions.map((reaction) => reaction.emoji));
     for (const emoji of expectedSequence) {
-      if (snapshotEmojis.has(emoji) && !seen.has(emoji)) {
+      if (snapshotEmojis.has(emoji)) {
         seen.add(emoji);
-        sequence.push(emoji);
       }
     }
   }
-  return sequence;
+  return [...seen];
 }
 
 export function renderDiscordStatusReactionHtml(params: {

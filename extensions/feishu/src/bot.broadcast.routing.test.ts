@@ -122,7 +122,7 @@ describe("broadcast routing", () => {
     },
   );
 
-  it("skips unknown agents not in agents.list", async () => {
+  it("skips unknown agents not in agents.entries", async () => {
     await dispatch("msg-broadcast-unknown-agent", {
       ...createBroadcastConfig(),
       broadcast: { "oc-broadcast-group": ["susan", "unknown-agent"] },

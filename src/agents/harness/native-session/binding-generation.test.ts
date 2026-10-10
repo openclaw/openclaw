@@ -2,12 +2,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
-  loadSessionEntryReadOnly,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { createOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
+  captureNativeSessionGenerationAuthority,
   reclaimNativeSessionGeneration,
   resolveNativeSessionBinding,
   type NativeSessionGenerationOperations,
@@ -36,91 +36,72 @@ describe("native session binding generation", () => {
     storePath = path.join(fixture.stateDir, "sessions.json");
   });
 
-  it.each(["current", "stale", "ephemeral"])("fences a %s readable binding", async (state) => {
-    let active = true;
-    await upsertSessionEntryCore(
-      state === "ephemeral" ? { ...scope(), sessionKey: "agent:main:other" } : scope(),
-      { sessionId: state === "ephemeral" ? "session-other" : target.sessionId, updatedAt: 1 },
-    );
-    const pending = resolveNativeSessionBinding({
-      target: state === "stale" ? { ...target, sessionId: "session-stale" } : target,
-      storePath,
-      readBinding: () => binding,
-      createSupersededError,
-      assertCurrent: () => {
-        if (!active) {
-          throw new Error("caller authority closed");
-        }
-      },
-    });
-    if (state === "stale") {
-      await expect(pending).rejects.toThrow("Session generation is no longer current");
-      return;
-    }
-    const resolved = await pending;
-    expect(resolved.binding).toEqual(binding);
-    expect(resolved.assertCurrent).not.toThrow();
-    if (state === "ephemeral") {
-      active = false;
-    } else {
-      await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
-    }
-    expect(resolved.assertCurrent).toThrow(
-      state === "ephemeral" ? "caller authority closed" : "Session generation is no longer current",
-    );
-  });
-
-  it("does not bridge two generations when the host rotates during a predecessor wait", async () => {
-    const previous = { ...target, sessionId: "previous" };
-    const next = { ...previous, sessionId: "next" };
-    let bindingSessionId = previous.sessionId;
-    const { promise: preparationStarted, resolve: markPreparationStarted } = createDeferred();
-    const { promise: preparationReleased, resolve: finishPreparation } = createDeferred();
-    const generation: NativeSessionGenerationOperations = {
-      prepareReclaim: async () => {
-        markPreparationStarted();
-        await preparationReleased;
-        return { kind: "verify", expectedPreviousSessionId: bindingSessionId };
-      },
-      adopt: async (_expectedPreviousSessionId, assertCurrent) => {
-        assertCurrent();
-        bindingSessionId = target.sessionId;
-        return "adopted";
-      },
-      reclaim: async (_expectedPreviousSessionId, assertCurrent) => {
-        assertCurrent();
-        throw new Error("Stale reclaim is disabled");
-      },
-    };
-    await upsertSessionEntryCore(scope(), { sessionId: previous.sessionId, updatedAt: 1 });
-    await patchSessionEntryCore(scope(), () => ({ sessionId: target.sessionId }));
-    const outcome = reclaimNativeSessionGeneration({
+  it("preserves synchronous authority capture for released harness plugins", async () => {
+    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    const captured = captureNativeSessionGenerationAuthority({
       target,
       storePath,
-      generation,
-      reclaimStale: false,
       createSupersededError,
-    }).catch((error: unknown) => error);
-    await preparationStarted;
-    await patchSessionEntryCore(scope(), () => ({ sessionId: next.sessionId }));
-    finishPreparation();
+    });
+    expect(captured.state).toBe("current");
+    expect(captured.assertCurrent).not.toThrow();
+    expect(captured.assertHostCurrent).not.toThrow();
+
+    await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+    expect(captured.assertCurrent).toThrow("Session generation is no longer current");
+    expect(captured.assertHostCurrent).toThrow("Session generation is no longer current");
+  });
+
+  it.each(
+    (["resolve", "reclaim"] as const).flatMap((entry) =>
+      (["adopt", "reclaim"] as const).map((mutation) => ({ entry, mutation })),
+    ),
+  )("fences released $entry callbacks after an awaited $mutation", async ({ entry, mutation }) => {
+    let bindingSessionId = "session-previous";
+    const entered = createDeferred();
+    const released = createDeferred();
+    const mutate = async (assertCurrent: () => void) => {
+      entered.resolve();
+      await released.promise;
+      assertCurrent();
+      bindingSessionId = target.sessionId;
+    };
+    const generation: NativeSessionGenerationOperations = {
+      prepareReclaim: async () => ({
+        kind: "verify",
+        expectedPreviousSessionId: bindingSessionId,
+      }),
+      adopt: async (_previous, assertCurrent) => {
+        if (mutation === "reclaim") {
+          return "absent";
+        }
+        await mutate(assertCurrent);
+        return "adopted";
+      },
+      reclaim: async (_previous, assertCurrent) => {
+        await mutate(assertCurrent);
+        return true;
+      },
+    };
+    await upsertSessionEntryCore(scope(), { sessionId: bindingSessionId, updatedAt: 1 });
+    await patchSessionEntryCore(scope(), () => ({ sessionId: target.sessionId }));
+    const params = { target, storePath, generation, createSupersededError };
+    const outcome = (
+      entry === "resolve"
+        ? resolveNativeSessionBinding({
+            ...params,
+            reclaimStale: true,
+            readBinding: () => (bindingSessionId === target.sessionId ? binding : undefined),
+          })
+        : reclaimNativeSessionGeneration(params)
+    ).catch((error: unknown) => error);
+    await entered.promise;
+    await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
+    released.resolve();
 
     expect(await outcome).toMatchObject({
       message: `Session generation is no longer current: ${target.sessionId}`,
     });
-    expect(bindingSessionId).toBe(previous.sessionId);
-    expect(loadSessionEntryReadOnly(scope())).toMatchObject({
-      sessionId: next.sessionId,
-      previousSessionId: target.sessionId,
-    });
-    await expect(
-      reclaimNativeSessionGeneration({
-        target: next,
-        storePath,
-        generation,
-        reclaimStale: false,
-        createSupersededError,
-      }),
-    ).resolves.toBe(false);
+    expect(bindingSessionId).toBe("session-previous");
   });
 });

@@ -425,6 +425,8 @@ export type ControlUiMockGatewayScenario = {
   deferredMethods?: string[];
   /** Hold every request until resolveDeferred/rejectDeferred releases the method. */
   heldMethods?: string[];
+  /** Fail each admission-dependent read this many times before serving its normal response. */
+  startupPendingResponses?: number;
   /** Non-release gateway checkout branch surfaced in the sidebar footer. */
   devGitBranch?: string;
   /** Exact immutable Control UI artifact served by the mocked Gateway. */
@@ -959,6 +961,7 @@ function normalizeScenario(
     defaultAgentId,
     deferredMethods: scenario.deferredMethods ?? [],
     heldMethods: scenario.heldMethods ?? [],
+    startupPendingResponses: scenario.startupPendingResponses ?? 0,
     devGitBranch: scenario.devGitBranch?.trim() || "",
     serverBuildId: scenario.serverBuildId?.trim() || sharedBuildInfo?.buildId || "e2e",
     gatewayBootId: scenario.gatewayBootId?.trim() || "e2e-gateway-boot",
@@ -1207,6 +1210,8 @@ function installControlUiMockGateway(
     {
       methodResponses: scenario.methodResponses,
       defaultAgentId: scenario.defaultAgentId,
+      agentModel: scenario.agentModel,
+      startupPendingResponses: scenario.startupPendingResponses,
       sessions,
       groupRenames: () => groupsState.renames,
     },
@@ -1336,29 +1341,6 @@ function installControlUiMockGateway(
 
   function hasOwn(record: Record<string, unknown>, key: string): boolean {
     return Object.hasOwn(record, key);
-  }
-
-  function applyScenarioAgentModel(method: string, value: unknown): unknown {
-    if (!scenario.agentModel || !isRecord(value)) {
-      return value;
-    }
-    const applyAgentsList = (agentsList: unknown): unknown => {
-      if (!isRecord(agentsList) || !Array.isArray(agentsList.agents)) {
-        return agentsList;
-      }
-      return {
-        ...agentsList,
-        agents: agentsList.agents.map((agent) =>
-          isRecord(agent) && !hasOwn(agent, "model")
-            ? { ...agent, model: { primary: scenario.agentModel } }
-            : agent,
-        ),
-      };
-    };
-    if (method === "agents.list") {
-      return applyAgentsList(value);
-    }
-    return value;
   }
 
   type CommittedChatInput = {
@@ -1668,7 +1650,7 @@ function installControlUiMockGateway(
       return recordSessionsPatchMany(params, response);
     }
     if (method === "sessions.create" || method === "sessions.catalog.continue") {
-      recordMaterializedSession(params, response);
+      sessions.materializeResponse(params, response);
     }
     return response;
   }
@@ -1719,29 +1701,6 @@ function installControlUiMockGateway(
     socket?.deliver({ event, payload, seq: ++seq, type: "event" });
   }
 
-  function recordMaterializedSession(params: unknown, response: unknown): void {
-    if (!isRecord(response)) {
-      return;
-    }
-    const key =
-      typeof response.key === "string"
-        ? response.key
-        : typeof response.sessionKey === "string"
-          ? response.sessionKey
-          : "";
-    if (!key.trim()) {
-      return;
-    }
-    const label = isRecord(params) && typeof params.label === "string" ? params.label.trim() : "";
-    sessions.materialize(key, {
-      ...(isRecord(response.entry) ? response.entry : {}),
-      ...(typeof response.sessionId === "string" ? { sessionId: response.sessionId } : {}),
-      ...(label ? { displayName: label, label } : {}),
-      hasActiveRun: response.runStarted === true,
-      status: response.runStarted === true ? "running" : "done",
-    });
-  }
-
   function stopRepeatingSessionEvents(): void {
     if (sessionMessageEventTimer !== null) {
       window.clearInterval(sessionMessageEventTimer);
@@ -1769,25 +1728,6 @@ function installControlUiMockGateway(
     emitRepeatingSessionEvent();
     const intervalMs = Math.max(250, scenario.repeatingSessionEvents.intervalMs ?? 3_000);
     sessionMessageEventTimer = window.setInterval(emitRepeatingSessionEvent, intervalMs);
-  }
-
-  function updateSessionMessageSubscription(
-    socket: MockWebSocket,
-    method: string,
-    params: unknown,
-  ): void {
-    if (socket.readyState !== MockWebSocket.OPEN) {
-      return;
-    }
-    socket.sessionMessageSubscriptions.recordRequest(method, params);
-    if (method === "sessions.messages.subscribe") {
-      startRepeatingSessionEvents();
-    } else if (
-      method === "sessions.messages.unsubscribe" &&
-      socket.sessionMessageSubscriptions.size === 0
-    ) {
-      stopRepeatingSessionEvents();
-    }
   }
 
   function parseMockConfig(raw: string, fallback: unknown): { value: unknown; parsed: boolean } {
@@ -1820,6 +1760,10 @@ function installControlUiMockGateway(
   }
 
   function buildResponse(method: string, params: unknown): unknown {
+    const pending = responseFixtures.startupPending(method);
+    if (pending) {
+      return pending;
+    }
     if (configState && baseConfigResponse) {
       if (method === "config.get") {
         const configured = responseFixtures.select(method, params);
@@ -1889,7 +1833,7 @@ function installControlUiMockGateway(
     }
     const configured = responseFixtures.select(method, params);
     if (configured.found) {
-      const configuredValue = applyScenarioAgentModel(method, configured.value);
+      const configuredValue = responseFixtures.applyAgentModel(method, configured.value);
       return method === "sessions.list"
         ? sessions.listResponse(configuredValue, params, {
             renames: groupsState.renames,
@@ -2194,13 +2138,10 @@ function installControlUiMockGateway(
       }
       case "chat.abort":
         return { aborted: true };
-      case "skills.proposals.list":
-        return {
-          schema: "openclaw.skill-workshop.proposals-manifest.v1",
-          updatedAt: new Date().toISOString(),
-          proposals: [],
-          installedSkills: [],
-        };
+      case "skills.workshop.list":
+        return { agentId: "main", mode: "auto", root: "/tmp/workshop", skills: [], archived: [] };
+      case "skills.workshop.changes":
+        return { changes: [] };
       case "skills.status":
         return {
           workspaceDir: "/tmp/control-ui-mock/workspace",
@@ -2492,7 +2433,11 @@ function installControlUiMockGateway(
     readyState = MockWebSocket.CONNECTING;
     readonly url: string;
     private tickTimer: number | null = null;
-    readonly sessionMessageSubscriptions = subscriptionRouting.createClient();
+    readonly sessionMessageSubscriptions = subscriptionRouting.createClient({
+      isOpen: () => this.readyState === MockWebSocket.OPEN,
+      startRepeatingEvents: startRepeatingSessionEvents,
+      stopRepeatingEvents: stopRepeatingSessionEvents,
+    });
 
     constructor(url: string | URL) {
       super();
@@ -2569,7 +2514,7 @@ function installControlUiMockGateway(
         const mockError =
           isRecord(payload) && isRecord(payload["__mockError"]) ? payload["__mockError"] : null;
         if (!mockError) {
-          updateSessionMessageSubscription(this, method, frame.params);
+          this.sessionMessageSubscriptions.recordRequest(method, frame.params, payload);
         }
         this.deliver(
           mockError
@@ -2662,17 +2607,17 @@ function installControlUiMockGateway(
     },
     deferNext(method, match) {
       deferredMethods.push({ method, match });
+      return exposed.findRequests(method, match).length;
     },
     emit(event, payload) {
       emitGatewayEvent(MockWebSocket.latest, event, payload);
     },
-    findRequests(method, match) {
-      // Capture and deferral must select the same RPC scope; child lists share the roster method.
-      return requests.filter(
+    // Capture and deferral must select the same RPC scope; child lists share the roster method.
+    findRequests: (method, match) =>
+      requests.filter(
         (request) =>
           (!method || request.method === method) && responseFixtures.matches(request.params, match),
-      );
-    },
+      ),
     rejectDeferred(method, error) {
       for (const response of takeDeferredResponses(method)) {
         response.socket.deliver({
@@ -2694,14 +2639,18 @@ function installControlUiMockGateway(
         const resolvedPayload = commitFixtureResponse(
           response.method,
           response.params,
-          applyScenarioAgentModel(
+          responseFixtures.applyAgentModel(
             response.method,
             payload ?? buildResponse(response.method, response.params),
           ),
         );
         const mockError = isRecord(resolvedPayload) ? resolvedPayload["__mockError"] : undefined;
         if (!mockError) {
-          updateSessionMessageSubscription(response.socket, response.method, response.params);
+          response.socket.sessionMessageSubscriptions.recordRequest(
+            response.method,
+            response.params,
+            resolvedPayload,
+          );
         }
         response.socket.deliver({
           id: response.id,
@@ -2930,6 +2879,7 @@ export async function installMockGateway(
   if (
     scenario.awaitInitialRoster ??
     (!connectFails &&
+      normalizedScenario.startupPendingResponses === 0 &&
       ![...normalizedScenario.heldMethods, ...normalizedScenario.deferredMethods].some((method) =>
         rosterGates.has(method),
       ))

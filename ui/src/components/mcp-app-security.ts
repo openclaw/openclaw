@@ -1,10 +1,9 @@
 import type { ContentBlock } from "@modelcontextprotocol/client";
 import type { AppBridge } from "@modelcontextprotocol/ext-apps/app-bridge";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { t } from "../i18n/index.ts";
+import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { mcpAppMessageText } from "../lib/mcp-app-message-content.ts";
-import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 type McpAppHostCapabilities = ConstructorParameters<typeof AppBridge>[2];
 registerMcpAppEnglish();
@@ -27,14 +26,8 @@ const widgetPromptTimestampsByKey = new Map<string, number[]>();
 export function allowWidgetPrompt(key: string, nowMs: number): boolean {
   const cutoff = nowMs - WIDGET_PROMPT_RATE_WINDOW_MS;
   const timestamps = (widgetPromptTimestampsByKey.get(key) ?? []).filter((ts) => ts > cutoff);
-  if (
-    !widgetPromptTimestampsByKey.has(key) &&
-    widgetPromptTimestampsByKey.size >= WIDGET_PROMPT_RATE_KEYS_MAX
-  ) {
-    const oldest = widgetPromptTimestampsByKey.keys().next().value;
-    if (oldest !== undefined) {
-      widgetPromptTimestampsByKey.delete(oldest);
-    }
+  if (!widgetPromptTimestampsByKey.has(key)) {
+    pruneMapToMaxSize(widgetPromptTimestampsByKey, WIDGET_PROMPT_RATE_KEYS_MAX - 1);
   }
   if (timestamps.length >= WIDGET_PROMPT_RATE_MAX) {
     widgetPromptTimestampsByKey.set(key, timestamps);
@@ -67,12 +60,13 @@ export function isWidgetFrameInteractable(frame: HTMLIFrameElement): boolean {
  * Agent-authored frames may submit only user-focused conversational text.
  * The shared event preserves pane routing and prevents privileged shortcuts.
  */
-export function dispatchWidgetPrompt(
+export async function dispatchWidgetPrompt(
   frame: HTMLIFrameElement,
   raw: unknown,
   rateKey: string,
-  confirmPrompt?: (text: string) => boolean,
-): boolean {
+  confirmPrompt?: (text: string) => boolean | Promise<boolean>,
+  isCurrent?: () => boolean,
+): Promise<boolean> {
   const text = typeof raw === "string" ? raw.trim() : "";
   if (
     !text ||
@@ -80,8 +74,14 @@ export function dispatchWidgetPrompt(
     text.startsWith("/") ||
     text.startsWith("!") ||
     !isWidgetFrameInteractable(frame) ||
-    !allowWidgetPrompt(rateKey, Date.now()) ||
-    (confirmPrompt && !confirmPrompt(text))
+    !allowWidgetPrompt(rateKey, Date.now())
+  ) {
+    return false;
+  }
+  if (
+    (confirmPrompt && !(await confirmPrompt(text))) ||
+    isCurrent?.() === false ||
+    !isWidgetFrameInteractable(frame)
   ) {
     return false;
   }
@@ -99,10 +99,8 @@ export function buildMcpAppHostCapabilities(
   csp?: McpAppHostSandboxCsp,
   supportsMessage = false,
   supportsUpdateModelContext = false,
-  supportsServerResources = false,
   extensions: {
     richModelContext?: boolean;
-    richMessage?: boolean;
     fileResources?: boolean;
     openFiles?: boolean;
   } = {},
@@ -111,13 +109,10 @@ export function buildMcpAppHostCapabilities(
     openLinks: {},
     serverTools: {},
     sandbox: { csp: csp ?? {} },
-    ...(supportsServerResources ? { serverResources: {} } : {}),
     ...(supportsMessage
       ? {
-          message: {
-            text: {},
-            ...(extensions.richMessage ? { image: {}, resource: {}, resourceLink: {} } : {}),
-          },
+          serverResources: {},
+          message: { text: {}, image: {}, resource: {}, resourceLink: {} },
         }
       : {}),
     ...(supportsUpdateModelContext
@@ -132,28 +127,11 @@ export function buildMcpAppHostCapabilities(
       : {}),
     experimental: {
       ...(extensions.richModelContext ? { "openai/modelContext": {} } : {}),
-      ...(extensions.richMessage ? { "openai/message": {} } : {}),
+      ...(supportsMessage ? { "openai/message": {} } : {}),
       ...(extensions.fileResources ? { "openai/resource": {} } : {}),
       ...(extensions.openFiles ? { "openai/files": {} } : {}),
     },
   };
-}
-
-export function resolveMcpAppSandboxUrl(
-  value: string,
-  sandboxPort: number,
-  sandboxOrigin: string | undefined,
-  gatewayUrl: string,
-  hostOrigin: string,
-): string {
-  return resolveSandboxHostUrl(
-    value,
-    sandboxPort,
-    sandboxOrigin,
-    gatewayUrl,
-    hostOrigin,
-    t("mcpApp.errors.invalidSandboxUrl"),
-  );
 }
 
 /** The normal conversation/file owner must acknowledge custody; dispatch alone is not acceptance. */
@@ -214,7 +192,8 @@ export async function dispatchMcpAppMessage(
   frame: HTMLIFrameElement,
   binding: { sessionKey: string; viewId: string },
   params: { role: string; content: ContentBlock[]; _meta?: Record<string, unknown> },
-  confirm: (preview: string) => boolean,
+  confirm: (preview: string) => boolean | Promise<boolean>,
+  isCurrent?: () => boolean,
 ): Promise<boolean> {
   const options = params._meta?.["openai/message"];
   const messageOptions = asOptionalRecord(options);
@@ -257,7 +236,7 @@ export async function dispatchMcpAppMessage(
       return block.type;
     })
     .join("\n\n");
-  if (!confirm(preview)) {
+  if (!(await confirm(preview)) || isCurrent?.() === false || !isWidgetFrameInteractable(frame)) {
     return false;
   }
   return new Promise<boolean>((respond) => {

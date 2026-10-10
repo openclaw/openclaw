@@ -175,9 +175,16 @@ flow:
               && Buffer.from(mediaDeliveries[0].attachments[0].contentBase64, 'base64').equals(generatedImageBytes)
             message:
               expr: "`expected exactly one generated-image delivery with bytes matching ${generatedPath}; saw ${mediaDeliveries.length} media deliveries in ${outboundMessages.length} messages; transcript=${formatTransportTranscript(state, { conversationId: 'qa-operator' })}`"
+        - set: persistedDeliveryPayloads
+          value:
+            expr: >-
+              (await qaImport('openclaw/plugin-sdk/qa-runtime')).mergeAttemptToolMediaPayloads({
+                payloads: [{ text: generatedImageTranscript.finalText }],
+                toolMediaUrls: [generatedPath]
+              })
         - set: persistedReply
           value:
-            expr: "(await qaImport('openclaw/plugin-sdk/channel-outbound')).createOutboundPayloadPlan([{ text: generatedImageTranscript.finalText }])[0]?.parts.text"
+            expr: "(await qaImport('openclaw/plugin-sdk/channel-outbound')).createOutboundPayloadPlan(persistedDeliveryPayloads ?? [])[0]?.parts.text"
         - assert:
             expr: >-
               completedGenerations.length === 1

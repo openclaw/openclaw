@@ -35,50 +35,41 @@ describe("session entry replacement compare-and-swap", () => {
     cleanupTempDirs(tempDirs);
   });
 
-  it.each([false, true])(
-    "hydrates replacement candidates once while preserving detached snapshots (status selection: %s)",
-    async (selectStatus) => {
-      const prompt = "synthetic replacement payload ".repeat(8192);
-      for (const suffix of ["a", "b"]) {
-        await upsertSessionEntryCore(
-          { storePath, sessionKey: `agent:main:payload-${suffix}` },
-          {
-            sessionId: `payload-${suffix}`,
-            updatedAt: 10,
-            status: "running",
-            skillsSnapshot: { prompt, skills: [] },
-          },
-        );
-      }
-      const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const reads = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-        /\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null,
+  it("hydrates replacement candidates once while preserving detached snapshots", async () => {
+    const prompt = "synthetic replacement payload ".repeat(8192);
+    for (const suffix of ["a", "b"]) {
+      await upsertSessionEntryCore(
+        { storePath, sessionKey: `agent:main:payload-${suffix}` },
+        {
+          sessionId: `payload-${suffix}`,
+          updatedAt: 10,
+          skillsSnapshot: { prompt, skills: [] },
+        },
       );
-      try {
-        const snapshot = readSessionEntryReplacementState(
-          database,
-          selectStatus ? { statuses: ["running"] } : {},
-        );
-        const selected = snapshot.entries.filter(({ sessionKey }) =>
-          sessionKey.includes("payload-"),
-        );
-        expect(selected).toHaveLength(2);
-        for (const { entry } of selected) {
-          expect(entry.skillsSnapshot?.prompt).toBe(prompt);
-          if (entry.skillsSnapshot) {
-            entry.skillsSnapshot.prompt = "detached mutation";
-          }
+    }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    const reads = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
+      /\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null,
+    );
+    try {
+      const snapshot = readSessionEntryReplacementState(database, {});
+      const selected = snapshot.entries.filter(({ sessionKey }) => sessionKey.includes("payload-"));
+      expect(selected).toHaveLength(2);
+      for (const { entry } of selected) {
+        expect(entry.skillsSnapshot?.prompt).toBe(prompt);
+        if (entry.skillsSnapshot) {
+          entry.skillsSnapshot.prompt = "detached mutation";
         }
-        // Two full candidate payloads, with room for their small metadata; enumeration must not hydrate them again.
-        expect(reads.textBytes.entries).toBeLessThan(prompt.length * 3);
-      } finally {
-        reads.restore();
       }
-      expect(
-        loadSessionEntry({ storePath, sessionKey: "agent:main:payload-a" })?.skillsSnapshot?.prompt,
-      ).toBe(prompt);
-    },
-  );
+      // Two full candidate payloads, with room for their small metadata; enumeration must not hydrate them again.
+      expect(reads.textBytes.entries).toBeLessThan(prompt.length * 3);
+    } finally {
+      reads.restore();
+    }
+    expect(
+      loadSessionEntry({ storePath, sessionKey: "agent:main:payload-a" })?.skillsSnapshot?.prompt,
+    ).toBe(prompt);
+  });
 
   it("rejects a row deleted during its detached snapshot", async () => {
     await expect(

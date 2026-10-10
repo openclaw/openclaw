@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -9,57 +7,49 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
-import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
+import { readSessionTranscriptAnchorsAsync } from "../../config/sessions/session-transcript-anchor-read.js";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { createBackgroundWorkOwner } from "../../process/background-work.js";
+import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
-import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js";
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
-import { SKILL_WORKSHOP_MAINTENANCE_TOOLS } from "./maintenance-prompt.js";
-import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
-import { resolveWorkshopSkillsDir } from "./skills-root.js";
-import type { SkillWorkshopProposalMutationBudget } from "./types.js";
+import { listWorkshopChanges } from "./library.js";
+import { assertSkillReviewRunSucceeded, postWorkshopChangeNotice } from "./review-outcome.js";
+import { runSkillWorkshopReview } from "./review-run.js";
 
-const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
+const log = createSubsystemLogger("skills/workshop");
 
+/** Admits a queued review only when Workshop is on and the session's policy exposes the tool. */
 export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
 ): Promise<ExperienceReviewCandidate | undefined> {
   if (
     isIncognitoSessionKey(candidate.source.sessionKey) ||
-    resolveSkillWorkshopConfig(config).autonomous.mode === "off"
+    resolveSkillWorkshopConfig(config).autonomous.mode !== "auto"
   ) {
     return undefined;
   }
   const { resolveConversationCapabilityProfile } =
     await import("../../agents/conversation-capability-profile.js");
-  const { resolveSandboxRuntimeStatus } = await import("../../agents/sandbox.js");
   const { isToolAllowedByPolicies } = await import("../../agents/tool-policy-match.js");
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
   const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.source.sessionKey;
-  if (
-    resolveSkillWorkshopConfig(config).autonomous.mode === "propose" &&
-    resolveSandboxRuntimeStatus({ cfg: config, sessionKey, agentId: foreground.agentId }).sandboxed
-  ) {
-    return undefined;
-  }
   const capabilityProfile = resolveConversationCapabilityProfile({
     config,
     sessionKey,
@@ -81,26 +71,19 @@ export async function prepareSkillExperienceReviewCandidate(
     modelId: candidate.ctx.modelId,
     workspaceDir: candidate.ctx.workspaceDir,
   });
-  const profilePolicy = mergeAlsoAllowPolicy(
-    capabilityProfile.policy.profilePolicy,
-    capabilityProfile.policy.profileAlsoAllow,
-  );
-  const providerProfilePolicy = mergeAlsoAllowPolicy(
-    capabilityProfile.policy.providerProfilePolicy,
-    capabilityProfile.policy.providerProfileAlsoAllow,
-  );
+  const policy = capabilityProfile.policy;
   if (
     !isToolAllowedByPolicies("skill_workshop", [
-      profilePolicy,
-      providerProfilePolicy,
-      capabilityProfile.policy.globalPolicy,
-      capabilityProfile.policy.globalProviderPolicy,
-      capabilityProfile.policy.agentPolicy,
-      capabilityProfile.policy.agentProviderPolicy,
-      capabilityProfile.policy.groupPolicy,
-      capabilityProfile.policy.senderPolicy,
-      capabilityProfile.policy.subagentPolicy,
-      capabilityProfile.policy.inheritedToolPolicy,
+      mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
+      mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),
+      policy.globalPolicy,
+      policy.globalProviderPolicy,
+      policy.agentPolicy,
+      policy.agentProviderPolicy,
+      policy.groupPolicy,
+      policy.senderPolicy,
+      policy.subagentPolicy,
+      policy.inheritedToolPolicy,
     ])
   ) {
     return undefined;
@@ -120,213 +103,141 @@ export async function runSkillExperienceReview(
 }
 
 async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidate): Promise<void> {
-  // Reset replaces the global controller; this review keeps its original lifetime
-  // across model execution and outcome publication.
   const abortSignal = getGatewayRestartDrainSignal();
   const { foregroundPromptContext, workspaceDir } = candidate.ctx;
+  const { agentId } = foregroundPromptContext;
   const { sessionKey } = candidate.source;
   const config = candidate.config;
-  const mode = resolveSkillWorkshopConfig(config).autonomous.mode;
-  if (mode === "off") {
-    return;
-  }
-  const outcomeStore = { context: captureOpenClawStateWorkerContext() };
-  const executionRoot =
-    mode === "auto" ? resolveWorkshopSkillsDir(config, foregroundPromptContext.agentId) : undefined;
   const runId = `skill-workshop-review:${randomUUID()}`;
-  const reviewSession = resolveInternalSessionEffectsIdentity({
-    agentId: foregroundPromptContext.agentId,
-    runId,
-  });
+  const reviewSession = resolveInternalSessionEffectsIdentity({ agentId, runId });
   const origin = foregroundPromptContext.cronCreatorCallerOrigin;
   const capability = origin ? createCronCreatorAuthorityCapability(runId, origin) : undefined;
-  const proposalMutationBudget: SkillWorkshopProposalMutationBudget | undefined =
-    mode === "propose" ? { remaining: 1, readSkillHashes: new Map() } : undefined;
-  const attemptedAtMs = Date.now();
-  let outcome: "completed" | "proposed" | "nothing";
-  let proposalId: string | undefined;
-  let usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number } | undefined;
-  // Runtime identity is private; the captured promptCacheKey retains foreground cache affinity.
-  registerAgentRunContext(runId, {
-    agentId: foregroundPromptContext.agentId,
-    sessionId: reviewSession.sessionId,
-    sessionKey: reviewSession.sessionKey,
-    isControlUiVisible: false,
-    projectSessionActive: false,
-    projectSessionLifecycle: false,
-    projectSessionMessages: false,
-  });
-  try {
-    abortSignal.throwIfAborted();
-    if (executionRoot) {
-      await fs.mkdir(executionRoot, { recursive: true });
-    }
-    const sessionManager = await SessionManager.openModelContextAsync(candidate.source, {
-      cwd: executionRoot ?? workspaceDir,
+
+  // Fork the foreground model context through the completed turn; the review's tool
+  // schemas and prefix match the foreground so the provider prompt cache is reused.
+  const prepare = async (
+    source: typeof candidate.source,
+    assertPhysicalCurrent: () => void,
+    assertPreparationCurrent: () => void,
+  ) => {
+    const sessionManager = await SessionManager.openModelContextAsync(source, {
+      cwd: workspaceDir,
       through: candidate.source,
       signal: abortSignal,
     });
-    abortSignal.throwIfAborted();
-    const { listWritableWorkshopSkillSummaries } = await import("./workspace-skill-read.js");
-    abortSignal.throwIfAborted();
-    // Deleting or replacing the source session must not revive its captured evidence.
-    // Check after asynchronous preparation; a replacement can retain the old transcript.
-    const sourceEntry = loadSessionEntryReadOnly({
-      ...candidate.source,
-      hydrateSkillPromptRefs: false,
-      readConsistency: "latest",
-    });
-    if (sourceEntry?.sessionId !== candidate.source.sessionId) {
-      throw new Error("Skill experience review source session was deleted or replaced.");
-    }
-    const existingSkills =
-      mode === "propose"
-        ? listWritableWorkshopSkillSummaries({ config, agentId: foregroundPromptContext.agentId })
-        : undefined;
-    validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
-    // Source revocation fences retained tools and completion, even when the
-    // model handles a denied tool call and returns a normal final response.
-    const assertSourceCurrent = () => {
-      abortSignal.throwIfAborted();
-      if (
-        mode === "auto" &&
-        resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto"
-      ) {
-        throw new Error("Automatic Skill Workshop maintenance was disabled during review.");
-      }
-      const current = loadSessionEntryReadOnly({
-        ...candidate.source,
-        hydrateSkillPromptRefs: false,
-        readConsistency: "latest",
-      });
-      if (
-        current?.sessionId !== candidate.source.sessionId ||
-        current?.permissionMode !== sourceEntry.permissionMode
-      ) {
-        throw new Error(
-          "Skill experience review source session was deleted, replaced, or changed permissions.",
-        );
-      }
-      validateSessionTranscriptContextAnchor(candidate.source, candidate.source);
-    };
-    const preparedRunAdmission = prepareAgentRunAdmission({
-      cfg: config,
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
-      facts: {
-        runId,
-        agentId: foregroundPromptContext.agentId,
-        ingress: { kind: "system", boundary: "skill-workshop.experience", state: "present" },
-      },
-      assertSourceCurrent,
-    });
-    const run = async () => {
-      const reviewAbortSignal = AbortSignal.any([getGatewayRestartDrainSignal(), abortSignal]);
-      const reviewParams: Parameters<
-        typeof import("../../agents/embedded-agent.js").runEmbeddedAgent
-      >[0] = {
-        ...foregroundPromptContext,
-        preparedRunAdmission,
-        sessionId: reviewSession.sessionId,
-        sessionKey: reviewSession.sessionKey,
-        // Delivery authority closes with the foreground turn and cannot be reused by this fork.
-        messageActionTurnCapability: undefined,
-        sessionManager,
-        sessionPersistence: "detached",
-        workspaceDir,
-        ...(executionRoot ? rootedAgentRunParams(workspaceDir, executionRoot) : {}),
-        permissionMode: sourceEntry.permissionMode ?? foregroundPromptContext.permissionMode,
-        ...(executionRoot ? { skillsSnapshot: { prompt: "", skills: [] } } : {}),
-        config,
-        abortSignal: reviewAbortSignal,
-        prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }, mode),
-        provider: candidate.ctx.modelProviderId,
-        model: candidate.ctx.modelId,
-        ...(candidate.ctx.authProfileId
-          ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
-        timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
-        runId,
-        silentExpected: true,
-        allowEmptyAssistantReplyAsSilent: true,
-        terminalReplyExpectation: "optional",
-        toolExecutionAllow:
-          mode === "auto" ? [...SKILL_WORKSHOP_MAINTENANCE_TOOLS] : ["skill_workshop"],
-        skillWorkshopProposalOnly: mode === "propose",
-        skillWorkshopUpdateProposals: mode === "propose",
-        skillWorkshopAutonomousCapture: mode === "propose",
-        skillWorkshopProposalMutationBudget: proposalMutationBudget,
-        skillWorkshopOrigin: {
-          agentId: foregroundPromptContext.agentId,
-          sessionKey,
-          ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-        },
-        ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
-        lane: reviews.lane,
-        agentHarnessId: "openclaw",
-        agentHarnessRuntimeOverride: "openclaw",
-        // Review prompts and cloned prefixes are sized for this exact model.
-        modelSelectionLocked: true,
-        modelFallbacksOverride: [],
-        requestedRouteResolution: "resolved",
-        disableTrajectory: true,
-        cleanupBundleMcpOnRunEnd: true,
-        verboseLevel: "off",
-      };
-      reviewAbortSignal.throwIfAborted();
-      try {
-        const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-        return await runEmbeddedAgent(reviewParams);
-      } finally {
-        preparedRunAdmission.close();
-      }
-    };
-    const embeddedResult = capability
-      ? await runWithCronCreatorAuthorityCapability(capability, run)
-      : await run();
-    preparedRunAdmission.assertSourceCurrent();
-
-    // Direct edits have normal file-tool semantics; drafts remain pending even
-    // if the operator enables automatic maintenance while this review runs.
-    assertSkillReviewRunSucceeded(embeddedResult);
-    const proposalIds = [...(proposalMutationBudget?.mutatedProposalIds ?? [])];
-    proposalId = proposalIds[0];
-    outcome = mode === "auto" ? "completed" : proposalIds.length === 0 ? "nothing" : "proposed";
-    const agentUsage = embeddedResult.meta?.agentMeta?.usage;
-    usage = agentUsage
-      ? {
-          inputTokens:
-            (agentUsage.input ?? 0) + (agentUsage.cacheRead ?? 0) + (agentUsage.cacheWrite ?? 0),
-          cachedInputTokens: agentUsage.cacheRead ?? 0,
-          outputTokens: agentUsage.output ?? 0,
-        }
-      : undefined;
-  } catch (error) {
-    await recordSkillExperienceReviewOutcome(
-      foregroundPromptContext.agentId,
-      workspaceDir,
+    assertPreparationCurrent();
+    // Deleting, replacing, or resetting the source session must not revive its captured evidence.
+    let sourceEntry:
+      | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode">
+      | undefined;
+    await readSessionTranscriptAnchorsAsync(
+      source,
       {
-        attemptedAtMs,
-        outcome: "failed",
-        error: truncateUtf16Safe(String(error), 300),
+        entryIds: [],
+        contextAuthority: true,
+        contextValidation: { through: candidate.source },
       },
-      outcomeStore,
+      abortSignal,
+      (facts) => {
+        assertPreparationCurrent();
+        const current = facts.contextAuthority?.entry;
+        if (current?.sessionId !== candidate.source.sessionId) {
+          throw new Error("Skill experience review source session was deleted or replaced.");
+        }
+        if (facts.contextValidated) {
+          sourceEntry = current;
+        }
+      },
     );
-    throw error;
-  } finally {
-    if (executionRoot) {
-      bumpSkillsSnapshotVersion({ reason: "workshop" });
+    if (!sourceEntry) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
     }
-    clearAgentRunContext(runId);
-  }
-  await recordSkillExperienceReviewOutcome(
-    foregroundPromptContext.agentId,
-    workspaceDir,
-    {
-      attemptedAtMs,
-      outcome,
-      ...(proposalId ? { proposalId } : {}),
-      ...(usage ? { usage } : {}),
+    return { source, sourceEntry, sessionManager, assertPhysicalCurrent };
+  };
+  const { source, sourceEntry, sessionManager, assertPhysicalCurrent } =
+    await withSessionTranscriptReadSource(
+      candidate.source,
+      (scope) =>
+        prepare(
+          { ...candidate.source, ...scope },
+          () => abortSignal.throwIfAborted(),
+          () => abortSignal.throwIfAborted(),
+        ),
+      ({ scope, expectedIdentity, assertCurrent }) => {
+        const assertSourceIdentity = () => {
+          abortSignal.throwIfAborted();
+          if (expectedIdentity) {
+            assertExistingDatabaseIdentity(
+              scope.storePath,
+              expectedIdentity.key,
+              expectedIdentity.birthtime,
+            );
+          }
+        };
+        return prepare({ ...candidate.source, ...scope }, assertSourceIdentity, assertCurrent);
+      },
+      abortSignal,
+    );
+  // A Gateway reset keeps the sessionId and rotates the lifecycle revision.
+  const generation = {
+    agentId: candidate.source.agentId,
+    storePath: candidate.source.storePath,
+    sessionKey,
+    sessionId: sourceEntry.sessionId,
+    lifecycleRevision: sourceEntry.lifecycleRevision ?? null,
+  };
+  const assertSourceCurrent = () => {
+    assertPhysicalCurrent();
+    if (resolveSkillWorkshopConfig(getRuntimeConfig()).autonomous.mode !== "auto") {
+      throw new Error("Skill Workshop was turned off during review.");
+    }
+    // fs-safe requires synchronous authority immediately before mutation.
+    // SDK sync writers bypass the FIFO; the connection-local witness misses
+    // foreign commits. Retain this fence until the next SDK major retires them.
+    validateSessionTranscriptContextAnchor(source, candidate.source, sourceEntry);
+  };
+  const preparedRunAdmission = prepareAgentRunAdmission({
+    cfg: config,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      runId,
+      agentId,
+      ingress: { kind: "system", boundary: "skill-workshop.review", state: "present" },
     },
-    outcomeStore,
-  );
+    assertSourceCurrent,
+  });
+  const run = () =>
+    runSkillWorkshopReview({
+      ...foregroundPromptContext,
+      preparedRunAdmission,
+      sessionId: reviewSession.sessionId,
+      sessionKey: reviewSession.sessionKey,
+      skillWorkshopReviewOf: sessionKey,
+      // Delivery authority closes with the foreground turn and cannot be reused by this fork.
+      messageActionTurnCapability: undefined,
+      sessionManager,
+      workspaceDir,
+      permissionMode: sourceEntry.permissionMode ?? foregroundPromptContext.permissionMode,
+      config,
+      abortSignal,
+      prompt: buildSkillExperienceReviewPrompt(candidate),
+      provider: candidate.ctx.modelProviderId,
+      model: candidate.ctx.modelId,
+      ...(candidate.ctx.authProfileId
+        ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
+        : {}),
+      timeoutMs: resolveAgentTimeoutMs({ cfg: config }),
+      runId,
+      ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
+    });
+  try {
+    assertSkillReviewRunSucceeded(
+      capability ? await runWithCronCreatorAuthorityCapability(capability, run) : await run(),
+    );
+  } finally {
+    // Each skill_workshop call commits on its own, so a failed or aborted run may have changed skills.
+    const changes = await listWorkshopChanges(agentId, { runId });
+    log.debug(`experience review finished: session=${sessionKey} changes=${changes.length}`);
+    await postWorkshopChangeNotice({ config, generation, runId, changes });
+  }
 }

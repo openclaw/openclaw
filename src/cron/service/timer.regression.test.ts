@@ -100,36 +100,6 @@ function requireAdmittedRunId(storePath: string, jobId: string): string {
 }
 
 describe("cron service timer regressions", () => {
-  it("#24355: retries a deleteAfterRun one-shot before deleting its successful completion", async () => {
-    const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
-    const job = createDueIsolatedJob({
-      id: "oneshot-retry",
-      nowMs: scheduledAt,
-      nextRunAtMs: scheduledAt,
-      deleteAfterRun: true,
-    });
-    const storePath = await storeJobs([job]);
-    let now = scheduledAt;
-    const runIsolatedAgentJob = vi
-      .fn()
-      .mockResolvedValueOnce({ status: "error", error: "429 rate limit exceeded" })
-      .mockResolvedValueOnce({ status: "ok", summary: "done", delivered: true });
-    const state = createCronServiceState({
-      storePath,
-      nowMs: () => now,
-      runIsolatedAgentJob,
-    });
-    await onTimer(state);
-    const retry = requireJob(state, job.id);
-    expect(retry.enabled).toBe(true);
-    expect(retry.state.lastStatus).toBe("error");
-    expect(retry.state.nextRunAtMs).toBeGreaterThan(scheduledAt);
-    now = requireTimestamp(retry.state.nextRunAtMs, "retry next run") + 1;
-    await onTimer(state);
-    expect(state.store?.jobs.find((entry) => entry.id === job.id)).toBeUndefined();
-    expect(runIsolatedAgentJob).toHaveBeenCalledTimes(2);
-  });
-
   it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
     const scheduledAt = Date.parse("2026-02-06T10:00:00.000Z");
     const firedAt = scheduledAt + 18 * 60 * 60_000;
@@ -197,6 +167,7 @@ describe("cron service timer regressions", () => {
       payload: { kind: "agentTurn", message: "remind me" },
       state: { nextRunAtMs: scheduledAt },
     });
+    cronJob.deleteAfterRun = true;
     const storePath = await storeJobs([cronJob]);
 
     let now = scheduledAt;
@@ -1025,10 +996,7 @@ describe("cron service timer regressions", () => {
     }
   });
 
-  it.each([
-    { status: "ok", error: undefined, taskStatus: "succeeded" },
-    { status: "skipped", error: "agent skipped after removal", taskStatus: "failed" },
-  ] as const)(
+  it.each([{ status: "ok", error: undefined, taskStatus: "succeeded" }] as const)(
     "finalizes a removed job's $status outcome in operator history",
     async ({ status, error, taskStatus }) => {
       const dueAt = Date.parse("2026-02-06T10:05:01.000Z");

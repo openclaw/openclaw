@@ -9,6 +9,54 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+it("limits unadmitted mutation classification to its synchronous guarded branch", () => {
+  const root = tempDirs.make("openclaw-sqlite-guard-ratchet-");
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], {
+      cwd: root,
+      stdio: "pipe",
+    });
+  const relative = "src/config/sessions/session-accessor.sqlite-transcript-state.ts";
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(
+    file,
+    "function advanceTranscriptMutationAtInTransaction(database) { executeSqliteQuerySync(query); }",
+  );
+  git("init");
+  git("add", ".");
+  git("commit", "-m", "unconditional runtime update");
+  const guarded = `
+function advanceTranscriptMutationAtInTransaction(database) {
+  if (!findOpenClawAgentDatabaseIdentity(database)) {
+    executeSqliteQuerySync(query);
+    return;
+  }
+  const context = executeSqliteQueryTakeFirstSync(query);
+}
+`;
+  fs.writeFileSync(file, guarded);
+  vi.spyOn(console, "log").mockImplementation(() => {});
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  expect(inventory(root).map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 1],
+    ["T2", 1],
+  ]);
+  expect(main(root, ["--base", "HEAD"])).toBe(0);
+  fs.writeFileSync(
+    file,
+    guarded.replace(
+      "    return;\n  }",
+      "    callback(() => executeSqliteQuerySync(query));\n  } else { executeSqliteQuerySync(query); }",
+    ),
+  );
+  expect(inventory(root).map(({ tier, calls }) => [tier, calls.length])).toEqual([
+    ["T1", 3],
+    ["T2", 1],
+  ]);
+  expect(main(root, ["--base", "HEAD"])).toBe(1);
+});
+
 it("rejects total T1 growth with call sites and allows splits, shrinkage, and worker calls", () => {
   const root = tempDirs.make("openclaw-sqlite-ratchet-");
   const git = (...args: string[]) =>
@@ -101,20 +149,20 @@ function anotherRecorder() {
   const rows = inventory(root);
   expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
     ["T1", 2],
-    ["T1", 4],
+    ["T1", 1],
     ["T2", 1],
     ["W", 1],
-    ["W", 1],
+    ["W", 4],
   ]);
   expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
     "createPlacementTurnClaimOps.releaseTurn",
   );
+  expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+  );
   expect(
-    rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls[0],
-  ).toMatchObject({
-    operation: "recordSessionStateEventInDatabase",
-    binding: "registeredWatcherKeys",
-  });
+    rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],
+  ).toMatchObject({ operation: "anotherRecorder", binding: "registeredWatcherKeys" });
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   fs.writeFileSync(file, "\n\n" + source);

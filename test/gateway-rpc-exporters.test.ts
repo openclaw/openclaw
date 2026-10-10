@@ -4,6 +4,7 @@ import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { beforeEach, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { createGatewayMethodDescriptorsFromHandlers } from "../src/gateway/methods/registry.js";
 import { createLazyCoreHandlers } from "../src/gateway/server-methods/lazy-core-handlers.js";
 import {
   connectOk,
@@ -106,6 +107,12 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
             };
           },
         });
+        // Registry descriptors are normalized inputs; plugin-owned methods default to a required profile.
+        registry.gatewayMethodDescriptors = createGatewayMethodDescriptorsFromHandlers({
+          handlers: registry.gatewayHandlers,
+          owner: { kind: "plugin", pluginId: "synthetic-rpc-proof" },
+          defaultScope: "operator.admin",
+        }).map((descriptor) => Object.assign(descriptor, { profileAccess: "required" as const }));
         const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
         prometheusPlugin.register(
           createTestPluginApi({
@@ -318,12 +325,25 @@ it("exports RPC phases and completed event-loop windows through the same Gateway
           );
         }
         const measured = events.filter((event) => event.method === "test.trace");
+        expect(settled).toContain(
+          'openclaw_gateway_rpc_response_bytes_count{method="test.trace"} 3',
+        );
+        expect(
+          measured
+            .filter((event) => event.phase === "response")
+            .map((event) => event.firstResponse),
+        ).toEqual([true, true, false]);
         for (const [metric, phase] of [
           ["first_response", "response"],
           ["handler", "handler"],
         ] as const) {
           const totalMs = measured.reduce(
-            (sum, event) => sum + (event.phase === phase ? event.durationMs : 0),
+            (sum, event) =>
+              sum +
+              (event.phase === phase &&
+              !(event.phase === "response" && event.firstResponse === false)
+                ? event.durationMs
+                : 0),
             0,
           );
           const sample = settled

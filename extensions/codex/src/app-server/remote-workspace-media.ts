@@ -17,6 +17,7 @@ import {
   mapCodexAppServerLocalWorkspacePath,
   mapCodexAppServerRemoteWorkspacePath,
 } from "./remote-workspace-path.js";
+import type { CodexBindingAuthority } from "./session-binding.js";
 
 const REMOTE_WORKSPACE_MEDIA_TIMEOUT_MS = 60_000;
 const REMOTE_WORKSPACE_MEDIA_MAX_BYTES = 64 * 1024 * 1024;
@@ -27,14 +28,19 @@ export function createCodexRemoteWorkspaceFileReader(
     request: (
       method: "command/exec",
       params: CodexCommandExecParams,
-      options: { signal?: AbortSignal; timeoutMs?: number },
+      options: {
+        signal?: AbortSignal;
+        timeoutMs?: number;
+        assertCurrent?: () => void;
+        withCurrent?: (write: () => void) => Promise<void>;
+      },
     ) => Promise<CodexCommandExecResponse>;
   },
-  assertCurrent: () => void,
+  authority: Pick<CodexBindingAuthority, "assertCurrent" | "withCurrent">,
 ): RemoteWorkspaceFileReader {
-  return createBoundedRemoteFileReader({
+  const read = createBoundedRemoteFileReader({
     outputBytesCap: 1024 * 1024,
-    assertCurrent,
+    assertCurrent: authority.assertCurrent,
     execute: async (command, options) => {
       const response = await client
         .request(
@@ -45,7 +51,11 @@ export function createCodexRemoteWorkspaceFileReader(
             env: { NODE_OPTIONS: null, NODE_PATH: null },
             ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
           },
-          options,
+          {
+            ...options,
+            assertCurrent: authority.assertCurrent,
+            withCurrent: authority.withCurrent,
+          },
         )
         .catch((error: unknown) => {
           if (
@@ -67,6 +77,14 @@ export function createCodexRemoteWorkspaceFileReader(
       return response.stdout;
     },
   });
+  return async (params) => {
+    const bytes = await read(params);
+    // A final native response can arrive after the initiating lineage changes.
+    return authority.withCurrent(() => {
+      params.signal?.throwIfAborted();
+      return bytes;
+    });
+  };
 }
 
 /** Stages authoritative bounded remote bytes into immutable Gateway-owned media. */

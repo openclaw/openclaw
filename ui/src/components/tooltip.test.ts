@@ -188,7 +188,6 @@ describe("openclaw-tooltip", () => {
 
   it("restores the normal hover delay after the provider reconnects", async () => {
     const provider = createProvider();
-    provider.delay = 40;
     const { tooltip, trigger } = createTooltip("Delayed after reconnect");
     provider.append(tooltip);
     document.body.append(provider);
@@ -202,7 +201,7 @@ describe("openclaw-tooltip", () => {
     document.body.append(provider);
     await tooltip.updateComplete;
     hoverTrigger(trigger);
-    vi.advanceTimersByTime(39);
+    vi.advanceTimersByTime(149);
     await expectOpenCount(0);
     vi.advanceTimersByTime(1);
     await expectOpenCount(1);
@@ -613,8 +612,6 @@ describe("openclaw-tooltip", () => {
 
   it("releases the active provider reference when an open tooltip is removed", async () => {
     const provider = createProvider();
-    provider.delay = 40;
-    provider.skipDelay = 20;
     const first = createTooltip("First tooltip");
     provider.append(first.tooltip);
     document.body.append(provider);
@@ -634,13 +631,13 @@ describe("openclaw-tooltip", () => {
     provider.dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(false);
     expect(downstream).toHaveBeenCalledOnce();
-    vi.advanceTimersByTime(20);
+    vi.advanceTimersByTime(300);
 
     const second = createTooltip("Second tooltip");
     provider.append(second.tooltip);
     await second.tooltip.updateComplete;
     hoverTrigger(second.trigger);
-    vi.advanceTimersByTime(39);
+    vi.advanceTimersByTime(149);
     await expectOpenCount(0);
     vi.advanceTimersByTime(1);
     await expectOpenCount(1);
@@ -726,7 +723,6 @@ describe("title tooltips", () => {
 
   it("shares delay and exclusivity with explicit tooltips without moving titled nodes", async () => {
     const provider = createProvider();
-    provider.delay = 40;
     const explicit = createTooltip("Reply");
     const trigger = document.createElement("button");
     trigger.title = "Full timestamp";
@@ -741,7 +737,7 @@ describe("title tooltips", () => {
     );
     expect(delegated).toBeDefined();
     await delegated!.updateComplete;
-    vi.advanceTimersByTime(39);
+    vi.advanceTimersByTime(149);
     await expectOpenCount(0);
     vi.advanceTimersByTime(1);
     await expectOpenCount(1);

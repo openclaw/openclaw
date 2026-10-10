@@ -1,11 +1,17 @@
-import { constants, type Stats } from "node:fs";
+import { createHash } from "node:crypto";
+import fsSync, { constants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
+import { requireDirectorySync, syncDirectory, syncDirectorySync } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import {
+  packageActivationRuntimeIdentity,
+  resolvePackageActivationAnchor,
+  resolvePackageActivationControl,
+} from "./package-update-activation-paths.js";
 import { isPathInside } from "./path-guards.js";
 import { collectGitRuntimeErrors, readGitRuntimeArtifactIdentity } from "./update-git-runtime.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
@@ -141,10 +147,10 @@ export async function verifyImmutableGeneration(
   }
   const sealed = options.sealed !== false;
   await inspectGenerationTree(root, sealed);
-  if (sealed && !(await fs.lstat(path.join(root, ".git"))).isDirectory()) {
-    throw new Error("A sealed generation requires its own Git metadata directory.");
-  }
   if (sealed) {
+    if (!(await fs.lstat(path.join(root, ".git"))).isDirectory()) {
+      throw new Error("A sealed generation requires its own Git metadata directory.");
+    }
     const alternates = await fs
       .readFile(path.join(root, ".git", "objects", "info", "alternates"), "utf8")
       .catch((error: unknown) => {
@@ -184,9 +190,121 @@ export async function verifyImmutableGeneration(
   return { buildDigest: artifact.distDigest, identity: `${stat.dev}:${stat.ino}` };
 }
 
+// Exact launcher shipped by slice 1 (99babf272543); only its shebang is installation-specific.
+const IMMUTABLE_V1_LAUNCHER_SHA256 =
+  "7e3bcd5e1143c2b054ab2bd184b159143b2d2a45893fc462741b8f51780ad5d3";
+
+function upgradeImmutableLauncher(params: {
+  root: string;
+  launcher: string;
+  runtime: string;
+  content: string;
+  previous: string;
+  previousStat: Stats;
+  assertCurrent: () => void;
+}): void {
+  const normalized = params.previous.replace(/^#![^\n]*\n/u, "#!/usr/bin/env node\n");
+  if (
+    !params.previous.startsWith(`#!${params.runtime}\n`) ||
+    createHash("sha256").update(normalized).digest("hex") !== IMMUTABLE_V1_LAUNCHER_SHA256
+  ) {
+    throw new Error(
+      "An existing immutable Gateway launcher conflicts with the known v1 upgrade; it was preserved.",
+    );
+  }
+  const control = resolvePackageActivationControl(resolvePackageActivationAnchor(params.root));
+  const bin = path.dirname(params.launcher);
+  const directories = [params.root, bin, control].map((file) => ({
+    file,
+    stat: fsSync.lstatSync(file),
+  }));
+  const runtimeIdentity = packageActivationRuntimeIdentity(params.runtime);
+  const assertUpgrade = () => {
+    params.assertCurrent();
+    for (const { file, stat: previous } of directories) {
+      const stat = fsSync.lstatSync(file);
+      if (
+        !stat.isDirectory() ||
+        stat.uid !== 0 ||
+        (stat.mode & 0o022) !== 0 ||
+        stat.dev !== previous.dev ||
+        stat.ino !== previous.ino ||
+        fsSync.realpathSync(file) !== file
+      ) {
+        throw new Error("Immutable launcher upgrade directory identity changed.");
+      }
+    }
+    const current = fsSync.lstatSync(params.launcher);
+    if (
+      !current.isFile() ||
+      current.uid !== 0 ||
+      current.nlink !== 1 ||
+      (current.mode & 0o022) !== 0 ||
+      current.dev !== params.previousStat.dev ||
+      current.ino !== params.previousStat.ino ||
+      fsSync.readFileSync(params.launcher, "utf8") !== params.previous ||
+      packageActivationRuntimeIdentity(params.runtime) !== runtimeIdentity
+    ) {
+      throw new Error("Immutable launcher changed before its v1 upgrade.");
+    }
+  };
+  assertUpgrade();
+  const stage = fsSync.mkdtempSync(path.join(bin, ".launcher-upgrade-"));
+  const stageIdentity = fsSync.lstatSync(stage);
+  const backup = path.join(control, "openclaw-gateway.v1");
+  const isExpectedBackup = (stat: Stats) =>
+    stat.isFile() &&
+    stat.uid === 0 &&
+    stat.nlink === 1 &&
+    (stat.mode & 0o222) === 0 &&
+    fsSync.readFileSync(backup, "utf8") === params.previous;
+  const writeDurable = (file: string, content: string, mode: number) => {
+    const fd = fsSync.openSync(file, "wx", mode);
+    try {
+      fsSync.writeFileSync(fd, content);
+      fsSync.fchmodSync(fd, mode);
+      fsSync.fsyncSync(fd);
+    } finally {
+      fsSync.closeSync(fd);
+    }
+  };
+  try {
+    const previousBackup = fsSync.lstatSync(backup, { throwIfNoEntry: false });
+    if (previousBackup) {
+      if (!isExpectedBackup(previousBackup)) {
+        throw new Error("Existing immutable v1 launcher backup differs; it was preserved.");
+      }
+    } else {
+      const stagedBackup = path.join(stage, "previous");
+      writeDurable(stagedBackup, params.previous, 0o444);
+      assertUpgrade();
+      if (fsSync.lstatSync(backup, { throwIfNoEntry: false })) {
+        throw new Error("Immutable v1 launcher backup appeared during upgrade.");
+      }
+      fsSync.renameSync(stagedBackup, backup);
+      requireDirectorySync(syncDirectorySync(control), "Immutable v1 launcher backup");
+    }
+    const candidate = path.join(stage, "next");
+    writeDurable(candidate, params.content, 0o755);
+    assertUpgrade();
+    if (!isExpectedBackup(fsSync.lstatSync(backup))) {
+      throw new Error("Immutable v1 launcher backup changed before publication.");
+    }
+    fsSync.renameSync(candidate, params.launcher);
+    requireDirectorySync(syncDirectorySync(bin), "Immutable launcher upgrade");
+    params.assertCurrent();
+  } finally {
+    const remaining = fsSync.lstatSync(stage, { throwIfNoEntry: false });
+    if (remaining?.dev === stageIdentity.dev && remaining.ino === stageIdentity.ino) {
+      fsSync.rmSync(stage, { recursive: true });
+    }
+  }
+}
+
 export async function installImmutableLauncher(params: {
   root: string;
   runtimePath: string;
+  upgradeFromV1?: { assertCurrent: () => void };
 }): Promise<string> {
   const root = await fs.realpath(params.root);
   const rootStat = await fs.lstat(root);
@@ -233,15 +351,27 @@ export async function installImmutableLauncher(params: {
       throw error;
     }
     const existing = await fs.lstat(launcher);
-    if (
-      !existing.isFile() ||
-      existing.uid !== 0 ||
-      (existing.mode & 0o022) !== 0 ||
-      (await fs.readFile(launcher, "utf8")) !== content
-    ) {
+    if (!existing.isFile() || existing.uid !== 0 || (existing.mode & 0o022) !== 0) {
       throw new Error(
         "An existing immutable Gateway launcher conflicts with this adoption; it was preserved.",
       );
+    }
+    const previous = await fs.readFile(launcher, "utf8");
+    if (previous !== content) {
+      if (!params.upgradeFromV1) {
+        throw new Error(
+          "An existing immutable Gateway launcher conflicts with this adoption; it was preserved.",
+        );
+      }
+      upgradeImmutableLauncher({
+        root,
+        launcher,
+        runtime,
+        content,
+        previous,
+        previousStat: existing,
+        assertCurrent: params.upgradeFromV1.assertCurrent,
+      });
     }
     return null;
   });

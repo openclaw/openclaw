@@ -1,4 +1,3 @@
-/** Source-reply visibility and suppression policy for auto-reply delivery. */
 import {
   isSyntheticSourceReplyTurn,
   type ReplyExpectation,
@@ -14,8 +13,8 @@ import { resolveCommandTurnContext } from "../command-turn-context.js";
 import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
+import type { FollowupRun } from "./queue/types.js";
 
-/** Minimal inbound context needed for source-reply delivery decisions. */
 export type SourceReplyDeliveryModeContext = Pick<
   MsgContext,
   | "ChatType"
@@ -33,7 +32,6 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "InputProvenance"
 >;
 
-/** Returns true for text slash commands that lack authorization metadata. */
 export function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
   return (
@@ -55,7 +53,6 @@ export function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext
   );
 }
 
-/** Resolves whether normal final text should auto-deliver or require the message tool. */
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
@@ -80,22 +77,17 @@ export function resolveSourceReplyDeliveryMode(params: {
     return "automatic";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
-  if (
-    (chatType === "group" || chatType === "channel") &&
-    isUnauthorizedTextSlashCommand(params.ctx)
-  ) {
+  const isGroup = chatType === "group" || chatType === "channel";
+  if (isGroup && isUnauthorizedTextSlashCommand(params.ctx)) {
     return "message_tool_only";
   }
-  const configuredMode =
-    chatType === "group" || chatType === "channel"
-      ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
-      : (params.cfg.messages?.visibleReplies ??
-        (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
-  const mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
-  if (mode === "message_tool_only" && params.messageToolAvailable === false) {
-    return "automatic";
-  }
-  return mode;
+  const configuredMode = isGroup
+    ? (params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies)
+    : (params.cfg.messages?.visibleReplies ??
+      (isInternalSourceReplyChannel(params.ctx) ? "automatic" : params.defaultVisibleReplies));
+  return configuredMode === "message_tool" && params.messageToolAvailable !== false
+    ? "message_tool_only"
+    : "automatic";
 }
 
 /** Selects reply requiredness at admission, preserving configured ambient group silence. */
@@ -138,7 +130,19 @@ export function resolveSourceReplyExpectation(params: {
   return "required";
 }
 
-/** Resolves source delivery, hooks, lifecycle, and typing suppression flags. */
+export function resolveFollowupReplyExpectation(queued: FollowupRun, cfg: OpenClawConfig) {
+  return (
+    queued.run.terminalReplyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: {
+        InboundEventKind: queued.currentInboundEventKind,
+        InputProvenance: queued.run.inputProvenance,
+      },
+      cfg,
+    })
+  );
+}
+
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;

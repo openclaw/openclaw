@@ -1,7 +1,10 @@
-import type { WorkerTaskControl } from "../../infra/worker-task-native-sections.js";
+import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
-import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
+import {
+  MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionTranscriptWorkerValues,
+} from "./session-transcript-worker.types.js";
 
 /** Read each hydrated view under the same worker-owned quarantine and snapshot admission. */
 export async function readSessionTranscriptHydrationRequest(
@@ -69,13 +72,46 @@ export async function readSessionTranscriptHydrationRequest(
   const { streamSessionTranscriptHydration } =
     await import("./session-transcript-hydration.worker.js");
   if (request.limits) {
+    const selection = request.transcript;
+    if (
+      selection &&
+      (selection.sessionKey !== request.resolvedScope.sessionKey ||
+        selection.entryIds.length > MAX_SESSION_ROW_FACTS_KEYS)
+    ) {
+      throw new Error("Transcript hydration cohort must select its own bounded session");
+    }
+    const { readSessionTranscriptAnchorFactsInDatabase } =
+      await import("./session-transcript-anchor-read.kernel.js");
+    const { assertOpenClawAgentDatabaseIdentity } =
+      await import("../../state/openclaw-agent-db-identity.js");
+    let transcript: Extract<
+      SessionTranscriptWorkerValues["transcript-hydration"],
+      { kind: "bounded" }
+    >["transcript"];
+    const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
+      ...request.limits,
+      readOnly: true,
+      resolvedScope: request.resolvedScope,
+      onRead: (projection) => {
+        const { database, resolved } = projection;
+        if (request.expectedIdentity) {
+          assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
+        }
+        if (selection) {
+          transcript = readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            { ...resolved, sessionKey: selection.sessionKey },
+            selection,
+            undefined,
+            projection,
+          );
+        }
+      },
+    });
     return {
       kind: "bounded" as const,
-      snapshot: readSessionTranscriptBoundedActiveContextCore(request.target, {
-        ...request.limits,
-        readOnly: true,
-        resolvedScope: request.resolvedScope,
-      }),
+      snapshot,
+      ...(selection ? { transcript } : {}),
     };
   }
   if (!channel) {

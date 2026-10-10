@@ -1,4 +1,4 @@
-import { runWithGatewayDetachedWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -61,7 +61,7 @@ export async function completeCleanupBookkeeping(
     const runCleanupTail = (label: string, run: () => Promise<unknown>) => {
       // Admission can outlive the caller's async scope. Own the tail's lifetime
       // and recheck row ownership after waiting; surviving tails still block snapshots.
-      void runWithGatewayDetachedWorkAdmission(async () => {
+      void runWithGatewayDetachedWorkContinuation(async () => {
         if (
           !(await context.shouldSuppressSessionEffects(entry)) &&
           postBookkeepingEffectsAllowed()
@@ -156,11 +156,8 @@ export async function completeCleanupBookkeeping(
       if (!retireImmediately) {
         draft.cleanupCompletedAt = cleanupParams.completedAt;
         if (suppressSessionEffects) {
-          draft.execution = {
-            ...draft.execution,
-            restartRecovery: undefined,
-            suppressSessionEffects: true,
-          };
+          draft.execution.restartRecovery = undefined;
+          draft.execution.suppressSessionEffects = true;
           draft.terminalOwner = undefined;
         }
         if (draft.collect) {

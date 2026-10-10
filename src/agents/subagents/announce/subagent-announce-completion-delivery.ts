@@ -1,4 +1,4 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizePendingFinalDeliveryText } from "../../../auto-reply/reply/pending-final-delivery-state.js";
 import {
@@ -57,6 +57,7 @@ export async function runAnnounceAgentCall(params: {
   delegatedToolPolicyHandoff?: SubagentCompletionToolHandoffRegistration;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;
+  onExecutionStarted?: () => void;
   signal?: AbortSignal;
   timeoutMs?: number;
   isExecutionAllowed: () => boolean;
@@ -135,6 +136,7 @@ export async function runAnnounceAgentCall(params: {
         }
         // Execution can be observed before acceptance on an already-running replay.
         clearTimeout(timer);
+        params.onExecutionStarted?.();
         if (params.typing) {
           stopTyping ??= typingRuntime?.startRecoveryTyping?.({
             ...params.typing,
@@ -165,11 +167,7 @@ const FAILED_COMPLETION_NOTICE =
   "A delegated task failed before it could report a result. Please retry the task.";
 
 export function isGatewayAgentRunPending(response: unknown): boolean {
-  if (!response || typeof response !== "object") {
-    return false;
-  }
-  const status = (response as { status?: unknown }).status;
-  return isNonTerminalAgentRunStatus(status);
+  return isNonTerminalAgentRunStatus(asOptionalObjectRecord(response)?.status);
 }
 
 /** A recovery successor owns its admitted input until its exact final can be reconciled. */

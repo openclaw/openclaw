@@ -36,7 +36,7 @@ import { resolvePnpmRunner } from "./pnpm-runner.mts";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
 const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
-const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 15 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
 const PROCESS_GROUP_EXIT_POLL_MS = 25;
@@ -828,10 +828,10 @@ async function restorePackageSourceArtifacts(
   await restoreDocsMap(sourceDir);
 }
 
-async function loadSourcePackageLifecycle(
+async function loadSourcePackageLifecycle<T>(
   sourceDir: string,
   moduleName: string,
-  validate: (value: unknown) => boolean,
+  validate: (value: unknown) => value is T,
 ) {
   const modulePath = path.join(sourceDir, "scripts", moduleName);
   try {
@@ -872,11 +872,7 @@ export async function packOpenClawPackageForDocker(
   const sourceDocsMapLifecycle =
     packageOptions.prepareDocsMap && packageOptions.restoreDocsMap
       ? null
-      : ((await loadSourcePackageLifecycle(
-          sourcePath,
-          "package-docs-map.mjs",
-          isDocsMapLifecycle,
-        )) as DocsMapLifecycle | null);
+      : await loadSourcePackageLifecycle(sourcePath, "package-docs-map.mjs", isDocsMapLifecycle);
   const prepareDocsMap =
     packageOptions.prepareDocsMap ??
     sourceDocsMapLifecycle?.preparePackageDocsMap ??
@@ -888,11 +884,11 @@ export async function packOpenClawPackageForDocker(
   const sourceManifestLifecycle =
     packageOptions.prepareManifest && packageOptions.restoreManifest
       ? null
-      : ((await loadSourcePackageLifecycle(
+      : await loadSourcePackageLifecycle(
           sourcePath,
           "package-manifest.mjs",
           isPackageManifestLifecycle,
-        )) as PackageManifestLifecycle | null);
+        );
   const prepareManifest =
     packageOptions.prepareManifest ??
     sourceManifestLifecycle?.preparePackageManifest ??
@@ -903,18 +899,18 @@ export async function packOpenClawPackageForDocker(
     (async () => false);
   const sourceWorkerBundlePrepareLifecycle = packageOptions.prepareWorkerBundle
     ? null
-    : ((await loadSourcePackageLifecycle(
+    : await loadSourcePackageLifecycle(
         sourcePath,
         "package-worker-bundle.mts",
         isPackageWorkerBundlePrepareLifecycle,
-      )) as PackageWorkerBundlePrepareLifecycle | null);
+      );
   const sourceWorkerBundleRestoreLifecycle = packageOptions.restoreWorkerBundle
     ? null
-    : ((await loadSourcePackageLifecycle(
+    : await loadSourcePackageLifecycle(
         sourcePath,
         "package-worker-bundle-lifecycle.mjs",
         isPackageWorkerBundleRestoreLifecycle,
-      )) as PackageWorkerBundleRestoreLifecycle | null);
+      );
   const prepareWorkerBundle =
     packageOptions.prepareWorkerBundle ??
     sourceWorkerBundlePrepareLifecycle?.preparePackagedWorkerBundle ??

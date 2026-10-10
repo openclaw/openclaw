@@ -16,6 +16,7 @@ import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
+import { prepareTtsPreferences, type PreparedTtsPreferences } from "./tts-preferences.js";
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
@@ -103,6 +104,7 @@ export async function maybeApplyTtsToPayloadCore(
   params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;
+    preparedTtsPreferences?: PreparedTtsPreferences;
     channel?: string;
     kind?: "tool" | "block" | "final";
     inboundAudio?: boolean;
@@ -121,6 +123,7 @@ export async function maybeApplyTtsToPayloadCore(
   const cfg = resolveTtsRuntimeConfig(params.cfg);
   const { autoMode, config, prefsPath } = resolveTtsSettingsSnapshot({
     cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channel,
@@ -178,7 +181,7 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  const mode = config.mode ?? "final";
+  const mode = config.mode;
   if (mode === "final" && params.kind && params.kind !== "final") {
     return nextPayload;
   }

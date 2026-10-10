@@ -19,7 +19,7 @@ import type { AnyAgentTool } from "../tools/common.js";
 
 type NamedTool = { name: string };
 
-function isAgentTool(tool: NamedTool): tool is AnyAgentTool {
+function isAgentTool<T extends NamedTool>(tool: T): tool is T & AnyAgentTool {
   return "execute" in tool && typeof tool.execute === "function";
 }
 
@@ -61,13 +61,7 @@ export function createAgentHarnessPromptToolPolicy<T extends NamedTool>(params: 
       });
       const allowedTools = filterTools(baselineTools, toolsAllow);
       if (!catalog) {
-        const executableTools: AnyAgentTool[] = [];
-        for (const tool of allowedTools) {
-          if (isAgentTool(tool)) {
-            executableTools.push(tool);
-          }
-        }
-        finalizeAgentToolAvailability(executableTools);
+        finalizeAgentToolAvailability(allowedTools.filter(isAgentTool));
         return {
           tools: allowedTools,
           toolSchemaDirectoryPrompt: undefined,

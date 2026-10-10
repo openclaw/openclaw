@@ -20,7 +20,6 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 const chatAbortMock = vi.fn();
 const resolveSessionForRunMock = vi.fn();
-const isEmbeddedAgentRunInProgressMock = vi.fn();
 const abortEmbeddedAgentRunMock = vi.fn();
 const clearSessionLifecycleQueuesMock = vi.fn();
 const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
@@ -62,11 +61,6 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
       abortEmbeddedAgentRunMock(sessionId);
       return actual.abortEmbeddedAgentRun(sessionId);
     },
-    isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
-    resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
-      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
-    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
-      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 
@@ -154,8 +148,6 @@ describe("sessions.abort agent scope", () => {
     chatAbortMock.mockReset();
     resolveSessionForRunMock.mockReset();
     loadSessionEntryMock.mockReset();
-    isEmbeddedAgentRunInProgressMock.mockReset();
-    isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
     abortEmbeddedAgentRunMock.mockReset();
     clearSessionLifecycleQueuesMock.mockReset();
     clearSessionLifecycleQueuesMock.mockReturnValue({
@@ -208,18 +200,19 @@ describe("sessions.abort agent scope", () => {
     }
   });
 
-  it("marks listed sessions active when the embedded or channel reply run registry owns the session id", async () => {
+  it("marks a listed session active when the embedded registry owns its session id", async () => {
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
     });
+    const sessionKey = "agent:main:openclaw-weixin:direct:user";
+    const handle = createEmbeddedRunHandle({ runId: "run-channel-active" });
+    setActiveEmbeddedRun("sess-weixin", handle, sessionKey, undefined, "main");
+    onTestFinished(() => clearActiveEmbeddedRun("sess-weixin", handle, sessionKey));
     projectSession(context, {
-      key: "agent:main:openclaw-weixin:direct:user",
+      key: sessionKey,
       agentId: "main",
       sessionId: "sess-weixin",
     });
-    isEmbeddedAgentRunInProgressMock.mockImplementation(
-      (sessionId: string) => sessionId === "sess-weixin",
-    );
 
     const respond = await callSessions(
       "sessions.list",
@@ -227,10 +220,6 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-channel-active" },
     );
 
-    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith(
-      "sess-weixin",
-      expect.objectContaining({ agentId: "main" }),
-    );
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -322,7 +311,7 @@ describe("sessions.abort agent scope", () => {
           undefined,
           undefined,
         );
-        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
           endedReason: "subagent-killed",
           killReconciliation: { suppressTaskDelivery: true },
         });
@@ -786,7 +775,7 @@ describe("sessions.abort agent scope", () => {
     const activeRun = createActiveRun("main");
     const context = createContext({
       activeRuns: [["run-work", activeRun]],
-      agents: [{ id: "work", default: true }],
+      agents: [{ id: "work" }],
     });
 
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
@@ -850,7 +839,7 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("rejects unknown explicit agentId before session mutations", async () => {
-    const context = createContext({ agents: [{ id: "main", default: true }] });
+    const context = createContext({ agents: [{ id: "main" }] });
     const respond = await callSessions(
       "sessions.patch",
       { key: "global", agentId: "work", label: "Work" },

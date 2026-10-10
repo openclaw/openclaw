@@ -6,15 +6,10 @@ import {
   type CapturedRuntimeConfigRead,
 } from "../../config/runtime-config-capture-state.js";
 import { resolveStateDir } from "../../config/state-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import type { AcpSessionReadContextInput } from "./session-meta-read.types.js";
 
-export type AcpSessionReadContextInput = {
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-  assertCurrent?: () => void;
-};
+export type { AcpSessionReadContextInput } from "./session-meta-read.types.js";
 
 /** Capture routing inputs before a read yields, retaining the caller's live assertion. */
 export async function captureAcpSessionReadContext(params: AcpSessionReadContextInput) {

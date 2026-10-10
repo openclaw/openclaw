@@ -110,7 +110,7 @@ module Supply
       self.client = AndroidPublisher::AndroidPublisherService.new
       client.define_singleton_method(:execute_or_queue_command) do |command, &block|
         $committed_query = command.query
-        if $scenario == "internal" && command.query.key?("changesNotSentForReview")
+        if $tracks.key?("internal") && command.query.key?("changesNotSentForReview")
           raise "Changes are sent for review automatically. The query parameter changesNotSentForReview must not be set."
         end
         AndroidPublisher::AppEdit.new(id: "synthetic-edit")
@@ -217,7 +217,7 @@ function runRuby(fixtureRoot: string, source: string): unknown {
   ];
   const result = spawnSync(
     useBundle ? "bundle" : "ruby",
-    useBundle ? ["_4.0.21_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+    useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
     {
       encoding: "utf8",
       cwd: rootDir,
@@ -267,11 +267,12 @@ plan_path = File.join($root, "recovery", "android-plan.json")
 $scenario, $events, $edits, $client = "plan", [], 0, Supply::Client.new
 $run_lane.call(:release_plan, output_path: plan_path)
 ENV["OPENCLAW_ANDROID_RELEASE_PLAN"] = plan_path
-results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload internal).map do |scenario|
+results = %w(invalid-destination invalid-notes changed-baseline changed-code initialize-failure validate-only upload closed-testing internal).map do |scenario|
   $scenario, $events, $tracks, $edits, $client, $committed_config = scenario, [], {}, 0, Supply::Client.new, nil
   $committed_query = nil
   ENV["SUPPLY_CHANGES_NOT_SENT_FOR_REVIEW"] = "true"
   ENV["SUPPLY_RESCUE_CHANGES_NOT_SENT_FOR_REVIEW"] = "false"
+  ENV["GOOGLE_PLAY_TRACK"] = scenario == "closed-testing" ? "beta" : "internal"
   scenario == "validate-only" ? ENV["GOOGLE_PLAY_VALIDATE_ONLY"] = "1" : ENV.delete("GOOGLE_PLAY_VALIDATE_ONLY")
   if scenario == "internal"
     ENV["GOOGLE_PLAY_TRACK"] = "production"
@@ -303,6 +304,7 @@ STDOUT.puts JSON.generate(results)
       failedInitialize,
       validated,
       uploaded,
+      closedTesting,
       internal,
     ] = results;
     expect(internal?.error).toBeUndefined();
@@ -374,16 +376,27 @@ STDOUT.puts JSON.generate(results)
     expect(internal?.events).not.toContain("image");
     expect(internal?.pinned_notes).toBe("Pinned archive notes stay unchanged.\n");
     expect(uploaded?.committed_config).toMatchObject({
-      changes_not_sent_for_review: true,
+      changes_not_sent_for_review: null,
       rescue_changes_not_sent_for_review: false,
     });
     expect(internal?.committed_config).toMatchObject({
       changes_not_sent_for_review: null,
       rescue_changes_not_sent_for_review: false,
     });
+    expect(closedTesting?.error).toBeUndefined();
+    expect(closedTesting?.tracks).toMatchObject({
+      beta: [{ codes: [2026080254] }],
+      "wear:beta": [{ codes: [2026080255] }],
+    });
+    expect(closedTesting?.committed_config).toMatchObject({
+      changes_not_sent_for_review: true,
+      rescue_changes_not_sent_for_review: false,
+    });
+    expect(closedTesting?.events.at(-1)).toBe("ref:record");
     if (process.env.OPENCLAW_TEST_FASTLANE_BUNDLE === "1") {
-      expect(uploaded?.committed_query).toEqual({ changesNotSentForReview: true });
+      expect(uploaded?.committed_query).toEqual({});
       expect(internal?.committed_query).toEqual({});
+      expect(closedTesting?.committed_query).toEqual({ changesNotSentForReview: true });
     }
   });
 

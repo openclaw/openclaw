@@ -8,6 +8,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import fs from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { serializeSystemdEnvironmentFile } from "../../src/daemon/systemd-environment-files.js";
@@ -15,6 +16,7 @@ import { readLoadedSystemdServiceRuntime } from "../../src/daemon/systemd-loaded
 import { readSystemdServiceRuntime } from "../../src/daemon/systemd-runtime.js";
 import { readSystemdServiceExecStart } from "../../src/daemon/systemd-service-files.js";
 import { buildSystemdUnit } from "../../src/daemon/systemd-unit.js";
+import { readSystemdStopTimeout } from "../../src/infra/systemd-stop-timeout.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
   fixtureReceiptClientSource,
@@ -510,7 +512,7 @@ fs.existsSync = (file) => file === "/sys/fs/cgroup/openclaw-gateway.service/cgro
         program,
         `import fs from "node:fs";
 ${fixtureReceiptClientSource(receipts.endpoint)}
-fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({pid:process.pid, argv:process.argv.slice(2), cwd:process.cwd(), value:process.env.FIXTURE_VALUE, state:process.env.OPENCLAW_STATE_DIR, update:process.env.OPENCLAW_UPDATE_IN_PROGRESS, npmRegistry:process.env.NPM_CONFIG_REGISTRY, npmLowerRegistry:process.env.npm_config_registry, bunRegistry:process.env.BUN_CONFIG_REGISTRY, skipChannels:process.env.OPENCLAW_SKIP_CHANNELS, skipProviders:process.env.OPENCLAW_SKIP_PROVIDERS, disableBonjour:process.env.OPENCLAW_DISABLE_BONJOUR, runtimeDir:process.env.XDG_RUNTIME_DIR, busAddress:process.env.DBUS_SESSION_BUS_ADDRESS}) + "\\n");
+fs.appendFileSync(${JSON.stringify(record)}, JSON.stringify({pid:process.pid, argv:process.argv.slice(2), cwd:process.cwd(), value:process.env.FIXTURE_VALUE, state:process.env.OPENCLAW_STATE_DIR, update:process.env.OPENCLAW_UPDATE_IN_PROGRESS, npmRegistry:process.env.NPM_CONFIG_REGISTRY, npmLowerRegistry:process.env.npm_config_registry, bunRegistry:process.env.BUN_CONFIG_REGISTRY, skipChannels:process.env.OPENCLAW_SKIP_CHANNELS, skipProviders:process.env.OPENCLAW_SKIP_PROVIDERS, disableBonjour:process.env.OPENCLAW_DISABLE_BONJOUR, runtimeDir:process.env.XDG_RUNTIME_DIR, busAddress:process.env.DBUS_SESSION_BUS_ADDRESS, invocationId:process.env.INVOCATION_ID}) + "\\n");
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 sendReceipt(${JSON.stringify(record)}, "started");
@@ -533,7 +535,13 @@ sendReceipt(${JSON.stringify(record)}, "started");
           environmentFiles: [environmentFile],
         }),
       );
-      const records = (): Array<{ pid: number; argv: string[]; cwd: string; value: string }> => {
+      const records = (): Array<{
+        pid: number;
+        argv: string[];
+        cwd: string;
+        value: string;
+        invocationId: string;
+      }> => {
         if (!existsSync(record)) {
           return [];
         }
@@ -640,7 +648,35 @@ raise SystemExit(code if code >= 0 else 128 - code)
           disableBonjour: "1",
           runtimeDir: env.XDG_RUNTIME_DIR,
           busAddress: env.DBUS_SESSION_BUS_ADDRESS,
+          invocationId: expect.stringMatching(/^[a-f0-9]{32}$/),
         });
+        const stopPolicy = async (invocationId: string) => {
+          const readFile = fs.readFile;
+          // The reader runs in Vitest's cgroup, not the copied service's.
+          const membership = vi
+            .spyOn(fs, "readFile")
+            .mockImplementation((...args) =>
+              args[0] === "/proc/self/cgroup"
+                ? Promise.resolve(
+                    "0::/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-gateway.service\n",
+                  )
+                : readFile(...args),
+            );
+          try {
+            return await readSystemdStopTimeout({
+              ...env,
+              INVOCATION_ID: invocationId,
+              OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+            });
+          } finally {
+            membership.mockRestore();
+          }
+        };
+        const expectedStopPolicy = {
+          timeoutMs: 330_000,
+          source: "systemd user openclaw-gateway.service TimeoutStopUSec",
+        };
+        expect(await stopPolicy(records()[0]!.invocationId)).toEqual(expectedStopPolicy);
         const previousPid = readFileSync(paths.pid, "utf8").trim();
         expect(await readSystemdServiceRuntime(env)).toMatchObject({
           status: "running",
@@ -672,6 +708,12 @@ raise SystemExit(code if code >= 0 else 128 - code)
         const proof = assertion();
         expect(proof.status, proof.stderr).toBe(0);
         expect(records()[1]?.pid).not.toBe(records()[0]?.pid);
+        expect(records()[1]!.invocationId).not.toBe(records()[0]!.invocationId);
+        expect(await stopPolicy(records()[1]!.invocationId)).toEqual(expectedStopPolicy);
+        expect(await stopPolicy(records()[0]!.invocationId)).toMatchObject({
+          timeoutMs: 90_000,
+          warning: expect.stringContaining("InvocationID does not match the running process"),
+        });
         expect(() => process.kill(records()[0]!.pid, 0)).toThrow();
         expect(await readSystemdServiceRuntime(env)).toMatchObject({
           status: "running",

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   openOpenClawAgentDatabase,
@@ -184,9 +185,9 @@ describe("memory entry origins", () => {
       origin("queued", "session-1"),
     ]);
     const dispatch = Promise.withResolvers<void>();
-    const run = cpuRuntime.runMemoryOriginRows;
+    const run = cpuRuntime.runMemoryOriginRead;
     const transport = vi
-      .spyOn(cpuRuntime, "runMemoryOriginRows")
+      .spyOn(cpuRuntime, "runMemoryOriginRead")
       .mockImplementationOnce(async (...args) => {
         await dispatch.promise;
         return run(...args);
@@ -258,6 +259,65 @@ describe("memory entry origins", () => {
     expect(db.prepare("PRAGMA user_version").get()).toEqual(version);
   });
 
+  it("filters origins and tombstones by selections larger than SQLite's parameter limit", async () => {
+    const variableLimit = openOpenClawAgentDatabase({ agentId: "main" })
+      .db.prepare("PRAGMA compile_options")
+      .all()
+      .map((row) => String(row.compile_options))
+      .find((option) => option.startsWith("MAX_VARIABLE_NUMBER="));
+    const selected = (prefix: string, ...ids: string[]) => [
+      ...ids,
+      ...Array.from(
+        { length: Number(variableLimit?.split("=")[1] ?? 32766) + 1 },
+        (_, index) => `${prefix}-missing-${index}`,
+      ),
+    ];
+    const kept = origin("kept", "session-1");
+    const pruned = origin("pruned", "session-2");
+    await recordMemoryEntryOrigins({
+      agentId: "main",
+      origins: [kept, origin("kept", "session-3"), pruned],
+    });
+    seedMemoryForgetTombstones({ agentId: "main", sessionIds: ["session-2"], createdAt: 1_000 });
+
+    expect(
+      await listMemoryEntryOrigins({
+        agentId: "main",
+        sessionIds: selected("session", "session-1"),
+      }),
+    ).toEqual([kept]);
+    expect(
+      await listMemoryEntryOrigins({ agentId: "main", entryKeys: selected("key", "pruned") }),
+    ).toEqual([pruned]);
+    expect(
+      await listMemorySessionTombstones({
+        agentId: "main",
+        sessionIds: selected("session", "session-2"),
+      }),
+    ).toEqual([{ sessionId: "session-2", agentId: "main", reason: "forgotten", createdAt: 1_000 }]);
+
+    await pruneMemoryEntryOrigins({
+      workspaceDir: stateDir,
+      agentIds: ["main"],
+      entryKeys: selected("key", "pruned"),
+      retainedEntryKeys: new Set(),
+    });
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([
+      kept,
+      origin("kept", "session-3"),
+    ]);
+    await expect(
+      withOpenClawAgentDatabaseWrite({ agentId: "main" }, ({ db }) =>
+        deleteMemoryEntryOriginsInDatabase(db, {
+          agentId: "main",
+          entryKeys: ["kept"],
+          sessionIds: selected("session", "session-3"),
+        }),
+      ),
+    ).resolves.toBe(1);
+    expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual([kept]);
+  });
+
   it("rolls back only newly reserved lineage when a replacement does not commit", async () => {
     const priorEntry = "- Keep the original deployment target.";
     const prior = Array.from({ length: 32 }, (_, index) =>
@@ -319,38 +379,72 @@ describe("memory entry origins", () => {
     async (cleanupFails) => {
       const prior = origin("prior", "session-1");
       await recordMemoryEntryOrigins({ agentId: "main", origins: [prior] });
-      const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
-      db.exec(`
-        CREATE TRIGGER reject_origin_reservation BEFORE INSERT ON memory_entry_origins
-        WHEN NEW.entry_key = 'failing'
-        BEGIN SELECT RAISE(ABORT, 'fixture reservation write rejected'); END;
-      `);
-      if (cleanupFails) {
-        db.exec(`
-          CREATE TRIGGER reject_origin_compensation BEFORE DELETE ON memory_entry_origins
-          WHEN OLD.entry_key = 'first'
-          BEGIN SELECT RAISE(ABORT, 'fixture reservation cleanup rejected'); END;
-        `);
+      const moduleUrl = resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.entryOrigins);
+      const fixturePath = path.join(stateDir, "origin-statement-fault.mjs");
+      // Intercept execution, including cached statements, without changing admitted schema.
+      await fs.writeFile(
+        fixturePath,
+        `import { StatementSync } from "node:sqlite";
+import { bindSqliteWorkerBackend as bind } from ${JSON.stringify(moduleUrl.href)};
+export function bindSqliteWorkerBackend(input, context) {
+  const backend = bind(input, context);
+  const originals = new Map();
+  for (const method of ["run", "get", "all", "iterate"]) {
+    const original = StatementSync.prototype[method];
+    originals.set(method, original);
+    StatementSync.prototype[method] = function (...args) {
+      const sql = this.sourceSQL.toLowerCase().replaceAll('"', '');
+      if (sql.startsWith('insert into memory_entry_origins ') && args.includes('failing')) {
+        throw new Error('fixture reservation write rejected');
       }
+      if (${cleanupFails} && sql.startsWith('delete from memory_entry_origins ') && args.includes('["first"]')) {
+        throw new Error('fixture reservation cleanup rejected');
+      }
+      return Reflect.apply(original, this, args);
+    };
+  }
+  return { ...backend, close() {
+    for (const [method, original] of originals) StatementSync.prototype[method] = original;
+    return backend.close();
+  } };
+}
+`,
+      );
+      const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
+      const fault = vi
+        .spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore")
+        .mockImplementation((options, source, worker) =>
+          open(
+            options,
+            source,
+            worker.moduleUrl.href === moduleUrl.href
+              ? { ...worker, moduleUrl: pathToFileURL(fixturePath) }
+              : worker,
+          ),
+        );
       const priorEntry = "- Retain the source until publication settles.";
-      await expect(
-        reserveMemoryEntryOrigins({
-          agentIds: ["main"],
-          previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
-          operations: ["first", "failing"].map((candidateKey) => ({
-            candidateKey,
-            action: "merged" as const,
-            priorEntries: [priorEntry],
-          })),
-        }),
-      ).rejects.toThrow(
-        cleanupFails
-          ? "fixture reservation cleanup rejected"
-          : "fixture reservation write rejected",
-      );
-      expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(
-        cleanupFails ? [origin("first", "session-1"), prior] : [prior],
-      );
+      try {
+        await expect(
+          reserveMemoryEntryOrigins({
+            agentIds: ["main"],
+            previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
+            operations: ["first", "failing"].map((candidateKey) => ({
+              candidateKey,
+              action: "merged" as const,
+              priorEntries: [priorEntry],
+            })),
+          }),
+        ).rejects.toThrow(
+          cleanupFails
+            ? "fixture reservation cleanup rejected"
+            : "fixture reservation write rejected",
+        );
+        expect(await listMemoryEntryOrigins({ agentId: "main" })).toEqual(
+          cleanupFails ? [origin("first", "session-1"), prior] : [prior],
+        );
+      } finally {
+        fault.mockRestore();
+      }
     },
   );
 

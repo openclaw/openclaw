@@ -76,6 +76,10 @@ export class ExpectedCliError extends Error {
   }
 }
 
+export function throwExpectedCliError(message: string): never {
+  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
+
 export function isGatewayCredentialsCliError(
   error: unknown,
 ): error is Error & { method: string; configPath: string } {

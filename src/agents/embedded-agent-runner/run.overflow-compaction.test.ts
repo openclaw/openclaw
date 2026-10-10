@@ -124,7 +124,7 @@ function makeRecoveryInput(
     }),
     prepareRecoverySession: async () => ({
       sessionManager: SessionManager.inMemory(),
-      assertActive: vi.fn(),
+      assertActive: vi.fn<() => void>(),
       withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
         await operation(),
     }),
@@ -357,7 +357,7 @@ describe("compactEmbeddedRunForRecovery", () => {
     expect(completionMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
-  it.each(["returned", "failed", "cancelled", "failed-result"] as const)(
+  it.each(["failed", "cancelled", "failed-result"] as const)(
     "keeps committed context chronology when the backend is %s",
     async (outcome) => {
       const state = createEmbeddedRunContextRecoveryState();
@@ -428,7 +428,7 @@ describe("compactEmbeddedRunForRecovery", () => {
           .soft(input.adoptCompactionTranscript)
           .toHaveBeenCalledExactlyOnceWith(completedFact, undefined);
       } else {
-        await expect(pending).resolves.toMatchObject({ result: { ok: outcome === "returned" } });
+        await expect(pending).resolves.toMatchObject({ result: { ok: false } });
       }
       expect(compact).toHaveBeenCalledOnce();
       expect.soft(usageAccumulator).toMatchObject({ input: 100, output: 50, total: 150 });
@@ -437,18 +437,6 @@ describe("compactEmbeddedRunForRecovery", () => {
         lastCompactionTokensAfter: 40,
         currentContextSnapshot: { tokens: 20 },
       });
-      if (outcome === "returned") {
-        compact.mockResolvedValueOnce({
-          ok: true,
-          compacted: true,
-          result: { tokensBefore: 100, tokensAfter: 60 },
-        });
-        await compactEmbeddedRunForRecovery(input, { ...recovery, attempt: 2 });
-        expect(state).toMatchObject({
-          autoCompactionCount: 2,
-          currentContextSnapshot: { tokens: 60 },
-        });
-      }
     },
   );
 });

@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
@@ -198,8 +198,14 @@ describe("chat.history cursor catch-up", () => {
       reason: "reset",
       timestamp: new Date().toISOString(),
     });
+    const cleanup = vi
+      .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
+      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+    onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);
+    expect(cleanup).not.toHaveBeenCalled();
+    cleanup.mockRestore();
     expect(cached.payload?.messages).toMatchObject([
       { __openclaw: { id: "reset", seq: 1, transcriptPosition: { rawSeq: 13 } } },
     ]);
@@ -288,22 +294,6 @@ describe("chat.history cursor catch-up", () => {
     expect(reloaded.payload!.messages.at(-1)).toMatchObject({
       __openclaw: { tokensBefore: 42_000, tokensAfter: 8_000 },
     });
-  });
-
-  test("chat.history does not launch managed outgoing media garbage collection", async () => {
-    const { context } = await createCursorSession();
-    const cleanup = vi
-      .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
-
-    try {
-      const result = await callChat(context, "chat.history");
-
-      expect(result.ok).toBe(true);
-      expect(cleanup).not.toHaveBeenCalled();
-    } finally {
-      cleanup.mockRestore();
-    }
   });
 
   test("composes nested completions identically after cursor catch-up and fresh history", async () => {
@@ -432,8 +422,9 @@ describe("chat.history cursor catch-up", () => {
   test("returns an empty delta at the cached head with a fixed multi-agent store", async () => {
     testState.agentsConfig = {
       ownership: "explicit",
-      entries: { main: { default: true }, ops: {} },
+      entries: { main: {}, ops: {} },
     };
+    testState.agentConfig = { sessionStore: { agentId: "main" } };
     const { context } = await createCursorSession();
     const page = await callChat<History>(context, "chat.history", { sessionKey });
     expect(page.ok).toBe(true);
@@ -559,20 +550,6 @@ describe("chat.history cursor catch-up", () => {
     });
     const delta = await callChat(context, "chat.history", { cursor: cached.payload!.deltaCursor });
     expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });
-  });
-
-  test("resets for an appended reset boundary", async () => {
-    const { context, storePath } = await createCursorSession();
-    const page = await callChat<{ deltaCursor?: string }>(context, "chat.history");
-    await appendTranscriptEvent(currentScope(storePath), {
-      type: "reset",
-      id: "reset-boundary",
-      parentId: "cached",
-      reason: "reset",
-      firstKeptEntryId: "cached",
-    });
-    const result = await callChat(context, "chat.history", { cursor: page.payload?.deltaCursor });
-    expect(result).toMatchObject({ ok: true, payload: { kind: "reset" } });
   });
 
   test.each(["offset", "messageId"] as const)("rejects cursor with %s", async (field) => {

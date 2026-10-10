@@ -129,23 +129,18 @@ export function resolveEffectiveReplyRoute(params: {
       inheritedExternalRoute: true,
     };
   }
-  if (params.ctx.InternalTurnSource === undefined) {
-    return {
-      channel: params.ctx.OriginatingChannel,
-      to: params.ctx.OriginatingTo,
-      accountId: params.ctx.AccountId,
-      ...(params.ctx.MessageThreadId !== undefined ? { threadId: params.ctx.MessageThreadId } : {}),
-      ...(liveChatType ? { chatType: liveChatType } : {}),
-    };
-  }
-  const persistedChannel = persistedDeliveryContext?.channel;
   const liveChannel = params.ctx.OriginatingChannel;
   const canInheritPersistedTuple =
-    !liveChannel ||
-    normalizeMessageChannel(liveChannel) === normalizeMessageChannel(persistedChannel);
+    params.ctx.InternalTurnSource !== undefined &&
+    (!liveChannel ||
+      normalizeMessageChannel(liveChannel) ===
+        normalizeMessageChannel(persistedDeliveryContext?.channel));
   const chatType = liveChatType ?? (canInheritPersistedTuple ? persistedChatType : undefined);
   return {
-    channel: liveChannel ?? persistedChannel,
+    channel:
+      params.ctx.InternalTurnSource === undefined
+        ? liveChannel
+        : (liveChannel ?? persistedDeliveryContext?.channel),
     to:
       params.ctx.OriginatingTo ??
       (canInheritPersistedTuple ? persistedDeliveryContext?.to : undefined),

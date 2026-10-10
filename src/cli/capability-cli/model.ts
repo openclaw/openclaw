@@ -48,21 +48,7 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
   );
 }
 
-function requireModelRunPrompt(value: unknown): string {
-  if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
-    throw new Error("--prompt cannot be empty or whitespace-only.");
-  }
-  return value;
-}
-
-type ModelRunImageFile = {
-  path: string;
-  fileName: string;
-  mimeType: string;
-  data: string;
-};
-
-async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+async function readModelRunImageFiles(files: string[] | undefined) {
   if (!files || files.length === 0) {
     return [];
   }
@@ -93,20 +79,6 @@ async function readModelRunImageFiles(files: string[] | undefined): Promise<Mode
       };
     }),
   );
-}
-
-function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "string") {
-    throw new Error("--thinking must be a string.");
-  }
-  const normalized = normalizeThinkLevel(value);
-  if (!normalized) {
-    throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
-  }
-  return normalized;
 }
 
 async function runModelRun(params: {
@@ -144,6 +116,10 @@ async function runModelRun(params: {
   });
   const hasExplicitProviderModelOverride = Boolean(explicitModelOverride);
   const imageFiles = await readModelRunImageFiles(params.files);
+  const inputs =
+    imageFiles.length > 0
+      ? { inputs: imageFiles.map((image) => ({ path: image.path, mimeType: image.mimeType })) }
+      : {};
   const messageContent =
     imageFiles.length > 0
       ? [
@@ -218,9 +194,22 @@ async function runModelRun(params: {
                 typeof providerErrorMessage === "string" && providerErrorMessage.trim()
                   ? `: ${providerErrorMessage.trim()}`
                   : "";
-              throw new Error(
-                `No text output returned for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`,
-              );
+              // Keep AI runtime imports out of command registration and help loading.
+              const { hasOnlyAssistantReasoningContent, isReasoningOnlyLengthAssistantTurn } =
+                await import("@openclaw/ai/internal/shared");
+              const target = `for provider "${prepared.selection.provider}" model "${prepared.selection.modelId}"${detail}.`;
+              // Failed or aborted streams can keep partial reasoning; report those as provider failures.
+              const completedWithoutError =
+                (result.stopReason === "stop" || result.stopReason === "length") && !detail;
+              if (completedWithoutError && hasOnlyAssistantReasoningContent(result)) {
+                const limitHint = isReasoningOnlyLengthAssistantTurn(result)
+                  ? " It stopped at the output token limit while reasoning; a lower --thinking level may leave room for text."
+                  : "";
+                throw new Error(
+                  `Model returned reasoning but no text output ${target}${limitHint}`,
+                );
+              }
+              throw new Error(`No text output returned ${target}`);
             }
             return {
               ok: true,
@@ -229,14 +218,7 @@ async function runModelRun(params: {
               provider: prepared.selection.provider,
               model: prepared.selection.modelId,
               attempts: [],
-              ...(imageFiles.length > 0
-                ? {
-                    inputs: imageFiles.map((image) => ({
-                      path: image.path,
-                      mimeType: image.mimeType,
-                    })),
-                  }
-                : {}),
+              ...inputs,
               outputs: [
                 {
                   text,
@@ -317,26 +299,19 @@ async function runModelRun(params: {
       mediaUrl: payload.mediaUrl,
       mediaUrls: payload.mediaUrls,
     })),
-    ...(imageFiles.length > 0
-      ? {
-          inputs: imageFiles.map((image) => ({
-            path: image.path,
-            mimeType: image.mimeType,
-          })),
-        }
-      : {}),
+    ...inputs,
   } satisfies CapabilityEnvelope;
 }
 
 async function buildModelProviders(cfg: OpenClawConfig, agentId: string) {
-  const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-    await import("./shared.js");
+  const { providerHasGenericConfig } = await import("./shared.js");
+  const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
   const { resolveAgentEffectiveModelPrimary } = await import("../../agents/agent-scope.js");
   const { getProviderEnvVarsCore } = await import("../../secrets/provider-env-vars.js");
   const catalog = await loadModelCatalogForInspection(cfg, agentId);
-  const selectedProvider = resolveSelectedProviderFromModelRef(
+  const selectedProvider = resolveModelRefOverride(
     resolveAgentEffectiveModelPrimary(cfg, agentId),
-  );
+  ).provider;
   const grouped = new Map<
     string,
     {
@@ -458,12 +433,23 @@ export function registerModelCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const { resolveCapabilityAgentOption, resolveTransport } = await import("./shared.js");
-        const prompt = requireModelRunPrompt(opts.prompt);
-        const thinking = normalizeModelRunThinking(opts.thinking);
+        const prompt = opts.prompt;
+        if (typeof prompt !== "string" || normalizeOptionalString(prompt) === undefined) {
+          throw new Error("--prompt cannot be empty or whitespace-only.");
+        }
+        let thinking: ThinkLevel | undefined;
+        if (opts.thinking !== undefined) {
+          if (typeof opts.thinking !== "string") {
+            throw new Error("--thinking must be a string.");
+          }
+          thinking = normalizeThinkLevel(opts.thinking);
+          if (!thinking) {
+            throw new Error(`Invalid thinking level. Use one of: ${THINKING_LEVELS_HELP}.`);
+          }
+        }
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
-          supported: ["local", "gateway"],
           defaultTransport: "local",
         });
         return runModelRun({

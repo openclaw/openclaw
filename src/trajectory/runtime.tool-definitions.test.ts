@@ -41,15 +41,15 @@ describe("trajectory tool definition preparation", () => {
     expect(digest).toHaveBeenCalledTimes(3);
   });
 
-  it("rechecks changed schemas and current secret registrations after repeated projections", () => {
+  it("rechecks changed schemas and current secret registrations after repeated projections", async () => {
     const writes: string[] = [];
     const description = "trajectory-fixture-value";
-    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockReturnValueOnce({
+    vi.spyOn(runtimeStoreWriter, "createSqliteTrajectoryRuntimeSink").mockResolvedValueOnce({
       write: (_event, line) => writes.push(line),
       flush: async () => {},
       describeFlushState: () => undefined,
     });
-    const recorder = createTrajectoryRuntimeRecorder({
+    const recorder = await createTrajectoryRuntimeRecorder({
       sessionId: "tool-projection",
     });
     const record = (text: string) =>
@@ -101,30 +101,30 @@ describe("trajectory tool definition preparation", () => {
     expect(has).not.toHaveBeenCalled();
   });
 
-  it("preserves native retry metadata returned by custom array operations", () => {
-    const headers = new Headers({
-      "retry-after": "7",
-      authorization: "Bearer synthetic-credential",
-    });
-
-    expect(projectParameters({ ordinary: "kept", nested: arrayReturning(headers) })).toEqual({
-      ordinary: "kept",
-      nested: { "retry-after-ms": 7_000 },
-    });
-  });
-
-  it("preserves prototype traps when a copied field changes the prepared record prototype", () => {
-    const getPrototypeOf = vi.fn(() => null);
-    const prototype = new Proxy({}, { getPrototypeOf });
-    const parameters = {
-      ["__proto__"]: arrayReturning(prototype),
-      ordinary: "kept",
-    };
-
-    expect(projectParameters(parameters)).toEqual({ ordinary: "kept" });
-    expect(getPrototypeOf).toHaveBeenCalled();
-    expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
-  });
+  it.each(["native headers", "prototype traps"])(
+    "preserves %s returned by custom array operations",
+    (kind) => {
+      const native = kind === "native headers";
+      const getPrototypeOf = vi.fn(() => null);
+      const value = native
+        ? new Headers({
+            "retry-after": "7",
+            authorization: "Bearer synthetic-credential",
+          })
+        : new Proxy({}, { getPrototypeOf });
+      const parameters = {
+        [native ? "nested" : "__proto__"]: arrayReturning(value),
+        ordinary: "kept",
+      };
+      expect(projectParameters(parameters)).toEqual(
+        native ? { ordinary: "kept", nested: { "retry-after-ms": 7_000 } } : { ordinary: "kept" },
+      );
+      if (!native) {
+        expect(getPrototypeOf).toHaveBeenCalled();
+        expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
+      }
+    },
+  );
 
   it("reads source getters once while preserving inert serialization hooks", () => {
     const toJSON = vi.fn(() => ({ unexpected: true }));

@@ -201,14 +201,15 @@ export function buildSidebarSessionNavigationState(input: {
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
       gatewayHasActiveRun: row.hasActiveRun,
+      hasActiveSubagentRun: row.hasActiveSubagentRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
       modelSelectionLocked: row.modelSelectionLocked === true,
       kind: row.kind,
       pinned: row.pinned === true,
       pinnable: isPinnableUiSessionRow(row),
+      sidebarRoot: row.sidebarRoot,
       snoozedUntil: row.snoozedUntil,
       archived: row.archived === true,
       visibility: row.visibility,
@@ -310,7 +311,7 @@ export function buildReconciledSidebarZone(input: {
   const defaultPluginNavigationKeys = new Set([
     ...pluginTabs.keys(),
     ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
+      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
       .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
       .map((entry) => entry.key),
   ]);
@@ -441,7 +442,7 @@ export function collectCategorizedChildRootRows(input: {
     (row) =>
       !scopedRootKeys.has(row.key) &&
       !isSubagentSessionKey(row.key) &&
-      normalizeOptionalString(row.category) != null &&
+      (row.sidebarRoot === true || normalizeOptionalString(row.category) != null) &&
       resolveUiSessionNavigationParentKey(row) != null &&
       sessionMatchesVisibleSessionScope(row, input.visibilityOptions),
   );

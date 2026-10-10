@@ -2,12 +2,6 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { z } from "zod";
 
-type ReadinessDeps = {
-  execFileSync: typeof execFileSync;
-};
-
-const DEFAULT_DEPS: ReadinessDeps = { execFileSync };
-
 const MxcProbeOutputSchema = z.object({
   tier: z.enum(["base-container", "appcontainer-bfs", "appcontainer-dacl"]).optional(),
   warnings: z.array(z.string()).default([]),
@@ -21,10 +15,7 @@ function resolveWindowsSystemExecutable(name: string): string {
 
 // `wxc-exec --probe` can exit 0 even when detection fails; only a selected tier
 // means this host can run MXC sandboxes.
-function probeMxcIsolationTier(
-  executablePath: string,
-  deps: ReadinessDeps,
-): { tier: string; warnings: string[] } {
+function probeMxcIsolationTier(executablePath: string): { tier: string; warnings: string[] } {
   const notReady = (reason: string, cause?: unknown) =>
     new Error(
       `[mxc] MXC Windows ProcessContainer sandbox is not ready: ${reason}. ` +
@@ -37,7 +28,7 @@ function probeMxcIsolationTier(
     );
   let output: string;
   try {
-    output = deps.execFileSync(executablePath, ["--probe"], {
+    output = execFileSync(executablePath, ["--probe"], {
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 15_000,
@@ -45,21 +36,21 @@ function probeMxcIsolationTier(
     });
   } catch (error) {
     const detail = error instanceof Error && error.message ? `: ${error.message.trim()}` : "";
-    throw notReady(`the MXC host probe failed${detail}`, error);
+    throw notReady(`the MXC host check failed${detail}`, error);
   }
   let probe: unknown;
   try {
     probe = JSON.parse(output);
   } catch (error) {
-    throw notReady("the MXC host probe did not return JSON", error);
+    throw notReady("the MXC host check did not return JSON", error);
   }
   const parsed = MxcProbeOutputSchema.safeParse(probe);
   if (!parsed.success) {
-    throw notReady("the MXC host probe returned an unexpected result", parsed.error);
+    throw notReady("the MXC host check returned an unexpected result", parsed.error);
   }
   const { tier, warnings, error } = parsed.data;
   if (!tier) {
-    const reason = error || "the probe reported no isolation tier";
+    const reason = error || "the check reported no isolation tier";
     throw notReady(`MXC cannot select an isolation tier on this host (${reason})`);
   }
   return { tier, warnings };
@@ -73,11 +64,11 @@ function probeMxcIsolationTier(
 // sandbox fails with "Access is denied". This is advisory: the sandbox still
 // runs basic cmd.exe read/write workloads without it, so a missing grant warns
 // rather than blocking activation.
-function isSystemDrivePrepared(deps: ReadinessDeps): boolean {
+function isSystemDrivePrepared(): boolean {
   const systemDrive = process.env.SystemDrive || "C:";
   let output: string;
   try {
-    output = deps.execFileSync(resolveWindowsSystemExecutable("icacls.exe"), [`${systemDrive}\\`], {
+    output = execFileSync(resolveWindowsSystemExecutable("icacls.exe"), [`${systemDrive}\\`], {
       encoding: "utf-8",
       stdio: "pipe",
       timeout: 5_000,
@@ -107,21 +98,12 @@ function systemDrivePrepWarning(systemDrive: string): string {
  * Emits an advisory warning when the system drive is not prepared for
  * AppContainer directory access. Non-fatal: the sandbox still activates.
  */
-export function warnMxcHostPrepIfNeeded(
-  params: {
-    platform?: NodeJS.Platform;
-    deps?: Partial<ReadinessDeps>;
-    warn?: (message: string) => void;
-  } = {},
-): void {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32") {
+export function warnMxcHostPrepIfNeeded(): void {
+  if (process.platform !== "win32") {
     return;
   }
-  const deps = { ...DEFAULT_DEPS, ...params.deps };
-  if (!isSystemDrivePrepared(deps)) {
-    const warn = params.warn ?? ((message: string) => console.warn(message));
-    warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
+  if (!isSystemDrivePrepared()) {
+    console.warn(systemDrivePrepWarning(process.env.SystemDrive || "C:"));
   }
 }
 
@@ -130,21 +112,13 @@ export function warnMxcHostPrepIfNeeded(
  * `executablePath`. Degradation warnings from the probe are reported but do not
  * block activation.
  */
-export function assertMxcReadiness(params: {
-  executablePath: string;
-  platform?: NodeJS.Platform;
-  deps?: Partial<ReadinessDeps>;
-  warn?: (message: string) => void;
-}): void {
-  const platform = params.platform ?? process.platform;
-  if (platform !== "win32") {
+export function assertMxcReadiness(params: { executablePath: string }): void {
+  if (process.platform !== "win32") {
     return;
   }
-  const deps = { ...DEFAULT_DEPS, ...params.deps };
-  const probe = probeMxcIsolationTier(params.executablePath, deps);
+  const probe = probeMxcIsolationTier(params.executablePath);
   if (probe.warnings.length > 0) {
-    const warn = params.warn ?? ((message: string) => console.warn(message));
-    warn(
+    console.warn(
       `[mxc] MXC sandbox is using the ${probe.tier} isolation tier: ${probe.warnings.join("; ")}`,
     );
   }

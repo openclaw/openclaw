@@ -6,11 +6,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  readChatHistoryCliSessionImportSnapshot,
-  resolveChatHistoryWithCliSessionImports,
-} from "./cli-session-history.js";
-import {
-  boundEntry,
+  readClaudeCliSessionMessagesAsync,
   createClaudeTextHistoryLines,
   withClaudeProjectsDir,
 } from "./cli-session-history.test-support.js";
@@ -22,60 +18,11 @@ function readRecord(value: unknown): Record<string, unknown> {
   return requireGatewayRecord(value, "record");
 }
 
-it("refreshes changed Claude snapshots and singleflights concurrent reads", async () => {
+it("reads changed Claude sources and preserves discovery precedence", async () => {
   await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-    const params = {
-      entry: boundEntry(sessionId),
-      provider: "claude-cli",
-      localMessages: [],
-      homeDir,
-    };
-    const read = async () =>
-      resolveChatHistoryWithCliSessionImports({
-        ...params,
-        preparedImportedMessages: await readChatHistoryCliSessionImportSnapshot(params),
-      });
-    const streamSpy = vi.spyOn(rawFs, "createReadStream");
-    const transcriptRedact = await import("../agents/transcript-redact.js");
-    const redactSpy = vi.spyOn(transcriptRedact, "redactTranscriptMessage");
-    const readdirSyncSpy = vi.spyOn(rawFs, "readdirSync");
-    const existsSyncSpy = vi.spyOn(rawFs, "existsSync");
-    const initial = await (async () => {
-      try {
-        const [first, second] = await Promise.all([
-          readChatHistoryCliSessionImportSnapshot(params),
-          readChatHistoryCliSessionImportSnapshot(params),
-        ]);
-        expect(second).toEqual(first);
-        const secondToolBlocks = readRecord(second.at(-1)).content;
-        if (!Array.isArray(secondToolBlocks)) {
-          throw new Error("Expected imported tool call and result blocks");
-        }
-        readRecord(readRecord(secondToolBlocks[0]).arguments).command = "mutated";
-        expect(first.at(-1)).toMatchObject({
-          content: [{ arguments: { command: "pwd" } }, { content: "/tmp/demo" }],
-        });
-        expect(await readChatHistoryCliSessionImportSnapshot(params)).toEqual(first);
-        expect(streamSpy).toHaveBeenCalledTimes(1);
-        expect(redactSpy).toHaveBeenCalledTimes(first.length);
-        // Scope this to transcript discovery; redaction may load unrelated config.
-        const projectsDir = path.dirname(path.dirname(filePath));
-        expect(
-          readdirSyncSpy.mock.calls.filter(([directory]) => directory === projectsDir),
-        ).toHaveLength(0);
-        expect(existsSyncSpy).not.toHaveBeenCalledWith(filePath);
-        return resolveChatHistoryWithCliSessionImports({
-          ...params,
-          preparedImportedMessages: first,
-        });
-      } finally {
-        streamSpy.mockRestore();
-        redactSpy.mockRestore();
-        readdirSyncSpy.mockRestore();
-        existsSyncSpy.mockRestore();
-      }
-    })();
-    expect(initial.messages).toHaveLength(3);
+    const read = () => readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
+    const initial = await read();
+    expect(initial).toHaveLength(3);
 
     await fs.appendFile(
       filePath,
@@ -85,8 +32,8 @@ it("refreshes changed Claude snapshots and singleflights concurrent reads", asyn
       "utf8",
     );
     const appended = await read();
-    expect(appended.messages).toHaveLength(4);
-    expect(appended.messages.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
+    expect(appended).toHaveLength(4);
+    expect(appended.map((message) => readRecord(message)["__openclaw"])).toContainEqual(
       expect.objectContaining({ externalId: "appended-user" }),
     );
 
@@ -98,8 +45,8 @@ it("refreshes changed Claude snapshots and singleflights concurrent reads", asyn
       "utf8",
     );
     const replaced = await read();
-    expect(replaced.messages).toHaveLength(1);
-    expectRecordFields(readRecord(replaced.messages[0])["__openclaw"], "fields", {
+    expect(replaced).toHaveLength(1);
+    expectRecordFields(readRecord(replaced[0])["__openclaw"], "fields", {
       externalId: "replacement-assistant",
     });
 
@@ -111,7 +58,7 @@ it("refreshes changed Claude snapshots and singleflights concurrent reads", asyn
 
     await fs.rm(movedFilePath);
     const deleted = await read();
-    expect(deleted).toEqual({ messages: [], imported: false, expanded: false });
+    expect(deleted).toEqual([]);
   });
 });
 
@@ -149,12 +96,7 @@ it("preserves project precedence when a later matching transcript is found first
           foundSecond.resolve();
         }
       });
-    const pending = readChatHistoryCliSessionImportSnapshot({
-      entry: boundEntry(sessionId),
-      provider: "claude-cli",
-      localMessages: [],
-      homeDir,
-    });
+    const pending = readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
     try {
       await Promise.race([foundSecond.promise, pending]);
       releaseFirst.resolve();
@@ -168,104 +110,6 @@ it("preserves project precedence when a later matching transcript is found first
     }
   });
 });
-
-it.each(["success", "failure"] as const)(
-  "shares interleaved pending Claude reads and retires them after %s",
-  async (outcome) => {
-    const homeDir = tempDirs.make("openclaw-claude-interleaved-");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "workspace");
-    await fs.mkdir(projectsDir, { recursive: true });
-    for (const sessionId of ["first", "second"]) {
-      await fs.writeFile(
-        path.join(projectsDir, `${sessionId}.jsonl`),
-        JSON.stringify({
-          type: "user",
-          uuid: `${sessionId}-message`,
-          message: { role: "user", content: `${sessionId} transcript` },
-        }),
-      );
-    }
-    const firstPath = await fs.realpath(path.join(projectsDir, "first.jsonl"));
-    const secondPath = await fs.realpath(path.join(projectsDir, "second.jsonl"));
-    const firstOpenStarted = createDeferred();
-    const releaseFirstOpen = createDeferred();
-    const createReadStream = rawFs.createReadStream;
-    const stat = fs.stat;
-    let firstStats = 0;
-    let failFirstOpen = outcome === "failure";
-    const reads: Promise<unknown[]>[] = [];
-    const read = (sessionId: string) => {
-      const pending = readChatHistoryCliSessionImportSnapshot({
-        entry: {
-          sessionId: "openclaw-session",
-          updatedAt: 0,
-          cliSessionBindings: { "claude-cli": { sessionId } },
-        },
-        provider: "claude-cli",
-        localMessages: [],
-        homeDir,
-      });
-      reads.push(pending);
-      return pending;
-    };
-    const streamSpy = vi.spyOn(rawFs, "createReadStream").mockImplementation((file, options) => {
-      if (file !== firstPath) {
-        return createReadStream(file, options);
-      }
-      return createReadStream(file, {
-        ...(typeof options === "string" ? { encoding: options } : options),
-        fs: {
-          open(openedPath, flags, mode, callback) {
-            firstOpenStarted.resolve();
-            void releaseFirstOpen.promise.then(() => {
-              if (failFirstOpen) {
-                callback(new Error("synthetic read failure"), -1);
-              } else {
-                rawFs.open(openedPath, flags, mode, callback);
-              }
-            });
-          },
-          read: rawFs.read,
-          close: rawFs.close,
-        },
-      });
-    });
-    const statSpy = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-      const result = await stat(...args);
-      if (args[0] === firstPath && ++firstStats === 2) {
-        // The repeated read has its fingerprint before the held file can open.
-        releaseFirstOpen.resolve();
-      }
-      return result;
-    });
-    try {
-      const firstRead = read("first");
-      await firstOpenStarted.promise;
-      expect(await read("second")).toMatchObject([{ content: "second transcript" }]);
-      const [first, repeated] = await Promise.all([firstRead, read("first")]);
-      expect(first).toMatchObject(outcome === "success" ? [{ content: "first transcript" }] : []);
-      expect(repeated).toEqual(first);
-      expect(streamSpy.mock.calls.filter(([file]) => file === firstPath)).toHaveLength(1);
-      if (outcome === "success") {
-        requireGatewayRecord(first[0], "first snapshot message").content = "caller-only edit";
-        expect(repeated).toMatchObject([{ content: "first transcript" }]);
-      }
-      failFirstOpen = false;
-      expect(await read("first")).toMatchObject([{ content: "first transcript" }]);
-      expect(streamSpy.mock.calls.filter(([file]) => file === firstPath)).toHaveLength(
-        outcome === "success" ? 1 : 2,
-      );
-      // Completed imports still retain only the most recently requested snapshot.
-      expect(await read("second")).toMatchObject([{ content: "second transcript" }]);
-      expect(streamSpy.mock.calls.filter(([file]) => file === secondPath)).toHaveLength(2);
-    } finally {
-      releaseFirstOpen.resolve();
-      await Promise.allSettled(reads);
-      statSpy.mockRestore();
-      streamSpy.mockRestore();
-    }
-  },
-);
 
 it("projects oversized Claude messages off-thread using one worker per snapshot", async () => {
   const homeDir = tempDirs.make("openclaw-claude-snapshot-");
@@ -296,16 +140,7 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
   const onWorker = (worker: Worker) => workers.push(worker);
   process.on("worker", onWorker);
   try {
-    const messages = await readChatHistoryCliSessionImportSnapshot({
-      entry: {
-        sessionId: "openclaw-session",
-        updatedAt: Date.now(),
-        cliSessionBindings: { "claude-cli": { sessionId } },
-      },
-      provider: "claude-cli",
-      localMessages: [],
-      homeDir,
-    });
+    const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
 
     expect(messages).toHaveLength(4);
     for (let index = 0; index < 3; index++) {

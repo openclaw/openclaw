@@ -400,6 +400,8 @@ export function emitSessionsChanged(
   payload: SessionChangedPayload,
   options: {
     accessChanged?: boolean;
+    /** The producer changed liveness only; durable owners publish their own row facts. */
+    rowScope?: "runtime";
     preparedPublication?: boolean;
     sessionRows?: SessionRowReadView;
     catalogOnly?: boolean;
@@ -414,6 +416,9 @@ export function emitSessionsChanged(
         ? {
             sessionKey: payload.sessionKey,
             ...(payload.agentId ? { agentId: payload.agentId } : {}),
+            ...(options.rowScope
+              ? { scope: options.rowScope, facts: { kind: "unchanged" as const } }
+              : {}),
           }
         : { all: true, scope: "sessions" },
     );
@@ -425,7 +430,7 @@ export function emitSessionsChanged(
   if (!catalogOnly) {
     invalidateSessionSharingSnapshot(payload.sessionKey);
     // Inbox subscriptions are independent of session-list subscriptions, including a closed sidebar.
-    context.mentionInbox?.invalidate(payload.sessionKey);
+    void context.mentionInbox?.invalidateAsync(payload.sessionKey);
   }
   const connIds = context.getSessionEventSubscriberConnIds();
   if (!hasSessionChangeReceivers(connIds)) {
@@ -509,19 +514,4 @@ export function emitSessionsChanged(
   next.timer = setTimeout(() => finishPendingSessionChange(next), SESSIONS_CHANGED_DEBOUNCE_MS);
   next.timer.unref?.();
   startPendingSessionChange(next, captureSessionChange(context, payload, scope, key));
-}
-
-export function emitSessionArchived(
-  context: SessionChangeContext,
-  sessionKey: string | undefined,
-  agentId?: string,
-): void {
-  if (!sessionKey) {
-    return;
-  }
-  emitSessionsChanged(context, {
-    sessionKey,
-    ...(agentId ? { agentId } : {}),
-    reason: "archive",
-  });
 }

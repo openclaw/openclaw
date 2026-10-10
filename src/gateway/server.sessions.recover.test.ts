@@ -22,9 +22,10 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import { recoverGatewaySession } from "./session-recovery-service.js";
 import {
@@ -46,9 +47,7 @@ import type { WorkerSessionPlacementRecord } from "./worker-environments/placeme
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(() => drainGlobalSingletonLifecycleState());
 
 function recoveryWorkerPlacement(params: {
   sessionId: string;
@@ -200,6 +199,7 @@ test("sessions.recover settles its active placement before archiving a real sess
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       get: () => placement,
+      getAsync: async () => placement,
       waitForTurnClaimRelease: vi.fn(async () => {}),
     },
     loadSessionRuntime: async () => ({
@@ -280,11 +280,13 @@ test("sessions.recover settles its active placement before archiving a real sess
     archivedAt: expect.any(Number),
     worktree: { id: worktree.id },
   });
-  expect(managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
+  expect(await managedWorktrees.findLiveByOwner("session", sourceKey)).toMatchObject({
     id: worktree.id,
     ownerId: sourceKey,
   });
-  expect(managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? "")).toBeUndefined();
+  expect(
+    await managedWorktrees.findLiveByOwner("session", recovered.payload?.key ?? ""),
+  ).toBeUndefined();
   expect(
     loadSessionEntry({
       agentId: "main",
@@ -347,6 +349,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
         get: () => placement,
+        getAsync: async () => placement,
         waitForTurnClaimRelease: async () => {
           if (phase === "before-drain") {
             await wait();
@@ -555,7 +558,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry).toMatchObject({
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -608,7 +611,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     agentId: "main",
     key: sourceKey,
   });
-  expect(repeated).toMatchObject({
+  expect(repeated, JSON.stringify(repeated)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -696,8 +699,11 @@ test.each([
       context: {
         getRuntimeConfig: () =>
           identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getCommittedRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
       },
     };
+    prepareGatewayRecipientProfile(request.client);
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
       "sessions.recover",

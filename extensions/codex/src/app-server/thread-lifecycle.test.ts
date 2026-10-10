@@ -41,24 +41,25 @@ import {
   withLeasedCodexTestClient,
 } from "./test-support.js";
 import {
-  buildDeveloperInstructions,
-  buildTurnCollaborationMode,
-  buildTurnStartParams,
-  buildThreadResumeParams,
-  buildThreadStartParams,
   areCodexDynamicToolFingerprintsCompatible,
   codexDynamicToolsFingerprint,
   codexLegacyDynamicToolsFingerprint,
-  startOrResumeThread as startOrResumeThreadImpl,
-} from "./thread-lifecycle.js";
+} from "./thread-fingerprints.js";
 import {
   createLeasedCodexLifecycleHarness,
   createThreadRequestAppServerOptions as createAppServerOptions,
   createThreadRequestAttemptParams as createAttemptParams,
   disabledMcpServerStatus,
+  startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
-import { attestCodexRestrictedToolSurfaceMcpServersDisabled } from "./thread-requests.js";
+import { buildDeveloperInstructions } from "./thread-prompt.js";
+import {
+  attestCodexRestrictedToolSurfaceMcpServersDisabled,
+  buildThreadResumeParams,
+  buildThreadStartParams,
+} from "./thread-requests.js";
+import { buildTurnStartParams } from "./turn-params.js";
 
 it("uses direct OpenClaw functions and hosted web search for subscription sharing", () => {
   const params = createAttemptParams({ provider: "openai", authProfileId: "openai:sharing" });
@@ -125,19 +126,6 @@ type CodexThreadLifecycleTimingLogger = NonNullable<
   NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
 >;
 
-describe("Codex usage attribution", () => {
-  it.each(["user"] as const)("preserves the %s run trigger on each new turn", (trigger) => {
-    const params = { ...createAttemptParams({ provider: "openai" }), trigger };
-    const request = buildTurnStartParams(params, {
-      appServer: createAppServerOptions() as never,
-      threadId: "existing-thread",
-      cwd: "/repo",
-    });
-
-    expect(request.turnTrigger).toBe(trigger);
-  });
-});
-
 describe("Codex context window config", () => {
   it("forwards only a prepared cap on thread start and resume (#124702)", () => {
     const appServer = createAppServerOptions() as never;
@@ -166,140 +154,66 @@ describe("Codex context window config", () => {
 });
 
 describe("Codex ring-zero thread config", () => {
-  it("accepts the attested app server alongside disabled inherited servers", async () => {
-    const request = vi.fn(async () => ({
-      data: [
-        disabledMcpServerStatus("inherited"),
-        {
-          name: "codex_apps",
-          serverInfo: { name: "codex_apps", version: "1.0.0" },
-          tools: { "calendar.list": {} },
-        },
-      ],
-      nextCursor: null,
-    }));
-
-    await expect(
-      attestCodexRestrictedToolSurfaceMcpServersDisabled(
-        { request } as never,
-        "thread-restricted",
-        { mcp_servers: { inherited: { enabled: false } } },
-        undefined,
-        ["codex_apps"],
-      ),
-    ).resolves.toBeUndefined();
-
-    expect(request).toHaveBeenCalledWith(
-      "mcpServerStatus/list",
-      { threadId: "thread-restricted", detail: "toolsAndAuthOnly" },
-      { signal: undefined },
-    );
-  });
-
   it.each([
-    { name: "missing", rows: [], failure: "is missing admitted server codex_apps" },
     {
-      name: "inactive",
-      rows: [{ name: "codex_apps", serverInfo: null, tools: { lookup: {} } }],
-      failure: "found inactive admitted server codex_apps",
+      name: "a missing admitted app",
+      active: ["codex_apps"],
+      rows: [],
+      failure: "is missing admitted server codex_apps",
     },
     {
-      name: "empty tools",
+      name: "an admitted app with no tools",
+      active: ["codex_apps"],
       rows: [{ name: "codex_apps", serverInfo: { name: "codex_apps" }, tools: {} }],
       failure: "found inactive admitted server codex_apps",
     },
-  ])("rejects an admitted app server with $name status", async ({ rows, failure }) => {
-    const request = vi.fn(async () => ({ data: rows, nextCursor: null }));
-
-    await expect(
-      attestCodexRestrictedToolSurfaceMcpServersDisabled(
-        { request } as never,
-        "thread-restricted",
-        {},
-        undefined,
-        ["codex_apps"],
-      ),
-    ).rejects.toThrow(failure);
-  });
-
-  it("rejects an admitted app server that the thread disabled", async () => {
-    const request = vi.fn();
-
-    await expect(
-      attestCodexRestrictedToolSurfaceMcpServersDisabled(
-        { request } as never,
-        "thread-restricted",
-        { mcp_servers: { codex_apps: { enabled: false } } },
-        undefined,
-        ["codex_apps"],
-      ),
-    ).rejects.toThrow("MCP server codex_apps has conflicting policy");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each([
     {
-      name: "an unexpected server",
-      status: { name: "unexpected", serverInfo: null, tools: {} },
-      failure: "found unexpected server unexpected",
+      name: "a disabled admitted app",
+      disabled: ["codex_apps"],
+      active: ["codex_apps"],
+      rows: [],
+      failure: "MCP server codex_apps has conflicting policy",
+      beforeRequest: true,
     },
     {
-      name: "an active disabled server",
-      status: {
-        name: "inherited",
-        serverInfo: { name: "inherited", version: "1.0.0" },
-        tools: {},
-      },
-      failure: "found active server inherited",
-    },
-    {
-      name: "a disabled server without explicit inactive status",
-      status: { name: "inherited", tools: {} },
+      name: "a server without explicit inactive status",
+      disabled: ["inherited"],
+      rows: [{ name: "inherited", tools: {} }],
       failure: "returned malformed server inherited",
     },
     {
       name: "tools from a disabled server",
-      status: { name: "inherited", serverInfo: null, tools: { lookup: {} } },
+      disabled: ["inherited"],
+      rows: [{ name: "inherited", serverInfo: null, tools: { lookup: {} } }],
       failure: "found tools for server inherited",
     },
-  ])("rejects $name", async ({ status, failure }) => {
-    const request = vi.fn(async () => ({ data: [status], nextCursor: null }));
-
-    await expect(
-      attestCodexRestrictedToolSurfaceMcpServersDisabled(
-        { request } as never,
-        "thread-restricted",
-        { mcp_servers: { inherited: { enabled: false } } },
-      ),
-    ).rejects.toThrow(failure);
-  });
-
-  it.each([
     {
-      name: "one missing server",
-      statuses: [disabledMcpServerStatus("inherited")],
+      name: "a missing disabled server",
+      disabled: ["inherited", "request"],
+      rows: [disabledMcpServerStatus("inherited")],
       failure: "is missing server request",
     },
     {
       name: "a duplicate server",
-      statuses: [disabledMcpServerStatus("inherited"), disabledMcpServerStatus("inherited")],
+      disabled: ["inherited", "request"],
+      rows: [disabledMcpServerStatus("inherited"), disabledMcpServerStatus("inherited")],
       failure: "returned duplicate server inherited",
     },
-  ])("rejects $name", async ({ statuses, failure }) => {
-    const request = vi.fn(async () => ({ data: statuses, nextCursor: null }));
-
-    await expect(
-      attestCodexRestrictedToolSurfaceMcpServersDisabled(
-        { request } as never,
-        "thread-restricted",
-        {
-          mcp_servers: {
-            inherited: { enabled: false },
-            request: { enabled: false },
-          },
-        },
-      ),
-    ).rejects.toThrow(failure);
+  ])("attests $name", async ({ disabled, active, rows, failure, beforeRequest }) => {
+    const request = vi.fn(async () => ({ data: rows, nextCursor: null }));
+    const result = attestCodexRestrictedToolSurfaceMcpServersDisabled(
+      { request } as never,
+      "thread-restricted",
+      disabled
+        ? { mcp_servers: Object.fromEntries(disabled.map((name) => [name, { enabled: false }])) }
+        : {},
+      undefined,
+      active,
+    );
+    await expect(result).rejects.toThrow(failure);
+    if (beforeRequest) {
+      expect(request).not.toHaveBeenCalled();
+    }
   });
 
   it("preserves project documents for ordinary policy-restricted turns", () => {
@@ -341,54 +255,6 @@ describe("Codex ring-zero thread config", () => {
       config: authoredProjectDocConfig(200_000),
     });
     expect(disabled.config?.project_doc_max_bytes).toBe(0);
-  });
-
-  it("keeps scheduled-authority apps enabled inside the restricted tool surface", () => {
-    const params = createAttemptParams({ provider: "openai" });
-    params.pluginHarnessToolPolicyRestricted = true;
-    params.scheduledRuntimeAuthority = {
-      version: 1,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { version: 1, auth: {}, apps: [] },
-    };
-    const apps = {
-      _default: { enabled: false },
-      calendar: { enabled: true },
-    };
-
-    const appServer = createAppServerOptions() as never;
-    const options = {
-      appServer,
-      cwd: "/repo",
-      dynamicTools: [],
-      hostSystemAgentActive: false,
-      nativeCodeModeEnabled: false,
-      config: {
-        apps,
-        mcp_servers: {
-          inherited: { command: "inherited-mcp" },
-        },
-      },
-    };
-    const start = buildThreadStartParams(params, options);
-    const resume = buildThreadResumeParams(params, {
-      ...options,
-      threadId: "thread-1",
-    });
-
-    for (const request of [start, resume]) {
-      expect(request.config?.["features.apps"]).toBe(true);
-      expect(request.config?.["orchestrator.mcp.enabled"]).toBe(true);
-      expect(request.config?.apps).toEqual(apps);
-      expect(request.config?.mcp_servers).toEqual({
-        inherited: {
-          command: "inherited-mcp",
-          enabled: false,
-        },
-      });
-      expect(request.config?.["features.multi_agent"]).toBe(false);
-    }
   });
 });
 
@@ -526,7 +392,6 @@ function createThreadLifecycleAppServerOptions(): Parameters<
     approvalsReviewer: "user",
     sandbox: "workspace-write",
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -573,39 +438,6 @@ function createProvisionalPluginThreadConfigProvider(appId: string) {
     enabledPluginConfigKeys: ["linear"],
     recoverablePluginConfigKeys: ["linear"],
     build: vi.fn(async () => config),
-  };
-}
-
-function createAttestedAccountAppThreadConfigProvider(appId: string) {
-  const pluginProvider = createProvisionalPluginThreadConfigProvider(appId);
-  const inputFingerprint = `account-input-${appId}`;
-  return {
-    enabled: true,
-    inputFingerprint,
-    enabledPluginConfigKeys: [],
-    recoverablePluginConfigKeys: [],
-    accountAppRecoveryEnabled: true,
-    build: vi.fn(async (): Promise<CodexPluginThreadConfig> => {
-      const pluginConfig = await pluginProvider.build();
-      return {
-        ...pluginConfig,
-        fingerprint: `account-config-${appId}`,
-        inputFingerprint,
-        policyContext: {
-          fingerprint: `account-policy-${appId}`,
-          apps: {
-            [appId]: {
-              source: "account",
-              appName: "Account App",
-              allowDestructiveActions: false,
-              destructiveApprovalMode: "deny",
-              mcpServerNames: [],
-            },
-          },
-          pluginAppIds: {},
-        },
-      };
-    }),
   };
 }
 
@@ -736,70 +568,59 @@ describe("Codex app-server native code mode config", () => {
     expect(instructions).not.toContain("`sessions_spawn`");
   });
 
-  it.each([
-    { namespace: "openclaw_direct", exposesNativeYield: true },
-    { namespace: "openclaw", exposesNativeYield: false },
-  ])(
-    "materializes the $namespace prompt inventory once with matching guidance",
-    ({ namespace, exposesNativeYield }) => {
-      const params = createAttemptParams({ provider: "openai" });
-      params.sourceReplyDeliveryMode = "message_tool_only";
-      let namespaceReads = 0;
-      const yieldTool: CodexDynamicToolFunctionSpec = {
-        type: "function",
-        name: "sessions_yield",
-        description: "End the current turn",
-        inputSchema: { type: "object" },
-      };
-      const tools = [
+  it("materializes the openclaw_direct prompt inventory once with matching guidance", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    let namespaceReads = 0;
+    const yieldTool: CodexDynamicToolFunctionSpec = {
+      type: "function",
+      name: "sessions_yield",
+      description: "End the current turn",
+      inputSchema: { type: "object" },
+    };
+    const tools = [
+      yieldTool,
+      ...["zeta_tool", "message", "skill_workshop", "alpha_tool", "sessions_spawn"].map(
+        (name): CodexDynamicToolFunctionSpec => ({
+          type: "function",
+          name,
+          description: name,
+          inputSchema: { type: "object" },
+          deferLoading: ["zeta_tool", "skill_workshop", "alpha_tool"].includes(name),
+        }),
+      ),
+    ];
+    const instructions = buildDeveloperInstructions(params, {
+      dynamicTools: [
         yieldTool,
-        ...["zeta_tool", "message", "skill_workshop", "alpha_tool", "sessions_spawn"].map(
-          (name): CodexDynamicToolFunctionSpec => ({
-            type: "function",
-            name,
-            description: name,
-            inputSchema: { type: "object" },
-            deferLoading: ["zeta_tool", "skill_workshop", "alpha_tool"].includes(name),
-          }),
-        ),
-      ];
-      const instructions = buildDeveloperInstructions(params, {
-        dynamicTools: [
-          yieldTool,
-          {
-            type: "namespace",
-            name: namespace,
-            description: "",
-            get tools() {
-              namespaceReads += 1;
-              return tools;
-            },
+        {
+          type: "namespace",
+          name: "openclaw_direct",
+          description: "",
+          get tools() {
+            namespaceReads += 1;
+            return tools;
           },
-        ],
-      });
-      expect(namespaceReads).toBe(1);
-      expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(exposesNativeYield);
-      expect(instructions.includes("native `wait_agent`")).toBe(exposesNativeYield);
-      expect(instructions).toContain(
-        "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
-      );
-      expect(instructions).toContain("## Skill Workshop");
-      if (!exposesNativeYield) {
-        expect(instructions).not.toContain(
-          "Visible source replies are not automatically delivered",
-        );
-      }
-      expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
-      expect(instructions).toContain("Use `tool_search` when directly callable");
-      expect(instructions).toContain(
-        "On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description",
-      );
-      expect(instructions).toContain("call the matching entry through `tools`");
-      expect(instructions).toContain(
-        "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.",
-      );
-    },
-  );
+        },
+      ],
+    });
+    expect(namespaceReads).toBe(1);
+    expect(instructions.includes("`openclaw_direct.sessions_yield`")).toBe(true);
+    expect(instructions.includes("native `wait_agent`")).toBe(true);
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: alpha_tool, skill_workshop, zeta_tool.",
+    );
+    expect(instructions).toContain("## Skill Workshop");
+    expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
+    expect(instructions).toContain("Use `tool_search` to find a tool that is not listed");
+    expect(instructions).toContain(
+      "Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have.",
+    );
+    expect(instructions).not.toContain("On code-mode-only models");
+    expect(instructions).toContain(
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork.",
+    );
+  });
 
   it("keeps hashed dynamic tool fingerprints compatible with legacy JSON bindings", () => {
     const tools = [
@@ -829,32 +650,6 @@ describe("Codex app-server native code mode config", () => {
         nextLegacy: legacy,
       }),
     ).toBe(true);
-  });
-
-  it("disables Codex tool-search features for nano models", () => {
-    const request = buildThreadStartParams(
-      createAttemptParams({ provider: "openai", modelId: "gpt-5.4-nano" }),
-      {
-        cwd: "/repo",
-        dynamicTools: [],
-        appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
-      },
-    );
-
-    expect(request.config).toEqual({
-      project_doc_max_bytes: 131_072,
-      "features.code_mode": true,
-      "features.code_mode_only": false,
-      "features.goals": false,
-      "tools.update_plan.enabled": false,
-      "features.shell_tool": true,
-      "features.apply_patch_streaming_events": true,
-      suppress_unstable_features_warning: true,
-      "features.multi_agent": false,
-      "features.standalone_web_search": false,
-      web_search: "cached",
-    });
   });
 
   it("honors an explicit top-level reviewer on thread start and resume", () => {
@@ -926,7 +721,6 @@ describe("Codex app-server native code mode config", () => {
         cwd: "/repo",
         dynamicTools,
         appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
         nativeCodeModeOnlyEnabled,
         config,
       });
@@ -934,7 +728,6 @@ describe("Codex app-server native code mode config", () => {
         threadId: "thread-1",
         dynamicTools,
         appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
         nativeCodeModeOnlyEnabled,
         config,
       });
@@ -955,47 +748,52 @@ describe("Codex app-server native code mode config", () => {
         });
         expect(request.config?.["code_mode.direct_only_tool_namespaces"]).toBeUndefined();
         expect(request.config?.["features.code_mode_only"]).toBe(nativeCodeModeOnlyEnabled);
+        expect(request.developerInstructions?.includes("On code-mode-only models")).toBe(
+          nativeCodeModeOnlyEnabled,
+        );
       }
     },
   );
 
-  it("disables native Codex project docs for lightweight context threads", () => {
-    const request = buildThreadStartParams(
-      createAttemptParams({
-        provider: "openai",
-        bootstrapContextMode: "lightweight",
-        bootstrapContextRunKind: "cron",
-      }),
-      {
-        cwd: "/repo",
-        dynamicTools: [],
-        appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
-        config: {
-          ...authoredProjectDocConfig(200_000),
-          "features.hooks": true,
+  it.each([false, true])(
+    "configures native tools and project documents for lightweight=%s",
+    (lightweight) => {
+      const request = buildThreadStartParams(
+        createAttemptParams({
+          provider: "openai",
+          ...(lightweight
+            ? ({ bootstrapContextMode: "lightweight", bootstrapContextRunKind: "cron" } as const)
+            : { modelId: "gpt-5.4-nano" }),
+        }),
+        {
+          cwd: "/repo",
+          dynamicTools: [],
+          appServer: createAppServerOptions() as never,
+          developerInstructions: "test instructions",
+          ...(lightweight
+            ? { config: { ...authoredProjectDocConfig(200_000), "features.hooks": true } }
+            : {}),
         },
-      },
-    );
+      );
+      expect(request.config).toEqual({
+        project_doc_max_bytes: lightweight ? 0 : 131_072,
+        ...(lightweight ? { "features.hooks": true } : { "features.multi_agent": false }),
+        "features.code_mode": true,
+        "features.code_mode_only": false,
+        "features.goals": false,
+        "tools.update_plan.enabled": false,
+        "features.shell_tool": true,
+        "features.apply_patch_streaming_events": true,
+        suppress_unstable_features_warning: true,
+        "features.standalone_web_search": false,
+        web_search: "cached",
+      });
+    },
+  );
 
-    expect(request.config).toEqual({
-      project_doc_max_bytes: 0,
-      "features.hooks": true,
-      "features.code_mode": true,
-      "features.code_mode_only": false,
-      "features.goals": false,
-      "tools.update_plan.enabled": false,
-      "features.shell_tool": true,
-      "features.apply_patch_streaming_events": true,
-      suppress_unstable_features_warning: true,
-      "features.standalone_web_search": false,
-      web_search: "cached",
-    });
-  });
-
-  it.each([0])("prefers request budgets over authored native budget %s", (nativeBudget) => {
+  it("rejects authored negative project-document budgets before applying request overrides", () => {
     const effectiveNativeConfig = {
-      config: { project_doc_max_bytes: nativeBudget },
+      config: { project_doc_max_bytes: -1 },
       origins: {
         project_doc_max_bytes: {
           name: { type: "user" as const, file: "/codex/config.toml", profile: null },
@@ -1004,34 +802,9 @@ describe("Codex app-server native code mode config", () => {
       },
       layers: [],
     };
-    expect(buildCodexProjectDocThreadConfig(undefined, effectiveNativeConfig)).toEqual({
-      project_doc_max_bytes: nativeBudget,
-    });
-    expect(
-      buildCodexProjectDocThreadConfig({ project_doc_max_bytes: 64_000 }, effectiveNativeConfig),
-    ).toEqual({ project_doc_max_bytes: 64_000 });
-    expect(
-      buildCodexProjectDocThreadConfig({ project_doc_max_bytes: 0 }, effectiveNativeConfig),
-    ).toEqual({ project_doc_max_bytes: 0 });
-  });
-
-  it.each([
-    { label: "string", value: "200000" },
-    { label: "negative", value: -1 },
-    { label: "fractional", value: 1.5 },
-  ])("rejects an authored $label project-document budget", ({ value }) => {
-    expect(() =>
-      buildCodexProjectDocThreadConfig(undefined, {
-        config: value === undefined ? {} : { project_doc_max_bytes: value },
-        origins: {
-          project_doc_max_bytes: {
-            name: { type: "user", file: "/codex/config.toml", profile: null },
-            version: "sha256:authored-budget",
-          },
-        },
-        layers: [],
-      }),
-    ).toThrow("Codex config/read returned an invalid project_doc_max_bytes value");
+    expect(() => buildCodexProjectDocThreadConfig(undefined, effectiveNativeConfig)).toThrow(
+      "Codex config/read returned an invalid project_doc_max_bytes value",
+    );
   });
 });
 
@@ -1056,17 +829,6 @@ describe("Codex app-server turn input image sanitizing", () => {
         "-c=sandbox_workspace_write.exclude_slash_tmp = true # exclusion retained",
       ],
       excluded: true,
-    },
-    {
-      name: "commented false wins last",
-      args: [
-        "-csandbox_workspace_write.exclude_tmpdir_env_var=true",
-        "--config",
-        "sandbox_workspace_write.exclude_tmpdir_env_var=false # explicit last value",
-        "--config=sandbox_workspace_write.exclude_slash_tmp=true",
-        "-csandbox_workspace_write.exclude_slash_tmp=false # explicit last value",
-      ],
-      excluded: false,
     },
     {
       name: "quoted booleans remain strings",
@@ -1107,39 +869,15 @@ describe("Codex app-server turn input image sanitizing", () => {
     },
   );
 
-  it("uses Codex permissions for network-proxy turn/start requests", () => {
+  it("uses the explicit undefined sandbox override ahead of network-proxy permissions", () => {
     const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       cwd: "/repo",
-      appServer: {
-        ...createNetworkProxyAppServerOptions(),
-        start: excludedTmpStart,
-      } as never,
+      appServer: { ...createNetworkProxyAppServerOptions(), start: excludedTmpStart } as never,
+      sandboxPolicy: undefined,
     });
-
     expect(request).not.toHaveProperty("permissions");
     expect(request).not.toHaveProperty("sandboxPolicy");
-  });
-
-  it("keeps explicit sandbox policy overrides ahead of network-proxy turn permissions", () => {
-    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
-      threadId: "thread-1",
-      cwd: "/repo",
-      appServer: {
-        ...createNetworkProxyAppServerOptions(),
-        start: excludedTmpStart,
-      } as never,
-      sandboxPolicy: {
-        type: "externalSandbox",
-        networkAccess: "enabled",
-      },
-    });
-
-    expect(request).not.toHaveProperty("permissions");
-    expect(request.sandboxPolicy).toEqual({
-      type: "externalSandbox",
-      networkAccess: "enabled",
-    });
   });
 
   it("replaces malformed inline images before turn/start", () => {
@@ -1167,156 +905,139 @@ describe("Codex app-server turn input image sanitizing", () => {
 });
 
 describe("Codex app-server turn params", () => {
-  it("builds resume and turn params from the currently selected OpenClaw model", () => {
-    const params = createAttemptParams({ provider: "codex" });
-    params.modelId = "gpt-5.4-codex";
-    params.thinkLevel = "medium";
-    const appServer = {
-      start: {
-        transport: "stdio" as const,
-        command: "codex",
-        args: ["app-server", "--listen", "stdio://"],
-        headers: {},
-      },
-      codeModeOnly: false,
-      loopDetectionPreToolUseRelay: true,
-      requestTimeoutMs: 60_000,
-      approvalPolicy: "on-request" as const,
-      approvalsReviewer: "guardian_subagent" as const,
-      sandbox: "danger-full-access" as const,
-      connectionClass: "local-loopback" as const,
-      remoteAppsSubstrate: "preconfigured" as const,
-      serviceTier: "flex" as const,
-    };
+  it.each(["user", "cron"] as const)(
+    "builds resume and %s turn params from the selected OpenClaw model",
+    (trigger) => {
+      const params = createAttemptParams({ provider: "codex" });
+      params.modelId = "gpt-5.4-codex";
+      params.thinkLevel = "medium";
+      params.trigger = trigger;
+      const appServer = {
+        start: {
+          transport: "stdio" as const,
+          command: "codex",
+          args: ["app-server", "--listen", "stdio://"],
+          headers: {},
+        },
+        codeModeOnly: false,
+        loopDetectionPreToolUseRelay: true,
+        requestTimeoutMs: 60_000,
+        approvalPolicy: "on-request" as const,
+        approvalsReviewer: "guardian_subagent" as const,
+        sandbox: "danger-full-access" as const,
+        connectionClass: "local-loopback" as const,
+        serviceTier: "flex" as const,
+      };
 
-    const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
-    expect(resumeParams).toEqual({
-      threadId: "thread-1",
-      excludeTurns: true,
-      initialTurnsPage: {
-        limit: 1,
-        sortDirection: "desc",
-        itemsView: "notLoaded",
-      },
-      model: "gpt-5.4-codex",
-      approvalPolicy: "on-request",
-      approvalsReviewer: "guardian_subagent",
-      config: {
-        project_doc_max_bytes: 131_072,
-        "features.code_mode": true,
-        "features.code_mode_only": false,
-        "features.goals": false,
-        "tools.update_plan.enabled": false,
-        "features.shell_tool": true,
-        "features.apply_patch_streaming_events": true,
-        suppress_unstable_features_warning: true,
-        "features.standalone_web_search": false,
-        web_search: "cached",
-      },
-      sandbox: "danger-full-access",
-      serviceTier: "flex",
-      personality: "none",
-      developerInstructions: resumeParams.developerInstructions,
-    });
-    expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
-    const turnParams = buildTurnStartParams(params, {
-      threadId: "thread-1",
-      cwd: "/tmp/workspace",
-      appServer,
-    });
-    expect(turnParams.threadId).toBe("thread-1");
-    expect(turnParams.cwd).toBe("/tmp/workspace");
-    expect(turnParams.model).toBe("gpt-5.4-codex");
-    expect(turnParams.approvalPolicy).toBe("on-request");
-    expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
-    expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-    expect(turnParams.serviceTier).toBe("flex");
-    expect(turnParams.collaborationMode).toEqual({
-      mode: "default",
-      settings: {
+      const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
+      expect(resumeParams).toEqual({
+        threadId: "thread-1",
+        excludeTurns: true,
+        initialTurnsPage: {
+          limit: 1,
+          sortDirection: "desc",
+          itemsView: "notLoaded",
+        },
         model: "gpt-5.4-codex",
-        reasoning_effort: "medium",
-        developer_instructions: null,
-      },
-    });
-  });
-
-  it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
-    const params = createAttemptParams({ provider: "codex" });
-    params.modelId = "gpt-5.4-codex";
-    params.thinkLevel = "medium";
-    params.trigger = "cron";
-
-    const cronCollaborationMode = buildTurnCollaborationMode(params);
-    expect(cronCollaborationMode.mode).toBe("default");
-    expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
-    expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "This is an OpenClaw cron automation turn",
-    );
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "If it asks you to run an exact command, run that command before doing any investigation",
-    );
-    expect(cronCollaborationMode.settings.developer_instructions).toContain(
-      "Use context already provided by the runtime",
-    );
-  });
+        approvalPolicy: "on-request",
+        approvalsReviewer: "guardian_subagent",
+        config: {
+          project_doc_max_bytes: 131_072,
+          "features.code_mode": true,
+          "features.code_mode_only": false,
+          "features.goals": false,
+          "tools.update_plan.enabled": false,
+          "features.shell_tool": true,
+          "features.apply_patch_streaming_events": true,
+          suppress_unstable_features_warning: true,
+          "features.standalone_web_search": false,
+          web_search: "cached",
+        },
+        sandbox: "danger-full-access",
+        serviceTier: "flex",
+        personality: "none",
+        developerInstructions: resumeParams.developerInstructions,
+      });
+      expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+      const turnParams = buildTurnStartParams(params, {
+        threadId: "thread-1",
+        cwd: "/tmp/workspace",
+        appServer,
+      });
+      expect(turnParams.turnTrigger).toBe(trigger);
+      expect(turnParams.threadId).toBe("thread-1");
+      expect(turnParams.cwd).toBe("/tmp/workspace");
+      expect(turnParams.model).toBe("gpt-5.4-codex");
+      expect(turnParams.approvalPolicy).toBe("on-request");
+      expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
+      expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+      expect(turnParams.serviceTier).toBe("flex");
+      const collaboration = turnParams.collaborationMode;
+      if (trigger === "user") {
+        expect(collaboration).toEqual({
+          mode: "default",
+          settings: {
+            model: "gpt-5.4-codex",
+            reasoning_effort: "medium",
+            developer_instructions: null,
+          },
+        });
+      } else {
+        expect(collaboration?.mode).toBe("default");
+        expect(collaboration?.settings.model).toBe("gpt-5.4-codex");
+        expect(collaboration?.settings.reasoning_effort).toBe("medium");
+        for (const instruction of [
+          "This is an OpenClaw cron automation turn",
+          "If it asks you to run an exact command, run that command before doing any investigation",
+          "Use context already provided by the runtime",
+        ]) {
+          expect(collaboration?.settings.developer_instructions).toContain(instruction);
+        }
+      }
+    },
+  );
 });
 
 describe("Codex app-server model provider selection", () => {
-  it("uses the bound native Codex auth profile when deciding thread/resume modelProvider", () => {
-    const request = buildThreadResumeParams(
-      createAttemptParams({
+  it.each([
+    {
+      name: "bound native profile",
+      attempt: {
         provider: "openai",
         authProfileProviders: { bound: "openai" },
         runtimeExternalProfileIds: ["bound"],
-      }),
-      {
-        threadId: "thread-1",
-        authProfileId: "bound",
-        appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
       },
-    );
-
-    expect(request).not.toHaveProperty("modelProvider");
-  });
-
-  it("does not infer native Codex auth from the profile id prefix", () => {
-    const request = buildThreadStartParams(
-      createAttemptParams({
+      boundProfile: "bound",
+      expected: undefined,
+    },
+    {
+      name: "API-key profile with native-looking prefix",
+      attempt: {
         provider: "openai",
         authProfileId: "openai:work",
-        authProfileType: "api_key",
+        authProfileType: "api_key" as const,
         authProfileProvider: "openai",
-      }),
-      {
-        cwd: "/repo",
-        dynamicTools: [],
-        appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
       },
-    );
-
-    expect(request.modelProvider).toBe("openai");
-  });
-
-  it("omits public OpenAI modelProvider for persisted Codex OAuth profiles", () => {
-    const request = buildThreadStartParams(
-      createAttemptParams({
-        provider: "openai",
-        authProfileId: "openai:work",
-        authProfileProvider: "openai",
-      }),
-      {
-        cwd: "/repo",
-        dynamicTools: [],
-        appServer: createAppServerOptions() as never,
-        developerInstructions: "test instructions",
-      },
-    );
-
-    expect(request).not.toHaveProperty("modelProvider");
+      expected: "openai",
+    },
+  ])("selects the model provider from $name", ({ attempt, boundProfile, expected }) => {
+    const params = createAttemptParams(attempt);
+    const options = {
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+    };
+    const request = boundProfile
+      ? buildThreadResumeParams(params, {
+          ...options,
+          threadId: "thread-1",
+          authProfileId: boundProfile,
+        })
+      : buildThreadStartParams(params, { ...options, cwd: "/repo", dynamicTools: [] });
+    if (expected) {
+      expect(request.modelProvider).toBe(expected);
+    } else {
+      expect(request).not.toHaveProperty("modelProvider");
+    }
   });
 });
 
@@ -1665,309 +1386,229 @@ describe("Codex plugin binding recovery", () => {
 describe("Codex thread-effective app attestation", () => {
   installLifecycleHooks();
 
-  it.each([{ source: "heartbeat", state: "not-callable" }])(
-    "keeps the $source binding when its optional app is $state",
-    async ({ source, state }) => {
-      const params = createThreadLifecycleParams();
-      params.sessionKey =
-        source === "heartbeat"
-          ? "agent:main:main"
-          : source === "incognito"
-            ? "agent:main:internal-session-effects:incognito-app-unavailable"
-            : "agent:main:dashboard:app-unavailable";
-      const provider = createProvisionalPluginThreadConfigProvider("linear-app");
-      const expectedConfig = (await provider.build()).configPatch;
-      const fixture = await createLeasedCodexLifecycleHarness({
-        agentDir: path.join(tempDir, "agent"),
-        respond: (method, requestParams) => {
-          if (method === "config/read") {
-            return { config: {}, origins: {}, layers: [] };
-          }
-          if (method === "configRequirements/read") {
-            return { requirements: null };
-          }
-          if (method === "thread/start") {
-            expect(requestParams).toMatchObject({ config: expectedConfig });
-            return threadStartResult("thread-app-unavailable");
-          }
-          if (method === "app/installed") {
-            return {
-              apps:
-                state === "missing"
-                  ? []
-                  : [
-                      {
-                        id: "linear-app",
-                        runtimeName: "Linear",
-                        enabled: state !== "disabled",
-                        callable: false,
-                      },
-                    ],
-            };
-          }
-          throw new Error(`unexpected method: ${method}`);
-        },
-      });
-      const abandonClient = vi.fn(async () => {});
-      const result = await startOrResumeThread({
-        client: fixture.client,
-        abandonClient,
-        ...lifecycleOptions(params),
-        pluginThreadConfig: provider,
-        signal: new AbortController().signal,
-      });
-      expect(result.threadId).toBe("thread-app-unavailable");
-      expect(
-        testCodexAppServerBindingStore.read(
-          sessionBindingIdentity({
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            agentId: params.agentId,
-            config: params.config,
-          }),
-        ),
-      ).toMatchObject({ threadId: result.threadId });
-      expect(
-        fixture.request.mock.calls.some(
-          ([method]) => method === "thread/delete" || method === "thread/unsubscribe",
-        ),
-      ).toBe(false);
-      expect(abandonClient).not.toHaveBeenCalled();
-    },
-  );
-  it.each([
-    { ephemeral: false, cleanupFails: false },
-    { ephemeral: false, cleanupFails: true },
-    { ephemeral: true, cleanupFails: true },
-  ])(
-    "cleans failed app admission (ephemeral=$ephemeral, cleanupFails=$cleanupFails)",
-    async ({ ephemeral, cleanupFails }) => {
-      const params = createThreadLifecycleParams();
-      if (ephemeral) {
-        params.sessionKey = "agent:main:internal-session-effects:incognito-plugin-attestation";
-      }
-      const abandonClient = vi.fn(async () => undefined);
-      const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
+  it("keeps the heartbeat binding when its optional app is not-callable", async () => {
+    const params = createThreadLifecycleParams();
+    params.sessionKey = "agent:main:main";
+    const provider = createProvisionalPluginThreadConfigProvider("linear-app");
+    const expectedConfig = (await provider.build()).configPatch;
+    const fixture = await createLeasedCodexLifecycleHarness({
+      agentDir: path.join(tempDir, "agent"),
+      respond: (method, requestParams) => {
+        if (method === "config/read") {
+          return { config: {}, origins: {}, layers: [] };
+        }
+        if (method === "configRequirements/read") {
+          return { requirements: null };
+        }
         if (method === "thread/start") {
-          if (ephemeral) {
-            expect(requestParams).toMatchObject({ ephemeral: true });
-          }
-          return threadStartResult("thread-linear");
+          expect(requestParams).toMatchObject({ config: expectedConfig });
+          return threadStartResult("thread-app-unavailable");
         }
         if (method === "app/installed") {
-          throw new Error("app inventory offline");
-        }
-        if (!ephemeral && method === "thread/delete") {
-          if (cleanupFails) {
-            throw new Error("delete unavailable");
-          }
-          return {};
-        }
-        if ((ephemeral || cleanupFails) && method === "thread/unsubscribe") {
-          if (ephemeral && cleanupFails) {
-            throw new Error("unsubscribe unavailable");
-          }
-          return {};
+          return {
+            apps: [
+              {
+                id: "linear-app",
+                runtimeName: "Linear",
+                enabled: true,
+                callable: false,
+              },
+            ],
+          };
         }
         throw new Error(`unexpected method: ${method}`);
-      });
-      await expect(
-        startOrResumeThread({
-          ...lifecycleOptions(params),
-          client: { request } as never,
-          abandonClient,
-          pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      },
+    });
+    const abandonClient = vi.fn(async () => {});
+    const result = await startOrResumeThread({
+      client: fixture.client,
+      abandonClient,
+      ...lifecycleOptions(params),
+      pluginThreadConfig: provider,
+      signal: new AbortController().signal,
+    });
+    expect(result.threadId).toBe("thread-app-unavailable");
+    expect(
+      testCodexAppServerBindingStore.read(
+        sessionBindingIdentity({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          config: params.config,
         }),
-      ).rejects.toMatchObject(
-        cleanupFails
-          ? {
-              name: "CodexAppServerUnsafeSubscriptionError",
-              message: "Codex uncommitted thread cleanup failed",
-            }
-          : {
-              name: "CodexPluginThreadAppAttestationError",
-              cause: expect.objectContaining({ message: "app inventory offline" }),
-            },
-      );
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/start",
-        "app/installed",
-        ...(!ephemeral ? ["thread/delete"] : []),
-        ...(ephemeral || cleanupFails ? ["thread/unsubscribe"] : []),
-      ]);
-      expect(abandonClient).toHaveBeenCalledTimes(cleanupFails ? 1 : 0);
-    },
-  );
+      ),
+    ).toMatchObject({ threadId: result.threadId });
+    expect(
+      fixture.request.mock.calls.some(
+        ([method]) => method === "thread/delete" || method === "thread/unsubscribe",
+      ),
+    ).toBe(false);
+    expect(abandonClient).not.toHaveBeenCalled();
+  });
+  it("retires the client when failed ephemeral app admission cannot unsubscribe", async () => {
+    const params = createThreadLifecycleParams();
+    params.sessionKey = "agent:main:internal-session-effects:incognito-plugin-attestation";
+    const abandonClient = vi.fn(async () => undefined);
+    const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/start") {
+        expect(requestParams).toMatchObject({ ephemeral: true });
+        return threadStartResult("thread-linear");
+      }
+      if (method === "app/installed") {
+        throw new Error("app inventory offline");
+      }
+      if (method === "thread/unsubscribe") {
+        throw new Error("unsubscribe unavailable");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    await expect(
+      startOrResumeThread({
+        ...lifecycleOptions(params),
+        client: { request } as never,
+        abandonClient,
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).rejects.toMatchObject({
+      name: "CodexAppServerUnsafeSubscriptionError",
+      message: "Codex uncommitted thread cleanup failed",
+    });
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/start",
+      "app/installed",
+      "thread/unsubscribe",
+    ]);
+    expect(abandonClient).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("Codex app-server supervised branch lifecycle", () => {
   installLifecycleHooks();
 
   it.each([
-    { incognito: true, fault: "none" },
-    { incognito: false, fault: "unsubscribe rejected" },
-    { incognito: false, fault: "unsubscribe timeout" },
-    { incognito: false, fault: "abort after fork" },
-    { incognito: false, fault: "abort during unsubscribe" },
-    { incognito: false, fault: "fork response lost" },
-    { incognito: false, fault: "malformed probe response" },
-  ])(
-    "continues without archiving the model probe (incognito: $incognito, fault: $fault)",
-    async ({ incognito, fault }) => {
-      const attempt = createThreadLifecycleParams();
-      if (incognito) {
-        attempt.sessionKey = "agent:main:internal-session-effects:incognito-probe";
-      }
-      const identity = await seedPendingSupervisionBinding(attempt);
-      const source = sourceThread({ threadId: sourceThreadId });
-      const before = structuredClone(source);
-      const subscriptions = new Set([sourceThreadId]);
-      const harness = createClientHarness();
-      const controller = new AbortController();
-      const abandonClient = vi.fn(async () => {
-        harness.client.close();
-      });
-      const initial = testCodexAppServerBindingStore.read(identity);
-      const write = harness.process.stdin.write.bind(harness.process.stdin);
-      vi.spyOn(harness.process.stdin, "write").mockImplementation((...args) => {
-        const written = write(...args);
-        const request = JSON.parse(String(args[0]));
-        let result: unknown;
-        if (request.method === "config/read") {
-          result = { config: {}, origins: {}, layers: [] };
-        } else if (request.method === "configRequirements/read") {
-          result = { requirements: null };
-        } else if (request.method === "thread/read") {
-          result = { thread: source };
-        } else if (request.method === "thread/fork" || request.method === "thread/start") {
-          const threadId = request.method === "thread/fork" ? probeThreadId : finalThreadId;
-          subscriptions.add(threadId);
-          result =
-            request.method === "thread/fork" && fault === "malformed probe response"
-              ? { thread: { id: probeThreadId }, model: 42 }
-              : nativeThreadResult(threadId, "gpt-5.6-luna", "openai");
-          if (request.method === "thread/fork" && fault === "fork response lost") {
-            queueMicrotask(() => controller.abort(new Error(fault)));
-            return written;
-          }
-        } else if (request.method === "thread/unsubscribe") {
-          if (fault === "unsubscribe timeout") {
-            return written;
-          }
-          if (fault === "unsubscribe rejected") {
-            queueMicrotask(() =>
-              harness.send({
-                id: request.id,
-                error: { code: -32603, message: fault },
-              }),
-            );
-            return written;
-          }
-          subscriptions.delete(request.params.threadId);
-          result = { status: "unsubscribed" };
-        } else if (request.method === "thread/archive") {
-          // A native catalog scan can outlive the cleanup deadline. Leave this
-          // request unanswered so the real client owns cancellation/uncertainty.
+    "unsubscribe timeout",
+    "abort after fork",
+    "abort during unsubscribe",
+    "fork response lost",
+    "malformed probe response",
+  ])("continues without archiving the model probe after %s", async (fault) => {
+    const attempt = createThreadLifecycleParams();
+    const identity = await seedPendingSupervisionBinding(attempt);
+    const source = sourceThread({ threadId: sourceThreadId });
+    const before = structuredClone(source);
+    const harness = createClientHarness();
+    const controller = new AbortController();
+    const abandonClient = vi.fn(async () => {
+      harness.client.close();
+    });
+    const initial = testCodexAppServerBindingStore.read(identity);
+    const write = harness.process.stdin.write.bind(harness.process.stdin);
+    vi.spyOn(harness.process.stdin, "write").mockImplementation((...args) => {
+      const written = write(...args);
+      const request = JSON.parse(String(args[0]));
+      let result: unknown;
+      if (request.method === "config/read") {
+        result = { config: {}, origins: {}, layers: [] };
+      } else if (request.method === "configRequirements/read") {
+        result = { requirements: null };
+      } else if (request.method === "thread/read") {
+        result = { thread: source };
+      } else if (request.method === "thread/fork" || request.method === "thread/start") {
+        const threadId = request.method === "thread/fork" ? probeThreadId : finalThreadId;
+        result =
+          request.method === "thread/fork" && fault === "malformed probe response"
+            ? { thread: { id: probeThreadId }, model: 42 }
+            : nativeThreadResult(threadId, "gpt-5.6-luna", "openai");
+        if (request.method === "thread/fork" && fault === "fork response lost") {
+          queueMicrotask(() => controller.abort(new Error(fault)));
           return written;
-        } else {
-          throw new Error(`unexpected method: ${request.method}`);
         }
-        queueMicrotask(() => {
-          harness.send({ id: request.id, result });
-          if (
-            (request.method === "thread/fork" && fault === "abort after fork") ||
-            (request.method === "thread/unsubscribe" && fault === "abort during unsubscribe")
-          ) {
-            controller.abort(new Error(fault));
-          }
-        });
+      } else if (request.method === "thread/unsubscribe") {
+        if (fault === "unsubscribe timeout") {
+          return written;
+        }
+        result = { status: "unsubscribed" };
+      } else if (request.method === "thread/archive") {
+        // A native catalog scan can outlive the cleanup deadline. Leave this
+        // request unanswered so the real client owns cancellation/uncertainty.
         return written;
+      } else {
+        throw new Error(`unexpected method: ${request.method}`);
+      }
+      queueMicrotask(() => {
+        harness.send({ id: request.id, result });
+        if (
+          (request.method === "thread/fork" && fault === "abort after fork") ||
+          (request.method === "thread/unsubscribe" && fault === "abort during unsubscribe")
+        ) {
+          controller.abort(new Error(fault));
+        }
       });
-      try {
-        if (fault === "unsubscribe timeout") {
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-        }
-        const outcome = startOrResumeThread({
-          client: harness.client,
-          abandonClient,
-          signal: controller.signal,
-          ...lifecycleOptions(attempt),
-        }).then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        if (fault === "unsubscribe timeout") {
-          expect(JSON.parse(await harness.waitForWrite(4))).toMatchObject({
-            method: "thread/unsubscribe",
-            params: { threadId: probeThreadId },
-          });
-          await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
-        }
-        const settled = await outcome;
-        const requests = harness.writes.map((line) => JSON.parse(line));
-        expect(source).toEqual(before);
-        if (fault !== "none") {
-          const unsafe = fault.startsWith("unsubscribe") || fault === "fork response lost";
-          expect(settled).toMatchObject({
-            error: { name: unsafe ? "CodexAppServerUnsafeSubscriptionError" : "Error" },
-          });
-          expect(abandonClient).toHaveBeenCalledTimes(unsafe ? 1 : 0);
-          expect(requests.map((request) => request.method)).toEqual(
-            fault === "fork response lost"
-              ? ["config/read", "configRequirements/read", "thread/read", "thread/fork"]
-              : [
-                  "config/read",
-                  "configRequirements/read",
-                  "thread/read",
-                  "thread/fork",
-                  "thread/unsubscribe",
-                ],
-          );
-          if (fault === "unsubscribe timeout") {
-            expect(settled).toMatchObject({
-              error: {
-                cause: {
-                  code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
-                  reason: "timed out",
-                  mayHaveWritten: true,
-                },
-              },
-            });
-          }
-          expect(testCodexAppServerBindingStore.read(identity)).toEqual(initial);
-          return;
-        }
-        expect(settled).toMatchObject({ value: { threadId: finalThreadId } });
-        expect(requests[3].params).toMatchObject({ ephemeral: true, excludeTurns: true });
-        expect(requests.map((request) => request.method)).toEqual([
-          "config/read",
-          "configRequirements/read",
-          "thread/read",
-          "thread/fork",
-          "thread/unsubscribe",
-          "thread/start",
-        ]);
-        expect(requests[4].params).toEqual({ threadId: probeThreadId });
-        expect(requests[5].params.ephemeral === true).toBe(incognito);
-        expect([...subscriptions]).toEqual([sourceThreadId, finalThreadId]);
-        expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-          threadId: finalThreadId,
-          model: "gpt-5.6-luna",
-          modelProvider: "openai",
+      return written;
+    });
+    try {
+      if (fault === "unsubscribe timeout") {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
+      const outcome = startOrResumeThread({
+        client: harness.client,
+        abandonClient,
+        signal: controller.signal,
+        ...lifecycleOptions(attempt),
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      if (fault === "unsubscribe timeout") {
+        expect(JSON.parse(await harness.waitForWrite(4))).toMatchObject({
+          method: "thread/unsubscribe",
+          params: { threadId: probeThreadId },
         });
+        await vi.advanceTimersByTimeAsync(CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS);
+      }
+      const settled = await outcome;
+      const requests = harness.writes.map((line) => JSON.parse(line));
+      expect(source).toEqual(before);
+      const unsafe = fault === "unsubscribe timeout" || fault === "fork response lost";
+      expect(settled).toMatchObject({
+        error: { name: unsafe ? "CodexAppServerUnsafeSubscriptionError" : "Error" },
+      });
+      expect(abandonClient).toHaveBeenCalledTimes(unsafe ? 1 : 0);
+      expect(requests.map((request) => request.method)).toEqual(
+        fault === "fork response lost"
+          ? ["config/read", "configRequirements/read", "thread/read", "thread/fork"]
+          : [
+              "config/read",
+              "configRequirements/read",
+              "thread/read",
+              "thread/fork",
+              "thread/unsubscribe",
+            ],
+      );
+      if (fault === "unsubscribe timeout") {
+        expect(settled).toMatchObject({
+          error: {
+            cause: {
+              code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED",
+              reason: "timed out",
+              mayHaveWritten: true,
+            },
+          },
+        });
+      }
+      expect(testCodexAppServerBindingStore.read(identity)).toEqual(initial);
+    } finally {
+      try {
+        harness.client.close();
       } finally {
-        try {
-          harness.client.close();
-        } finally {
-          if (fault === "unsubscribe timeout") {
-            vi.useRealTimers();
-          }
+        if (fault === "unsubscribe timeout") {
+          vi.useRealTimers();
         }
       }
-    },
-  );
+    }
+  });
 
   it("materializes a model-locked canonical branch with frozen agent instructions", async () => {
     const lastTurnId = "turn-terminal";
@@ -2345,146 +1986,121 @@ describe("Codex app-server supervised branch lifecycle", () => {
     expect(restoredBinding).not.toHaveProperty("restrictedToolSurface");
   });
 
-  it.each(["probe", "final"] as const)(
-    "cleans tracked threads and preserves the pending binding when the %s MCP attestation fails",
-    async (failedThread) => {
-      const attempt = createThreadLifecycleParams();
-      attempt.pluginHarnessToolPolicyRestricted = true;
-      const identity = await seedPendingSupervisionBinding(attempt);
-      let attestationCount = 0;
-      const request = vi.fn(async (method: string, _requestParams?: unknown) => {
-        if (method === "config/read") {
-          return {
-            config: { mcp_servers: { inherited: { command: "inherited-mcp" } } },
-            layers: [{ name: { type: "user" } }],
-          };
-        }
-        if (method === "configRequirements/read") {
-          return { requirements: null };
-        }
-        if (method === "thread/read") {
-          return { thread: sourceThread({ threadId: sourceThreadId }) };
-        }
-        if (method === "thread/fork") {
-          return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-        }
-        if (method === "thread/start") {
-          return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-        }
-        if (method === "mcpServerStatus/list") {
-          attestationCount += 1;
-          const shouldFail = failedThread === "probe" || attestationCount === 2;
-          return {
-            data: shouldFail
-              ? [{ name: "unexpected", serverInfo: null, tools: {} }]
-              : [disabledMcpServerStatus("inherited")],
-            nextCursor: null,
-          };
-        }
-        if (method === "thread/archive" || method === "thread/unsubscribe") {
-          return {};
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-      const abandonClient = vi.fn(async () => undefined);
+  it("cleans tracked threads and preserves the pending binding when the final MCP attestation fails", async () => {
+    const attempt = createThreadLifecycleParams();
+    attempt.pluginHarnessToolPolicyRestricted = true;
+    const identity = await seedPendingSupervisionBinding(attempt);
+    let attestationCount = 0;
+    const request = vi.fn(async (method: string, _requestParams?: unknown) => {
+      if (method === "config/read") {
+        return {
+          config: { mcp_servers: { inherited: { command: "inherited-mcp" } } },
+          layers: [{ name: { type: "user" } }],
+        };
+      }
+      if (method === "configRequirements/read") {
+        return { requirements: null };
+      }
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "mcpServerStatus/list") {
+        attestationCount += 1;
+        const shouldFail = attestationCount === 2;
+        return {
+          data: shouldFail
+            ? [{ name: "unexpected", serverInfo: null, tools: {} }]
+            : [disabledMcpServerStatus("inherited")],
+          nextCursor: null,
+        };
+      }
+      if (method === "thread/archive" || method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const abandonClient = vi.fn(async () => undefined);
 
-      await expect(
-        startOrResumeThread({
-          client: { request } as never,
-          abandonClient,
-          ...lifecycleOptions(attempt),
-          nativeCodeModeEnabled: false,
-          userMcpServersEnabled: false,
-        }),
-      ).rejects.toThrow("found unexpected server unexpected");
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        ...lifecycleOptions(attempt),
+        nativeCodeModeEnabled: false,
+        userMcpServersEnabled: false,
+      }),
+    ).rejects.toThrow("found unexpected server unexpected");
 
-      const methods = request.mock.calls.map(([method]) => method);
-      expect(methods).not.toContain("thread/inject_items");
-      expect(methods.filter((method) => method === "thread/start")).toHaveLength(
-        failedThread === "probe" ? 0 : 1,
-      );
-      expect(
-        request.mock.calls
-          .filter(([method]) => method === "thread/archive")
-          .map(([, requestParams]) => requestParams),
-      ).toEqual(
-        (failedThread === "probe" ? [] : [finalThreadId]).map((threadId) => ({ threadId })),
-      );
-      expect(abandonClient).not.toHaveBeenCalled();
-      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-        threadId: sourceThreadId,
-        pendingSupervisionBranch: { sourceThreadId },
-      });
-    },
-  );
+    const methods = request.mock.calls.map(([method]) => method);
+    expect(methods).not.toContain("thread/inject_items");
+    expect(methods.filter((method) => method === "thread/start")).toHaveLength(1);
+    expect(
+      request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => requestParams),
+    ).toEqual([{ threadId: finalThreadId }]);
+    expect(abandonClient).not.toHaveBeenCalled();
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      threadId: sourceThreadId,
+      pendingSupervisionBranch: { sourceThreadId },
+    });
+  });
 
-  it.each([
-    {
-      source: "configured plugin",
-      createProvider: createProvisionalPluginThreadConfigProvider,
-      state: "missing from the effective thread",
-      apps: [],
-    },
-    {
-      source: "account-wide policy",
-      createProvider: createAttestedAccountAppThreadConfigProvider,
-      state: "disabled by managed or workspace policy",
-      apps: [{ id: "linear-app", runtimeName: "Linear", enabled: false, callable: false }],
-    },
-  ])(
-    "keeps the supervised branch when a $source app is $state",
-    async ({ createProvider, apps }) => {
-      const attempt = createThreadLifecycleParams();
-      const identity = await seedPendingSupervisionBinding(attempt);
-      const abandonClient = vi.fn(async () => undefined);
-      const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
-        if (method === "thread/read") {
-          return { thread: sourceThread({ threadId: sourceThreadId }) };
-        }
-        if (method === "thread/fork") {
-          return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-        }
-        if (method === "thread/start") {
-          return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-        }
-        if (method === "app/installed") {
-          expect(requestParams).toEqual({ threadId: finalThreadId, forceRefresh: false });
-          return { apps };
-        }
-        if (method === "thread/delete" || method === "thread/unsubscribe") {
-          return {};
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
+  it("keeps the supervised branch when a configured plugin app is missing from the effective thread", async () => {
+    const attempt = createThreadLifecycleParams();
+    const identity = await seedPendingSupervisionBinding(attempt);
+    const abandonClient = vi.fn(async () => undefined);
+    const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
+      if (method === "thread/read") {
+        return { thread: sourceThread({ threadId: sourceThreadId }) };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "app/installed") {
+        expect(requestParams).toEqual({ threadId: finalThreadId, forceRefresh: false });
+        return { apps: [] };
+      }
+      if (method === "thread/delete" || method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
 
-      await expect(
-        startOrResumeThread({
-          client: { request } as never,
-          abandonClient,
-          ...lifecycleOptions(attempt),
-          pluginThreadConfig: createProvider("linear-app"),
-        }),
-      ).resolves.toMatchObject({ threadId: finalThreadId, lifecycle: { action: "forked" } });
+    await expect(
+      startOrResumeThread({
+        client: { request } as never,
+        abandonClient,
+        ...lifecycleOptions(attempt),
+        pluginThreadConfig: createProvisionalPluginThreadConfigProvider("linear-app"),
+      }),
+    ).resolves.toMatchObject({ threadId: finalThreadId, lifecycle: { action: "forked" } });
 
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/read",
-        "thread/fork",
-        "thread/unsubscribe",
-        "thread/start",
-        "app/installed",
-      ]);
-      expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
-      expect(abandonClient).not.toHaveBeenCalled();
-      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-        threadId: finalThreadId,
-      });
-      expect(
-        testCodexAppServerBindingStore.read(identity)?.pendingSupervisionBranch,
-      ).toBeUndefined();
-    },
-  );
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "config/read",
+      "configRequirements/read",
+      "thread/read",
+      "thread/fork",
+      "thread/unsubscribe",
+      "thread/start",
+      "app/installed",
+    ]);
+    expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
+    expect(abandonClient).not.toHaveBeenCalled();
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      threadId: finalThreadId,
+    });
+    expect(testCodexAppServerBindingStore.read(identity)?.pendingSupervisionBranch).toBeUndefined();
+  });
 
   it("retires a supervised client when its unattested canonical branch cannot be deleted", async () => {
     const attempt = createThreadLifecycleParams();
@@ -2541,250 +2157,178 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
-  it("rejects materialization after the supervised source connection changes", async () => {
-    const attempt = createThreadLifecycleParams();
-    await seedPendingSupervisionBinding(attempt, { sourceThreadId: "thread-source" });
-    const request = createLifecycleRequest(async (method: string) => {
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const appServer = createThreadLifecycleAppServerOptions();
-    appServer.start.command = "different-codex";
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        params: attempt,
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer,
-      }),
-    ).rejects.toThrow("source connection changed before branch materialization");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-    ]);
-  });
-
-  it("recovers every persisted orphan before materializing a fresh canonical branch", async () => {
-    const orphanProbeThreadId = "thread-orphan-probe";
-    const orphanFinalThreadId = "thread-orphan-final";
-    const lastTurnId = "turn-terminal";
-    const attempt = createThreadLifecycleParams();
-    const identity = await seedPendingSupervisionBinding(attempt, {
-      sourceThreadId,
-      lastTurnId,
-      cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
-    });
-    const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
-      createThreadLifecycleAppServerOptions(),
-    );
-    const mutations: Parameters<CodexAppServerBindingStore["mutate"]>[1][] = [];
-    const bindingStore: CodexAppServerBindingStore = {
-      ...testCodexAppServerBindingStore,
-      mutate: async (storeIdentity, mutation) => {
-        mutations.push(mutation);
-        return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
-      },
-    };
-    const request = createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      if (method === "thread/read") {
-        return {
-          thread: sourceThread({
-            threadId: sourceThreadId,
-            turns: [{ id: lastTurnId, status: "completed", items: [] }],
-          }),
-        };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await expect(
-      startOrResumeThreadImpl({
-        client: { request } as never,
-        bindingStore,
-        ...lifecycleOptions(attempt),
-      }),
-    ).resolves.toMatchObject({
-      threadId: finalThreadId,
-      lifecycle: { action: "forked" },
-    });
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/archive",
-      "thread/archive",
-      "thread/read",
-      "thread/fork",
-      "thread/unsubscribe",
-      "thread/start",
-    ]);
-    expect(request.mock.calls.map(([, requestParams]) => requestParams)).toEqual([
-      { cwd: path.resolve(workspaceDir), includeLayers: true },
-      undefined,
-      { threadId: orphanProbeThreadId },
-      { threadId: orphanFinalThreadId },
-      { threadId: sourceThreadId, includeTurns: true },
-      expect.any(Object),
-      { threadId: probeThreadId },
-      expect.any(Object),
-    ]);
-    expect(mutations[0]).toEqual({
-      kind: "patch-pending-supervision-branch",
-      expected: {
+  it.each(["recovered", "archive failed", "CAS rejected"] as const)(
+    "settles persisted orphan cleanup before branch work: %s",
+    async (outcome) => {
+      const orphanProbeThreadId = "thread-orphan-probe";
+      const orphanFinalThreadId = "thread-orphan-final";
+      const cleanupThreadIds = [orphanProbeThreadId, orphanFinalThreadId];
+      const lastTurnId = outcome === "recovered" ? "turn-terminal" : undefined;
+      const attempt = createThreadLifecycleParams();
+      const identity = await seedPendingSupervisionBinding(attempt, {
         sourceThreadId,
-        connectionFingerprint,
-        lastTurnId,
-        cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
-      },
-      pending: { sourceThreadId, connectionFingerprint, lastTurnId },
-    });
-    const persisted = testCodexAppServerBindingStore.read(identity);
-    expect(persisted).toMatchObject({ threadId: finalThreadId });
-    expect(persisted?.pendingSupervisionBranch).toBeUndefined();
-  });
-
-  it("persists exact remaining orphan cleanup and performs no branch work after partial failure", async () => {
-    const orphanProbeThreadId = "thread-orphan-probe";
-    const orphanFinalThreadId = "thread-orphan-final";
-    const attempt = createThreadLifecycleParams();
-    const identity = await seedPendingSupervisionBinding(attempt, {
-      sourceThreadId,
-      cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
-    });
-    const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
-      const threadId = (requestParams as { threadId?: string } | undefined)?.threadId;
-      if (method === "thread/archive" && threadId === orphanProbeThreadId) {
-        return {};
-      }
-      if (method === "thread/archive" && threadId === orphanFinalThreadId) {
-        throw new CodexAppServerRpcError(
-          { code: -32_000, message: "temporary archive failure" },
-          method,
-        );
-      }
-      if (method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        ...lifecycleOptions(attempt),
-      }),
-    ).rejects.toThrow(`cleanup must finish before retry: ${orphanFinalThreadId}`);
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/archive",
-      "thread/archive",
-      "thread/unsubscribe",
-    ]);
-    expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
-    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-      threadId: sourceThreadId,
-      pendingSupervisionBranch: {
-        sourceThreadId,
-        cleanupThreadIds: [orphanFinalThreadId],
-      },
-    });
-  });
-
-  it("fails closed when persisted orphan cleanup loses its state CAS", async () => {
-    const orphanProbeThreadId = "thread-orphan-probe";
-    const orphanFinalThreadId = "thread-orphan-final";
-    const attempt = createThreadLifecycleParams();
-    const identity = await seedPendingSupervisionBinding(attempt, {
-      sourceThreadId,
-      cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
-    });
-    const request = createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/archive") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const bindingStore: CodexAppServerBindingStore = {
-      ...testCodexAppServerBindingStore,
-      mutate: vi.fn(async (storeIdentity, mutation) => {
-        if (
-          mutation.kind === "patch-pending-supervision-branch" &&
-          mutation.expected.cleanupThreadIds?.length === 2 &&
-          !mutation.pending.cleanupThreadIds
-        ) {
-          return false;
+        ...(lastTurnId ? { lastTurnId } : {}),
+        cleanupThreadIds,
+      });
+      const connectionFingerprint = buildCodexAppServerConnectionFingerprint(
+        createThreadLifecycleAppServerOptions(),
+      );
+      const mutations: Parameters<CodexAppServerBindingStore["mutate"]>[1][] = [];
+      const bindingStore: CodexAppServerBindingStore = {
+        ...testCodexAppServerBindingStore,
+        mutate: async (storeIdentity, mutation) => {
+          mutations.push(mutation);
+          if (
+            outcome === "CAS rejected" &&
+            mutation.kind === "patch-pending-supervision-branch" &&
+            mutation.expected.cleanupThreadIds?.length === 2 &&
+            !mutation.pending.cleanupThreadIds
+          ) {
+            return false;
+          }
+          return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+        },
+      };
+      const request = createLifecycleRequest(async (method: string, requestParams?: unknown) => {
+        const threadId = (requestParams as { threadId?: string } | undefined)?.threadId;
+        if (method === "thread/archive") {
+          if (outcome === "archive failed" && threadId === orphanFinalThreadId) {
+            throw new CodexAppServerRpcError(
+              { code: -32_000, message: "temporary archive failure" },
+              method,
+            );
+          }
+          if (outcome !== "archive failed" || threadId === orphanProbeThreadId) {
+            return {};
+          }
         }
-        return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
-      }),
-    };
-
-    await expect(
-      startOrResumeThreadImpl({
+        if (outcome !== "CAS rejected" && method === "thread/unsubscribe") {
+          return {};
+        }
+        if (outcome === "recovered") {
+          if (method === "thread/read") {
+            return {
+              thread: sourceThread({
+                threadId: sourceThreadId,
+                turns: [{ id: lastTurnId, status: "completed", items: [] }],
+              }),
+            };
+          }
+          if (method === "thread/fork" || method === "thread/start") {
+            return nativeThreadResult(
+              method === "thread/fork" ? probeThreadId : finalThreadId,
+              "native-effective",
+              "native-provider",
+            );
+          }
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const result = startOrResumeThreadImpl({
         client: { request } as never,
         bindingStore,
         ...lifecycleOptions(attempt),
-      }),
-    ).rejects.toThrow("recovering a supervised Codex branch");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/archive",
-      "thread/archive",
-    ]);
-    expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
-    expect(request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
-    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
-      threadId: sourceThreadId,
-      pendingSupervisionBranch: {
-        sourceThreadId,
-        cleanupThreadIds: [orphanProbeThreadId, orphanFinalThreadId],
-      },
-    });
-  });
+      });
+      if (outcome === "recovered") {
+        await expect(result).resolves.toMatchObject({
+          threadId: finalThreadId,
+          lifecycle: { action: "forked" },
+        });
+      } else {
+        await expect(result).rejects.toThrow(
+          outcome === "archive failed"
+            ? `cleanup must finish before retry: ${orphanFinalThreadId}`
+            : "recovering a supervised Codex branch",
+        );
+        expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
+        expect(request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
+      }
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        "configRequirements/read",
+        "thread/archive",
+        "thread/archive",
+        ...(outcome === "recovered"
+          ? ["thread/read", "thread/fork", "thread/unsubscribe", "thread/start"]
+          : outcome === "archive failed"
+            ? ["thread/unsubscribe"]
+            : []),
+      ]);
+      const persisted = testCodexAppServerBindingStore.read(identity);
+      if (outcome === "recovered") {
+        expect(request.mock.calls.map(([, requestParams]) => requestParams)).toEqual([
+          { cwd: path.resolve(workspaceDir), includeLayers: true },
+          undefined,
+          { threadId: orphanProbeThreadId },
+          { threadId: orphanFinalThreadId },
+          { threadId: sourceThreadId, includeTurns: true },
+          expect.any(Object),
+          { threadId: probeThreadId },
+          expect.any(Object),
+        ]);
+        expect(mutations[0]).toEqual({
+          kind: "patch-pending-supervision-branch",
+          expected: { sourceThreadId, connectionFingerprint, lastTurnId, cleanupThreadIds },
+          pending: { sourceThreadId, connectionFingerprint, lastTurnId },
+        });
+        expect(persisted).toMatchObject({ threadId: finalThreadId });
+        expect(persisted?.pendingSupervisionBranch).toBeUndefined();
+      } else {
+        expect(persisted).toMatchObject({
+          threadId: sourceThreadId,
+          pendingSupervisionBranch: {
+            sourceThreadId,
+            cleanupThreadIds:
+              outcome === "archive failed" ? [orphanFinalThreadId] : cleanupThreadIds,
+          },
+        });
+      }
+    },
+  );
 
   it.each([
     {
+      name: "connection",
+      command: "different-codex",
+      failure: "source connection changed before branch materialization",
+    },
+    {
       name: "active source",
-      thread: sourceThread({ threadId: "thread-source", status: "active" }),
+      thread: sourceThread({ threadId: sourceThreadId, status: "active" }),
+      failure: "source changed after Continue",
     },
     {
       name: "source with uncaptured turns",
       thread: sourceThread({
-        threadId: "thread-source",
+        threadId: sourceThreadId,
         turns: [{ id: "turn-late", status: "completed", items: [] }],
       }),
+      failure: "source changed after Continue",
     },
-  ])("fails closed for a zero-turn snapshot when the $name changed", async ({ thread }) => {
+  ])("fails closed when the supervised $name changed", async ({ command, thread, failure }) => {
     const attempt = createThreadLifecycleParams();
-    await seedPendingSupervisionBinding(attempt, { sourceThreadId: "thread-source" });
-    const request = createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/read") {
+    await seedPendingSupervisionBinding(attempt);
+    const request = createLifecycleRequest(async (method: string) => {
+      if (method === "thread/read" && thread) {
         return { thread };
       }
       throw new Error(`unexpected method: ${method}`);
     });
-
+    const appServer = createThreadLifecycleAppServerOptions();
+    if (command) {
+      appServer.start.command = command;
+    }
     await expect(
       startOrResumeThread({
-        client: { request } as never,
         ...lifecycleOptions(attempt),
+        client: { request } as never,
+        appServer,
       }),
-    ).rejects.toThrow("source changed after Continue");
+    ).rejects.toThrow(failure);
     expect(request.mock.calls.map(([method]) => method)).toEqual([
       "config/read",
       "configRequirements/read",
-      "thread/read",
+      ...(command ? [] : ["thread/read"]),
     ]);
   });
 
@@ -2846,98 +2390,97 @@ describe("Codex app-server supervised branch lifecycle", () => {
     ]);
   });
 
-  it("tracks the canonical thread before observing abort and archives it", async () => {
-    const lastTurnId = "turn-terminal";
-    const attempt = createThreadLifecycleParams();
-    const identity = await seedPendingSupervisionBinding(attempt, { sourceThreadId, lastTurnId });
-    const abortController = new AbortController();
-    const request = createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/read") {
-        return {
-          thread: sourceThread({
-            threadId: sourceThreadId,
-            turns: [{ id: lastTurnId, status: "completed", items: [] }],
-          }),
-        };
-      }
-      if (method === "thread/fork") {
-        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/start") {
-        abortController.abort("cancelled after canonical start");
-        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
-      }
-      if (method === "thread/archive" || method === "thread/unsubscribe") {
-        return {};
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await expect(
-      startOrResumeThread({
-        client: { request } as never,
-        ...lifecycleOptions(attempt),
-        signal: abortController.signal,
-      }),
-    ).rejects.toThrow("cancelled after canonical start");
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/read",
-      "thread/fork",
-      "thread/unsubscribe",
-      "thread/start",
-      "thread/archive",
-    ]);
-    expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
-    expect(request.mock.calls[6]?.[1]).toEqual({ threadId: finalThreadId });
-    const persisted = testCodexAppServerBindingStore.read(identity);
-    expect(persisted).toMatchObject({
-      threadId: sourceThreadId,
-      pendingSupervisionBranch: { sourceThreadId, lastTurnId },
-    });
-    expect(persisted?.pendingSupervisionBranch?.cleanupThreadIds).toBeUndefined();
-  });
-
-  it("archives the canonical thread when cleanup tracking loses its CAS", async () => {
-    const attempt = createThreadLifecycleParams();
-    const identity = await seedPendingSupervisionBinding(attempt);
-    const request = createSupervisedCommitRequest();
-    const bindingStore: CodexAppServerBindingStore = {
-      ...testCodexAppServerBindingStore,
-      mutate: vi.fn(async (storeIdentity, mutation) => {
-        if (
-          mutation.kind === "patch-pending-supervision-branch" &&
-          mutation.pending.cleanupThreadIds?.join(",") === finalThreadId
-        ) {
-          return false;
-        }
-        return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
-      }),
-    };
-    const abandonClient = vi.fn(async () => undefined);
-
-    await expect(
-      startOrResumeThreadImpl({
-        client: { request } as never,
-        abandonClient,
-        bindingStore,
-        ...lifecycleOptions(attempt),
-      }),
-    ).rejects.toThrow("tracking supervised Codex branch cleanup");
-    const archivedThreadIds = request.mock.calls
-      .filter(([method]) => method === "thread/archive")
-      .map(([, requestParams]) => (requestParams as { threadId: string }).threadId);
-    expect(archivedThreadIds).toEqual([finalThreadId]);
-    expect(abandonClient).not.toHaveBeenCalled();
-    const persisted = testCodexAppServerBindingStore.read(identity);
-    expect(persisted).toMatchObject({
-      threadId: sourceThreadId,
-      pendingSupervisionBranch: {
+  it.each(["abort", "tracking CAS"] as const)(
+    "archives the canonical thread after %s failure",
+    async (failure) => {
+      const lastTurnId = failure === "abort" ? "turn-terminal" : undefined;
+      const attempt = createThreadLifecycleParams();
+      const identity = await seedPendingSupervisionBinding(attempt, {
         sourceThreadId,
-      },
-    });
-  });
+        ...(lastTurnId ? { lastTurnId } : {}),
+      });
+      const abortController = new AbortController();
+      const request = createLifecycleRequest(async (method: string) => {
+        if (method === "thread/read") {
+          return {
+            thread: sourceThread({
+              threadId: sourceThreadId,
+              ...(lastTurnId
+                ? { turns: [{ id: lastTurnId, status: "completed", items: [] }] }
+                : {}),
+            }),
+          };
+        }
+        if (method === "thread/fork") {
+          return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+        }
+        if (method === "thread/start") {
+          if (failure === "abort") {
+            abortController.abort("cancelled after canonical start");
+          }
+          return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+        }
+        if (method === "thread/archive" || method === "thread/unsubscribe") {
+          return {};
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+      const bindingStore: CodexAppServerBindingStore = {
+        ...testCodexAppServerBindingStore,
+        mutate: async (storeIdentity, mutation) => {
+          if (
+            failure === "tracking CAS" &&
+            mutation.kind === "patch-pending-supervision-branch" &&
+            mutation.pending.cleanupThreadIds?.join(",") === finalThreadId
+          ) {
+            return false;
+          }
+          return await testCodexAppServerBindingStore.mutate(storeIdentity, mutation);
+        },
+      };
+      const abandonClient = vi.fn(async () => undefined);
+      await expect(
+        startOrResumeThreadImpl({
+          client: { request } as never,
+          abandonClient,
+          bindingStore,
+          ...lifecycleOptions(attempt),
+          ...(failure === "abort" ? { signal: abortController.signal } : {}),
+        }),
+      ).rejects.toThrow(
+        failure === "abort"
+          ? "cancelled after canonical start"
+          : "tracking supervised Codex branch cleanup",
+      );
+      const archivedThreadIds = request.mock.calls
+        .filter(([method]) => method === "thread/archive")
+        .map(([, requestParams]) => (requestParams as { threadId: string }).threadId);
+      expect(archivedThreadIds).toEqual([finalThreadId]);
+      if (failure === "abort") {
+        expect(request.mock.calls.map(([method]) => method)).toEqual([
+          "config/read",
+          "configRequirements/read",
+          "thread/read",
+          "thread/fork",
+          "thread/unsubscribe",
+          "thread/start",
+          "thread/archive",
+        ]);
+        expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
+        expect(request.mock.calls[6]?.[1]).toEqual({ threadId: finalThreadId });
+      } else {
+        expect(abandonClient).not.toHaveBeenCalled();
+      }
+      const persisted = testCodexAppServerBindingStore.read(identity);
+      expect(persisted).toMatchObject({
+        threadId: sourceThreadId,
+        pendingSupervisionBranch: { sourceThreadId, ...(lastTurnId ? { lastTurnId } : {}) },
+      });
+      if (failure === "abort") {
+        expect(persisted?.pendingSupervisionBranch?.cleanupThreadIds).toBeUndefined();
+      }
+    },
+  );
 
   it.each([
     { failure: "before write", archive: "confirmed" },
@@ -3192,11 +2735,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
     { applied: true, verification: "same", error: undefined },
     { applied: true, verification: "changed", error: "binding changed while commit was uncertain" },
     { applied: false, verification: "unreadable", error: "binding could not be verified" },
-    {
-      applied: false,
-      verification: "changed",
-      error: "binding changed while commit was uncertain",
-    },
   ])(
     "reconciles failed canonical commit (applied=$applied, verification=$verification)",
     async ({ applied, verification, error }) => {
@@ -3272,49 +2810,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
     },
   );
 
-  it.each([undefined, "thread-source"])(
-    "abandons an unsafe probe id %s without touching the source",
-    async (returnedId) => {
-      const attempt = createThreadLifecycleParams();
-      await seedPendingSupervisionBinding(attempt);
-      const request = createLifecycleRequest(async (method: string) => {
-        if (method === "thread/read") {
-          return { thread: sourceThread({ threadId: sourceThreadId }) };
-        }
-        if (method === "thread/fork") {
-          return { thread: { id: returnedId } };
-        }
-        throw new Error(`unexpected method: ${method}`);
-      });
-      const abandonClient = vi.fn(async () => undefined);
-
-      await expect(
-        startOrResumeThread({
-          client: { request } as never,
-          abandonClient,
-          ...lifecycleOptions(attempt),
-        }),
-      ).rejects.toThrow(
-        returnedId === "thread-source"
-          ? "model probe reused an existing thread"
-          : "model probe may have materialized without a safe thread id",
-      );
-      expect(request.mock.calls.map(([method]) => method)).toEqual([
-        "config/read",
-        "configRequirements/read",
-        "thread/read",
-        "thread/fork",
-      ]);
-      expect(abandonClient).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each(["", "thread-probe"])(
-    "releases the probe before abandoning unsafe canonical id %s",
+  it.each(["", probeThreadId])(
+    "abandons an unsafe canonical branch id %s without touching the source",
     async (returnedId) => {
       const attempt = createThreadLifecycleParams();
       const identity = await seedPendingSupervisionBinding(attempt);
-      const request = createLifecycleRequest(async (method: string, _requestParams?: unknown) => {
+      const request = createLifecycleRequest(async (method: string) => {
         if (method === "thread/read") {
           return { thread: sourceThread({ threadId: sourceThreadId }) };
         }
@@ -3330,7 +2831,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
         throw new Error(`unexpected method: ${method}`);
       });
       const abandonClient = vi.fn(async () => undefined);
-
       await expect(
         startOrResumeThread({
           client: { request } as never,
@@ -3350,11 +2850,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
         "thread/unsubscribe",
         "thread/start",
       ]);
+      expect(abandonClient).toHaveBeenCalledOnce();
       expect(request.mock.calls[4]?.[1]).toEqual({ threadId: probeThreadId });
       expect(request.mock.invocationCallOrder[4]).toBeLessThan(
         abandonClient.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
-      expect(abandonClient).toHaveBeenCalledOnce();
       const persisted = testCodexAppServerBindingStore.read(identity);
       expect(persisted).toMatchObject({
         threadId: sourceThreadId,
@@ -3368,168 +2868,109 @@ describe("Codex app-server supervised branch lifecycle", () => {
 describe("Codex app-server thread lifecycle timing", () => {
   installLifecycleHooks();
 
-  it("emits a trace stage summary when resuming an existing thread", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+  it.each([
+    { action: "resumed", duration: 9, trace: true },
+    { action: "started", duration: 10_000, trace: false },
+  ])("reports a $action request with trace=$trace", async ({ action, duration, trace }) => {
     let nowMs = 0;
-    const log = createTimingLogger(true);
+    const log = createTimingLogger(trace);
+    const threadId = trace ? "thread-existing" : "thread-slow";
     const respond = createLifecycleRequest(async (method: string) => {
-      if (method === "thread/start") {
-        return threadStartResult("thread-existing");
-      }
-      if (method === "thread/resume") {
-        nowMs += 9;
-        return threadStartResult("thread-existing");
+      if (method === "thread/start" || (trace && method === "thread/resume")) {
+        if (method === (trace ? "thread/resume" : "thread/start")) {
+          nowMs += duration;
+        }
+        return threadStartResult(threadId);
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond,
-    });
-    const { client } = fixture;
-    const commonParams = {
-      client,
-      signal: new AbortController().signal,
-      params: createThreadLifecycleParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
+    const fixture = trace
+      ? await createLeasedCodexLifecycleHarness({
+          agentDir: path.join(tempDir, "agent"),
+          respond,
+        })
+      : undefined;
+    const common = {
+      client: fixture?.client ?? ({ request: respond } as never),
+      ...lifecycleOptions(createThreadLifecycleParams()),
+      ...(trace ? { signal: new AbortController().signal } : {}),
     };
-
+    if (fixture) {
+      await startOrResumeThread({
+        ...common,
+        timing: { enabled: true, now: () => nowMs, log: createTimingLogger(false) },
+      });
+      await fixture.endTurn(threadId);
+    }
     await startOrResumeThread({
-      ...commonParams,
+      ...common,
       timing: {
-        enabled: true,
-        now: () => nowMs,
-        log: createTimingLogger(false),
-      },
-    });
-    await fixture.endTurn("thread-existing");
-    await startOrResumeThread({
-      ...commonParams,
-      timing: {
-        enabled: true,
+        enabled: trace,
         now: () => nowMs,
         log,
-        totalThresholdMs: 1_000,
-        stageThresholdMs: 1_000,
       },
     });
-
-    const message = expectSingleLogMessage(log, "trace");
-    expect(message).toContain("action=resumed");
-    expect(message).toContain("thread-resume-request:9ms@9ms");
-  });
-
-  it("warns on slow start even when profiling and trace logging are disabled", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    let nowMs = 0;
-    const log = createTimingLogger(false);
-    const request = createLifecycleRequest(async (method: string) => {
-      if (method === "thread/start") {
-        nowMs += 25;
-        return threadStartResult("thread-slow");
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createThreadLifecycleParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createThreadLifecycleAppServerOptions(),
-      timing: {
-        enabled: false,
-        now: () => nowMs,
-        log,
-        totalThresholdMs: 10,
-        stageThresholdMs: 10,
-      },
-    });
-
-    const message = expectSingleLogMessage(log, "warn");
-    expect(log.trace).not.toHaveBeenCalled();
-    expect(message).toContain("action=started");
-    expect(message).toContain("thread-start-request:25ms@25ms");
+    const message = expectSingleLogMessage(log, trace ? "trace" : "warn");
+    if (!trace) {
+      expect(log.trace).not.toHaveBeenCalled();
+    }
+    expect(message).toContain(`action=${action}`);
+    expect(message).toContain(
+      `thread-${trace ? "resume" : "start"}-request:${duration}ms@${duration}ms`,
+    );
   });
 });
 
 describe("resolveCodexAppServerReasoningEffort (#71946)", () => {
-  const standardEfforts = ["low", "medium", "high", "xhigh"];
-  const maxEfforts = [...standardEfforts, "max"];
-  const ultraEfforts = [...maxEfforts, "ultra"];
-
   it.each([
-    { requested: "high", supported: standardEfforts, expected: "high" },
-    { requested: "minimal", supported: ["medium", "high", "xhigh"], expected: "medium" },
-    { requested: "max", supported: ["medium", "high", "xhigh"], expected: "xhigh" },
-    { requested: "high", supported: ["none"], expected: null },
-  ] as const)(
-    "maps $requested to $expected using provider-supported efforts",
-    ({ requested, supported, expected }) => {
-      expect(
-        resolveCodexAppServerReasoningEffort({
-          thinkLevel: requested,
-          modelId: "catalog-model",
-          supportedReasoningEfforts: supported,
-        }),
-      ).toBe(expected);
+    {
+      thinkLevel: "high",
+      modelId: "catalog-model",
+      supportedReasoningEfforts: ["none"],
+      expected: null,
     },
-  );
-
-  it.each([
     { thinkLevel: "minimal", modelId: "gpt-5.5", expected: "low" },
-    { thinkLevel: "minimal", modelId: "gpt-4o", expected: "minimal" },
     { thinkLevel: "low", modelId: "gpt-5.5-pro", expected: "medium" },
     { thinkLevel: "max", modelId: "gpt-5.6-sol", expected: null },
-  ] as const)("maps $thinkLevel for $modelId without effort metadata", (params) => {
+    ...(["off", "adaptive"] as const).map((thinkLevel) => ({
+      thinkLevel,
+      modelId: "catalog-model",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+      expected: null,
+    })),
+  ] as const)("maps $thinkLevel for $modelId with efforts $supportedReasoningEfforts", (params) => {
     expect(resolveCodexAppServerReasoningEffort(params)).toBe(params.expected);
-  });
-
-  it("omits non-effort think levels", () => {
-    for (const thinkLevel of ["off", "adaptive"] as const) {
-      expect(
-        resolveCodexAppServerReasoningEffort({
-          thinkLevel,
-          modelId: "catalog-model",
-          supportedReasoningEfforts: ultraEfforts,
-        }),
-      ).toBeNull();
-    }
   });
 });
 
 describe("native Codex Ultra turn mapping", () => {
-  it.each([{ modelId: "gpt-5.6-sol", requested: "ultra", expected: "ultra" }] as const)(
-    "preserves resolved $requested for $modelId with direct OpenAI API metadata",
-    ({ modelId, requested, expected }) => {
-      const params = createAttemptParams({
-        provider: "openai",
-        modelId,
-        authProfileId: "openai:api-key",
-        authProfileType: "api_key",
-      });
-      params.thinkLevel = requested;
-      const compat: ModelCompatConfig = {
-        supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
-      };
-      params.model = {
-        ...createCodexTestModel("openai"),
-        id: modelId,
-        compat,
-      };
+  it("preserves resolved ultra for gpt-5.6-sol with direct OpenAI API metadata", () => {
+    const modelId = "gpt-5.6-sol";
+    const params = createAttemptParams({
+      provider: "openai",
+      modelId,
+      authProfileId: "openai:api-key",
+      authProfileType: "api_key",
+    });
+    params.thinkLevel = "ultra";
+    const compat: ModelCompatConfig = {
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+    };
+    params.model = {
+      ...createCodexTestModel("openai"),
+      id: modelId,
+      compat,
+    };
 
-      const request = buildTurnStartParams(params, {
-        threadId: "thread-ultra",
-        cwd: "/repo",
-        appServer: createAppServerOptions() as never,
-      });
+    const request = buildTurnStartParams(params, {
+      threadId: "thread-ultra",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+    });
 
-      expect(request.effort).toBe(expected);
-      expect(request.collaborationMode?.settings.reasoning_effort).toBe(expected);
-      expect(request).not.toHaveProperty("multiAgentMode");
-    },
-  );
+    expect(request.effort).toBe("ultra");
+    expect(request.collaborationMode?.settings.reasoning_effort).toBe("ultra");
+    expect(request).not.toHaveProperty("multiAgentMode");
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

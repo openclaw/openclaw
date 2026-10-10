@@ -85,15 +85,14 @@ describe("prepared core tool policy", () => {
     {
       tools: { fs: { workspaceOnly: false } },
       agents: {
-        list: [
-          {
-            id: "restricted",
+        entries: {
+          restricted: {
             tools: {
               fs: { workspaceOnly: true },
               exec: { applyPatch: { allowModels: ["other-model"] } },
             },
           },
-        ],
+        },
       },
     },
   ] satisfies OpenClawConfig[])(

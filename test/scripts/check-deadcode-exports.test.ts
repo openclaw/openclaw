@@ -158,7 +158,6 @@ describe("check-deadcode-exports", () => {
         "scripts/check-openclaw-package-tarball.mts!",
         "scripts/crabbox-wrapper.mjs!",
         "scripts/crabbox-wrapper.mts!",
-        "scripts/check-live-cache.ts!",
         "scripts/lib/vitest-resource-reporter.mts!",
         "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
         "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
@@ -242,10 +241,6 @@ describe("check-deadcode-exports", () => {
       "--config config/knip.all-exports.config.ts",
     );
     expect(packageJson.scripts["deadcode:full"]).toContain("--exclude duplicates");
-  });
-
-  it("models the jiti virtual agent-sessions SDK entry", () => {
-    expect(knipConfig.workspaces["."].entry).toContain("src/agents/sessions/extension-sdk.ts!");
   });
 
   it("models the spawned system-agent MCP stdio entry", () => {

@@ -274,7 +274,7 @@ export function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
 
 function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
   let hostCapabilities = overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES;
-  if (!hostCapabilities.createToolSurface) {
+  if (!hostCapabilities.createToolSurfaceAsync) {
     hostCapabilities = createCodexTestHostCapabilities(hostCapabilities);
     setCodexTestToolFactory({ hostCapabilities }, createOpenClawCodingToolsMock);
   }
@@ -485,4 +485,25 @@ export async function runSideQuestionWithManagedWebSearchCall(
   const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
   const forkConfig = (forkCall?.[1] as { config?: Record<string, unknown> } | undefined)?.config;
   return { forkConfig, result, toolResponse };
+}
+
+export function createPendingClient({ interrupt = true } = {}) {
+  const client = createFakeClient({ completeTurn: false });
+  client.request.mockImplementation(async (method: string) => {
+    if (method === "thread/fork") {
+      return threadResult("side-thread");
+    }
+    if (method === "turn/start") {
+      return turnStartResult("turn-1");
+    }
+    if (
+      method === "thread/inject_items" ||
+      method === "thread/unsubscribe" ||
+      (interrupt && method === "turn/interrupt")
+    ) {
+      return {};
+    }
+    throw new Error(`unexpected request: ${method}`);
+  });
+  return client;
 }

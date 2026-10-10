@@ -74,7 +74,7 @@ export function renderDebugOverlayWidget(
   history: readonly DebugOverlayStatusSample[],
 ): TemplateResult {
   return html`<div class="debug-overlay__widget">
-    ${renderGatewayCpuVital(status, history)}
+    ${renderGatewayCpuVital(status, history)} ${renderGatewayMemoryVital(status, history)}
     <openclaw-sparkline
       class="gateway-vital gateway-vital--ping"
       data-degraded=${status.pingMs > PING_DEGRADED_THRESHOLD_MS ? "" : nothing}
@@ -84,7 +84,6 @@ export function renderDebugOverlayWidget(
       .format=${formatPingMs}
       .floorMax=${20}
     ></openclaw-sparkline>
-    ${renderGatewayMemoryVital(status, history)}
   </div>`;
 }
 

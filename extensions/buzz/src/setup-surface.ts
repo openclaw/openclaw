@@ -23,23 +23,14 @@ import {
 const channel = "buzz" as const;
 type BuzzSetupPrompter = Parameters<ChannelSetupWizardAdapter["configure"]>[0]["prompter"];
 
-type BuzzSetupDependencies = {
-  discoverRooms?: typeof discoverBuzzRooms;
-  generateSecretKey?: typeof generateSecretKey;
-  runSecretStep?: typeof runSingleChannelSecretStep;
-  waitForRoomAccess?: typeof waitForBuzzRoomAccess;
-  verifyAfterWrite?: typeof verifyBuzzAfterSetup;
-};
-
 function validateRelayUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value.trim());
-    return url.protocol === "ws:" || url.protocol === "wss:"
-      ? undefined
-      : "Use a ws:// or wss:// relay URL";
-  } catch {
+  const url = URL.parse(value.trim());
+  if (!url) {
     return "Enter a valid Buzz relay WebSocket URL";
   }
+  return url.protocol === "ws:" || url.protocol === "wss:"
+    ? undefined
+    : "Use a ws:// or wss:// relay URL";
 }
 
 function isRemoteInsecureRelayUrl(value: string): boolean {
@@ -119,9 +110,6 @@ async function resolvePrivateKey(params: {
   accountId: string;
   prompter: BuzzSetupPrompter;
   secretInputMode?: "plaintext" | "ref";
-  generate: typeof generateSecretKey;
-  generatedPrivateKeys: WeakMap<BuzzSetupPrompter, Map<string, string>>;
-  runSecretStep: typeof runSingleChannelSecretStep;
 }): Promise<{ cfg: OpenClawConfig; resolvedPrivateKey: string }> {
   const { allowEnv } = resolveBuzzAccountConfig(params);
   const currentPrivateKey = await resolveSetupCredential({ ...params, field: "privateKey" });
@@ -132,14 +120,14 @@ async function resolvePrivateKey(params: {
   if (params.secretInputMode !== "ref") {
     // Back navigation replays the full channel setup function. Keep one generated
     // identity per account/session so replay cannot invalidate already granted access.
-    let accountKeys = params.generatedPrivateKeys.get(params.prompter);
+    let accountKeys = generatedPrivateKeys.get(params.prompter);
     if (!accountKeys) {
       accountKeys = new Map();
-      params.generatedPrivateKeys.set(params.prompter, accountKeys);
+      generatedPrivateKeys.set(params.prompter, accountKeys);
     }
     let privateKey = accountKeys.get(params.accountId);
     if (!privateKey) {
-      privateKey = nip19.nsecEncode(params.generate());
+      privateKey = nip19.nsecEncode(generateSecretKey());
       accountKeys.set(params.accountId, privateKey);
     }
     return {
@@ -153,7 +141,7 @@ async function resolvePrivateKey(params: {
     };
   }
 
-  const secretStep = await params.runSecretStep({
+  const secretStep = await runSingleChannelSecretStep({
     cfg: params.cfg,
     prompter: params.prompter,
     providerHint: channel,
@@ -251,192 +239,177 @@ async function noteBuzzAccessInstructions(params: {
   );
 }
 
-export function createBuzzSetupWizard(
-  dependencies: BuzzSetupDependencies = {},
-): ChannelSetupWizardAdapter {
-  const discoverRooms = dependencies.discoverRooms ?? discoverBuzzRooms;
-  const generate = dependencies.generateSecretKey ?? generateSecretKey;
-  const runSecretStep = dependencies.runSecretStep ?? runSingleChannelSecretStep;
-  const waitForRoomAccess = dependencies.waitForRoomAccess ?? waitForBuzzRoomAccess;
-  const verifyAfterWrite = dependencies.verifyAfterWrite ?? verifyBuzzAfterSetup;
-  const generatedPrivateKeys = new WeakMap<BuzzSetupPrompter, Map<string, string>>();
+const generatedPrivateKeys = new WeakMap<BuzzSetupPrompter, Map<string, string>>();
 
-  return {
-    channel,
-    getStatus: async ({ cfg, accountOverrides }) => {
-      const { configured, enabled } = resolveBuzzAccount({ cfg, accountId: accountOverrides.buzz });
-      const status = !configured
-        ? "needs relay URL and bot identity"
-        : enabled
-          ? "configured"
-          : "configured but disabled";
-      return {
-        channel,
-        configured,
-        statusLines: [`Buzz: ${status}`],
-        selectionHint: status,
-      };
-    },
-    configure: async ({ cfg, prompter, options, accountOverrides, shouldPromptAccountIds }) => {
-      let accountId = resolveBuzzAccountConfig({ cfg, accountId: accountOverrides.buzz }).accountId;
-      if (shouldPromptAccountIds && !accountOverrides.buzz?.trim()) {
-        accountId = await promptAccountId({
-          cfg,
-          prompter,
-          label: "Buzz",
-          currentId: accountId,
-          listAccountIds: listBuzzAccountIds,
-          defaultAccountId: accountId,
-        });
-      }
-      const { config: existingBuzzConfig } = resolveBuzzAccountConfig({ cfg, accountId });
-      const rootPolicy = cfg.channels?.buzz;
-      const rawAccount = rootPolicy?.accounts?.[accountId];
-      const hasExistingAccessConfig =
-        rootPolicy?.groupPolicy !== undefined ||
-        rootPolicy?.groupAllowFrom !== undefined ||
-        rawAccount?.groupPolicy !== undefined ||
-        rawAccount?.groupAllowFrom !== undefined ||
-        existingBuzzConfig.groups !== undefined;
-      const existingAccount = resolveBuzzAccount({ cfg, accountId });
-      const useFreshAccessDefaults = !existingAccount.configured && !hasExistingAccessConfig;
-      const configuredRelayUrl = existingAccount.relayUrl;
-      const relayUrl = await resolveRelayUrl({ configuredValue: configuredRelayUrl, prompter });
-      let next = patchBuzzAccountConfig({ cfg, accountId, patch: { enabled: true, relayUrl } });
-      const identity = await resolvePrivateKey({
-        cfg: next,
-        accountId,
+export const buzzSetupWizard: ChannelSetupWizardAdapter = {
+  channel,
+  getStatus: async ({ cfg, accountOverrides }) => {
+    const { configured, enabled } = resolveBuzzAccount({ cfg, accountId: accountOverrides.buzz });
+    const status = !configured
+      ? "needs relay URL and bot identity"
+      : enabled
+        ? "configured"
+        : "configured but disabled";
+    return {
+      channel,
+      configured,
+      statusLines: [`Buzz: ${status}`],
+      selectionHint: status,
+    };
+  },
+  configure: async ({ cfg, prompter, options, accountOverrides, shouldPromptAccountIds }) => {
+    let accountId = resolveBuzzAccountConfig({ cfg, accountId: accountOverrides.buzz }).accountId;
+    if (shouldPromptAccountIds && !accountOverrides.buzz?.trim()) {
+      accountId = await promptAccountId({
+        cfg,
         prompter,
-        secretInputMode: options?.secretInputMode,
-        generate,
-        generatedPrivateKeys,
-        runSecretStep,
+        label: "Buzz",
+        currentId: accountId,
+        listAccountIds: listBuzzAccountIds,
+        defaultAccountId: accountId,
       });
-      next = identity.cfg;
+    }
+    const { config: existingBuzzConfig } = resolveBuzzAccountConfig({ cfg, accountId });
+    const rootPolicy = cfg.channels?.buzz;
+    const rawAccount = rootPolicy?.accounts?.[accountId];
+    const hasExistingAccessConfig =
+      rootPolicy?.groupPolicy !== undefined ||
+      rootPolicy?.groupAllowFrom !== undefined ||
+      rawAccount?.groupPolicy !== undefined ||
+      rawAccount?.groupAllowFrom !== undefined ||
+      existingBuzzConfig.groups !== undefined;
+    const existingAccount = resolveBuzzAccount({ cfg, accountId });
+    const useFreshAccessDefaults = !existingAccount.configured && !hasExistingAccessConfig;
+    const configuredRelayUrl = existingAccount.relayUrl;
+    const relayUrl = await resolveRelayUrl({ configuredValue: configuredRelayUrl, prompter });
+    let next = patchBuzzAccountConfig({ cfg, accountId, patch: { enabled: true, relayUrl } });
+    const identity = await resolvePrivateKey({
+      cfg: next,
+      accountId,
+      prompter,
+      secretInputMode: options?.secretInputMode,
+    });
+    next = identity.cfg;
 
-      const privateKey = identity.resolvedPrivateKey;
-      const publicKey = resolveBuzzPublicKey(privateKey);
+    const privateKey = identity.resolvedPrivateKey;
+    const publicKey = resolveBuzzPublicKey(privateKey);
 
-      let discoveredRooms: BuzzDiscoveredRoom[] = [];
-      let discoveryError: string | undefined;
-      const authTag = await resolveSetupCredential({ cfg: next, accountId, field: "authTag" });
-      const discoverAuthorizedRooms = async (): Promise<BuzzDiscoveredRoom[]> => {
-        try {
-          const rooms = await discoverRooms({
-            relayUrl,
-            privateKey,
-            ...(authTag ? { authTag } : {}),
-          });
-          discoveryError =
-            rooms.length === 0 ? "No authorized rooms were returned for this bot." : undefined;
-          return rooms;
-        } catch (error) {
-          discoveryError = `Authenticated room discovery failed: ${error instanceof Error ? error.message : String(error)}.`;
-          return [];
-        }
-      };
-      discoveredRooms = await discoverAuthorizedRooms();
-      if (discoveredRooms.length === 0) {
-        await noteBuzzAccessInstructions({
+    let discoveredRooms: BuzzDiscoveredRoom[] = [];
+    let discoveryError: string | undefined;
+    const authTag = await resolveSetupCredential({ cfg: next, accountId, field: "authTag" });
+    const discoverAuthorizedRooms = async (): Promise<BuzzDiscoveredRoom[]> => {
+      try {
+        const rooms = await discoverBuzzRooms({
           relayUrl,
-          publicKey,
-          prompter,
-          discoveryError,
+          privateKey,
+          ...(authTag ? { authTag } : {}),
         });
-        const progress = prompter.progress("Waiting for Buzz room access...");
-        try {
-          discoveredRooms = await waitForRoomAccess({
-            relayUrl,
-            privateKey,
-            ...(authTag ? { authTag } : {}),
-          });
-          progress.stop(
-            discoveredRooms.length > 0
-              ? "Buzz room access confirmed"
-              : "Buzz room access wait expired",
-          );
-        } catch (error) {
-          progress.stop("Buzz room access check failed");
-          await prompter.note(
-            error instanceof Error ? error.message : String(error),
-            "Buzz room access check failed",
-          );
-        }
+        discoveryError =
+          rooms.length === 0 ? "No authorized rooms were returned for this bot." : undefined;
+        return rooms;
+      } catch (error) {
+        discoveryError = `Authenticated room discovery failed: ${error instanceof Error ? error.message : String(error)}.`;
+        return [];
       }
-      while (discoveredRooms.length === 0) {
-        await prompter.select({
-          message: "Buzz room access is not ready",
-          options: [
-            {
-              value: "retry",
-              label: "Retry authenticated room discovery",
-              hint: "Use after the bot has been added to a room with the Bot role",
-            },
-          ],
-          initialValue: "retry",
-        });
-        const progress = prompter.progress("Checking Buzz room access...");
-        discoveredRooms = await discoverAuthorizedRooms();
-        progress.stop(
-          discoveredRooms.length > 0 ? "Buzz room access confirmed" : "Buzz room access not found",
-        );
-        if (discoveredRooms.length === 0 && discoveryError) {
-          await prompter.note(discoveryError, "Buzz room access not ready");
-        }
-      }
-
-      const configuredGroups = existingBuzzConfig.groups ?? {};
-      const roomIds = await promptRooms({
-        rooms: discoveredRooms,
-        configuredRoomIds: Object.keys(configuredGroups),
+    };
+    discoveredRooms = await discoverAuthorizedRooms();
+    if (discoveredRooms.length === 0) {
+      await noteBuzzAccessInstructions({
+        relayUrl,
+        publicKey,
         prompter,
+        discoveryError,
       });
-      const existingDefault = existingBuzzConfig.defaultTo;
-      const defaultTo =
-        roomIds.length === 1
-          ? roomIds[0]!
-          : await prompter.select({
-              message: "Choose the default Buzz room target",
-              options: roomIds.map((roomId) => {
-                const room = discoveredRooms.find((candidate) => candidate.id === roomId);
-                return { value: roomId, label: room?.name ?? roomId, hint: roomId };
-              }),
-              initialValue:
-                existingDefault && roomIds.includes(existingDefault) ? existingDefault : roomIds[0],
-            });
-      next = patchBuzzAccountConfig({
-        cfg: next,
-        accountId,
-        patch: {
-          ...(useFreshAccessDefaults ? { groupPolicy: "open", groupAllowFrom: undefined } : {}),
-          groups: Object.fromEntries(
-            roomIds.map((roomId) => [
-              roomId,
-              {
-                ...configuredGroups[roomId],
-                enabled: configuredGroups[roomId]?.enabled ?? true,
-                requireMention: configuredGroups[roomId]?.requireMention ?? !useFreshAccessDefaults,
-              },
-            ]),
-          ),
-          defaultTo,
-        },
+      const progress = prompter.progress("Waiting for Buzz room access...");
+      try {
+        discoveredRooms = await waitForBuzzRoomAccess({
+          relayUrl,
+          privateKey,
+          ...(authTag ? { authTag } : {}),
+        });
+        progress.stop(
+          discoveredRooms.length > 0
+            ? "Buzz room access confirmed"
+            : "Buzz room access wait expired",
+        );
+      } catch (error) {
+        progress.stop("Buzz room access check failed");
+        await prompter.note(
+          error instanceof Error ? error.message : String(error),
+          "Buzz room access check failed",
+        );
+      }
+    }
+    while (discoveredRooms.length === 0) {
+      await prompter.select({
+        message: "Buzz room access is not ready",
+        options: [
+          {
+            value: "retry",
+            label: "Retry authenticated room discovery",
+            hint: "Use after the bot has been added to a room with the Bot role",
+          },
+        ],
+        initialValue: "retry",
       });
-      options?.onPostWriteHook?.({
-        channel,
-        accountId,
-        run: async ({ runtime }) =>
-          await verifyAfterWrite({
-            accountId,
-            target: defaultTo,
-            runtime,
-          }),
-      });
-      return { cfg: next, accountId };
-    },
-    disable: (cfg) =>
-      patchTopLevelChannelConfigSection({ cfg, channel, patch: { enabled: false } }),
-  };
-}
+      const progress = prompter.progress("Checking Buzz room access...");
+      discoveredRooms = await discoverAuthorizedRooms();
+      progress.stop(
+        discoveredRooms.length > 0 ? "Buzz room access confirmed" : "Buzz room access not found",
+      );
+      if (discoveredRooms.length === 0 && discoveryError) {
+        await prompter.note(discoveryError, "Buzz room access not ready");
+      }
+    }
 
-export const buzzSetupWizard = createBuzzSetupWizard();
+    const configuredGroups = existingBuzzConfig.groups ?? {};
+    const roomIds = await promptRooms({
+      rooms: discoveredRooms,
+      configuredRoomIds: Object.keys(configuredGroups),
+      prompter,
+    });
+    const existingDefault = existingBuzzConfig.defaultTo;
+    const defaultTo =
+      roomIds.length === 1
+        ? roomIds[0]!
+        : await prompter.select({
+            message: "Choose the default Buzz room target",
+            options: roomIds.map((roomId) => {
+              const room = discoveredRooms.find((candidate) => candidate.id === roomId);
+              return { value: roomId, label: room?.name ?? roomId, hint: roomId };
+            }),
+            initialValue:
+              existingDefault && roomIds.includes(existingDefault) ? existingDefault : roomIds[0],
+          });
+    next = patchBuzzAccountConfig({
+      cfg: next,
+      accountId,
+      patch: {
+        ...(useFreshAccessDefaults ? { groupPolicy: "open", groupAllowFrom: undefined } : {}),
+        groups: Object.fromEntries(
+          roomIds.map((roomId) => [
+            roomId,
+            {
+              ...configuredGroups[roomId],
+              enabled: configuredGroups[roomId]?.enabled ?? true,
+              requireMention: configuredGroups[roomId]?.requireMention ?? !useFreshAccessDefaults,
+            },
+          ]),
+        ),
+        defaultTo,
+      },
+    });
+    options?.onPostWriteHook?.({
+      channel,
+      accountId,
+      run: async ({ runtime }) =>
+        await verifyBuzzAfterSetup({
+          accountId,
+          target: defaultTo,
+          runtime,
+        }),
+    });
+    return { cfg: next, accountId };
+  },
+  disable: (cfg) => patchTopLevelChannelConfigSection({ cfg, channel, patch: { enabled: false } }),
+};

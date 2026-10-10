@@ -94,9 +94,6 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
   await retired.dispose();
   const request: DurableInboundReplyDeliveryParams = {
     cfg,
-    ...(options?.sameGeneration
-      ? {}
-      : { prepareRuntimeHandoff: (currentConfig: OpenClawConfig) => currentConfig }),
     channel: "telegram",
     accountId: "default",
     agentId: "main",
@@ -139,11 +136,16 @@ describe("final delivery after plugin replacement", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each([false, true])(
-    "sends an ordinary final from a prepared view without a handoff (structured=%s)",
-    async (structured) => {
+  it.each([
+    { sameGeneration: true, structured: false },
+    { sameGeneration: false, structured: true },
+  ])(
+    "settles final custody through its Gateway without sender preparation (sameGeneration=$sameGeneration, structured=$structured)",
+    async ({ sameGeneration, structured }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-      const fixture = await replacementFixture({ sameGeneration: true });
+      const fixture = await replacementFixture({ sameGeneration });
+      const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
+      fixture.setConfig(successorConfig);
       const locator = {
         agentId: "main",
         sessionKey: "agent:main:telegram:direct:12345",
@@ -182,7 +184,12 @@ describe("final delivery after plugin replacement", () => {
         },
       });
       expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ to: "12345", text: "Saved final answer", accountId: "default" }),
+        expect.objectContaining({
+          cfg: sameGeneration ? cfg : successorConfig,
+          to: "12345",
+          text: "Saved final answer",
+          accountId: "default",
+        }),
       );
       expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
         { id: completion.deliveryId, state: "delivered" },
@@ -194,42 +201,7 @@ describe("final delivery after plugin replacement", () => {
   );
 
   it.each([
-    { structured: false, senderPreparation: false },
-    { structured: true, senderPreparation: false },
-    { structured: false, senderPreparation: true },
-    { structured: true, senderPreparation: true },
-  ])(
-    "sends once through its own Gateway (structured=$structured, senderPreparation=$senderPreparation)",
-    async ({ structured, senderPreparation }) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-      const fixture = await replacementFixture();
-      if (!senderPreparation) {
-        delete fixture.request.prepareRuntimeHandoff;
-      }
-      const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
-      fixture.setConfig(successorConfig);
-      const result = await fixture.deliver(structured);
-      if (result.status === "failed") {
-        throw result.error;
-      }
-      expect(result).toMatchObject({
-        status: "handled_visible",
-        delivery: { visibleReplySent: true, messageIds: ["accepted-final"] },
-      });
-      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          cfg: successorConfig,
-          to: "12345",
-          text: "Saved final answer",
-          accountId: "default",
-        }),
-      );
-    },
-  );
-
-  it.each([
     "closed",
-    "closed-prepared",
     "removed",
     "account-changed",
     "defaults-changed",
@@ -244,8 +216,7 @@ describe("final delivery after plugin replacement", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
     const fixture = await replacementFixture({
       newChannel: stateChange === "new-channel",
-      sameGeneration:
-        stateChange === "closed-prepared" || stateChange === "superseded-prepared-send",
+      sameGeneration: stateChange === "superseded-prepared-send",
     });
     setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
     if (stateChange === "replaced-channel") {
@@ -260,9 +231,7 @@ describe("final delivery after plugin replacement", () => {
         pluginId: "another-owner",
       }));
     }
-    // Optional sender preparation must not bypass the Gateway and channel continuity fences.
-    delete fixture.request.prepareRuntimeHandoff;
-    if (stateChange.startsWith("closed")) {
+    if (stateChange === "closed") {
       fixture.publication.current = undefined;
     }
     if (stateChange === "removed") {
@@ -290,7 +259,7 @@ describe("final delivery after plugin replacement", () => {
       status: "failed",
       error: {
         message: expect.stringContaining(
-          stateChange.startsWith("closed")
+          stateChange === "closed"
             ? "closing"
             : stateChange.startsWith("superseded")
               ? "runtime changed"

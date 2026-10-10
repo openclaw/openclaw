@@ -139,7 +139,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       (gateway) => gateway.subscribeEvents((event) => this.narration?.handleEvent(event)),
     )
     .watchStore(() => this.context?.agentIdentity)
-    .watchStore(() => this.context?.theme)
+    .watchStore(
+      () => this.context?.theme,
+      () => this.syncCommunityInviteState(),
+    )
     .watchStore(
       () => this.context?.config,
       () => this.syncCommunityInviteState(),
@@ -322,7 +325,11 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   };
 
   private syncCommunityInviteState() {
-    if (this.context?.config.current.communityInvite !== true || !isCommunityInviteEligible()) {
+    if (
+      this.context?.theme.branding.communityLinks === false ||
+      this.context?.config.current.communityInvite !== true ||
+      !isCommunityInviteEligible()
+    ) {
       this.communityInvitePresentation = "unavailable";
     } else if (this.communityInvitePresentation !== "shown") {
       this.communityInvitePresentation = "pending";
@@ -522,6 +529,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
+    const entries = sidebarZone.entries.filter(
+      (entry) => entry.type !== "route" || this.sidebarMenus.isRouteEnabled(entry.route),
+    );
+    const showHome = this.sidebarAgentsMode !== "roster";
     return html`
       <aside
         class="sidebar"
@@ -538,10 +549,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           ${renderAppSidebarBrand(
             this,
             this.sidebarAgentsMode === "roster"
-              ? this.rosterRenderer?.renderSidebarNewSessionMenu(
-                  this,
-                  "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-                )
+              ? this.rosterRenderer?.renderSidebarNewSessionMenu(this)
               : nothing,
           )}
           <div class="sidebar-shell__content">
@@ -553,7 +561,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 class="sidebar-nav"
                 @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}
               >
-                ${renderAppSidebarPagesHead(this)}
                 <div
                   class="nav-section__items"
                   @dragover=${(event: DragEvent) =>
@@ -562,14 +569,15 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                     this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
-                  ${renderAppSidebarHomeRow(this)}
+                  ${showHome || entries.length === 0 ? renderAppSidebarPagesHead(this, renderAppSidebarHomeRow(this)) : nothing}
                   <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
-                  ${repeat(sidebarZone.entries, serializeSidebarEntry, (entry) =>
+                  ${repeat(entries, serializeSidebarEntry, (entry, index) =>
                     renderAppSidebarZoneEntry(
                       this,
                       entry,
                       sidebarZone.sessionRows,
                       sidebarZone.pluginTabs,
+                      !showHome && index === 0,
                     ),
                   )}
                 </div>

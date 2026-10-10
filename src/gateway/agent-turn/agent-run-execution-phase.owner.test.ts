@@ -761,6 +761,26 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(execution.callerRelease).toHaveBeenCalledOnce();
   });
 
+  it.each([undefined, "/workspace/session-override"])(
+    "preserves the admitted workspace with session override %s",
+    async (workspaceOverride) => {
+      const execution = createExecution();
+      execution.params.prepared.workspaceOverride = workspaceOverride;
+      execution.params.prepared.replyDispatchRuntime = {
+        ...execution.params.prepared.replyDispatchRuntime,
+        workspaceDir: "/workspace/admitted",
+      };
+      dispatchAgentRunFromGateway.mockResolvedValueOnce(undefined);
+
+      await startAgentRunExecution(execution.params);
+
+      const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
+      expect(dispatch?.ingressOpts.workspaceDir).toBe(workspaceOverride ?? "/workspace/admitted");
+      expect(execution.runtimeRelease).toHaveBeenCalledOnce();
+      expect(execution.callerRelease).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([
     { ending: "aborted", registration: "current" },
     { ending: "failed", registration: "current" },

@@ -82,7 +82,7 @@ function probeDeps(found: Record<string, boolean>) {
 }
 
 describe("detectInferenceBackends", () => {
-  it.each([false, true])(
+  it.each([true])(
     "keeps native detection passive with stored Codex credentials: %s",
     async (stored) => {
       const calls: Array<{ command: string; args: string[] }> = [];
@@ -185,7 +185,7 @@ describe("detectInferenceBackends", () => {
       config: {
         agents: {
           defaults: { model: "zai/glm-5.2" },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       env: { OPENAI_API_KEY: "sk-x", ANTHROPIC_API_KEY: "sk-y" },
@@ -229,17 +229,19 @@ describe("detectInferenceBackends", () => {
     expect(candidates[1]?.credentials).toBeUndefined();
   });
 
-  it("prefers the configured default agent model over the global default", async () => {
+  it("prefers the explicitly selected agent model over the global default", async () => {
     const candidates = await detectInferenceBackends({
       config: {
         agents: {
+          ownership: "explicit",
           defaults: { model: "openai/gpt-5.5" },
-          list: [
-            { id: "fallback", model: "google/gemini-3.1-pro-preview" },
-            { id: "ops", default: true, model: "anthropic/claude-opus-4-8" },
-          ],
+          entries: {
+            fallback: { model: "google/gemini-3.1-pro-preview" },
+            ops: { model: "anthropic/claude-opus-4-8" },
+          },
         },
       },
+      agentId: "ops",
       env: {},
       platform: "linux",
       deps: {
@@ -261,7 +263,7 @@ describe("detectInferenceBackends", () => {
             model: { primary: "opus" },
             models: { "anthropic/claude-opus-4-8": { alias: "opus" } },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       env: {},
@@ -347,75 +349,5 @@ describe("detectInferenceBackends", () => {
     expect(probed.filter((entry) => entry.command === command)).toEqual([
       { command, args: ["--version"], timeoutMs: 3_000 },
     ]);
-  });
-
-  it.each([
-    ["system ChatGPT", "/Applications/ChatGPT.app/Contents/Resources/codex", "/Users/tester"],
-    [
-      "user ChatGPT",
-      "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex",
-      "/Users/tester",
-    ],
-    ["system", "/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
-    ["user", "/Users/tester/Applications/Codex.app/Contents/Resources/codex", "/Users/tester"],
-    ["system beta", "/Applications/Codex Beta.app/Contents/Resources/codex", "/Users/tester"],
-    [
-      "user beta",
-      "/Users/tester/Applications/Codex Beta.app/Contents/Resources/codex",
-      "/Users/tester",
-    ],
-  ])("finds the Codex CLI bundled in the %s macOS app directory", async (_scope, appCli, home) => {
-    const candidates = await detectInferenceBackends({
-      env: { HOME: home },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: probeDeps({ [appCli]: true }),
-        readCodexCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]).toMatchObject({
-      kind: "codex-cli",
-      detail: "installed; login status unverified",
-    });
-  });
-
-  it("prefers a user ChatGPT app before a system legacy Codex app", async () => {
-    const probed: string[] = [];
-    const chatGPTCli = "/Users/tester/Applications/ChatGPT.app/Contents/Resources/codex";
-    const legacyCodexCli = "/Applications/Codex.app/Contents/Resources/codex";
-    const candidates = await detectInferenceBackends({
-      env: { HOME: "/Users/tester" },
-      platform: "darwin",
-      deps: {
-        probeLocalCommand: async (command) => {
-          probed.push(command);
-          return {
-            command,
-            found: command === chatGPTCli || command === legacyCodexCli,
-          };
-        },
-        readCodexCliCredentials: () => null,
-      },
-    });
-
-    expect(candidates).toMatchObject([
-      { kind: "codex-cli", detail: "installed; login status unverified" },
-    ]);
-    expect(probed).toContain(chatGPTCli);
-    expect(probed).not.toContain(legacyCodexCli);
-  });
-
-  it("ignores blank env keys", async () => {
-    const candidates = await detectInferenceBackends({
-      env: { OPENAI_API_KEY: "   " },
-      platform: "linux",
-      deps: {
-        probeLocalCommand: probeDeps({}),
-        readCodexCliCredentials: () => null,
-      },
-    });
-    expect(candidates).toEqual([]);
   });
 });

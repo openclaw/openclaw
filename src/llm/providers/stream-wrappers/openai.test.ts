@@ -534,12 +534,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
       agentId: "main",
       config: {
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["group:web"] },
             },
-          ],
+          },
         },
         tools: {
           web: {

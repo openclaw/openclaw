@@ -138,24 +138,12 @@ async function resolveProvidersForModelsJson(params: {
     ...(context.workspaceDir ? { workspaceDir: context.workspaceDir } : {}),
     explicitProviders,
     sourceModelFields,
-    ...(context.pluginMetadataSnapshot
-      ? { pluginMetadataSnapshot: context.pluginMetadataSnapshot }
-      : {}),
-    ...(context.preparedStaticProviderCatalog
-      ? { preparedStaticProviderCatalog: context.preparedStaticProviderCatalog }
-      : {}),
-    ...(context.providerDiscoveryProviderIds
-      ? { providerDiscoveryProviderIds: context.providerDiscoveryProviderIds }
-      : {}),
-    ...(context.providerDiscoveryTimeoutMs !== undefined
-      ? { providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs }
-      : {}),
-    ...(context.providerDiscoveryEntriesOnly === true
-      ? { providerDiscoveryEntriesOnly: true }
-      : {}),
-    ...(context.onProviderCatalogOutcome
-      ? { onProviderCatalogOutcome: context.onProviderCatalogOutcome }
-      : {}),
+    pluginMetadataSnapshot: context.pluginMetadataSnapshot,
+    preparedStaticProviderCatalog: context.preparedStaticProviderCatalog,
+    providerDiscoveryProviderIds: context.providerDiscoveryProviderIds,
+    providerDiscoveryTimeoutMs: context.providerDiscoveryTimeoutMs,
+    providerDiscoveryEntriesOnly: context.providerDiscoveryEntriesOnly === true,
+    onProviderCatalogOutcome: context.onProviderCatalogOutcome,
   });
   return mergeProviders({
     implicit: implicitProviders,

@@ -89,6 +89,7 @@ export interface SessionListHost {
     SessionOrganizerController,
     | "draggingSidebarSection"
     | "draggingSessionKey"
+    | "isDraggingChildSession"
     | "finishSessionDrag"
     | "finishSidebarSectionDrag"
     | "handleSessionListDragLeave"
@@ -118,7 +119,7 @@ export interface SessionListHost {
     | "sessionMenu"
     | "sessionSortMenuPosition"
     | "toggleCatalogViewMenu"
-    | "toggleSessionSortMenu"
+    | "togglePositionedMenu"
   >;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionOwnerFilterActive: boolean;
@@ -170,11 +171,12 @@ export function visibleSessionChildren(params: {
 }
 
 /** Compose independently owned session state and context indicators. */
-function renderSidebarSessionIndicators(
+export function renderSidebarSessionIndicators(
   host: SessionListHost,
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
   icon?: TemplateResult,
+  headerSummary?: Parameters<typeof renderTeamSessionSlots>,
 ) {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
@@ -227,6 +229,13 @@ function renderSidebarSessionIndicators(
     password: gateway?.connection.password,
   });
   const runVisibility = sessionRunVisibility();
+  const teamSummary: Parameters<typeof renderTeamSessionSlots> = headerSummary ?? [
+    [session],
+    !childrenExpanded,
+    session.childSessionKeys.length,
+    0,
+    runVisibility,
+  ];
   const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
     session,
     leadingOwner,
@@ -286,6 +295,7 @@ function renderSidebarSessionIndicators(
     originIndicators,
     childrenExpanded,
     content: html` <span class="sidebar-recent-session__details-endcap">
+      ${headerSummary && (leadingIndicator !== nothing || session.visibility === "draft") ? persistentIndicator : nothing}
       <openclaw-viewer-facepile
         .presencePayload=${host.sessionData.presencePayload}
         .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
@@ -315,18 +325,7 @@ function renderSidebarSessionIndicators(
             ? ownAttention.requests.some((request) => request.kind === "approval")
             : !team && ownAttention.kind === "approval",
       })}
-      ${team ? trail : nothing}
-      ${
-        team
-          ? renderTeamSessionSlots(
-              [session],
-              !childrenExpanded,
-              session.childSessionKeys.length,
-              0,
-              runVisibility,
-            )
-          : nothing
-      }
+      ${team ? trail : nothing} ${team ? renderTeamSessionSlots(...teamSummary) : nothing}
       ${!team && stateDescription ? html`<span class="sr-only" id=${stateId} aria-hidden="true">${stateDescription}</span>` : nothing}
       ${team ? nothing : trail}
     </span>`,
@@ -438,7 +437,7 @@ export function renderRecentSession(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  const rowDraggable = !session.isChild && groupWriteAccess.allowed;
+  const rowDraggable = groupWriteAccess.allowed;
   const marqueeLabelTemplate = renderHoverMarquee(
     html`${team ? nothing : indicators.originIndicators}${label}`,
     "sidebar-recent-session__name",

@@ -2,6 +2,7 @@ import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.
 import { bindAgentToolExecutionLocation } from "../agents/agent-tool-metadata.js";
 import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import type { BoundAgentRunSessionTarget } from "../agents/run-session-target.types.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "../gateway/worker-environments/placement-store.js";
@@ -10,7 +11,7 @@ import {
   bindWorkerTurnCapabilities,
 } from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { createWorkerGatewayToolRuntime } from "../gateway/worker-environments/worker-gateway-tool-runtime.js";
-import { resolveWorkerTurnTranscriptTarget } from "../gateway/worker-environments/worker-turn-transcript-target.js";
+import { captureWorkerTurnTranscriptSource } from "../gateway/worker-environments/worker-turn-transcript-target.js";
 import {
   claimAgentRunDelegatedAuthority,
   registerAgentRunContext,
@@ -33,9 +34,7 @@ export async function bindWorkerFixtureTurnSource(
     expectedLifecycleRevision: entry.lifecycleRevision,
     expectedWriterRunId: entry.activeWriterRunId,
   };
-  const assertSourceCurrent = () => {
-    resolveWorkerTurnTranscriptTarget({ ...sessionTarget, sessionTarget });
-  };
+  const assertSourceCurrent = captureWorkerTurnTranscriptSource(sessionTarget);
   const operationalRunInstance = createOperationalRunInstanceRef(claim.runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, assertSourceCurrent);
   const lifetime = new AbortController();
@@ -98,7 +97,7 @@ export async function bindWorkerFixtureTurnSource(
         for (const tool of tools) {
           bindAgentToolExecutionLocation(tool, { kind: "placement" });
         }
-        return { tools, policy };
+        return { tools, policy, presentation: createToolSurfacePresentationForTest() };
       },
     }),
   });

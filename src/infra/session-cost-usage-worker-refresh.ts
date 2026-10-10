@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   parseSqliteSessionFileMarker,
   type SqliteSessionFileMarker,
@@ -13,14 +13,13 @@ import {
   scanSessionTranscriptTree,
 } from "../config/sessions/transcript-tree.js";
 import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
+import { sha256Base64Url } from "./crypto-digest.js";
 import {
   resolveUsageCostTranscriptFile,
   type UsageCostCollectionAccess,
 } from "./session-cost-usage-collection.js";
 import {
-  applyCostBreakdown,
-  applyCostTotal,
-  applyUsageTotals,
+  computeUsageTokenTotals,
   parseUsageCostTranscriptRecord,
   needsUsageCostEstimate,
   applyUsageCostEstimate,
@@ -34,7 +33,6 @@ import {
 import {
   appendSessionUsageRollupContribution,
   createSessionUsageRollupData,
-  type SessionUsageRollupData,
 } from "./session-cost-usage-rollup.js";
 import { createEmptyCostUsageTotals as emptyTotals } from "./session-cost-usage-totals.js";
 import type {
@@ -45,15 +43,11 @@ import type {
 
 const USAGE_COST_FILE_ANCHOR_BYTES = 4096;
 
-function hashUsageCostCheckpoint(value: Buffer | string): string {
-  return createHash("sha256").update(value).digest("base64url");
-}
-
 async function readJsonlAnchorHash(filePath: string, offset: number): Promise<string | undefined> {
   const start = Math.max(0, offset - USAGE_COST_FILE_ANCHOR_BYTES);
   const length = offset - start;
   if (length === 0) {
-    return hashUsageCostCheckpoint("");
+    return sha256Base64Url("");
   }
   const handle = await fs.promises.open(filePath, "r").catch(() => null);
   if (!handle) {
@@ -62,7 +56,7 @@ async function readJsonlAnchorHash(filePath: string, offset: number): Promise<st
   try {
     const buffer = Buffer.alloc(length);
     const { bytesRead } = await handle.read(buffer, 0, length, start);
-    return bytesRead === length ? hashUsageCostCheckpoint(buffer) : undefined;
+    return bytesRead === length ? sha256Base64Url(buffer) : undefined;
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -140,35 +134,6 @@ async function scanJsonlRange(params: {
   }
 }
 
-function appendParsedEntryToRollup(
-  rollup: SessionUsageRollupData,
-  entry: ParsedTranscriptEntry,
-): { countedRecord: boolean; parsedRecord: boolean } {
-  let usageTotals: CostUsageTotals | undefined;
-  if (entry.usage) {
-    usageTotals = emptyTotals();
-    applyUsageTotals(usageTotals, entry.usage);
-    if (entry.costBreakdown?.total !== undefined) {
-      applyCostBreakdown(usageTotals, entry.costBreakdown);
-    } else {
-      applyCostTotal(usageTotals, entry.costTotal, entry.provider, entry.model);
-    }
-  }
-  const timestamp = entry.timestamp?.getTime();
-  appendSessionUsageRollupContribution(rollup, {
-    timestamp,
-    role: entry.role,
-    durationMs: entry.durationMs,
-    provider: entry.provider,
-    model: entry.model,
-    stopReason: entry.stopReason,
-    toolNames: entry.toolNames,
-    toolResultCounts: entry.toolResultCounts,
-    usageTotals,
-  });
-  return { parsedRecord: Boolean(entry.usage), countedRecord: Boolean(entry.usage && timestamp) };
-}
-
 type RollupScanInput = {
   file: UsageCostTranscriptFile;
   previous?: UsageCostRollupEntry;
@@ -202,9 +167,44 @@ function createUsageRollupScan(params: RollupScanInput & { appendOnly: boolean }
           applyUsageCostEstimate(estimated[i]!, () => costs[i]);
         }
         for (const entry of batch) {
-          const counted = appendParsedEntryToRollup(rollup, entry);
-          countedRecords += counted.countedRecord ? 1 : 0;
-          parsedRecords += counted.parsedRecord ? 1 : 0;
+          let usageTotals: CostUsageTotals | undefined;
+          if (entry.usage) {
+            usageTotals = emptyTotals();
+            const tokens = computeUsageTokenTotals(entry.usage);
+            usageTotals.input += tokens.input;
+            usageTotals.output += tokens.output;
+            usageTotals.cacheRead += tokens.cacheRead;
+            usageTotals.cacheWrite += tokens.cacheWrite;
+            usageTotals.totalTokens += tokens.totalTokens;
+            const cost = entry.costBreakdown;
+            if (cost?.total !== undefined) {
+              usageTotals.totalCost += cost.total;
+              usageTotals.inputCost += cost.input ?? 0;
+              usageTotals.outputCost += cost.output ?? 0;
+              usageTotals.cacheReadCost += cost.cacheRead ?? 0;
+              usageTotals.cacheWriteCost += cost.cacheWrite ?? 0;
+            } else if (entry.costTotal === undefined) {
+              usageTotals.missingCostEntries = 1;
+              const modelKey = `${normalizeOptionalString(entry.provider) ?? "unknown"}/${normalizeOptionalString(entry.model) ?? "unknown"}`;
+              usageTotals.missingCostByModel = { [modelKey]: 1 };
+            } else {
+              usageTotals.totalCost += entry.costTotal;
+            }
+          }
+          const timestamp = entry.timestamp?.getTime();
+          appendSessionUsageRollupContribution(rollup, {
+            timestamp,
+            role: entry.role,
+            durationMs: entry.durationMs,
+            provider: entry.provider,
+            model: entry.model,
+            stopReason: entry.stopReason,
+            toolNames: entry.toolNames,
+            toolResultCounts: entry.toolResultCounts,
+            usageTotals,
+          });
+          countedRecords += entry.usage && timestamp ? 1 : 0;
+          parsedRecords += entry.usage ? 1 : 0;
         }
         batch = [];
       };
@@ -319,7 +319,7 @@ function selectIncrementalSqliteRecords(
 }
 
 function sqliteCheckpointAnchorHash(event: unknown): string {
-  return hashUsageCostCheckpoint(JSON.stringify(event));
+  return sha256Base64Url(JSON.stringify(event));
 }
 
 async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
@@ -336,7 +336,7 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   }
   const snapshotAnchorHash = snapshotLastRow
     ? sqliteCheckpointAnchorHash(snapshotLastRow.event)
-    : hashUsageCostCheckpoint("");
+    : sha256Base64Url("");
   const previousCheckpoint =
     params.previous?.checkpoint.kind === "sqlite" ? params.previous.checkpoint : undefined;
   const previousAnchor = previousCheckpoint?.maxSeq

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Writable } from "node:stream";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   readWorkspaceSkillResources,
   resolveWorkspaceWorkerArgv,
@@ -43,7 +44,7 @@ export function createWorkspaceCommand(
       ) {
         throw new Error("Invalid workspace response byte limit");
       }
-      const agents = api.config.agents?.list?.map((agent) => agent.id) ?? ["main"];
+      const agents = listAgentIds(api.config);
       const configured = agents.some(
         (agentId) =>
           path.resolve(api.runtime.agent.resolveAgentWorkspaceDir(api.config, agentId)) ===

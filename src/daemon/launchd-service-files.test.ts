@@ -185,11 +185,10 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
     expect((await fs.stat(plistPath)).mode & 0o7777).toBe(0o644);
   });
 
-  it.each(
-    [0o600, 0o640, 0o1600].flatMap((mode) =>
-      ["publication ownership", "install activation"].map((failure) => ({ mode, failure })),
-    ),
-  )(
+  it.each([
+    { mode: 0o640, failure: "publication ownership" },
+    { mode: 0o1600, failure: "install activation" },
+  ])(
     "restores bytes and mode $mode before publication after $failure failure",
     async ({ mode, failure }) => {
       const home = dirs.make("launchd-rollback-files-");

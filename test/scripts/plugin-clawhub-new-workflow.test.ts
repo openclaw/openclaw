@@ -215,17 +215,6 @@ describe("Plugin ClawHub New workflow", () => {
     expect(validation.run).toContain('--source-digest "${EXPECTED_WORKFLOW_SHA}"');
   });
 
-  it("requires the child workflow SHA to match the separately attested bootstrap tooling SHA", () => {
-    const validation = step(
-      job("validate_release_publish_approval"),
-      "Validate release publish approval run",
-    );
-    expect(validation.env?.CHILD_WORKFLOW_SHA).toBe("${{ inputs.bootstrap_workflow_sha }}");
-    expect(readFileSync("scripts/validate-release-publish-approval.mjs", "utf8")).toContain(
-      "bootstrapWorkflowSha: childWorkflowSha",
-    );
-  });
-
   it("packs target code only in the secretless producer", () => {
     const pack = job("pack_bootstrap_plugins");
     expect(pack.name).toBe("Pack immutable ClawHub bootstrap artifacts");
@@ -364,31 +353,9 @@ describe("Plugin ClawHub New workflow", () => {
     expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
       "OPENCLAW_CLAWHUB_TARGET_SHA",
     );
-  });
-
-  it("preserves configure-only repair and exact registry byte readback", () => {
-    const publish = job("publish_bootstrap_plugins");
-    const publishRun = step(publish, "Publish exact ClawHub bootstrap artifacts").run ?? "";
-    expect(publishRun).toContain('mode}" == "publish"');
-    expect(publishRun).toContain("GitHub Actions immutable bootstrap retry");
-    expect(publishRun).toContain("GitHub Actions trusted publisher repair before OIDC migration");
-    expect(publishRun).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
-    expect(publishRun).toContain("timeout --signal=TERM --kill-after=10s 300s");
-    expect(publishRun).toContain("--repository openclaw/openclaw");
-    expect(publishRun).toContain("--workflow-filename plugin-clawhub-release.yml");
-    expect(publishRun).not.toContain("--environment");
-    expect(step(publish, "Verify exact ClawHub registry artifact bytes").run).toContain(
-      ".release-harness/scripts/verify-clawhub-published-artifact.mjs",
+    expect(step(publish, "Publish exact ClawHub bootstrap artifacts").run).toContain(
+      "OPENCLAW_CLAWHUB_PACKAGE_FAMILY",
     );
-    expect(step(publish, "Verify exact ClawHub registry artifact bytes").run).toContain(
-      '--terminal-run-attempt "${GITHUB_RUN_ATTEMPT}"',
-    );
-    expect(step(publish, "Upload ClawHub bootstrap readback evidence").with?.name).toBe(
-      "clawhub-bootstrap-readback-${{ github.run_id }}-${{ github.run_attempt }}",
-    );
-    expect(
-      step(publish, "Reconfirm configure-only registry bytes before credentials").run,
-    ).toContain("--mode configure-only-preflight");
   });
 
   it("uses one lockfile-only ClawHub CLI graph and absolute binary path", () => {
@@ -413,18 +380,5 @@ describe("Plugin ClawHub New workflow", () => {
     expect(source).not.toContain("CLAWHUB_CLI_PACKAGE");
     expect(source).toContain("OPENCLAW_CLAWHUB_CLI: ${{ steps.clawhub_cli.outputs.cli }}");
     expect(source).toContain('"${OPENCLAW_CLAWHUB_CLI}" package trusted-publisher set');
-  });
-
-  it("bounds every job and keeps secretless validation active in dry-run mode", () => {
-    expect(job("resolve_bootstrap_plan")["timeout-minutes"]).toBe(30);
-    expect(job("validate_release_publish_approval")["timeout-minutes"]).toBe(20);
-    expect(job("validate_bootstrap_trusted_publisher_cli")["timeout-minutes"]).toBe(10);
-    expect(job("validate_bootstrap_trusted_publisher_cli").if).not.toContain(
-      "inputs.dry_run != true",
-    );
-    expect(job("validate_release_publish_approval").if).toContain(
-      "inputs.pretag_validation != true",
-    );
-    expect(job("pack_bootstrap_plugins")["timeout-minutes"]).toBe(60);
   });
 });

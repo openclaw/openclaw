@@ -14,7 +14,7 @@ import {
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
-import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 import { createWorkerEnvironmentStore } from "./store.js";
@@ -128,12 +128,14 @@ export function usePreparedPoolFixture() {
       purpose?: "reserve" | "build";
       runSetupScript?: boolean;
       repository?: RepositoryWorkerProjectSnapshot;
+      profileId?: string;
+      expiresAtMs?: number;
     } = {},
   ) {
     return store.createIntent({
       environmentId,
       providerId: provider.id,
-      profileId: "development",
+      profileId: options.profileId ?? "development",
       provisionOperationId: `provision:${environmentId}`,
       profileSnapshot: profile(
         options.projectKey,
@@ -147,7 +149,7 @@ export function usePreparedPoolFixture() {
               purpose: options.purpose ?? "reserve",
               key: options.preparationKey ?? PREPARATION_KEY,
               demandAtMs: nowMs,
-              expiresAtMs: nowMs + IDLE_TIMEOUT_MS,
+              expiresAtMs: options.expiresAtMs ?? nowMs + IDLE_TIMEOUT_MS,
             }
           : undefined,
     });
@@ -190,7 +192,7 @@ export function usePreparedPoolFixture() {
     const placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     const requested = await placements.startDispatch(identity);
     const assigned = record.preparation
-      ? placements.bindPreparedEnvironment({
+      ? (await placements.bindPreparedEnvironment({
           ...identity,
           expectedGeneration: requested.generation,
           environmentId: record.environmentId,
@@ -202,7 +204,7 @@ export function usePreparedPoolFixture() {
           leaseId: record.leaseId!,
           bundleHash: BUNDLE_HASH,
           assertCurrent: () => {},
-        })!
+        }))!
       : await placements.transition({
           sessionId,
           from: "requested",

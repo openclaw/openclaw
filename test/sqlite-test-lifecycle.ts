@@ -6,17 +6,27 @@ const source = (name: string) => normalizeModuleId(path.resolve(import.meta.dirn
 const agentSource = source("src/state/openclaw-agent-db-lifecycle.ts");
 const agentKey = Symbol.for("openclaw.agentDatabaseLifecycle");
 const brokerKey = Symbol.for("openclaw.sqliteWorkerBroker");
+const sessionStateNoticesKey = Symbol.for("openclaw.sessionStateNotices");
 const resetKey = Symbol.for("openclaw.globalSingletonLifecycleResets");
 const retainedCustodyKey = Symbol.for("openclaw.sqliteTestRetainedCustody");
 
 // These owners retain module closures and each other's lifecycle callbacks.
 // Keep their native custody intact through drainage, then retire the whole generation.
 export const sqliteTestSingletonPublications: ReadonlyMap<string, symbol> = new Map([
+  [source("src/sessions/session-state-notices.ts"), sessionStateNoticesKey],
+  [
+    source("src/cron/store/receipt-authority-owner.ts"),
+    Symbol.for("openclaw.cron.receiptAuthority"),
+  ],
   [
     source("src/state/openclaw-state-worker-owner.ts"),
     Symbol.for("openclaw.sharedStateWorkerOwner"),
   ],
   [source("src/infra/sqlite-worker-store.ts"), brokerKey],
+  [
+    source("src/infra/device-pairing-publication.ts"),
+    Symbol.for("openclaw.devicePairingPublications"),
+  ],
   [source("src/state/openclaw-state-db-cache.ts"), Symbol.for("openclaw.stateDatabaseLifecycle")],
   [
     source("src/state/openclaw-state-db-snapshot-owner.ts"),
@@ -67,7 +77,10 @@ export async function drainSqliteTestSingletons(
   const entries = [...(resets ?? [])].filter(
     ([, reset]) => reset.lifecycle !== "plugin-registry" && !failedResets.has(reset),
   );
-  const sqliteKeys = new Set(sqliteTestSingletonPublications.values());
+  // Notice callbacks retain their module graph, but must drain before the storage they use.
+  const sqliteKeys = new Set(
+    [...sqliteTestSingletonPublications.values()].filter((key) => key !== sessionStateNoticesKey),
+  );
   await Promise.all(
     entries
       .filter(([key]) => !sqliteKeys.has(key))

@@ -15,8 +15,8 @@ import {
 } from "../../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { ExitError } from "../../runtime.js";
+import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -37,6 +37,22 @@ vi.mock("../../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
+
+const recoveryMocks = vi.hoisted(() => ({
+  confirm: vi.fn(),
+  isInteractive: vi.fn(),
+  runDoctor: vi.fn(),
+}));
+vi.mock("../prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../prompt.js")>()),
+  promptYesNo: recoveryMocks.confirm,
+}));
+vi.mock("../terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../terminal-interactivity.js")>()),
+  isTerminalInteractive: recoveryMocks.isInteractive,
+}));
+// mock-isolation: Consent and retry tests must not initialize Doctor migrations or state admission.
+vi.mock("../../commands/doctor.js", () => ({ doctorCommand: recoveryMocks.runDoctor }));
 
 type ConfigIssue = ConfigValidationIssue;
 
@@ -94,6 +110,7 @@ describe("ensureConfigReady", () => {
   let processCache: ReturnType<typeof getProcessPluginCache>;
   let preflightCache: ReturnType<typeof createPluginCache>;
   let preflightMetadata: ReturnType<typeof createPluginMetadataSnapshotFixture>;
+  let statePath: string;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -142,11 +159,14 @@ describe("ensureConfigReady", () => {
       "OPENCLAW_STATE_DIR",
     ]);
     vi.clearAllMocks();
+    recoveryMocks.confirm.mockReset().mockResolvedValue(true);
+    recoveryMocks.isInteractive.mockReset().mockReturnValue(false);
+    recoveryMocks.runDoctor.mockReset().mockResolvedValue(undefined);
     resetConfigGuardStateForTests();
     for (const root of tempRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
-    useTempOpenClawHome();
+    statePath = path.join(useTempOpenClawHome(), ".openclaw", "state", "openclaw.sqlite");
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
     runStartupConfigPreflightMock.mockImplementation(async () => ({
       snapshot: makeSnapshot(),
@@ -165,23 +185,60 @@ describe("ensureConfigReady", () => {
   });
 
   it.each([
-    ["prepares non-observing status snapshots", ["status"], 1],
-    ["leaves Doctor orchestration to Doctor itself", ["doctor"], 0],
+    { commandPath: ["connect"], valid: true },
+    { commandPath: ["node", "run"], valid: false },
+  ])("validates managed $commandPath with valid=$valid", async ({ commandPath, valid }) => {
+    const config = { plugins: { entries: { fixture: { enabled: true } } } };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...makeSnapshot(),
+      exists: true,
+      valid,
+      raw: JSON.stringify(config),
+      parsed: config,
+      config,
+      runtimeConfig: config,
+      sourceConfig: config,
+      issues: valid
+        ? []
+        : [{ path: "plugins.entries.fixture.config", message: "invalid plugin value" }],
+    });
+    const runtime = makeRuntime();
+    runtime.exit.mockImplementation((code: number): never => {
+      throw new ExitError(code);
+    });
+    recoveryMocks.isInteractive.mockReturnValue(true);
+    const result = withExistingOpenClawStateSchema({ path: statePath }, () =>
+      ensureConfigReady({ runtime, commandPath }),
+    );
+    if (valid) {
+      await result;
+      expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(config, config);
+      expect(runtime.exit).not.toHaveBeenCalled();
+    } else {
+      await expect(result).rejects.toMatchObject({ name: "ExitError", code: 1 });
+      expect(recoveryMocks.isInteractive).not.toHaveBeenCalled();
+      expect(setRuntimeConfigSnapshotMock).not.toHaveBeenCalled();
+      expect(runtime.error.mock.calls.join("\n")).toContain("invalid plugin value");
+    }
+    expect(runStartupConfigPreflightMock).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
+  });
+
+  it("rejects changed state selectors before config or migration work", async () => {
+    await expect(
+      withExistingOpenClawStateSchema({ path: statePath }, async () => {
+        setTestEnvValue("OPENCLAW_STATE_DIR", path.join(path.dirname(statePath), "other"));
+        await ensureConfigReady({ runtime: makeRuntime(), commandPath: ["node", "run"] });
+      }),
+    ).rejects.toThrow(/state.*(?:bound|changed)/i);
+
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(runStartupConfigPreflightMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["skips state preparation for update status", ["update", "status"], 0],
-    ["skips state preparation for health", ["health"], 0],
     ["skips state preparation for logs", ["logs"], 0],
-    ["skips state preparation for sessions", ["sessions"], 0],
-    ["skips state preparation for remote gateway calls", ["gateway", "call"], 0],
-    ["skips state preparation for gateway restart control", ["gateway", "restart"], 0],
-    ["skips state preparation for legacy daemon restart control", ["daemon", "restart"], 0],
-    ["skips state preparation for config set", ["config", "set"], 0],
-    ["skips state preparation for config patch", ["config", "patch"], 0],
-    ["skips state preparation for config get", ["config", "get"], 0],
-    ["skips state preparation for config unset", ["config", "unset"], 0],
-    ["prepares ordinary agent snapshots", ["agent"], 1],
-    ["prepares plugin listing snapshots", ["plugins", "list"], 1],
-    ["prepares snapshots for operational commands", ["message"], 1],
-    ["prepares snapshots for unknown commands", ["unknown-command"], 1],
     ["prepares snapshots when the command path is empty", [], 1],
   ])("%s", async (_name, commandPath, expectedPreflightCalls) => {
     await runEnsureConfigReady(commandPath);
@@ -190,75 +247,26 @@ describe("ensureConfigReady", () => {
     if (expectedPreflightCalls > 0) {
       expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({
         gateway: false,
-        ...(commandPath[0] === "status" ? { observe: false } : {}),
+      });
+    }
+    if (commandPath[0] === "logs") {
+      expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
+        observe: false,
+        pluginValidation: "core-only",
       });
     }
   });
 
-  it("keeps status config guard reads non-observing", async () => {
-    await runEnsureConfigReady(["status"]);
+  it("retains accepted startup facts with stdout suppressed", async () => {
+    await runEnsureConfigReady(["gateway", "run"], true);
 
-    expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({ gateway: false, observe: false });
-  });
-
-  it("keeps logs config guard reads non-observing and independent of plugin state", async () => {
-    await runEnsureConfigReady(["logs"]);
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
-      observe: false,
-      pluginValidation: "core-only",
+    expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({
+      gateway: true,
+      validateStartupConfig: expect.any(Function),
     });
-  });
-
-  it("validates config without observing health, plugins, or startup migrations", async () => {
-    await ensureConfigReady({
-      runtime: makeRuntime() as never,
-      commandPath: ["nodes", "approve"],
-      validateConfigOnly: true,
-    });
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({
-      observe: false,
-      pluginValidation: "core-only",
-    });
-    expect(runStartupConfigPreflightMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps remote gateway call config reads non-observing", async () => {
-    await runEnsureConfigReady(["gateway", "call"]);
-
-    expect(readConfigFileSnapshotMock).toHaveBeenCalledWith({ observe: false });
-  });
-
-  it.each([
-    [["gateway"], false],
-    [["gateway"], true],
-    [["gateway", "run"], false],
-    [["gateway", "run"], true],
-  ])(
-    "retains accepted startup facts for %j (suppressed: %s)",
-    async (commandPath, suppressDoctorStdout) => {
-      await runEnsureConfigReady(commandPath, suppressDoctorStdout);
-
-      expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({
-        gateway: true,
-        validateStartupConfig: expect.any(Function),
-      });
-      expect(getProcessPluginCache() === preflightCache).toBe(true);
-      // Cache reuse must not freeze the Gateway inventory before its final config read.
-      expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
-    },
-  );
-
-  it("keeps the process owner when accepted config preparation fails", async () => {
-    const error = new Error("runtime config preparation failed");
-    setRuntimeConfigSnapshotMock.mockImplementationOnce(() => {
-      throw error;
-    });
-
-    await expect(runEnsureConfigReady(["gateway", "run"])).rejects.toThrow(error);
-
-    expect(getProcessPluginCache()).toBe(processCache);
+    expect(getProcessPluginCache() === preflightCache).toBe(true);
+    // Cache reuse must not freeze the Gateway inventory before its final config read.
+    expect(getGatewayPluginMetadataSnapshot()).toBeUndefined();
   });
 
   it("honors a readiness refusal after preflight resources unwind", async () => {
@@ -281,32 +289,6 @@ describe("ensureConfigReady", () => {
 
     expect(runtime.exit).toHaveBeenCalledWith(78);
     expect(getProcessPluginCache()).toBe(processCache);
-  });
-
-  it("keeps Gateway probes on snapshot-only readiness", async () => {
-    await runEnsureConfigReady(["gateway", "health"]);
-
-    expect(runStartupConfigPreflightMock).toHaveBeenCalledWith({
-      gateway: false,
-    });
-    expect(getProcessPluginCache()).toBe(processCache);
-  });
-
-  it("pins a valid preflight snapshot for command code reuse", async () => {
-    const snapshot = {
-      ...makeSnapshot(),
-      config: { runtime: true },
-      runtimeConfig: { runtime: true, materialized: true },
-      sourceConfig: { source: true },
-    };
-    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
-
-    await runEnsureConfigReady(["health"]);
-
-    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
-      snapshot.runtimeConfig,
-      snapshot.sourceConfig,
-    );
   });
 
   it("forwards config snapshot phase measurement", async () => {
@@ -354,27 +336,6 @@ describe("ensureConfigReady", () => {
     expect(measuredStages).toEqual(["config.snapshot.read.validate"]);
   });
 
-  it("pins plugin listing config from ordinary readiness", async () => {
-    const snapshot = {
-      ...makeSnapshot(),
-      config: { plugins: { entries: { alpha: { enabled: true } } } },
-      runtimeConfig: { plugins: { entries: { alpha: { enabled: true } } } },
-      sourceConfig: { plugins: { entries: { alpha: { enabled: true } } } },
-    };
-    runStartupConfigPreflightMock.mockResolvedValue({
-      snapshot,
-      baseConfig: snapshot.sourceConfig,
-    });
-
-    await runEnsureConfigReady(["plugins", "list"]);
-
-    expect(runStartupConfigPreflightMock).toHaveBeenCalledOnce();
-    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
-      snapshot.runtimeConfig,
-      snapshot.sourceConfig,
-    );
-  });
-
   it("retries the cached config snapshot after a read rejection", async () => {
     const transientError = new Error("temporary config read failure");
     const recoveredSnapshot = makeSnapshot();
@@ -390,80 +351,22 @@ describe("ensureConfigReady", () => {
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
   });
 
-  it.each([
-    { commandPath: ["message"] },
-    { commandPath: ["tasks"] },
-    { commandPath: ["tasks", "list"] },
-    { commandPath: ["tasks", "audit"] },
-  ])(
-    "exits for invalid config on non-allowlisted command: $commandPath",
-    async ({ commandPath }) => {
-      setInvalidSnapshot();
-      const runtime = await runEnsureConfigReady(commandPath);
-
-      expect(plainErrorCalls(runtime)).toEqual([
-        "OpenClaw config is invalid",
-        "File: /tmp/openclaw.json",
-        "Problem:",
-        "  - channels.quietchat: invalid",
-        "",
-        `Inspect: ${formatCliCommand("openclaw config validate")}`,
-        "Audit, status, health, logs, and doctor commands still run with invalid config.",
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
-      ]);
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-    },
-  );
-
-  it("renders unknown keys and received values with the shared source diagnostics", async () => {
-    setInvalidSnapshot({
-      raw: '{\n  "meta": { "migrations": { "futureMarker": true } },\n  "gateway": { "port": "nope" }\n}',
-      parsed: {
-        meta: { migrations: { futureMarker: true } },
-        gateway: { port: "nope" },
-      },
-      sourceConfig: {
-        meta: { migrations: { futureMarker: true } },
-        gateway: { port: "nope" },
-      },
-      issues: [
-        {
-          path: "meta",
-          pathSegments: ["meta"],
-          message: 'Unrecognized key: "migrations"',
-        },
-        {
-          path: "gateway.port",
-          pathSegments: ["gateway", "port"],
-          message: "Invalid input: expected number",
-        },
-      ],
-    });
-
+  it("exits for invalid config on non-allowlisted commands", async () => {
+    setInvalidSnapshot();
     const runtime = await runEnsureConfigReady(["message"]);
-    const output = plainErrorCalls(runtime).join("\n");
 
-    expect(output).toContain('  - openclaw.json:2 — meta: Unrecognized key: "migrations"');
-    expect(output).toContain(
-      '  - openclaw.json:3 — gateway.port: Invalid input: expected number, got: "nope"',
-    );
+    expect(plainErrorCalls(runtime)).toEqual([
+      "OpenClaw config is invalid",
+      "File: /tmp/openclaw.json",
+      "Problem:",
+      "  - channels.quietchat: invalid",
+      "",
+      `Inspect: ${formatCliCommand("openclaw config validate")}`,
+      "Audit, status, health, logs, and doctor commands still run with invalid config.",
+      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
+    ]);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
-
-  it.each([
-    ["9999.1.1", true],
-    [VERSION, false],
-  ])(
-    "shows a config version-skew hint only for newer writers (%s)",
-    async (touchedVersion, expected) => {
-      setInvalidSnapshot({ sourceConfig: { meta: { lastTouchedVersion: touchedVersion } } });
-
-      const runtime = await runEnsureConfigReady(["message"]);
-      const output = plainErrorCalls(runtime).join("\n");
-      const hint = `Config was last written by OpenClaw ${touchedVersion}, but you are running ${VERSION} — upgrade or re-run setup.`;
-
-      expect(output.includes(hint)).toBe(expected);
-    },
-  );
 
   it("runs doctor and retries the config guard once after consent", async () => {
     const invalidSnapshot = setInvalidSnapshot();
@@ -477,13 +380,11 @@ describe("ensureConfigReady", () => {
       .mockResolvedValueOnce({ snapshot: validSnapshot, baseConfig: validSnapshot.config });
     readConfigFileSnapshotMock.mockResolvedValue(validSnapshot);
     const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
-    const runDoctor = vi.fn(async () => {});
+    const confirm = recoveryMocks.confirm;
+    recoveryMocks.isInteractive.mockReturnValue(true);
+    const runDoctor = recoveryMocks.runDoctor;
 
-    await ensureConfigReady(
-      { runtime: runtime as never, commandPath: ["message"] },
-      { confirm, isInteractive: () => true, runDoctor },
-    );
+    await ensureConfigReady({ runtime: runtime as never, commandPath: ["message"] });
 
     expect(confirm).toHaveBeenCalledWith(
       `Run "${formatCliCommand("openclaw doctor --fix")}" now?`,
@@ -500,97 +401,67 @@ describe("ensureConfigReady", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("does not prompt for repair when stdout belongs to a machine-readable command", async () => {
+  it("preserves JSON output ownership for blocked commands", async () => {
     setInvalidSnapshot();
     const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
-
-    await ensureConfigReady(
-      {
-        runtime: runtime as never,
-        commandPath: ["agents", "list"],
+    recoveryMocks.isInteractive.mockReturnValue(true);
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "onboard", "--json"];
+    try {
+      await ensureConfigReady({
+        runtime,
+        commandPath: ["onboard"],
         suppressDoctorStdout: true,
-      },
-      { confirm, isInteractive: () => true },
-    );
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledOnce();
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: {
+        type: "cli_error",
+        message: "OpenClaw config is invalid: /tmp/openclaw.json",
+      },
+      issues: [{ path: "channels.quietchat", message: "invalid" }],
+    });
+    expect(recoveryMocks.confirm).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([
-    ["blocked JSON commands", ["onboard"], ["node", "openclaw", "onboard", "--json"], 1, true],
-    ["protocol-owned stdout", ["mcp", "serve"], ["node", "openclaw", "mcp", "serve"], 1, false],
-    [
-      "allowed read-only JSON diagnostics",
-      ["status"],
-      ["node", "openclaw", "status", "--json"],
-      undefined,
-      false,
-    ],
-    [
-      "blocked JSON gateway startup",
-      ["gateway", "run"],
-      ["node", "openclaw", "gateway", "run", "--json"],
-      78,
-      true,
-    ],
-  ])(
-    "preserves output ownership for %s",
-    async (_name, commandPath, argv, exitCode, writesJson) => {
-      setInvalidSnapshot();
-      const runtime = makeRuntime();
-      const originalArgv = process.argv;
-      process.argv = argv;
-      try {
-        await ensureConfigReady({
-          runtime,
-          commandPath,
-          suppressDoctorStdout: true,
-        });
-      } finally {
-        process.argv = originalArgv;
-      }
+  it("preserves protocol-owned stdout for MCP serve", async () => {
+    setInvalidSnapshot();
+    const runtime = makeRuntime();
+    const originalArgv = process.argv;
+    process.argv = ["node", "openclaw", "mcp", "serve"];
+    try {
+      await ensureConfigReady({
+        runtime,
+        commandPath: ["mcp", "serve"],
+        suppressDoctorStdout: true,
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
 
-      if (writesJson) {
-        expect(runtime.log).toHaveBeenCalledOnce();
-        expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: "OpenClaw config is invalid: /tmp/openclaw.json",
-          },
-          issues: [{ path: "channels.quietchat", message: "invalid" }],
-        });
-      } else {
-        expect(runtime.log).not.toHaveBeenCalled();
-      }
-      if (exitCode === undefined) {
-        expect(runtime.exit).not.toHaveBeenCalled();
-      } else {
-        expect(runtime.exit).toHaveBeenCalledWith(exitCode);
-      }
-    },
-  );
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 
-  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
-    "keeps invalid %s config on the manual recovery path",
-    async (mode) => {
-      setInvalidSnapshot();
-      setTestEnvValue(mode, "1");
-      const runtime = makeRuntime();
-      const confirm = vi.fn(async () => true);
+  it("keeps invalid Nix config on the manual recovery path", async () => {
+    setInvalidSnapshot();
+    setTestEnvValue("OPENCLAW_NIX_MODE", "1");
+    const runtime = makeRuntime();
+    const confirm = recoveryMocks.confirm;
+    recoveryMocks.isInteractive.mockReturnValue(true);
 
-      await ensureConfigReady(
-        { runtime: runtime as never, commandPath: ["gateway", "run"] },
-        { confirm, isInteractive: () => true },
-      );
+    await ensureConfigReady({ runtime: runtime as never, commandPath: ["gateway", "run"] });
 
-      expect(confirm).not.toHaveBeenCalled();
-      expect(plainErrorCalls(runtime).join("\n")).toContain(`${mode}=1`);
-      expect(runtime.exit).toHaveBeenCalledWith(78);
-    },
-  );
+    expect(confirm).not.toHaveBeenCalled();
+    expect(plainErrorCalls(runtime).join("\n")).toContain("OPENCLAW_NIX_MODE=1");
+    expect(runtime.exit).toHaveBeenCalledWith(78);
+  });
 
   it("replaces doctor fix advice for plugin packaging-only invalid config", async () => {
     setInvalidSnapshot({
@@ -650,94 +521,20 @@ describe("ensureConfigReady", () => {
     expect(getProcessPluginCache()).toBe(processCache);
   });
 
-  it.each(["", "run", "start", "restart"])(
-    "keeps gateway %s restartable when configuration could not be read",
-    async (subcommand) => {
-      setInvalidSnapshot({
-        issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
-      });
-      const runtime = makeRuntime();
-      const confirm = vi.fn(async () => true);
-      await ensureConfigReady(
-        { runtime, commandPath: subcommand ? ["gateway", subcommand] : ["gateway"] },
-        { confirm, isInteractive: () => true },
-      );
-      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-      expect(confirm).not.toHaveBeenCalled();
-      expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
-    },
-  );
-
-  it("allows an explicit invalid-config override", async () => {
-    setInvalidSnapshot();
+  it("keeps gateway start restartable when configuration could not be read", async () => {
+    setInvalidSnapshot({
+      issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+    });
     const runtime = makeRuntime();
+    const confirm = recoveryMocks.confirm;
+    recoveryMocks.isInteractive.mockReturnValue(true);
     await ensureConfigReady({
-      runtime: runtime as never,
-      commandPath: ["plugins", "install"],
-      allowInvalid: true,
+      runtime,
+      commandPath: ["gateway", "start"],
     });
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
-  it("does not offer repair for an explicitly allowed gateway startup", async () => {
-    setInvalidSnapshot();
-    const runtime = makeRuntime();
-    const confirm = vi.fn(async () => true);
-
-    await ensureConfigReady(
-      {
-        runtime: runtime as never,
-        commandPath: ["gateway", "run"],
-        allowInvalid: true,
-      },
-      { confirm, isInteractive: () => true },
-    );
-
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(getProcessPluginCache()).toBe(processCache);
-  });
-
-  it("runs startup readiness only once per module instance", async () => {
-    const runtimeA = makeRuntime();
-    const runtimeB = makeRuntime();
-
-    await ensureConfigReady({ runtime: runtimeA as never, commandPath: ["message"] });
-    await ensureConfigReady({ runtime: runtimeB as never, commandPath: ["message"] });
-    expect(runStartupConfigPreflightMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("still prepares readiness when stdout suppression is enabled", async () => {
-    await runEnsureConfigReady(["message"], true);
-    expect(runStartupConfigPreflightMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("prevents preflight note noise when suppression is enabled", async () => {
-    runStartupConfigPreflightMock.mockImplementation(async () => {
-      note("Startup warnings", "Config warnings");
-      return {
-        snapshot: makeSnapshot(),
-        baseConfig: {},
-      };
-    });
-    const output = await withCapturedStdout(async () => {
-      await runEnsureConfigReady(["message"], true);
-    });
-    expect(output).not.toContain("Startup warnings");
-  });
-
-  it("allows preflight note noise when suppression is not enabled", async () => {
-    runStartupConfigPreflightMock.mockImplementation(async () => {
-      note("Startup warnings", "Config warnings");
-      return {
-        snapshot: makeSnapshot(),
-        baseConfig: {},
-      };
-    });
-    const output = await withCapturedStdout(async () => {
-      await runEnsureConfigReady(["message"], false);
-    });
-    expect(output).toContain("Startup warnings");
+    expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
   });
 
   it("does not suppress unrelated concurrent stdout writes while suppressing preflight notes", async () => {

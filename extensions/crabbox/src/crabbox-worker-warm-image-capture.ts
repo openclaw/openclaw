@@ -275,8 +275,9 @@ export function createCrabboxWarmImageCapture(dependencies: {
               "--wait-timeout",
               `${WARM_IMAGE_NATIVE_WAIT_TIMEOUT_MS}ms`,
               "--json",
-              // Daytona requires explicit permission to stop the scrubbed source for capture.
-              ...(context.provider === "daytona" ? ["--no-reboot=false"] : []),
+              // Daytona and direct Azure snapshots require explicit permission to stop the
+              // scrubbed source for capture. Both owners restore or retire it afterward.
+              ...(["azure", "daytona"].includes(context.provider) ? ["--no-reboot=false"] : []),
               ...(context.provider === "machine0" ? ["--strategy", "image"] : []),
             ],
             resolveCrabboxCheckpointCaptureTimeoutMs(context.provider),

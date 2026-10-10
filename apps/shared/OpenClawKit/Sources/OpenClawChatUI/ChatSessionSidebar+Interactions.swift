@@ -62,7 +62,18 @@ extension ChatSessionSidebar {
     }
 
     private var renderedInteractionRows: [OpenClawChatSessionEntry] {
-        self.interactionSections().flatMap(\.nodes).flatMap(\.previewSessions).map(self.batchTarget)
+        let roster = self.interactionSections().flatMap(\.nodes).flatMap(\.previewSessions).map(self.batchTarget)
+        // Catalog rows navigate through List selection but never join the roster's batch or drag roots.
+        let catalogs = self.catalogPresentation.catalogs.flatMap { catalog in
+            catalog.hosts.flatMap { host in
+                host.rows.map { row in
+                    let target = ChatSidebarCatalogPresentation.target(
+                        catalogID: catalog.id, hostID: host.id, row: row, agentID: self.catalogData.agentID)
+                    return OpenClawChatSessionEntry(key: target.sessionKey, agentId: target.agentID)
+                }
+            }
+        }
+        return roster + catalogs
     }
 
     func isCurrentInteractionRow(_ row: OpenClawChatSessionEntry) -> Bool {

@@ -6,6 +6,7 @@ import {
   commandRpcMocks,
   pinnedConnectionMocks,
   createCodexSessionCatalogControl,
+  createCodexSessionCatalogControlFactory,
   continueLocalCodexSession,
   registerCodexSessionCatalog,
   config,
@@ -86,17 +87,19 @@ describe("Codex supervision actions", () => {
         throw new Error(`unexpected method: ${request.method}`);
       },
     );
-    const control = createCodexSessionCatalogControl({
+    const control = createCodexSessionCatalogControlFactory({
       getPluginConfig: () => pluginConfig,
       getRuntimeConfig: () => runtimeConfig,
-    });
+    }).forRequest("alpha");
 
     commandRpcMocks.codexControlRequest.mockResolvedValue({
       data: [idleThread({ source: "cli" })],
     });
     await control.initialize();
     commandRpcMocks.codexControlRequest.mockClear();
-    await expect(archiveTestSession({ config: initialRuntimeConfig, control })).resolves.toEqual({
+    await expect(
+      archiveTestSession({ agentId: "alpha", config: initialRuntimeConfig, control }),
+    ).resolves.toEqual({
       archived: true,
     });
 
@@ -105,7 +108,13 @@ describe("Codex supervision actions", () => {
     expect(acquisition).toMatchObject({
       agentDir: expectedAgentDir,
       startOptions: expect.objectContaining({ command: "codex-archive-a", homeScope: "user" }),
-      config: { agents: { list: [{ id: "alpha" }, { id: "beta" }] } },
+      config: {
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "alpha" } },
+          entries: { alpha: {}, beta: {} },
+        },
+      },
     });
     expect(pinnedConnectionMocks.request.mock.calls.map(([request]) => request.method)).toEqual([
       "thread/read",

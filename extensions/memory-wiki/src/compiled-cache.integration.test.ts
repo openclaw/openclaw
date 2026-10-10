@@ -221,6 +221,80 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     await expect(loadMemoryWikiCompiledCache(config)).resolves.not.toBeNull();
   });
 
+  it.each([false, true])(
+    "reconciles an external publication before source sync (source changed: %s)",
+    async (sourceChanged) => {
+      const { rootDir, config } = await createPersistentVault({
+        initialize: true,
+        config: {
+          vaultMode: "bridge",
+          bridge: { enabled: true, readMemoryArtifacts: false },
+        },
+      });
+      const sourcePath = path.join(rootDir, "sources", "alpha.md");
+      await fs.writeFile(sourcePath, "# Alpha\n\nOriginal source.\n");
+      await compileMemoryWikiVault(config);
+      const compiled = await loadMemoryWikiCompiledCache(config);
+      if (!compiled) {
+        throw new Error("Expected the initial compiled snapshot");
+      }
+      const parent = await loadMemoryWikiVaultIdentity(rootDir);
+      if (!parent.compiledCachePublicationId) {
+        throw new Error("Expected the initial publication");
+      }
+      configureMemoryWikiCompiledCacheStore(undefined);
+      configureMemoryWikiCompiledCacheStore(createCacheStore());
+      await activateExistingMemoryWikiVault(config);
+
+      // A separate compiler replaces the durable publication without updating
+      // this process's activated owner or warming its snapshot.
+      const publicationId = randomUUID();
+      const reservationId = randomUUID();
+      const externalStore = createCacheStore();
+      await externalStore.write(
+        config,
+        compiled,
+        resolveMemoryWikiCompiledCacheGeneration(compiled),
+        publicationId,
+      );
+      await appendMemoryWikiLog(rootDir, {
+        type: "compile",
+        timestamp: new Date().toISOString(),
+        details: { compiledCacheReservationId: reservationId },
+      });
+      await appendMemoryWikiLog(rootDir, {
+        type: "compile",
+        timestamp: new Date().toISOString(),
+        details: {
+          compiledCachePublicationId: publicationId,
+          compiledCacheParentPublicationId: parent.compiledCachePublicationId,
+          compiledCacheReservationId: reservationId,
+          compiledCacheSourceGeneration: parent.compiledCacheSourceGeneration,
+        },
+      });
+      await externalStore.deletePublication(config, parent.compiledCachePublicationId);
+      if (sourceChanged) {
+        await fs.writeFile(sourcePath, "# Alpha\n\nChanged source.\n");
+      }
+      const logPath = path.join(rootDir, ".openclaw-wiki", "log.jsonl");
+      const before = await fs.readFile(logPath, "utf8");
+
+      const result = await syncMemoryWikiImportedSources({ config });
+
+      expect(result.indexesRefreshed).toBe(sourceChanged);
+      expect(result.indexRefreshReason).toBe(
+        sourceChanged ? "missing-compiled-cache" : "no-import-changes",
+      );
+      const after = await fs.readFile(logPath, "utf8");
+      if (sourceChanged) {
+        expect(after).not.toBe(before);
+      } else {
+        expect(after).toBe(before);
+      }
+      await expect(readMemoryWikiDashboardState(config)).resolves.toMatchObject({ state: "ready" });
+    },
+  );
+
   it("reuses an active compiled owner during repeated initialization and exact page reads", async () => {
     const { rootDir, config } = await createPersistentVault({ initialize: true });
     await fs.writeFile(path.join(rootDir, "sources", "alpha.md"), "# Alpha\n\nRequested source.\n");
@@ -819,7 +893,7 @@ describe("Memory Wiki compiled cache lifecycle", () => {
   it("deletes cache rows when their agent owner is removed", async () => {
     const rootDir = path.join((await createPersistentVault()).rootDir, "agents");
     const appConfig = {
-      agents: { list: [{ id: "support", default: true }, { id: "marketing" }] },
+      agents: { entries: { support: {}, marketing: {} } },
     };
     const baseConfig = resolveMemoryWikiConfig({ vault: { scope: "agent", path: rootDir } });
     const support = resolveMemoryWikiAgentConfig({

@@ -368,44 +368,50 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
   threadId: string;
   attempt: EmbeddedRunAttemptParams;
   request: { requestId: string | number; snapshot: Record<string, unknown>; signal: AbortSignal };
-  origin: { id: string; server: string; tool: string };
-  assertCurrent: () => void;
+  readOrigin: (serverName: string) => { id: string; server: string; tool: string } | undefined;
 }) {
+  const serverName =
+    typeof params.request.snapshot.serverName === "string"
+      ? params.request.snapshot.serverName
+      : "";
+  const origin = params.readOrigin(serverName);
+  const { agentId, sessionKey } = params.attempt;
+  if (!origin || !sessionKey || !agentId) {
+    throw new Error("Native MCP form has no unambiguous live origin");
+  }
   const assertCurrent = () => {
-    params.assertCurrent();
-    params.request.signal.throwIfAborted();
     params.attempt.hostCapabilities.assertActive();
+    if (params.readOrigin(serverName)?.id !== origin.id) {
+      throw new Error("Native MCP form origin expired");
+    }
+    params.request.signal.throwIfAborted();
   };
   assertCurrent();
   const initial = createNativeMcpRuntime({
     client: params.client,
     threadId: params.threadId,
     attempt: params.attempt,
-    originCallId: params.origin.id,
+    originCallId: origin.id,
     assertCurrent,
   });
-  const tools = (await initial.listTools?.(params.origin.server))?.tools ?? [];
+  const tools = (await initial.listTools?.(origin.server))?.tools ?? [];
   assertCurrent();
-  const source = tools.find((tool) => tool.name === params.origin.tool);
+  const source = tools.find((tool) => tool.name === origin.tool);
   if (!source) {
     throw new Error("Native MCP form origin is no longer listed");
   }
   const connectorId = readCodexMcpToolConnectorId(source);
-  if (params.origin.server === CODEX_APPS_MCP_SERVER && !connectorId) {
+  if (origin.server === CODEX_APPS_MCP_SERVER && !connectorId) {
     throw new Error("Native MCP form connector is unavailable");
   }
   const runtime = createNativeMcpRuntime({
     client: params.client,
     threadId: params.threadId,
     attempt: params.attempt,
-    originCallId: params.origin.id,
+    originCallId: origin.id,
     connectorId,
     assertCurrent,
   });
-  const { agentId, sessionKey } = params.attempt;
-  if (!agentId || !sessionKey) {
-    throw new Error("Native MCP form origin has no session owner");
-  }
   await runtime.getCatalog();
   assertCurrent();
   return await createHarnessMcpFormResourceContext({
@@ -415,7 +421,7 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
     signal: params.request.signal,
     origin: {
       runtime,
-      serverName: params.origin.server,
+      serverName: origin.server,
       agentId,
       sessionKey,
       requesterId: runtime.appRequester?.profileId,
@@ -426,28 +432,26 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
         const target = tools.find((tool) => tool.name === request.toolName);
         if (
           !target ||
-          params.attempt.toolOverrides?.mcpServers?.[params.origin.server] === false ||
-          params.attempt.toolOverrides?.mcpToolsDeny?.[params.origin.server]?.includes(
-            request.toolName,
-          ) ||
+          params.attempt.toolOverrides?.mcpServers?.[origin.server] === false ||
+          params.attempt.toolOverrides?.mcpToolsDeny?.[origin.server]?.includes(request.toolName) ||
           readCodexMcpToolUiVisibility(target)?.includes("app") === false ||
-          (params.origin.server === CODEX_APPS_MCP_SERVER &&
+          (origin.server === CODEX_APPS_MCP_SERVER &&
             readCodexMcpToolConnectorId(target) !== connectorId)
         ) {
           throw new Error("Native form preview tool is not authorized");
         }
-        const server = params.attempt.config?.mcp?.servers?.[params.origin.server];
+        const server = params.attempt.config?.mcp?.servers?.[origin.server];
         if (
           requiresMcpCodexToolApproval({
             mode: server
-              ? resolveProjectedMcpCodexToolApprovalMode(params.origin.server, server)
+              ? resolveProjectedMcpCodexToolApprovalMode(origin.server, server)
               : "prompt",
             fullPermission: params.attempt.permissionMode === "full",
             annotations: normalizeMcpCodexToolAnnotations(target.annotations),
           })
         ) {
           const description = JSON.stringify({
-            server: params.origin.server,
+            server: origin.server,
             tool: request.toolName,
             arguments: request.input,
           });

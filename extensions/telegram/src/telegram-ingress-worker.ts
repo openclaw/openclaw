@@ -1,5 +1,6 @@
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createCpuTrackedWorker } from "openclaw/plugin-sdk/process-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
 const TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS = 2_000;
@@ -79,31 +80,6 @@ export type TelegramIngressWorkerFactory = (
   options: TelegramIngressWorkerOptions,
 ) => TelegramIngressWorkerHandle;
 
-async function stopTelegramIngressWorker(params: {
-  requestStop: () => void;
-  task: Promise<void>;
-  terminate: () => Promise<number>;
-}): Promise<void> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const forcedTermination = new Promise<void>((resolve, reject) => {
-    timeout = setTimeout(() => {
-      void params.terminate().then(() => resolve(), reject);
-    }, TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS);
-    timeout.unref?.();
-  });
-  try {
-    params.requestStop();
-    // Keep the cooperative close path, but finish inside the host channel's
-    // stop budget. Forced termination is replay-safe because updates advance
-    // only after the parent durably spools and acknowledges them.
-    await Promise.race([params.task.catch(() => undefined), forcedTermination]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
   const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
   const worker = createCpuTrackedWorker(
@@ -150,13 +126,16 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       }
     },
     async stop() {
-      await stopTelegramIngressWorker({
-        requestStop: () => {
+      // Forced termination is replay-safe: the parent commits each update before its ACK.
+      await raceWithTimeout(
+        () => {
           worker.postMessage({ type: "stop" } satisfies TelegramIngressWorkerCommand, []);
+          return taskPromise.catch(() => undefined);
         },
-        task: taskPromise,
-        terminate: () => worker.terminate(),
-      });
+        TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS,
+        () => worker.terminate().then(() => undefined),
+        { ref: false },
+      );
     },
     task() {
       return taskPromise;

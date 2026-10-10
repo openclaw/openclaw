@@ -23,6 +23,7 @@ import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   resolveBoardWidgetContentKind,
   resolveBoardWidgetContentKindByPluginKind,
@@ -56,7 +57,7 @@ import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { emitSessionsChanged } from "./session-change-event.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
 
 type CanvasDocumentReader = typeof readCanvasDocumentHtmlSource;
@@ -98,6 +99,19 @@ function projectBoardSnapshot<T extends BoardSnapshot>(snapshot: T, agentId: str
   return { ...snapshot, sessionKey: sessionObserverScopeKey(snapshot.sessionKey, agentId) };
 }
 
+function broadcastBoardChanged(
+  context: GatewayRequestContext,
+  session: Required<BoardSessionTarget>,
+  { sessionKey, revision }: BoardSnapshot,
+  widget?: string,
+) {
+  context.broadcast(
+    "board.changed",
+    { sessionKey, revision, ...(widget !== undefined ? { widget } : {}) },
+    { sessionKeys: [session.sessionKey], agentId: session.agentId },
+  );
+}
+
 export function createBoardHandlers(
   store: BoardStore,
   readCanvasDocument: CanvasDocumentReader = readCanvasDocumentHtmlSource,
@@ -121,8 +135,7 @@ export function createBoardHandlers(
         await store.getSnapshotWithHtmlViewMetadata(boardSession);
       authority.assertActive();
       let sandboxPort = context.getMcpAppSandboxPort?.();
-      let sandboxOrigin: string | undefined;
-      let sandboxOriginResolved = false;
+      let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
@@ -185,10 +198,9 @@ export function createBoardHandlers(
             ...(resourceOrigins ? { resourceOrigins } : {}),
           });
           widget.sandboxPort = sandboxPort;
-          if (!sandboxOriginResolved) {
+          if (sandboxOrigin === null) {
             const configuredOrigin = context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
             sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
-            sandboxOriginResolved = true;
           }
           if (sandboxOrigin) {
             widget.sandboxOrigin = sandboxOrigin;
@@ -222,14 +234,7 @@ export function createBoardHandlers(
             agentId: boardSession.agentId,
             reason: "board",
           });
-          context.broadcast(
-            "board.changed",
-            {
-              sessionKey: snapshot.sessionKey,
-              revision: snapshot.revision,
-            },
-            { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
-          );
+          broadcastBoardChanged(context, boardSession, snapshot);
         }
         respond(true, snapshot);
       },
@@ -384,19 +389,24 @@ export function createBoardHandlers(
         const putWidget = () =>
           store.putWidget(boardParams, {
             ...(resolveMcpAppInteraction ? { resolveMcpAppInteraction } : {}),
-            assertCurrent: () => {
-              authority.assertActive();
-              identity?.assertSelected();
-              const cfg = context.getRuntimeConfig();
-              const current = resolveRequestedSessionStoreTarget(
-                cfg,
-                boardSession.sessionKey,
-                boardSession.agentId,
-              );
-              if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
-                throw new BoardValidationError("invalid_operation", "board session changed; retry");
-              }
-            },
+            assertCurrent: composeSessionSourceAssertion(
+              [identity?.assertSelected ?? authority.assertActive],
+              (assertSources) => {
+                assertSources();
+                const cfg = context.getRuntimeConfig();
+                const current = resolveRequestedSessionStoreTarget(
+                  cfg,
+                  boardSession.sessionKey,
+                  boardSession.agentId,
+                );
+                if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
+                  throw new BoardValidationError(
+                    "invalid_operation",
+                    "board session changed; retry",
+                  );
+                }
+              },
+            ),
           });
         let snapshot = identity ? await identity.start(putWidget) : await putWidget();
         authority.assertActive();
@@ -433,15 +443,7 @@ export function createBoardHandlers(
           agentId: boardSession.agentId,
           reason: "board",
         });
-        context.broadcast(
-          "board.changed",
-          {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-            widget: snapshot.resolvedWidgetName,
-          },
-          { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
-        );
+        broadcastBoardChanged(context, boardSession, snapshot, snapshot.resolvedWidgetName);
         respond(true, snapshot);
       },
     ),
@@ -468,14 +470,7 @@ export function createBoardHandlers(
           boardSession.agentId,
         );
         authority.assertActive();
-        context.broadcast(
-          "board.changed",
-          {
-            sessionKey: snapshot.sessionKey,
-            revision: snapshot.revision,
-          },
-          { sessionKeys: [boardSession.sessionKey], agentId: boardSession.agentId },
-        );
+        broadcastBoardChanged(context, boardSession, snapshot);
         respond(true, snapshot);
       },
     ),

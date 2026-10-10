@@ -15,7 +15,9 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archive-session.js";
 import type {
   MaterializedSessionStateDeletePlan,
+  SessionHistoryEvictionArchivePlan,
   SessionStateDeletePlan,
+  SqliteArchiveOneShotWorkerData,
   TranscriptArchivePagePlan,
   TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
@@ -233,7 +235,11 @@ function runSqliteTranscriptArchiveWorker(
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
-    workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "materialize",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 
@@ -257,7 +263,11 @@ export function runSqliteTranscriptArchivePublishWorker(
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
     signal,
     expectedMessageType: "published",
-    workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "publish",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 
@@ -333,23 +343,43 @@ export async function materializeSessionStateDeletePlans(
     if (!result) {
       throw new Error(`SQLite transcript archive worker omitted ${plan.sessionId}`);
     }
-    const generation = plan.snapshot.generation;
-    if (result.archive && !generation) {
-      throw new Error(
-        `Cannot archive SQLite transcript without a generation for ${plan.sessionId}`,
-      );
-    }
-    const archivedTranscript =
-      result.archive && generation
-        ? {
-            generation,
-            sessionId: plan.sessionId,
-            archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
-            sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
-          }
-        : null;
-    return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
+    return materializedSessionStateDeletePlan(plan, result);
   });
+}
+
+/** Plan and stage the selected history in the archive worker's existing read snapshot. */
+export async function materializeSessionHistoryEvictionPlan(
+  input: SessionHistoryEvictionArchivePlan,
+): Promise<MaterializedSessionStateDeletePlan | null> {
+  const [result] = await runSqliteTranscriptArchiveWorker([input]);
+  if (!result || result.sessionId !== input.sessionId || result.preparedPlan === undefined) {
+    throw new Error(
+      `SQLite transcript archive worker omitted history planning for ${input.sessionId}`,
+    );
+  }
+  return result.preparedPlan
+    ? materializedSessionStateDeletePlan(result.preparedPlan, result)
+    : null;
+}
+
+function materializedSessionStateDeletePlan(
+  plan: SessionStateDeletePlan,
+  result: TranscriptArchiveWorkerResult,
+): MaterializedSessionStateDeletePlan {
+  const generation = plan.snapshot.generation;
+  if (result.archive && !generation) {
+    throw new Error(`Cannot archive SQLite transcript without a generation for ${plan.sessionId}`);
+  }
+  const archivedTranscript =
+    result.archive && generation
+      ? {
+          generation,
+          sessionId: plan.sessionId,
+          archivedPath: path.join(plan.archiveDirectory, result.archive.archiveName),
+          sourcePath: path.join(plan.archiveDirectory, `${plan.sessionId}.jsonl`),
+        }
+      : null;
+  return Object.assign({}, plan, { archive: result.archive, archivedTranscript });
 }
 
 // Multiple removed entries can point at one transcript session. If any owner

@@ -11,7 +11,6 @@ import {
   hasExecutionSettlement,
   isStickyAgentRunTerminalOutcome,
   mergeAgentRunTerminalOutcome,
-  type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReceipt } from "../../agents/agent-run-terminal-receipt.js";
 import {
@@ -32,7 +31,10 @@ const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
 const AGENT_RUN_CACHE_MAX_ENTRIES = 5_000;
 
 type AgentJobSource = "agent" | "chat" | "lifecycle";
-type AgentRunObservation = AgentJobTerminalSnapshot & {
+type StoredAgentJobSnapshot = Omit<AgentJobTerminalSnapshot, "pendingError"> & {
+  pendingError?: never;
+};
+type AgentRunObservation = StoredAgentJobSnapshot & {
   session?: AgentJobSession;
   runId: string;
   source: AgentJobSource;
@@ -51,7 +53,7 @@ type AgentJobRecord = {
 type AgentJobWaiter = (lifecycleReset?: boolean) => void;
 type DedupeObservation =
   | { state: "active" }
-  | { state: "terminal"; snapshot: AgentJobTerminalSnapshot }
+  | { state: "terminal"; snapshot: StoredAgentJobSnapshot }
   | { state: "untracked" };
 
 type AgentJobState = {
@@ -171,24 +173,12 @@ function enforceAgentRunCacheMaxEntries() {
   }
 }
 
-function terminalOutcomeFromSnapshot(
-  snapshot: AgentJobTerminalSnapshot,
-): AgentRunTerminalOutcome | undefined {
-  if (snapshot.pendingError) {
-    return undefined;
-  }
-  return buildAgentRunTerminalOutcome(snapshot);
-}
-
 function shouldPreserveTerminalSnapshot(
-  existing: AgentJobTerminalSnapshot,
-  incoming: AgentJobTerminalSnapshot,
+  existing: StoredAgentJobSnapshot,
+  incoming: StoredAgentJobSnapshot,
 ): boolean {
-  const existingOutcome = terminalOutcomeFromSnapshot(existing);
-  const incomingOutcome = terminalOutcomeFromSnapshot(incoming);
-  if (!existingOutcome || !incomingOutcome) {
-    return false;
-  }
+  const existingOutcome = buildAgentRunTerminalOutcome(existing);
+  const incomingOutcome = buildAgentRunTerminalOutcome(incoming);
   return mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome) === existingOutcome;
 }
 
@@ -306,7 +296,7 @@ function schedulePendingAgentRunTerminal(
     if (
       pendingRuns === pendingAgentRunErrors &&
       !replacesPendingTimeout &&
-      terminalOutcomeFromSnapshot(pending.snapshot)?.reason === "failed" &&
+      buildAgentRunTerminalOutcome(pending.snapshot).reason === "failed" &&
       agentRunWaiters.has(snapshot.runId)
     ) {
       pending.timer = undefined;
@@ -535,11 +525,11 @@ export function setGatewayDedupeEntry(params: {
   const incomingObservation = parseDedupeObservation(params.entry, executionTiming);
   const existingOutcome =
     existingObservation?.state === "terminal"
-      ? terminalOutcomeFromSnapshot(existingObservation.snapshot)
+      ? buildAgentRunTerminalOutcome(existingObservation.snapshot)
       : undefined;
   const incomingOutcome =
     incomingObservation.state === "terminal"
-      ? terminalOutcomeFromSnapshot(incomingObservation.snapshot)
+      ? buildAgentRunTerminalOutcome(incomingObservation.snapshot)
       : undefined;
   if (
     existingOutcome &&
@@ -561,6 +551,10 @@ export function setGatewayDedupeEntry(params: {
   }
   if (incomingObservation.state === "active") {
     beginAgentJob(key.runId);
+    // Queue custody can become observable after an RPC wait has already begun.
+    for (const waiter of agentRunWaiters.get(key.runId) ?? []) {
+      waiter();
+    }
     return;
   }
   if (incomingObservation.state === "terminal") {
@@ -622,14 +616,10 @@ function getCanonicalAgentRunSnapshot(
 function getAgentRunSnapshot(params: {
   runId: string;
   source?: "agent" | "chat";
-  afterVersion: number;
 }): AgentRunSnapshot | undefined {
   pruneAgentRunCache();
   const job = agentJobs.get(params.runId);
-  const snapshot = job
-    ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source)
-    : undefined;
-  return snapshot && snapshot.version > params.afterVersion ? snapshot : undefined;
+  return job ? getCanonicalAgentRunSnapshot(job.snapshotsBySource, params.source) : undefined;
 }
 
 function addAgentRunWaiter(runId: string, waiter: AgentJobWaiter): () => void {
@@ -671,16 +661,12 @@ export function projectAgentJobObservation(snapshot: AgentJobObservation): Agent
 export async function waitForAgentJob(params: {
   runId: string;
   timeoutMs: number;
-  ignoreCachedSnapshot?: boolean;
   source?: "agent" | "chat";
+  /** A caller-owned nonterminal observation can finish this wait without ending the run. */
+  stopWaiting?: () => boolean;
 }): Promise<AgentJobObservation | null> {
   ensureAgentRunListener();
-  const afterVersion = params.ignoreCachedSnapshot ? agentJobState.version : -1;
-  const cached = getAgentRunSnapshot({
-    runId: params.runId,
-    source: params.source,
-    afterVersion,
-  });
+  const cached = getAgentRunSnapshot(params);
   if (cached) {
     return projectAgentJobObservation(cached);
   }
@@ -710,11 +696,11 @@ export async function waitForAgentJob(params: {
         finish({ status: "timeout", timeoutPhase: "gateway_draining" });
         return;
       }
-      const snapshot = getAgentRunSnapshot({
-        runId: params.runId,
-        source: params.source,
-        afterVersion,
-      });
+      if (params.stopWaiting?.()) {
+        finish(null);
+        return;
+      }
+      const snapshot = getAgentRunSnapshot(params);
       if (snapshot) {
         finish(projectAgentJobObservation(snapshot));
       }
@@ -724,10 +710,10 @@ export async function waitForAgentJob(params: {
       if (!params.source) {
         const pending = pendingAgentRunErrors.get(params.runId);
         const pendingError = pending?.snapshot;
-        if (pendingError && pendingError.version > afterVersion) {
+        if (pendingError) {
           finish(
             !pending.timer ||
-              isStickyAgentRunTerminalOutcome(terminalOutcomeFromSnapshot(pendingError))
+              isStickyAgentRunTerminalOutcome(buildAgentRunTerminalOutcome(pendingError))
               ? projectAgentJobObservation(pendingError)
               : createPendingErrorTimeoutSnapshot(pendingError),
           );
@@ -736,8 +722,7 @@ export async function waitForAgentJob(params: {
         const pendingTimeout = pendingAgentRunTimeouts.get(params.runId)?.snapshot;
         if (
           pendingTimeout &&
-          pendingTimeout.version > afterVersion &&
-          terminalOutcomeFromSnapshot(pendingTimeout)?.reason === "hard_timeout"
+          buildAgentRunTerminalOutcome(pendingTimeout).reason === "hard_timeout"
         ) {
           finish(projectAgentJobObservation(pendingTimeout));
           return;

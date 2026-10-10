@@ -16,8 +16,6 @@ import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry.js";
 import { getPluginRegistryForContext } from "../plugins/runtime.js";
-import type { AuthRateLimiter } from "./auth-rate-limit.js";
-import type { ResolvedGatewayAuth } from "./auth.js";
 import { respondNotFound } from "./control-ui-http-utils.js";
 import {
   controlUiPluginAssetPrefix,
@@ -27,9 +25,16 @@ import {
   CUSTOM_PLUGIN_UI_DISABLED_MESSAGE,
   isControlUiPluginAllowed,
 } from "./control-ui-plugin-policy.js";
-import { authorizeControlUiPluginCookieRequest } from "./http-auth-plugin-cookie.js";
+import {
+  authorizeControlUiPluginCookieRequest,
+  prepareControlUiPluginCookieRequest,
+} from "./http-auth-plugin-cookie.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { sendGatewayAuthFailure, sendMethodNotAllowed } from "./http-common.js";
+import {
+  captureHttpRequestAuthority,
+  type GatewayHttpRequestAuthOptions,
+} from "./http-request-authority.js";
 import { authorizeOperatorScopesForRequiredScope, READ_SCOPE } from "./method-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -325,23 +330,18 @@ export function listControlUiPluginActivations(
   });
 }
 
-/** Serves only snapshot bytes after scoped plugin-cookie or explicit read authentication. */
+/** Authorized content-addressed snapshots stay in the private browser cache across grant renewal. */
 export async function handleControlUiPluginAssetRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  params: {
-    auth: ResolvedGatewayAuth;
-    basePath: string;
-    trustedProxies?: string[];
-    allowRealIpFallback?: boolean;
-    rateLimiter?: AuthRateLimiter;
-  },
+  params: GatewayHttpRequestAuthOptions & { basePath: string },
 ): Promise<boolean> {
   const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
   const assetRoot = controlUiPluginAssetRoot(params.basePath);
   if (!pathname.startsWith(assetRoot)) {
     return false;
   }
+  res.setHeader("Cache-Control", "no-store");
   if (req.method !== "GET" && req.method !== "HEAD") {
     sendMethodNotAllowed(res, "GET, HEAD");
     return true;
@@ -363,6 +363,16 @@ export async function handleControlUiPluginAssetRequest(
     respondNotFound(res);
     return true;
   }
+  const hasCurrentClientAuthority = captureHttpRequestAuthority({ ...params, req });
+  await prepareControlUiPluginCookieRequest(req, {
+    requestPath: pathname,
+    authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
+    res,
+  });
+  if (res.writableEnded || res.destroyed) {
+    return true;
+  }
+  // Keep the final policy check in the same synchronous frame as asset disclosure.
   const cookieAuth = authorizeControlUiPluginCookieRequest(req, {
     requestPath: pathname,
     authGeneration: resolveSharedGatewaySessionGeneration(params.auth, params.trustedProxies),
@@ -384,6 +394,10 @@ export async function handleControlUiPluginAssetRequest(
   } else if (!(await authorizeControlUiReadRequestOrReply({ req, res, ...params }))) {
     return true;
   }
+  if (!hasCurrentClientAuthority()) {
+    sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+    return true;
+  }
   const registry = getActiveBrowserRegistry();
   const owner = registry?.plugins.find((record) => record.id === pluginId);
   const build = owner && browserPluginStates.get(owner)?.revisions.get(revision);
@@ -398,7 +412,7 @@ export async function handleControlUiPluginAssetRequest(
   res.statusCode = 200;
   res.setHeader("Content-Type", asset.contentType);
   res.setHeader("Content-Length", asset.body.length);
-  res.setHeader("Cache-Control", "private, no-cache");
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.end(req.method === "HEAD" ? undefined : asset.body);
   return true;

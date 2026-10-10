@@ -11,15 +11,19 @@ import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identi
 import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
+  type SqliteWorkerAdmissionRequest,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import type {
+  AgentDatabaseGenerationClaim,
+  AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-admission-contract.js";
+import type {
   AgentDatabaseExecutionScope,
   AgentDatabaseOperations,
-  AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -32,6 +36,7 @@ import {
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import type { SessionEntryReplacementCommitted } from "./session-accessor.sqlite-replacement-types.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { parseSessionTranscriptAuthorityReceipts } from "./session-transcript-authority.js";
 
 type ReplacementDatabaseOptions = OpenClawAgentDatabaseOptions & { path: string };
 
@@ -71,21 +76,48 @@ export async function withSessionEntryWorker<T>(
   signal?: AbortSignal,
   prepare?: SessionEntryWorkerPreparation,
   onTransaction?: (facts: unknown) => void,
+  onAdmission?: (
+    admission: SqliteWorkerOperationAdmission,
+    retained: RetainedWorkerTransactionAdmission,
+    request: SqliteWorkerAdmissionRequest,
+    grant: () => boolean,
+  ) => boolean,
+  releaseSource?: () => void | Promise<void>,
+  operationMode: "write" | "prepared-read" = "write",
 ): Promise<T> {
-  const execution =
-    retainedExecution ??
-    captureOpenClawAgentDatabaseExecution(
-      options,
-      databaseIdentity
-        ? {
-            expectedIdentity: {
-              kind: "file",
-              physicalIdentity: databaseIdentity,
-              nativeLocation: options.path,
-            },
-          }
-        : {},
-    );
+  let execution: OpenClawAgentDatabaseExecution;
+  let env: SessionEntryCommitContext["env"];
+  try {
+    env = Object.freeze({ ...(options.env ?? process.env) });
+    execution =
+      retainedExecution ??
+      captureOpenClawAgentDatabaseExecution(
+        options,
+        databaseIdentity
+          ? {
+              expectedIdentity: {
+                kind: "file",
+                physicalIdentity: databaseIdentity,
+                nativeLocation: options.path,
+              },
+            }
+          : {},
+      );
+  } catch (error) {
+    try {
+      await releaseSource?.();
+    } catch (cleanupError) {
+      throw retainSqliteWorkerErrorCode(
+        createSqliteLifecycleAggregateError(
+          [error, cleanupError],
+          "Session writer acquisition and source cleanup failed",
+          error,
+        ),
+        error,
+      );
+    }
+    throw error;
+  }
   const assertRetainedIdentity = () => {
     if (!retainedExecution) {
       return;
@@ -111,7 +143,7 @@ export async function withSessionEntryWorker<T>(
   };
   let assertNativeCurrent: (() => void) | undefined;
   const context: SessionEntryCommitContext = {
-    env: Object.freeze({ ...(options.env ?? process.env) }),
+    env,
     assertCurrent() {
       execution.assertCurrent();
       assertRetainedIdentity();
@@ -122,15 +154,23 @@ export async function withSessionEntryWorker<T>(
     execution.assertCurrent();
     assertCurrent();
     assertRetainedIdentity();
+    preparedReadClaim?.assertCurrent();
   };
+  let preparedReadClaim: AgentDatabaseGenerationClaim | undefined;
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent: assertHeld,
     createAdmission(binding) {
       assertNativeCurrent = () => binding.assertCurrent();
       return (retained) => {
         const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+          if (operationMode === "prepared-read" && request.stage !== "prepare") {
+            throw new Error("Prepared session read cannot open storage or admit a write");
+          }
           binding.authorize(request);
           assertHeld();
+          if (onAdmission?.(admission, retained, request, grant)) {
+            return;
+          }
           if (request.stage === "commit") {
             onCommit?.(admission, retained, request.facts);
           } else if (request.stage === "transaction") {
@@ -147,6 +187,16 @@ export async function withSessionEntryWorker<T>(
   let preparation: ReturnType<SessionEntryWorkerPreparation> | undefined;
   let outcome: Result<T, unknown>;
   try {
+    if (operationMode === "prepared-read") {
+      if (prepare) {
+        throw new Error("Prepared session read cannot prepare a writer");
+      }
+      preparedReadClaim = execution.capturePreparedGenerationClaim();
+      if (!preparedReadClaim) {
+        throw new Error("Session read lost its prepared native generation");
+      }
+      assertHeld();
+    }
     preparation = prepare?.(execution, source);
     if (preparation) {
       // Cold native admission still owns the writer; snapshot planning releases it.
@@ -164,21 +214,28 @@ export async function withSessionEntryWorker<T>(
       }
       await preparation.prepare();
     }
-    const value = await runOpenClawAgentWorkerWrite(
-      options,
-      () => {
-        preparation?.beforeWrite();
-        return run(execution, source, context);
-      },
-      undefined,
-      signal,
-    );
+    const value =
+      operationMode === "prepared-read"
+        ? await run(execution, source, context)
+        : await runOpenClawAgentWorkerWrite(
+            options,
+            () => {
+              preparation?.beforeWrite();
+              return run(execution, source, context);
+            },
+            undefined,
+            signal,
+          );
+    if (operationMode === "prepared-read") {
+      assertHeld();
+    }
     outcome = { ok: true, value };
   } catch (error) {
     outcome = { ok: false, error };
   }
   const cleanupErrors: unknown[] = [];
   for (const cleanup of [
+    () => releaseSource?.(),
     () => preparation?.release(),
     () => (retainedExecution ? undefined : execution.release()),
   ]) {
@@ -277,6 +334,9 @@ export async function initializeSessionTranscriptInWorker(
               kind: "session-transcript-initialized",
               sessionKey: facts.sessionKey,
               ...(placeholder ? { placeholder } : {}),
+              transcriptPublication: parseSessionTranscriptAuthorityReceipts(
+                facts.transcriptPublication,
+              ),
             };
           }
           unknown = admitted.admission.settlement?.kind !== "completed" || !receipt;
@@ -310,7 +370,13 @@ export async function initializeSessionTranscriptInWorker(
         throw new Error("Session transcript commit omitted its exact publication facts");
       }
       admitted = { admission, retained };
-      publication.begin([input.sessionKey], []);
+      publication.begin(
+        [input.sessionKey],
+        [],
+        [],
+        [],
+        parseSessionTranscriptAuthorityReceipts(facts.publication.transcriptPublication),
+      );
     },
   );
 }
@@ -447,6 +513,10 @@ export async function runSessionEntryWorkerMutation<T>(
         !Array.isArray(facts.publication.sharingUnchangedKeys) ||
         !facts.publication.sharingUnchangedKeys.every(
           (key): key is string => typeof key === "string",
+        ) ||
+        !Array.isArray(facts.publication.generationUnchangedKeys) ||
+        !facts.publication.generationUnchangedKeys.every(
+          (key): key is string => typeof key === "string",
         )
       ) {
         throw new Error("Session entry mutation commit omitted its publication keys");
@@ -456,6 +526,8 @@ export async function runSessionEntryWorkerMutation<T>(
         facts.publication.changedKeys,
         facts.publication.membershipInvalidatedKeys,
         facts.publication.sharingUnchangedKeys,
+        facts.publication.generationUnchangedKeys,
+        parseSessionTranscriptAuthorityReceipts(facts.publication.transcriptPublication),
       );
     },
     executionOptions.retainedExecution,

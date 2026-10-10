@@ -53,17 +53,15 @@ export function createDiscordMessageProgressRuntime(params: {
   const reasoningWindowEnabled = reasoningLevel === "stream";
   // The durable verbose lane mirrors commentary, not tool lifecycle rows.
   // Yield only the draft content that has a durable counterpart.
-  let shouldYieldDraftCommentary: () => boolean = () => false;
-  const handleAssistantMessageBoundary = () => {
-    if (draftPreview.handleAssistantMessageBoundary()) {
-      params.onTurnReset();
-    }
-  };
-
+  let shouldYieldDraftCommentary = async () => false;
+  let turnCommentaryVisible = false;
   const replyOptions: Partial<ReplyOptions> = {
+    progressRequiresReply: draftPreview.isProgressMode ? true : undefined,
     onAssistantMessageStart: draftPreview.draftStream
       ? () => {
-          handleAssistantMessageBoundary();
+          if (draftPreview.handleAssistantMessageBoundary()) {
+            params.onTurnReset();
+          }
           return false;
         }
       : undefined,
@@ -100,15 +98,16 @@ export function createDiscordMessageProgressRuntime(params: {
       : undefined,
     shouldDeliverCommentaryPayloads:
       draftPreview.isProgressMode && draftPreview.commentaryProgressEnabled
-        ? () => shouldYieldDraftCommentary()
+        ? () => turnCommentaryVisible
         : undefined,
     reasoningPayloadsEnabled: reasoningDurableEnabled,
-    onVerboseProgressVisibility: (isActive) => {
+    onVerboseProgressVisibilityAsync: async (isActive) => {
       shouldYieldDraftCommentary = isActive;
+      turnCommentaryVisible = await isActive();
     },
     onNarrationUpdate: draftPreview.narrationProgressEnabled
       ? async (payload) => {
-          if (abortSignal?.aborted || shouldYieldDraftCommentary()) {
+          if ((await shouldYieldDraftCommentary()) || abortSignal?.aborted) {
             return;
           }
           await draftPreview.pushNarrationProgress(payload.text);
@@ -140,7 +139,10 @@ export function createDiscordMessageProgressRuntime(params: {
       return await draftPreview.pushToolEvent(payload);
     },
     onItemEvent: async (payload) => {
-      if (payload.kind === "preamble" && shouldYieldDraftCommentary()) {
+      if (
+        abortSignal?.aborted ||
+        (payload.kind === "preamble" && (await shouldYieldDraftCommentary()))
+      ) {
         return undefined;
       }
       return await draftPreview.pushItemEvent(payload);

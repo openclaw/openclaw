@@ -366,7 +366,7 @@ function buildVoiceTestHarness() {
       undefined,
       { voice: { realtime: { consultPolicy: "auto", requireWakeName: true } } },
       {
-        agents: { list: [{ id: "agent-1", identity: { name: agentName } }] },
+        agents: { entries: { "agent-1": { identity: { name: agentName } } } },
         commands: { ownerAllowFrom: ["user:u-owner"] },
       },
     );

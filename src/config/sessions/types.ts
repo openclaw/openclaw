@@ -49,9 +49,9 @@ import type { PendingSessionWorktree } from "./session-worktree-intent.js";
 export type { SessionToolOverrides } from "./session-tool-overrides.js";
 export type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 
-export type SessionScope = "per-sender" | "global";
+export type { SessionScope } from "../types.base.js";
 export type SessionChatType = ChatType;
-export type PersistedSessionRunStatus = SessionRunStatus;
+export type PersistedSessionRunStatus = Exclude<SessionRunStatus, "running" | "queued">;
 export const SESSION_TOTAL_TOKENS_VERSION = 1 as const;
 
 export type SessionOrigin = {
@@ -314,6 +314,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Independent sidebar placement; origin, execution ownership, and access remain unchanged. */
+    sidebarRoot?: boolean;
     /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
     snoozedUntil?: number;
     /** Server-stamped epoch ms when the current snooze was set. */
@@ -367,6 +369,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     parentSessionLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
+    /** Creation-only presentation surface; stored in entry_json without a column projection. */
+    createdSurface?: SessionRow["createdSurface"];
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
     /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
@@ -393,10 +397,20 @@ type SessionEntryCore = SessionRestartRecoveryState &
     subagentControlScope?: "children" | "none";
     /** Version of the requester tool-policy snapshot captured when this child was spawned. */
     inheritedToolPolicyVersion?: 1;
+    /** Sender/channel restriction provenance retained with the inherited tool snapshot. */
+    inheritedToolPolicySource?: "sender";
     /** Session-scoped tool deny entries inherited from the caller that created this session. */
     inheritedToolDeny?: string[];
     /** Session-scoped tool allow entries inherited from the caller that created this session. */
     inheritedToolAllow?: string[];
+    /** Host-created native execution exception; the full inherited snapshot still owns completion. */
+    delegatedToolPolicy?: {
+      requesterSessionKey: string;
+      targetAgentId: string;
+      deny: string[];
+      /** The immediate parent’s effective deny snapshot, separately from revocation fallback. */
+      requesterDeny: string[];
+    };
     systemSent?: boolean;
     abortedLastRun?: boolean;
     /** Interrupted run generations whose late lifecycle events must be ignored. */
@@ -644,14 +658,14 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
+  /** Original host-admitted operator basis, owned by the exact restart source claim. */
+  restartRecoveryOperatorSource?: import("../../gateway/operator-run-recovery-source.js").RestartRecoveryOperatorSource;
   mainRestartRecovery?: MainRestartRecoveryState;
 };
 
 export interface InternalSessionEntry extends InternalSessionEntryCore {}
 
-export function isTerminalSessionStatus(
-  status: unknown,
-): status is Exclude<NonNullable<SessionEntry["status"]>, "running"> {
+export function isTerminalSessionStatus(status: unknown): status is PersistedSessionRunStatus {
   return (
     status === "done" ||
     status === "failed" ||
@@ -780,6 +794,7 @@ function mergeSessionEntryWithPolicy(
   if (existing.createdVia !== undefined) {
     next.createdVia = existing.createdVia;
   }
+  next.createdSurface = existing.createdSurface;
   if (existing.createdActor !== undefined) {
     next.createdActor = existing.createdActor;
   }
@@ -791,9 +806,6 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
-  }
-  if (existing.conversationLink !== undefined) {
-    next.conversationLink = existing.conversationLink;
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;

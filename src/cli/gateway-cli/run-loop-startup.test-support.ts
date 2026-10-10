@@ -20,7 +20,6 @@ export function registerGatewayStartupFailureTests(
     { cleanup: "maintenance", supervised: false, platform: "linux" },
     { cleanup: "unrepaired", supervised: false, platform: "linux" },
     { cleanup: "unrepaired", supervised: true, platform: "linux" },
-    { cleanup: "unavailable", supervised: true, platform: "linux" },
     { cleanup: "repair-failed", supervised: false, platform: "linux" },
     { cleanup: "repair-failed", supervised: true, platform: "linux" },
     { cleanup: "unavailable", supervised: false, platform: "win32" },
@@ -164,6 +163,11 @@ export function registerGatewayStartupFailureTests(
             stop();
             await expect(exited).resolves.toBe(0);
           } else if (cleanup === "maintenance") {
+            expect(completeBoot).toHaveBeenCalledWith({
+              outcome: "startup_failed",
+              reason: startupError.message,
+              startupReason: GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
+            });
             expect(onRestartStartupFailure).not.toHaveBeenCalled();
             expect(loopRejected).toHaveBeenCalledExactlyOnceWith(startupError);
             expect(start).toHaveBeenCalledTimes(2);
@@ -221,56 +225,41 @@ export function registerGatewayStartupFailureTests(
     });
   });
 
-  it("records a maintenance reason for session store startup failures", async () => {
-    await withIsolatedSignals(async () => {
-      // Earlier lifecycle tests reload the runtime; create the error in that same module graph.
-      const { SessionStoreMigrationRequiredError } =
-        await import("../../config/sessions/migration-required.js");
-      const failure = new SessionStoreMigrationRequiredError("legacy session store");
-      const { runtime } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      const { runGatewayLoop } = await import("./run-loop.js");
-
-      await expect(
-        runGatewayLoop({
-          start: vi.fn(async () => {
-            throw failure;
-          }) as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
-          runtime: runtime as unknown as Parameters<typeof runGatewayLoop>[0]["runtime"],
-          completeBoot,
-        }),
-      ).rejects.toBe(failure);
-
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: "startup_failed",
-        reason: failure.message,
-        startupReason: GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
-      });
-    });
-  });
-
-  it("records the proven stopped-daemon prerequisite without blaming channels", async () => {
-    await withIsolatedSignals(async () => {
-      const { TailscaleBackendStoppedError } =
-        await import("../../infra/tailscale-backend-stopped-error.js");
-      const failure = new TailscaleBackendStoppedError();
-      const { runtime } = createRuntimeWithExitSignal();
-      const completeBoot = vi.fn();
-      const { runGatewayLoop } = await import("./run-loop.js");
-      await expect(
-        runGatewayLoop({
-          start: vi.fn(async () => {
-            throw failure;
+  it.each(["stopped daemon", "message-only error", "failed cleanup"] as const)(
+    "retains the startup failure classification for %s",
+    async (kind) => {
+      await withIsolatedSignals(async () => {
+        const { TailscaleBackendStoppedError } =
+          await import("../../infra/tailscale-backend-stopped-error.js");
+        const { GatewayStartupCleanupError } = await import("../../gateway/server-shutdown.js");
+        const stopped = new TailscaleBackendStoppedError();
+        const failure =
+          kind === "stopped daemon"
+            ? stopped
+            : kind === "message-only error"
+              ? new Error(stopped.message)
+              : new GatewayStartupCleanupError(stopped, new Error("cleanup failed"));
+        const { runtime } = createRuntimeWithExitSignal();
+        const completeBoot = vi.fn();
+        const { runGatewayLoop } = await import("./run-loop.js");
+        await expect(
+          runGatewayLoop({
+            start: vi.fn(async () => {
+              throw failure;
+            }),
+            runtime,
+            completeBoot,
           }),
-          runtime,
-          completeBoot,
-        }),
-      ).rejects.toBe(failure);
-      expect(completeBoot).toHaveBeenCalledWith({
-        outcome: "startup_failed",
-        reason: failure.message,
-        startupReason: failure.code,
+        ).rejects.toBe(failure);
+        expect(completeBoot).toHaveBeenCalledWith({
+          outcome: "startup_failed",
+          reason:
+            kind === "failed cleanup" ? expect.stringContaining("cleanup failed") : stopped.message,
+          ...(kind === "stopped daemon"
+            ? { startupReason: "gateway.tailscale_backend_stopped" }
+            : {}),
+        });
       });
-    });
-  });
+    },
+  );
 }

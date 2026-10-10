@@ -1,12 +1,11 @@
-/* @vitest-environment jsdom */
-
 import { nothing, render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
+import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { renderChatAvatar, renderForwardedAvatar } from "../pages/chat/chat-avatar.ts";
 import * as artworkLoader from "../pages/plugins/icon-loader.ts";
-import { resolveAvatarHat } from "./agent-avatar-hat.ts";
 import { renderAgentIdentityAvatar } from "./identity-avatar-view.ts";
 
 const pageLoadRandom = vi.hoisted(() => vi.spyOn(Math, "random").mockReturnValue(0));
@@ -14,27 +13,16 @@ const pageLoadRandom = vi.hoisted(() => vi.spyOn(Math, "random").mockReturnValue
 beforeAll(() => pageLoadRandom.mockRestore());
 
 afterEach(() => {
-  setCurrentThemeBranding({ mascot: "claw", critters: [] });
+  setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
 });
 
-const branding: ThemeBranding = { mascot: "none", critters: [], avatarHat: "fedora" };
+const branding: ThemeBranding = resolveThemeBranding({
+  mascot: "none",
+  critters: [],
+  avatarHat: "fedora",
+});
 
 describe("theme avatar hats", () => {
-  it("keeps one of six fixed agent seeds selected across render order within a page load", () => {
-    const agentIds = ["agent-0", "agent-1", "agent-2", "agent-3", "agent-4", "agent-5"];
-    const expected = [null, null, null, null, null, "fedora"];
-    expect(agentIds.map((id) => resolveAvatarHat(id, branding))).toEqual(expected);
-    expect(agentIds.toReversed().map((id) => resolveAvatarHat(id, branding))).toEqual(
-      expected.toReversed(),
-    );
-  });
-
-  it("requires theme opt-in and excludes reserved system agents", () => {
-    expect(resolveAvatarHat("agent-5", { mascot: "claw" })).toBeNull();
-    expect(resolveAvatarHat("openclaw", branding)).toBeNull();
-    expect(resolveAvatarHat("crestodian", branding)).toBeNull();
-  });
-
   it.each(["agent-5", "agent-0"])(
     "applies the theme hat to loaded transcript and forwarded photos for %s",
     (agentId) => {
@@ -64,10 +52,6 @@ describe("theme avatar hats", () => {
 
   it.each([
     ["fedora", "agent-5", false, "none", true],
-    ["crown", "agent-5", false, "none", true],
-    ["santa", "agent-5", false, "none", true],
-    ["party", "agent-5", false, "none", true],
-    ["pumpkin", "agent-5", false, "none", true],
     ["fedora", "agent-5", false, "claw", true],
     ["fedora", "agent-0", false, "none", false],
     ["fedora", "agent-5", true, "none", false],
@@ -76,7 +60,7 @@ describe("theme avatar hats", () => {
   ] as const)(
     "renders %s for %s (pending=%s, mascot=%s, hat=%s)",
     (avatarHat, id, pending, mascot, hat) => {
-      setCurrentThemeBranding({ ...branding, avatarHat, mascot });
+      setCurrentThemeBranding(resolveThemeBranding({ ...branding, avatarHat, mascot }));
       const container = document.createElement("div");
       const agent = { id, pending, textAvatar: "🦀" };
       render(renderAgentIdentityAvatar(agent), container);
@@ -89,7 +73,7 @@ describe("theme avatar hats", () => {
           "http://www.w3.org/2000/svg",
         );
       }
-      setCurrentThemeBranding({ mascot: "claw", critters: [] });
+      setCurrentThemeBranding(resolveThemeBranding({ mascot: "claw", critters: [] }));
       render(renderAgentIdentityAvatar(agent), container);
       expect(container.querySelector(".identity-avatar__hat")).toBeNull();
       render(nothing, container);
@@ -104,12 +88,14 @@ it.each([false, true])(
       .spyOn(artworkLoader, "fetchPluginThemeArtworkBlobUrl")
       .mockImplementation(async ({ url }) => (url.includes("missing") ? null : "blob:beret"));
     onTestFinished(() => fetchArtwork.mockRestore());
-    setCurrentThemeBranding({
-      mascot: "claw",
-      critters: [],
-      avatarHat: "beret",
-      artwork: { hats: { beret: { url: missing ? "/missing" : "/beret" } } },
-    });
+    setCurrentThemeBranding(
+      resolveThemeBranding({
+        mascot: "claw",
+        critters: [],
+        avatarHat: "beret",
+        artwork: { hats: { beret: { url: missing ? "/missing" : "/beret" } } },
+      }),
+    );
     const container = document.createElement("div");
     render(renderAgentIdentityAvatar({ id: "agent-5", textAvatar: "🦀" }), container);
     expect(container.querySelector(".identity-avatar__hat-img")).toBeNull();

@@ -1,4 +1,3 @@
-// QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
 
 const qaFlowModuleExportArgSchema = z
@@ -70,6 +69,22 @@ function sendSharedFlowMarker(marker: string) {
   };
 }
 
+function setSharedFlowMarker(marker: string, prefix: string) {
+  return {
+    set: marker,
+    value: { expr: "`${config." + prefix + "}_${randomUUID().slice(0, 8).toUpperCase()}`" },
+  };
+}
+
+function waitForSharedFlowMarker(marker: string) {
+  return {
+    waitForOutbound: {
+      textIncludes: { ref: marker },
+      timeoutMs: { ref: "config.timeoutMs" },
+    },
+  };
+}
+
 const qaSharedFlows = {
   "channel-access-control": {
     steps: [
@@ -77,12 +92,7 @@ const qaSharedFlows = {
         name: "enforces configured access policy",
         actions: [
           ...qaSharedFlowPreparationActions,
-          {
-            set: "marker",
-            value: {
-              expr: "`${config.markerPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
-            },
-          },
+          setSharedFlowMarker("marker", "markerPrefix"),
           {
             set: "outboundCount",
             value: {
@@ -91,33 +101,18 @@ const qaSharedFlows = {
           },
           sendSharedFlowMarker("marker"),
           {
-            // Object literals with a `then` property become JavaScript thenables.
-            // Build the QA DSL branch as data so an accidental await cannot execute it.
-            if: Object.fromEntries([
-              ["expr", "config.expectReply"],
-              [
-                qaSharedFlowPositiveBranch,
-                [
-                  {
-                    waitForOutbound: {
-                      textIncludes: { ref: "marker" },
-                      timeoutMs: { ref: "config.timeoutMs" },
-                    },
+            if: {
+              expr: "config.expectReply",
+              [qaSharedFlowPositiveBranch]: [waitForSharedFlowMarker("marker")],
+              else: [
+                {
+                  waitForNoOutbound: {
+                    quietMs: { ref: "config.timeoutMs" },
+                    sinceIndex: { ref: "outboundCount" },
                   },
-                ],
+                },
               ],
-              [
-                "else",
-                [
-                  {
-                    waitForNoOutbound: {
-                      quietMs: { ref: "config.timeoutMs" },
-                      sinceIndex: { ref: "outboundCount" },
-                    },
-                  },
-                ],
-              ],
-            ]),
+            },
           },
         ],
         detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",
@@ -130,19 +125,9 @@ const qaSharedFlows = {
         name: "resumes after restart without replay",
         actions: [
           ...qaSharedFlowPreparationActions,
-          {
-            set: "firstMarker",
-            value: {
-              expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
-            },
-          },
+          setSharedFlowMarker("firstMarker", "firstPrefix"),
           sendSharedFlowMarker("firstMarker"),
-          {
-            waitForOutbound: {
-              textIncludes: { ref: "firstMarker" },
-              timeoutMs: { ref: "config.timeoutMs" },
-            },
-          },
+          waitForSharedFlowMarker("firstMarker"),
           {
             assert: {
               expr: "typeof env.gateway.restartAfterStateMutation === 'function'",
@@ -163,19 +148,9 @@ const qaSharedFlows = {
           },
           { call: "waitForGatewayHealthy", args: [{ ref: "env" }, 60_000] },
           { call: "waitForTransportReady", args: [{ ref: "env" }, 60_000] },
-          {
-            set: "secondMarker",
-            value: {
-              expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
-            },
-          },
+          setSharedFlowMarker("secondMarker", "secondPrefix"),
           sendSharedFlowMarker("secondMarker"),
-          {
-            waitForOutbound: {
-              textIncludes: { ref: "secondMarker" },
-              timeoutMs: { ref: "config.timeoutMs" },
-            },
-          },
+          waitForSharedFlowMarker("secondMarker"),
         ],
         detailsExpr: "`${firstMarker} -> restart -> ${secondMarker}`",
       },

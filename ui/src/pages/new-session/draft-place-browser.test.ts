@@ -39,9 +39,18 @@ function createBrowser(
     auth: { recoveryScope: "principal-a", role: "operator", scopes: ["operator.read"] },
     features: { methods: ["projects.list"] },
   };
+  const eventListeners = new Set<Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0]>();
   const context = {
     gateway: {
       subscribe: () => () => undefined,
+      subscribeEvents: (
+        listener: Parameters<ApplicationContext["gateway"]["subscribeEvents"]>[0],
+      ) => {
+        eventListeners.add(listener);
+        return () => {
+          eventListeners.delete(listener);
+        };
+      },
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase: "connected",
@@ -167,7 +176,7 @@ describe("DraftPlaceBrowser", () => {
         false,
         { host, root },
       );
-      browser.onPopoverShow("project");
+      browser.popoverCallbacks("project").onPopoverShow();
       browse.focus();
       browser.selectGatewayBrowser("/workspace");
       const path = document.createElement("input");
@@ -205,15 +214,6 @@ describe("DraftPlaceBrowser", () => {
     },
   );
 
-  it("retains catalog context for a detached draft until its lifetime owner disposes it", async () => {
-    const project = { id: "project", displayName: "Project", repoRoot: "/project" };
-    const fixture = createBrowser(async () => ({ projects: [project] }));
-    await fixture.browser.refreshProjects();
-    fixture.browser.selectProject({ kind: "local", id: project.id });
-    fixture.detachHost();
-    expect(fixture.browser.selectedProject()).toEqual(project);
-  });
-
   it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
     const request = vi.fn(async () => ({ projects: [] }));
     const fixture = createBrowser(request);
@@ -233,21 +233,21 @@ describe("DraftPlaceBrowser", () => {
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
     onTestFinished(() => writeStorage.mockRestore());
     browser.changeProjectQuery("openclaw");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     browser.changeEnvironmentQuery("runner");
 
     expect(browser.environmentQuery).toBe("runner");
     expect(browser.projectQuery).toBe("openclaw");
     expect(writeStorage).not.toHaveBeenCalled();
 
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("where").onPopoverHide();
     browser.onPopoverAfterHide("where");
-    browser.onPopoverShow("where");
+    browser.popoverCallbacks("where").onPopoverShow();
     expect(browser.environmentQuery).toBe("");
     expect(browser.projectQuery).toBe("openclaw");
 
     browser.changeEnvironmentQuery("cloud");
-    browser.onPopoverShow("project");
+    browser.popoverCallbacks("project").onPopoverShow();
     expect(browser.environmentQuery).toBe("cloud");
     browser.disconnect();
     expect(browser.environmentQuery).toBe("");
@@ -284,6 +284,7 @@ describe("DraftPlaceBrowser", () => {
     "typed directory",
     "typed directory fails",
     "reopen",
+    "retry",
   ])("selects a registered project only while its browser remains current (%s)", async (change) => {
     const project = {
       id: "registered-workspace",
@@ -292,8 +293,13 @@ describe("DraftPlaceBrowser", () => {
     };
     const registration = createDeferred<typeof project>();
     let directoryPath = "/workspace";
+    let registrations = 0;
     const request = vi.fn(async (method: string, params?: { path?: string }) => {
       if (method === "projects.register") {
+        registrations += 1;
+        if (change === "retry" && registrations === 1) {
+          throw new Error("registry unavailable");
+        }
         return registration.promise;
       }
       if (method === "worktrees.branches") {
@@ -314,6 +320,12 @@ describe("DraftPlaceBrowser", () => {
     const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
     browser.selectGatewayBrowser("/workspace");
     await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+    if (change === "retry") {
+      await browser.registerBrowserProject("/workspace");
+      expect(browser.browser.error).toContain("registry unavailable");
+      expect(browser.browserRegistering).toBe(false);
+      expect(browser.browserProjectPath).toBe("/workspace");
+    }
     const pending = browser.registerBrowserProject("/workspace");
     const initiallyBusy = browser.browserRegistering;
     const failedDirectory = change === "typed directory fails";
@@ -343,7 +355,7 @@ describe("DraftPlaceBrowser", () => {
           // Flush request continuations while the directory debounce is still pending.
           await Promise.resolve();
         }
-      } else {
+      } else if (change === "reopen") {
         browser.close();
         browser.selectGatewayBrowser("/workspace");
         await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
@@ -357,10 +369,11 @@ describe("DraftPlaceBrowser", () => {
       expect(initiallyBusy).toBe(true);
       expect(stillBusy).toBe(change !== "reopen");
       expect(request.mock.calls.filter(([method]) => method === "projects.register")).toHaveLength(
-        1,
+        change === "retry" ? 2 : 1,
       );
+      expect(registrations).toBe(change === "retry" ? 2 : 1);
       expect(browser.browserRegistering).toBe(false);
-      if (change === "filtering") {
+      if (change === "filtering" || change === "retry") {
         expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(project.id);
       } else {
         expect(onSelectProject).not.toHaveBeenCalled();
@@ -376,47 +389,6 @@ describe("DraftPlaceBrowser", () => {
         }
       }
     }
-  });
-
-  it("keeps the register action available after a registration failure", async () => {
-    const project = {
-      id: "registered-workspace",
-      displayName: "Workspace",
-      repoRoot: "/workspace",
-    };
-    let registrations = 0;
-    const request = vi.fn(async (method: string) => {
-      if (method === "projects.register") {
-        registrations += 1;
-        if (registrations === 1) {
-          throw new Error("registry unavailable");
-        }
-        return project;
-      }
-      if (method === "worktrees.branches") {
-        return { repositoryStatus: "git" };
-      }
-      if (method === "fs.listDir") {
-        return {
-          path: "/workspace",
-          home: "/home/test",
-          entries: [{ name: "packages", path: "/workspace/packages" }],
-        };
-      }
-      return { projects: [project] };
-    });
-    const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
-    browser.selectGatewayBrowser("/workspace");
-    await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
-
-    await browser.registerBrowserProject("/workspace");
-    expect(browser.browser.error).toContain("registry unavailable");
-    expect(browser.browserRegistering).toBe(false);
-    expect(browser.browserProjectPath).toBe("/workspace");
-
-    await browser.registerBrowserProject("/workspace");
-    expect(registrations).toBe(2);
-    expect(onSelectProject).toHaveBeenCalledExactlyOnceWith(project.id);
   });
 
   it.each(["loaded", "pending"])(
@@ -443,7 +415,7 @@ describe("DraftPlaceBrowser", () => {
     },
   );
 
-  it.each(["disconnect", "failure"])(
+  it.each(["detached", "disconnect", "failure"])(
     "retains the selected project until a catalog confirms its removal (%s)",
     async (unavailable) => {
       const project = { id: "project", displayName: "Project", repoRoot: "/project" };
@@ -455,8 +427,11 @@ describe("DraftPlaceBrowser", () => {
       if (unavailable === "disconnect") {
         fixture.context.gateway.snapshot.phase = "reconnecting";
         fixture.update();
-      } else {
+      } else if (unavailable === "failure") {
         request.mockRejectedValue(new Error("projects unavailable"));
+      } else {
+        fixture.detachHost();
+        expect(fixture.browser.selectedProject()).toEqual(project);
       }
       await fixture.browser.refreshProjects();
       expect(fixture.browser.selectedProject()).toEqual(project);
@@ -473,8 +448,8 @@ describe("DraftPlaceBrowser", () => {
   it("tracks overlapping popover hides independently", () => {
     const { browser } = createBrowser(async () => ({}));
 
-    browser.onPopoverHide("project");
-    browser.onPopoverHide("where");
+    browser.popoverCallbacks("project").onPopoverHide();
+    browser.popoverCallbacks("where").onPopoverHide();
 
     expect(browser.popoverHiding("project")).toBe(true);
     expect(browser.popoverHiding("where")).toBe(true);
@@ -595,6 +570,7 @@ describe("DraftGatewayState", () => {
     fixture.client.recoveryScope = "principal-a";
     fixture.client.recoveryScopeReady = true;
     fixture.update();
+    expect(fixture.gateway.gatewayName).toBe("Gateway A");
     expect(fixture.onInvalidate).not.toHaveBeenCalled();
     expect(fixture.browser.browser.draft).toBe("/draft-folder");
     expect(fixture.browser.projectId).toBe("project");
@@ -645,44 +621,6 @@ describe("DraftGatewayState", () => {
     expect(fixture.gateway.gatewayName).toBe("Visible Gateway");
   });
 
-  it("retains a discovered name when the same connection's recovery scope arrives", async () => {
-    const fixture = createBrowser(async (method) =>
-      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
-    );
-    fixture.hello.features.methods.push("system.info");
-    fixture.client.recoveryScopeReady = false;
-    fixture.update();
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
-
-    fixture.client.recoveryScope = "resolved-principal";
-    fixture.client.recoveryScopeReady = true;
-    fixture.update();
-    expect(fixture.gateway.gatewayName).toBe("Gateway A");
-  });
-
-  it("hides a disconnected name until the same client's new discovery completes", async () => {
-    const pending = createDeferred<{ machineName: string }>();
-    const request = vi.fn(async (method: string) =>
-      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
-    );
-    const fixture = createBrowser(request);
-    fixture.hello.features.methods.push("system.info");
-    fixture.update();
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway A"));
-
-    fixture.context.gateway.snapshot.phase = "reconnecting";
-    fixture.update();
-    expect(fixture.gateway.gatewayName).toBe("");
-    request.mockImplementation((method) =>
-      method === "projects.list" ? Promise.resolve({ projects: [] }) : pending.promise,
-    );
-    fixture.context.gateway.snapshot.phase = "connected";
-    fixture.update();
-    expect(fixture.gateway.gatewayName).toBe("");
-    pending.resolve({ machineName: "Gateway B" });
-    await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Gateway B"));
-  });
-
   it("ignores a late name from the replaced client", async () => {
     const oldName = createDeferred<{ machineName: string }>();
     const newName = createDeferred<{ machineName: string }>();
@@ -707,6 +645,12 @@ describe("DraftGatewayState", () => {
 
   it.each([
     {
+      advertised: true,
+      response: { machineName: "Gateway B" },
+      name: "Gateway B",
+      scopes: ["operator.read"],
+    },
+    {
       advertised: false,
       response: { machineName: "Hidden Gateway" },
       name: "",
@@ -728,27 +672,32 @@ describe("DraftGatewayState", () => {
   ])(
     "settles name discovery with advertisement $advertised and response $response",
     async ({ advertised, response, name, scopes }) => {
-      let current: typeof response | { machineName: string } = { machineName: "Current Gateway" };
+      const pending = createDeferred<typeof response>();
+      let current: typeof response | Promise<typeof response> = { machineName: "Current Gateway" };
       const request = vi.fn(async (method: string) => {
         if (method === "projects.list") {
           return { projects: [] };
         }
-        if (!current) {
+        const result = await current;
+        if (!result) {
           throw new Error("System info unavailable");
         }
-        return current;
+        return result;
       });
       const fixture = createBrowser(request);
       fixture.hello.features.methods.push("system.info");
       fixture.update();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe("Current Gateway"));
-      current = response;
+      current = pending.promise;
       fixture.context.gateway.snapshot.phase = "reconnecting";
       fixture.update();
+      expect(fixture.gateway.gatewayName).toBe("");
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
       fixture.hello.auth.scopes = scopes;
       fixture.context.gateway.snapshot.phase = "connected";
       fixture.update();
+      expect(fixture.gateway.gatewayName).toBe("");
+      pending.resolve(response);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 0);
       });

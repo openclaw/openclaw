@@ -34,23 +34,20 @@ function readPayloadField(record: Record<string, unknown>, field: string): Paylo
   }
 }
 
-function isProviderSupportedSchemaViolation(violation: string): boolean {
-  return violation.endsWith(".$dynamicRef") || violation.endsWith(".$dynamicAnchor");
-}
-
 function projectJsonObjectSchema(
   schema: unknown,
   path: string,
 ): Record<string, unknown> | undefined {
-  const projection = projectRuntimeToolInputSchema(schema, path);
+  const { schema: normalizedSchema, violations } = projectRuntimeToolInputSchema(schema, path);
   if (
-    !isRecord(projection.schema) ||
-    projection.violations.some((violation) => !isProviderSupportedSchemaViolation(violation))
+    !isRecord(normalizedSchema) ||
+    violations.some(
+      (violation) => !violation.endsWith(".$dynamicRef") && !violation.endsWith(".$dynamicAnchor"),
+    )
   ) {
     return undefined;
   }
-  const properties = projection.schema.properties;
-  const required = projection.schema.required;
+  const { properties, required } = normalizedSchema;
   if (
     (properties !== undefined && properties !== null && !isRecord(properties)) ||
     (required !== undefined &&
@@ -59,7 +56,6 @@ function projectJsonObjectSchema(
   ) {
     return undefined;
   }
-  const normalizedSchema = { ...projection.schema };
   if (properties === null) {
     delete normalizedSchema.properties;
   }
@@ -126,7 +122,7 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     if (!nameField.ok) {
       return undefined;
     }
-    const name = normalizeOptionalString(nameField.value) ?? undefined;
+    const name = normalizeOptionalString(nameField.value);
     if (!name) {
       return undefined;
     }
@@ -177,14 +173,14 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
   if (!nameField.ok) {
     return undefined;
   }
-  const rawName = normalizeOptionalString(nameField.value) ?? "";
+  const rawName = normalizeOptionalString(nameField.value);
   if (!rawName) {
     const snapshot = snapshotJsonRecord(tool);
     if (!snapshot) {
       return undefined;
     }
     if (snapshot.type === "custom" && isRecord(snapshot.custom)) {
-      const name = normalizeOptionalString(snapshot.custom.name) ?? undefined;
+      const name = normalizeOptionalString(snapshot.custom.name);
       if (!name) {
         return undefined;
       }
@@ -330,7 +326,7 @@ function normalizeAllowedToolChoice(
     const kind =
       snapshot.type === "custom" || snapshot.type === "function" ? snapshot.type : undefined;
     const definition = kind && isRecord(snapshot[kind]) ? snapshot[kind] : undefined;
-    const name = definition ? (normalizeOptionalString(definition.name) ?? "") : "";
+    const name = definition && normalizeOptionalString(definition.name);
     if (!kind || !name || !isProjectedToolAvailable(toolProjection, kind, name)) {
       return [];
     }

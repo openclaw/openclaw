@@ -26,7 +26,7 @@ describe("searchable session people", () => {
     expect(menu.querySelectorAll('[value^="assign-owner:"]')).toHaveLength(1);
   });
 
-  it("searches beyond the first member page and preserves remove-member selection", async () => {
+  it("filters the member directory and preserves remove-member selection", async () => {
     const onMemberChange = vi.fn();
     const root = document.createElement("div");
     containers.push(root);
@@ -40,8 +40,8 @@ describe("searchable session people", () => {
             sessionKey: "agent:main:people",
             role: "owner",
             allowedVisibilities: ["shared"],
-            members: [{ identityId: "person-999", addedBy: "owner", addedAt: 1 }],
-            identities: Array.from({ length: 1000 }, (_, i) => ({
+            members: [{ identityId: "person-100", addedBy: "owner", addedAt: 1 }],
+            identities: Array.from({ length: 101 }, (_, i) => ({
               type: "human" as const,
               id: `person-${i}`,
               label: `Person ${String(i).padStart(4, "0")}`,
@@ -54,18 +54,17 @@ describe("searchable session people", () => {
       }),
       root,
     );
-    expect(root.querySelectorAll('[value^="member:"]').length).toBeLessThanOrEqual(20);
     const search = root.querySelector<HTMLInputElement>('input[type="search"]');
     expect(search).not.toBeNull();
-    search!.value = "Person 0999";
+    search!.value = "Person 0100";
     search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
     await waitForFast(() => expect(root.querySelectorAll('[value^="member:"]')).toHaveLength(1));
-    expect(root.querySelector('[value="member:person-999"] .session-menu__check')).not.toBeNull();
+    expect(root.querySelector('[value="member:person-100"] .session-menu__check')).not.toBeNull();
     root
       .querySelector("wa-dropdown")
       ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: { value: "member:person-999" } } }),
+        new CustomEvent("wa-select", { detail: { item: { value: "member:person-100" } } }),
       );
-    expect(onMemberChange).toHaveBeenCalledWith("person-999", false);
+    expect(onMemberChange).toHaveBeenCalledWith("person-100", false);
   });
 });

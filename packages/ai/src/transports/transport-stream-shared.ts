@@ -6,6 +6,7 @@ import type {
   Usage,
 } from "@openclaw/llm-core";
 import { asNonArrayRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../../../retry/src/index.js";
 import { getAiTransportHost } from "../host.js";
 import {
   appendAssistantMessageDiagnostic,
@@ -340,25 +341,8 @@ async function awaitProviderLifecycleCallback(
   }
   const callbackPromise = Promise.resolve().then(callback);
   getAiTransportHost().observePendingProviderWork?.(callbackPromise);
-  if (!signal) {
-    await callbackPromise;
-    return;
-  }
-  let onAbort: (() => void) | undefined;
-  try {
-    await Promise.race([
-      callbackPromise,
-      new Promise<never>((_resolve, reject) => {
-        onAbort = () => reject(transportAbortError(signal));
-        signal.addEventListener("abort", onAbort, { once: true });
-      }),
-    ]);
-  } finally {
-    if (onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
-  }
-  if (signal.aborted) {
+  await racePromiseWithAbortSignal(callbackPromise, signal, transportAbortError);
+  if (signal?.aborted) {
     throw transportAbortError(signal);
   }
 }

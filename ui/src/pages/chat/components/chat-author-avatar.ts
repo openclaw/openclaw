@@ -29,20 +29,6 @@ function renderInitialsAvatar(
   `;
 }
 
-function renderResolvedAvatar(view: IdentityAvatarView): TemplateResult {
-  if (!view.imageUrl) {
-    return renderInitialsAvatar(view.fallback);
-  }
-  return html`
-    ${renderIdentityAvatarImage({
-      view,
-      fallbackSelector: ".chat-author-avatar",
-      className: "chat-author-avatar__image",
-      ariaHidden: true,
-    })}${renderInitialsAvatar(view.fallback, true)}
-  `;
-}
-
 /** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
@@ -64,7 +50,16 @@ export function renderChatAuthorAvatar(
     </span>`;
   }
   const view = resolveIdentityAvatarView(sender);
-  const resolved = renderResolvedAvatar(view);
+  const resolved = view.imageUrl
+    ? html`
+        ${renderIdentityAvatarImage({
+          view,
+          fallbackSelector: ".chat-author-avatar",
+          className: "chat-author-avatar__image",
+          ariaHidden: true,
+        })}${renderInitialsAvatar(view.fallback, true)}
+      `
+    : renderInitialsAvatar(view.fallback);
   return html`<span
     class=${identityAvatarClass("chat-author-avatar", view)}
     role="img"
@@ -87,9 +82,9 @@ export function resolveChatDefaultAvatarPlacement(
  * stale configured URL); swap to initials instead of a broken image. Lit
  * reuses DOM parts, so a load must clear a prior identity's error state.
  */
-export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
+export function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
   const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
+    class="chat-avatar user chat-avatar--sender-initials"
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
     role="img"
     aria-label="${label}"
@@ -103,7 +98,7 @@ export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, ro
     ${renderIdentityAvatarImage({
       view,
       fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
+      className: "chat-avatar user",
       alt: label,
     })}${initialsAvatar}
   </span>`;

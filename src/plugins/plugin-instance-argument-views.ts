@@ -1,18 +1,5 @@
 import { types } from "node:util";
-import { PluginHostObject } from "./plugin-instance-owned-values.js";
-
-class CallbackView extends PluginHostObject {
-  #factory: object;
-
-  constructor(value: Function, factory: object) {
-    super(value);
-    this.#factory = factory;
-  }
-
-  static belongsTo(value: Function, factory: object): boolean {
-    return #factory in value && value.#factory === factory;
-  }
-}
+import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 
 const arrayCallbacks = new Set([
   "every",
@@ -121,16 +108,14 @@ export function createPluginArgumentView(bindings: {
       }
       let callback = callerData
         ? undefined
-        : CallbackView.belongsTo(value, factory)
+        : PluginFactoryBinding.belongsTo(value, factory)
           ? value
           : callbacks.get(value);
       if (!callback) {
-        const invoke = <R>(values: unknown[], run: (values: unknown[]) => R): R =>
-          bindings.invoke(() => run(values));
         // Callback delivery retains its invocation; arguments and receivers stay native.
         callback = new Proxy(value, {
           apply: (target, receiver, values) => {
-            const result = invoke(values, (wrapped) => Reflect.apply(target, receiver, wrapped));
+            const result = bindings.invoke(() => Reflect.apply(target, receiver, values));
             // Native reducers deliver this exact caller value as the next and final accumulator.
             if (callerData) {
               callerData[0] = result;
@@ -138,14 +123,14 @@ export function createPluginArgumentView(bindings: {
             return result;
           },
           construct: (target, values, newTarget) =>
-            invoke(values, (wrapped) =>
-              Reflect.construct(target, wrapped, newTarget === callback ? target : newTarget),
+            bindings.invoke(() =>
+              Reflect.construct(target, values, newTarget === callback ? target : newTarget),
             ),
         });
         bindings.setOriginal(callback, value);
         if (!callerData) {
           callbacks.set(value, callback);
-          void new CallbackView(callback, factory);
+          void new PluginFactoryBinding(callback, factory);
         }
       }
       return callback;

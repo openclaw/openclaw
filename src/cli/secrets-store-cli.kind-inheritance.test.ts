@@ -93,11 +93,10 @@ const {
 const scope = { kind: "team" } as const;
 const roots: string[] = [];
 
-function createProgram(): Command {
-  const program = new Command();
-  program.exitOverride();
+async function run(...args: string[]): Promise<void> {
+  const program = new Command().exitOverride();
   registerSecretsCli(program);
-  return program;
+  await program.parseAsync(["secrets", "store", ...args], { from: "user" });
 }
 
 function createStoreRoot(): string {
@@ -120,22 +119,17 @@ async function entryFor(name: string) {
 }
 
 async function protectEntry(name: string, valueFile: string, host: string): Promise<void> {
-  await createProgram().parseAsync(
-    [
-      "secrets",
-      "store",
-      "set",
-      name,
-      "--kind",
-      "secret",
-      "--value-file",
-      valueFile,
-      "--allow-host",
-      host,
-    ],
-    { from: "user" },
-  );
+  await run("set", name, "--kind", "secret", "--value-file", valueFile, "--allow-host", host);
 }
+
+const protectedExposure = (host: string) => ({
+  kind: "secret",
+  allowedHosts: [host],
+  valuePreview: undefined,
+  plaintextInSubprocessEnv: undefined,
+  sealedSentinel: true,
+  egressBindings: 1,
+});
 
 async function exposureFor(name: string) {
   const entry = await entryFor(name);
@@ -165,183 +159,145 @@ afterEach(async () => {
 });
 
 describe("secrets store kind inheritance", () => {
-  it("keeps a stored secret write-only and host-bound when only its value is rotated", async () => {
-    const root = createStoreRoot();
-    const original = writeValueFile(root, "original.txt", "sk-original-credential");
-    const rotated = writeValueFile(root, "rotated.txt", "sk-rotated-credential");
-
-    await createProgram().parseAsync(
-      [
-        "secrets",
-        "store",
-        "set",
-        "OPENAI_KEY",
-        "--kind",
-        "secret",
-        "--value-file",
-        original,
-        "--allow-host",
-        "api.openai.com",
-      ],
-      { from: "user" },
-    );
-    expect(await entryFor("OPENAI_KEY")).toMatchObject({
-      kind: "secret",
-      allowedHosts: ["api.openai.com"],
-    });
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "OPENAI_KEY", "--value-file", rotated],
-      { from: "user" },
-    );
-
-    const execEnvironment = await readSecretStoreExecEnvironment({
-      includeSecretSentinels: true,
-      database: mocks.database,
-    });
-    expect({
-      kind: (await entryFor("OPENAI_KEY"))?.kind,
-      allowedHosts: (await entryFor("OPENAI_KEY"))?.allowedHosts,
-      valuePreview: (await entryFor("OPENAI_KEY"))?.valuePreview,
-      plaintextInSubprocessEnv: execEnvironment.env?.OPENAI_KEY,
-      sealedSentinel: execEnvironment.secretSentinels?.OPENAI_KEY !== undefined,
-      egressBindings: execEnvironment.secretEgressBindings?.length ?? 0,
-    }).toEqual({
-      kind: "secret",
-      allowedHosts: ["api.openai.com"],
-      valuePreview: undefined,
-      plaintextInSubprocessEnv: undefined,
-      sealedSentinel: true,
-      egressBindings: 1,
-    });
-    expect(await readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
-      ok: true,
-      value: "sk-rotated-credential",
-    });
-  });
-
-  it("still downgrades a stored secret when --kind env is explicit", async () => {
-    const root = createStoreRoot();
-    const original = writeValueFile(root, "original.txt", "sk-original-credential");
-    const rotated = writeValueFile(root, "rotated.txt", "sk-rotated-credential");
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "OPENAI_KEY", "--kind", "secret", "--value-file", original],
-      { from: "user" },
-    );
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "OPENAI_KEY", "--kind", "env", "--value-file", rotated],
-      { from: "user" },
-    );
-
-    expect(await entryFor("OPENAI_KEY")).toMatchObject({
-      kind: "env",
-      valuePreview: expect.any(String),
-    });
-  });
+  it.each([
+    { concurrent: false, explicitEnv: false },
+    { concurrent: false, explicitEnv: true },
+    { concurrent: true, explicitEnv: false },
+    { concurrent: true, explicitEnv: true },
+  ])(
+    "rotates a value with concurrent=$concurrent and explicitEnv=$explicitEnv",
+    async ({ concurrent, explicitEnv }) => {
+      const root = createStoreRoot();
+      const name = concurrent ? "SERVICE_API_KEY" : "OPENAI_KEY";
+      const host = concurrent ? "api.example.com" : "api.openai.com";
+      const original = writeValueFile(
+        root,
+        "original.txt",
+        concurrent ? "plain-original-value" : "sk-original-credential",
+      );
+      const rotatedValue =
+        concurrent && explicitEnv ? "plain-rotated-value" : "sk-rotated-credential";
+      const rotated = writeValueFile(root, "rotated.txt", rotatedValue);
+      if (concurrent) {
+        await run("set", name, "--kind", "env", "--value-file", original);
+        expect((await entryFor(name))?.kind).toBe("env");
+        const protectedValue = writeValueFile(root, "protected.txt", "sk-protected-credential");
+        mocks.interleave.run = async () => {
+          await protectEntry(name, protectedValue, host);
+          mocks.runtimeLogs.length = 0;
+        };
+      } else {
+        await run(
+          "set",
+          name,
+          "--kind",
+          "secret",
+          "--value-file",
+          original,
+          ...(explicitEnv ? [] : ["--allow-host", host]),
+        );
+        if (!explicitEnv) {
+          expect(await entryFor(name)).toMatchObject({ kind: "secret", allowedHosts: [host] });
+        }
+      }
+      await run("set", name, "--value-file", rotated, ...(explicitEnv ? ["--kind", "env"] : []));
+      if (explicitEnv) {
+        expect(await entryFor(name)).toMatchObject({
+          kind: "env",
+          valuePreview: expect.any(String),
+        });
+        if (concurrent) {
+          expect((await entryFor(name))?.allowedHosts ?? []).toEqual([]);
+        }
+      } else {
+        expect(await exposureFor(name)).toEqual(protectedExposure(host));
+        expect(await readSecretStoreValue({ scope, name })).toEqual({
+          ok: true,
+          value: rotatedValue,
+        });
+        if (concurrent) {
+          expect(mocks.runtimeLogs).toContain("Stored SERVICE_API_KEY (secret).");
+        }
+      }
+    },
+  );
 
   it("still classifies a brand-new entry from its name", async () => {
     const root = createStoreRoot();
     const credential = writeValueFile(root, "credential.txt", "sk-original-credential");
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--value-file", credential],
-      { from: "user" },
-    );
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_MODE", "--value", "production"],
-      { from: "user" },
-    );
-
+    await run("set", "SERVICE_API_KEY", "--value-file", credential);
+    await run("set", "SERVICE_MODE", "--value", "production");
     expect((await entryFor("SERVICE_API_KEY"))?.kind).toBe("secret");
     expect((await entryFor("SERVICE_MODE"))?.kind).toBe("env");
   });
 
-  it("keeps import from downgrading an existing secret while classifying new names", async () => {
-    const root = createStoreRoot();
-    const original = writeValueFile(root, "original.txt", "sk-original-credential");
-    const dotenvPath = writeValueFile(
-      root,
-      "values.env",
-      "OPENAI_KEY=sk-rotated-credential\nSERVICE_MODE=production\n",
-    );
-
-    await createProgram().parseAsync(
-      [
-        "secrets",
-        "store",
-        "set",
-        "OPENAI_KEY",
-        "--kind",
-        "secret",
-        "--value-file",
-        original,
-        "--allow-host",
-        "api.openai.com",
-      ],
-      { from: "user" },
-    );
-    await createProgram().parseAsync(
-      ["secrets", "store", "import", "--from", dotenvPath, "--yes"],
-      { from: "user" },
-    );
-
-    expect(await entryFor("OPENAI_KEY")).toMatchObject({
-      kind: "secret",
-      allowedHosts: ["api.openai.com"],
-    });
-    expect((await entryFor("OPENAI_KEY"))?.valuePreview).toBeUndefined();
-    expect((await entryFor("SERVICE_MODE"))?.kind).toBe("env");
-    expect(await readSecretStoreValue({ scope, name: "OPENAI_KEY" })).toEqual({
-      ok: true,
-      value: "sk-rotated-credential",
-    });
-  });
-
-  it("applies a protection change made while set is waiting for its value", async () => {
-    const root = createStoreRoot();
-    const initial = writeValueFile(root, "initial.txt", "plain-original-value");
-    const protectedValue = writeValueFile(root, "protected.txt", "sk-protected-credential");
-    const rotated = writeValueFile(root, "rotated.txt", "sk-rotated-credential");
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--kind", "env", "--value-file", initial],
-      { from: "user" },
-    );
-    expect((await entryFor("SERVICE_API_KEY"))?.kind).toBe("env");
-
-    mocks.interleave.run = async () => {
-      await protectEntry("SERVICE_API_KEY", protectedValue, "api.example.com");
-      mocks.runtimeLogs.length = 0;
-    };
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--value-file", rotated],
-      { from: "user" },
-    );
-
-    expect(await exposureFor("SERVICE_API_KEY")).toEqual({
-      kind: "secret",
-      allowedHosts: ["api.example.com"],
-      valuePreview: undefined,
-      plaintextInSubprocessEnv: undefined,
-      sealedSentinel: true,
-      egressBindings: 1,
-    });
-    expect(await readSecretStoreValue({ scope, name: "SERVICE_API_KEY" })).toEqual({
-      ok: true,
-      value: "sk-rotated-credential",
-    });
-    expect(mocks.runtimeLogs).toContain("Stored SERVICE_API_KEY (secret).");
-  });
+  it.each(["stored", "concurrent", "invalidated batch"])(
+    "inherits live secret protection when importing a %s entry",
+    async (mode) => {
+      const root = createStoreRoot();
+      const concurrent = mode !== "stored";
+      const invalid = mode === "invalidated batch";
+      const name = concurrent ? "SERVICE_API_KEY" : "OPENAI_KEY";
+      const host = concurrent ? "api.example.com" : "api.openai.com";
+      const original = writeValueFile(
+        root,
+        "original.txt",
+        concurrent ? "plain-original-value" : "sk-original-credential",
+      );
+      const dotenvPath = writeValueFile(
+        root,
+        "values.env",
+        invalid
+          ? "SERVICE_MODE=production-next\nSERVICE_API_KEY=\n"
+          : `${name}=sk-rotated-credential\n${concurrent ? "" : "SERVICE_MODE=production\n"}`,
+      );
+      if (concurrent) {
+        await run("set", name, "--kind", "env", "--value-file", original);
+        expect((await entryFor(name))?.kind).toBe("env");
+        const protectedValue = writeValueFile(root, "protected.txt", "sk-protected-credential");
+        mocks.interleave.run = () => protectEntry(name, protectedValue, host);
+      } else {
+        await protectEntry(name, original, host);
+      }
+      if (invalid) {
+        expect(await entryFor("SERVICE_MODE")).toBeUndefined();
+      }
+      const stdinIsTty = process.stdin.isTTY;
+      const stdoutIsTty = process.stdout.isTTY;
+      if (concurrent) {
+        process.stdin.isTTY = true;
+        process.stdout.isTTY = true;
+      }
+      try {
+        const result = run("import", "--from", dotenvPath, ...(concurrent ? [] : ["--yes"]));
+        if (invalid) {
+          await expect(result).rejects.toThrow("__exit__:2");
+        } else {
+          await result;
+        }
+      } finally {
+        process.stdin.isTTY = stdinIsTty;
+        process.stdout.isTTY = stdoutIsTty;
+      }
+      expect(await exposureFor(name)).toEqual(protectedExposure(host));
+      if (invalid) {
+        expect(mocks.runtimeErrors.join("\n")).toContain("Secret store value is empty");
+        expect(await entryFor("SERVICE_MODE")).toBeUndefined();
+      } else if (!concurrent) {
+        expect((await entryFor("SERVICE_MODE"))?.kind).toBe("env");
+        expect(await readSecretStoreValue({ scope, name })).toEqual({
+          ok: true,
+          value: "sk-rotated-credential",
+        });
+      }
+    },
+  );
 
   it.each([false, true])(
     "checks literal input against the transaction-resolved kind (explicit env: %s)",
     async (explicitEnv) => {
       createStoreRoot();
-      await createProgram().parseAsync(
-        ["secrets", "store", "set", "MY_APP_CRED", "--value", "initial-value"],
-        { from: "user" },
-      );
+      await run("set", "MY_APP_CRED", "--value", "initial-value");
       // Models another process committing after metadata preflight, before this writer enters SQLite.
       mocks.beforeWrite.run = async () => {
         await writeSecretStoreEntry({
@@ -353,17 +309,12 @@ describe("secrets store kind inheritance", () => {
           updatedBy: "competing-writer",
         });
       };
-      const result = createProgram().parseAsync(
-        [
-          "secrets",
-          "store",
-          "set",
-          "MY_APP_CRED",
-          "--value",
-          "literal-value",
-          ...(explicitEnv ? ["--kind", "env"] : []),
-        ],
-        { from: "user" },
+      const result = run(
+        "set",
+        "MY_APP_CRED",
+        "--value",
+        "literal-value",
+        ...(explicitEnv ? ["--kind", "env"] : []),
       );
       if (explicitEnv) {
         await result;
@@ -372,14 +323,7 @@ describe("secrets store kind inheritance", () => {
       } else {
         await expect(result).rejects.toThrow("__exit__:2");
         expect(mocks.runtimeErrors.join("\n")).toContain("--value is refused for secret entries");
-        expect(await exposureFor("MY_APP_CRED")).toEqual({
-          kind: "secret",
-          allowedHosts: ["api.example.com"],
-          valuePreview: undefined,
-          plaintextInSubprocessEnv: undefined,
-          sealedSentinel: true,
-          egressBindings: 1,
-        });
+        expect(await exposureFor("MY_APP_CRED")).toEqual(protectedExposure("api.example.com"));
       }
       expect(await readSecretStoreValue({ scope, name: "MY_APP_CRED" })).toEqual({
         ok: true,
@@ -390,113 +334,4 @@ describe("secrets store kind inheritance", () => {
       );
     },
   );
-
-  it("applies a protection change made while import is waiting for confirmation", async () => {
-    const root = createStoreRoot();
-    const initial = writeValueFile(root, "initial.txt", "plain-original-value");
-    const protectedValue = writeValueFile(root, "protected.txt", "sk-protected-credential");
-    const dotenvPath = writeValueFile(
-      root,
-      "values.env",
-      "SERVICE_API_KEY=sk-rotated-credential\n",
-    );
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--kind", "env", "--value-file", initial],
-      { from: "user" },
-    );
-    expect((await entryFor("SERVICE_API_KEY"))?.kind).toBe("env");
-
-    const stdinIsTty = process.stdin.isTTY;
-    const stdoutIsTty = process.stdout.isTTY;
-    process.stdin.isTTY = true;
-    process.stdout.isTTY = true;
-    mocks.interleave.run = () => protectEntry("SERVICE_API_KEY", protectedValue, "api.example.com");
-    try {
-      await createProgram().parseAsync(["secrets", "store", "import", "--from", dotenvPath], {
-        from: "user",
-      });
-    } finally {
-      process.stdin.isTTY = stdinIsTty;
-      process.stdout.isTTY = stdoutIsTty;
-    }
-
-    expect(await exposureFor("SERVICE_API_KEY")).toEqual({
-      kind: "secret",
-      allowedHosts: ["api.example.com"],
-      valuePreview: undefined,
-      plaintextInSubprocessEnv: undefined,
-      sealedSentinel: true,
-      egressBindings: 1,
-    });
-  });
-
-  it("writes no import entry when a protection change during confirmation invalidates a later one", async () => {
-    const root = createStoreRoot();
-    const initial = writeValueFile(root, "initial.txt", "plain-original-value");
-    const protectedValue = writeValueFile(root, "protected.txt", "sk-protected-credential");
-    const dotenvPath = writeValueFile(
-      root,
-      "values.env",
-      "SERVICE_MODE=production-next\nSERVICE_API_KEY=\n",
-    );
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--kind", "env", "--value-file", initial],
-      { from: "user" },
-    );
-    expect((await entryFor("SERVICE_API_KEY"))?.kind).toBe("env");
-    expect(await entryFor("SERVICE_MODE")).toBeUndefined();
-
-    const stdinIsTty = process.stdin.isTTY;
-    const stdoutIsTty = process.stdout.isTTY;
-    process.stdin.isTTY = true;
-    process.stdout.isTTY = true;
-    mocks.interleave.run = () => protectEntry("SERVICE_API_KEY", protectedValue, "api.example.com");
-    try {
-      await expect(
-        createProgram().parseAsync(["secrets", "store", "import", "--from", dotenvPath], {
-          from: "user",
-        }),
-      ).rejects.toThrow("__exit__:2");
-    } finally {
-      process.stdin.isTTY = stdinIsTty;
-      process.stdout.isTTY = stdoutIsTty;
-    }
-
-    expect(mocks.runtimeErrors.join("\n")).toContain("Secret store value is empty");
-    expect(await entryFor("SERVICE_MODE")).toBeUndefined();
-    expect(await exposureFor("SERVICE_API_KEY")).toEqual({
-      kind: "secret",
-      allowedHosts: ["api.example.com"],
-      valuePreview: undefined,
-      plaintextInSubprocessEnv: undefined,
-      sealedSentinel: true,
-      egressBindings: 1,
-    });
-  });
-
-  it("still honours an explicit --kind when the entry changes while set waits", async () => {
-    const root = createStoreRoot();
-    const initial = writeValueFile(root, "initial.txt", "plain-original-value");
-    const protectedValue = writeValueFile(root, "protected.txt", "sk-protected-credential");
-    const rotated = writeValueFile(root, "rotated.txt", "plain-rotated-value");
-
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--kind", "env", "--value-file", initial],
-      { from: "user" },
-    );
-
-    mocks.interleave.run = () => protectEntry("SERVICE_API_KEY", protectedValue, "api.example.com");
-    await createProgram().parseAsync(
-      ["secrets", "store", "set", "SERVICE_API_KEY", "--kind", "env", "--value-file", rotated],
-      { from: "user" },
-    );
-
-    expect(await entryFor("SERVICE_API_KEY")).toMatchObject({
-      kind: "env",
-      valuePreview: expect.any(String),
-    });
-    expect((await entryFor("SERVICE_API_KEY"))?.allowedHosts ?? []).toEqual([]);
-  });
 });

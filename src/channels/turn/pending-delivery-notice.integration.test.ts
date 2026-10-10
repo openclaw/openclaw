@@ -9,9 +9,12 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../../infra/outbound/deliver-types.js";
-import { failDurableDelivery } from "../../infra/outbound/delivery-completion.js";
+import { settleDurableDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { dispatchRoutedChannelTurn } from "./lifecycle.js";
 
@@ -239,9 +242,13 @@ describe("pending delivery notice end to end", () => {
       );
 
       // Reopen the canonical store so normalization must preserve the terminal fact.
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
       // A queue restart can repeat owner settlement after its first write committed.
-      await failDurableDelivery({ kind: "pending-final", ...completion });
+      await settleDurableDelivery(
+        { kind: "pending-final", ...completion },
+        { platformSendStarted: true },
+      );
       await runTurn(async () => ({ visibleReplySent: true }), { bindCustody: false });
       expect(sendRecoveryNotice).toHaveBeenCalledTimes(1);
       expect(loadSessionEntry({ sessionKey, storePath })?.pendingDeliveryNotice?.state).toBe(

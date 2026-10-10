@@ -26,6 +26,10 @@ import type {
   TranscriptMessageAppendResult,
 } from "./session-accessor.types.js";
 import {
+  readTranscriptAppendPostimage,
+  type TranscriptAppendPostimage,
+} from "./session-transcript-append-postimage.js";
+import {
   buildExpectedTranscriptTurnSessionPatch,
   sessionMatchesExpectedTranscriptTurn,
 } from "./session-transcript-turn-state.js";
@@ -130,6 +134,7 @@ export function createSessionTranscriptTurnKernel(
         goal.id = options.preparedGoalId;
       }
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
+      let postimage: TranscriptAppendPostimage | undefined;
       for (const append of messages) {
         const { shouldAppend: _shouldAppend, shouldAppendInTransaction, ...appendOptions } = append;
         if (shouldAppendInTransaction) {
@@ -169,7 +174,8 @@ export function createSessionTranscriptTurnKernel(
           projection,
         );
         if (appended) {
-          appendedMessages.push(appended);
+          appendedMessages.push(appended.result);
+          postimage = readTranscriptAppendPostimage(appended);
         }
       }
       if (
@@ -200,6 +206,7 @@ export function createSessionTranscriptTurnKernel(
         transactionDb,
         resolved.sessionId,
         appendedMessages,
+        postimage,
       );
 
       // Append-owned metadata (including history coverage) is part of this same
@@ -210,7 +217,6 @@ export function createSessionTranscriptTurnKernel(
         appendedMessages,
         currentEntry: appendedEntry,
         expectedSessionState: options.expectedSessionState,
-        sessionFile: options.sessionFile,
         sessionLifecyclePatch: options.sessionLifecyclePatch,
         touchSessionEntry: options.touchSessionEntry,
       });

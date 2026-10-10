@@ -180,7 +180,7 @@ describe("getReplyFromConfig fallback availability", () => {
             workspace: workspaceDir,
             model: { primary: `${provider}/mock-1`, fallbacks: ["anthropic/mock-2"] },
           },
-          list: [{ id: "test", agentDir, workspace: workspaceDir }],
+          entries: { test: { agentDir, workspace: workspaceDir } },
         },
         models: {
           ...baseConfig.models,

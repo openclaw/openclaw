@@ -30,6 +30,35 @@ export function bindNull(value: unknown): SQLInputValue {
   return JSON.stringify(value);
 }
 
+export function prepareWorkboardUpsert(
+  db: DatabaseSync,
+  table: "workboard_cards" | "workboard_boards" | "workboard_notification_subscriptions",
+  fields: Record<string, () => SQLInputValue>,
+  preserved: readonly string[] = [],
+): () => void {
+  const { compiled, bind } = compileSqliteQueryBindings<void>((parameter) =>
+    getNodeSqliteKysely<Record<typeof table, Row>>(db)
+      .insertInto(table)
+      .values(
+        Object.fromEntries(Object.entries(fields).map(([key, read]) => [key, parameter(read)])),
+      )
+      .onConflict((conflict) =>
+        conflict.column("id").doUpdateSet((eb) =>
+          Object.fromEntries(
+            Object.keys(fields)
+              .filter((key) => key !== "id" && !preserved.includes(key))
+              .map((key) => [key, eb.ref(`excluded.${key}`)]),
+          ),
+        ),
+      ),
+  );
+  // Native preparation must precede payload getters and JSON serialization.
+  const statement = db.prepare(compiled.sql);
+  return () => {
+    statement.run(...bind());
+  };
+}
+
 function insertChildren<T>(
   db: DatabaseSync,
   table: (typeof CARD_CHILD_TABLES)[number],
@@ -77,83 +106,40 @@ export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
   const execution = card.execution;
   const metadata = card.metadata;
   const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
-  // Keep payload getters and JSON serialization after native statement preparation.
-  const parent = compileSqliteQueryBindings<void>((p) =>
-    query
-      .insertInto("workboard_cards")
-      .values({
-        id: p(() => card.id),
-        board_id: p(() => cardBoardId(card)),
-        title: p(() => card.title),
-        notes: p(() => bindNull(card.notes)),
-        status: p(() => card.status),
-        priority: p(() => card.priority),
-        agent_id: p(() => bindNull(card.agentId)),
-        session_key: p(() => bindNull(card.sessionKey)),
-        run_id: p(() => bindNull(card.runId)),
-        source_url: p(() => bindNull(card.sourceUrl)),
-        position: p(() => card.position),
-        created_at: p(() => card.createdAt),
-        updated_at: p(() => card.updatedAt),
-        started_at: p(() => bindNull(card.startedAt)),
-        completed_at: p(() => bindNull(card.completedAt)),
-        execution_id: p(() => bindNull(execution?.id)),
-        execution_kind: p(() => bindNull(execution?.kind)),
-        execution_engine: p(() => bindNull(execution?.engine)),
-        execution_mode: p(() => bindNull(execution?.mode)),
-        execution_status: p(() => bindNull(execution?.status)),
-        execution_model: p(() => bindNull(execution?.model)),
-        execution_session_key: p(() => bindNull(execution?.sessionKey)),
-        execution_run_id: p(() => bindNull(execution?.runId)),
-        execution_started_at: p(() => bindNull(execution?.startedAt)),
-        execution_updated_at: p(() => bindNull(execution?.updatedAt)),
-        automation_json: p(() => jsonValue(metadata?.automation)),
-        claim_json: p(() => jsonValue(metadata?.claim)),
-        template_id: p(() => bindNull(metadata?.templateId)),
-        archived_at: p(() => bindNull(metadata?.archivedAt)),
-        stale_json: p(() => jsonValue(metadata?.stale)),
-        lifecycle_status_source_updated_at: p(() =>
-          bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
-        ),
-        failure_count: p(() => bindNull(metadata?.failureCount)),
-      })
-      .onConflict((conflict) =>
-        conflict.column("id").doUpdateSet((eb) => ({
-          board_id: eb.ref("excluded.board_id"),
-          title: eb.ref("excluded.title"),
-          notes: eb.ref("excluded.notes"),
-          status: eb.ref("excluded.status"),
-          priority: eb.ref("excluded.priority"),
-          agent_id: eb.ref("excluded.agent_id"),
-          session_key: eb.ref("excluded.session_key"),
-          run_id: eb.ref("excluded.run_id"),
-          source_url: eb.ref("excluded.source_url"),
-          position: eb.ref("excluded.position"),
-          created_at: eb.ref("excluded.created_at"),
-          updated_at: eb.ref("excluded.updated_at"),
-          started_at: eb.ref("excluded.started_at"),
-          completed_at: eb.ref("excluded.completed_at"),
-          execution_id: eb.ref("excluded.execution_id"),
-          execution_kind: eb.ref("excluded.execution_kind"),
-          execution_engine: eb.ref("excluded.execution_engine"),
-          execution_mode: eb.ref("excluded.execution_mode"),
-          execution_status: eb.ref("excluded.execution_status"),
-          execution_model: eb.ref("excluded.execution_model"),
-          execution_session_key: eb.ref("excluded.execution_session_key"),
-          execution_run_id: eb.ref("excluded.execution_run_id"),
-          execution_started_at: eb.ref("excluded.execution_started_at"),
-          execution_updated_at: eb.ref("excluded.execution_updated_at"),
-          automation_json: eb.ref("excluded.automation_json"),
-          claim_json: eb.ref("excluded.claim_json"),
-          template_id: eb.ref("excluded.template_id"),
-          archived_at: eb.ref("excluded.archived_at"),
-          stale_json: eb.ref("excluded.stale_json"),
-          lifecycle_status_source_updated_at: eb.ref("excluded.lifecycle_status_source_updated_at"),
-          failure_count: eb.ref("excluded.failure_count"),
-        })),
-      ),
-  );
-  db.prepare(parent.compiled.sql).run(...parent.bind());
+  prepareWorkboardUpsert(db, "workboard_cards", {
+    id: () => card.id,
+    board_id: () => cardBoardId(card),
+    title: () => card.title,
+    notes: () => bindNull(card.notes),
+    status: () => card.status,
+    priority: () => card.priority,
+    agent_id: () => bindNull(card.agentId),
+    session_key: () => bindNull(card.sessionKey),
+    run_id: () => bindNull(card.runId),
+    source_url: () => bindNull(card.sourceUrl),
+    position: () => card.position,
+    created_at: () => card.createdAt,
+    updated_at: () => card.updatedAt,
+    started_at: () => bindNull(card.startedAt),
+    completed_at: () => bindNull(card.completedAt),
+    execution_id: () => bindNull(execution?.id),
+    execution_kind: () => bindNull(execution?.kind),
+    execution_engine: () => bindNull(execution?.engine),
+    execution_mode: () => bindNull(execution?.mode),
+    execution_status: () => bindNull(execution?.status),
+    execution_model: () => bindNull(execution?.model),
+    execution_session_key: () => bindNull(execution?.sessionKey),
+    execution_run_id: () => bindNull(execution?.runId),
+    execution_started_at: () => bindNull(execution?.startedAt),
+    execution_updated_at: () => bindNull(execution?.updatedAt),
+    automation_json: () => jsonValue(metadata?.automation),
+    claim_json: () => jsonValue(metadata?.claim),
+    template_id: () => bindNull(metadata?.templateId),
+    archived_at: () => bindNull(metadata?.archivedAt),
+    stale_json: () => jsonValue(metadata?.stale),
+    lifecycle_status_source_updated_at: () => bindNull(metadata?.lifecycleStatusSourceUpdatedAt),
+    failure_count: () => bindNull(metadata?.failureCount),
+  })();
 
   insertChildren(db, "workboard_card_labels", card.id, card.labels, {
     card_id: () => card.id,

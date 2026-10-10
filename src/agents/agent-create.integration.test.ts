@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import {
@@ -15,6 +16,7 @@ import {
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -28,17 +30,17 @@ import {
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import {
   persistProviderAuthProfileBatch,
   stageProviderAuthProfileBatch,
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import { AGENT_DELETION_RECOVERY_SOURCE_KEY } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
-  beginAgentDeletionJournal,
   completeAgentDeletionJournalInDatabase,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
-import { readAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -56,6 +58,8 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
+import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.js";
+import { readAgentProvenance } from "../test-utils/agent-provenance.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   installWorkspacePreparationPause,
@@ -83,12 +87,18 @@ it("restores only the configured held store after explicit creation, never throu
       openOpenClawAgentDatabase({ agentId: "alias", path: aliasPath, env: state.env }),
     ).toThrow("belongs to agent main; requested agent alias");
     const params = { name: "main", workspace: state.workspaceDir };
-    expect(
-      await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
-    ).toMatchObject({
-      status: "error",
-      reason: "already-exists",
-    });
+    const observation = observeHostDataSql();
+    try {
+      expect(
+        await createAgent({ ...params, agentDir: path.dirname(recovery.held[1]!.path) }),
+      ).toMatchObject({
+        status: "error",
+        reason: "already-exists",
+      });
+      expect(observation.queries.filter((sql) => /\bmigration_sources\b/i.test(sql))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     expect(recovery.readHolds()).toEqual(recovery.held);
     expect(await createAgent({ ...params, bootstrapMain: true })).toMatchObject({
       status: "existing",
@@ -135,6 +145,81 @@ it("restores only the configured held store after explicit creation, never throu
     await state.cleanup();
   }
 });
+
+it.each(["added", "removed"] as const)(
+  "observes a foreign hold %s between bootstrap probes without host hold SQL",
+  async (change) => {
+    const state = await createOpenClawTestState({ scenario: "minimal", label: "bootstrap-probes" });
+    try {
+      await state.writeConfig({ agents: { entries: { main: { workspace: state.workspaceDir } } } });
+      await transformConfigFileWithRetry({
+        transform: (current) => ({ nextConfig: current, result: undefined }),
+      });
+      const target = { agentId: "main", path: state.path("custom", "history.sqlite") };
+      await prepareRecoveryHolds(state, target.agentId, [target]);
+      beginAgentDeletionJournal({
+        agentId: target.agentId,
+        operationId: randomUUID(),
+        agentDir: state.agentDir(),
+        workspaceDir: state.workspaceDir,
+        sessionsDir: state.sessionsDir(),
+        deleteFiles: false,
+      });
+      const originalConfig = await fs.readFile(state.configPath, "utf8");
+      const foreign = openNodeSqliteDatabase(resolveOpenClawStateSqlitePath(state.env));
+      try {
+        const update = foreign.prepare(
+          "UPDATE migration_sources SET report_json = ? WHERE source_key = ?",
+        );
+        const setHeld = (held: boolean) =>
+          update.run(
+            JSON.stringify({ description: "Synthetic recovery hold", held: held ? [target] : [] }),
+            AGENT_DELETION_RECOVERY_SOURCE_KEY,
+          );
+        setHeld(change === "removed");
+        await withOpenClawStateDatabaseReadSnapshot(
+          async () => {
+            const observation = observeHostDataSql();
+            let changed = false;
+            try {
+              const result = await createAgent({
+                name: "main",
+                bootstrapMain: true,
+                beforePersistentApply: () => {
+                  if (!changed) {
+                    changed = true;
+                    setHeld(change === "added");
+                  }
+                },
+              });
+              expect(result).toMatchObject(
+                change === "added"
+                  ? { status: "existing" }
+                  : { status: "error", reason: "deletion-pending" },
+              );
+              expect(changed).toBe(true);
+              expect(
+                observation.queries.filter(
+                  (sql) => /^\s*select\b/i.test(sql) && /\bmigration_sources\b/i.test(sql),
+                ),
+              ).toEqual([]);
+            } finally {
+              observation.restore();
+            }
+          },
+          { env: state.env },
+        );
+      } finally {
+        foreign.close();
+      }
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await state.cleanup();
+    }
+  },
+);
 
 it("restores a held custom filename only after its session store configuration selects it", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-custom-store" });
@@ -762,7 +847,7 @@ describe("agent roster persistence", () => {
   });
 
   it("extends the complete keyed roster after Doctor migrates a legacy list", async () => {
-    const legacy = {
+    const legacy: OpenClawConfigWithLegacyRoster = {
       agents: {
         list: [
           { id: "main", default: true },
@@ -795,8 +880,12 @@ describe("agent roster persistence", () => {
       { id: "main", default: true },
       { id: "ops", workspace: "/srv/ops" },
     ];
+    const legacy: OpenClawConfigWithLegacyRoster = {
+      agents: { list },
+      gateway: { port: 18789 },
+    };
     try {
-      await state.writeConfig({ agents: { list }, gateway: { port: 18789 } });
+      await state.writeConfig(legacy);
       const original = await fs.readFile(state.configPath, "utf8");
       await expect(
         mutateConfigFileWithRetry({
@@ -807,10 +896,12 @@ describe("agent roster persistence", () => {
       ).rejects.toThrow("doctor --fix");
 
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
+      const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(
+        await fs.readFile(state.configPath, "utf8"),
+      );
+      expect(persisted.agents).toEqual({ list });
       expect(persisted.agents).not.toHaveProperty("entries");
-      expect(persisted.gateway?.port).toBe(18789);
+      expect(persisted.gateway).toEqual({ port: 18789 });
     } finally {
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

@@ -27,7 +27,7 @@ const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
   ["memory.md", 60],
 ]);
 
-export type CodexBootstrapFile = Awaited<
+type CodexBootstrapFile = Awaited<
   ReturnType<typeof prepareAgentWorkspaceContext>
 >["bootstrapFiles"][number];
 export type CodexWorkspaceBootstrapContext = {
@@ -197,40 +197,17 @@ function renderCodexWorkspaceBootstrapPromptContext(
   if (contextFiles.length === 0) {
     return undefined;
   }
-  const lines = [
+  return [
     "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads project-local AGENTS.md natively. When execution uses another folder, OpenClaw supplies the agent workspace AGENTS.md as thread-level developer instructions. SOUL.md, IDENTITY.md, and USER.md are prepared separately from user input and are not repeated here.",
     "",
     "# Project Context",
     "",
     "The following project context files have been loaded:",
     "",
-  ];
-  for (const file of contextFiles) {
-    lines.push(`## ${file.path}`, "", file.content, "");
-  }
-  return lines.join("\n").trim();
-}
-
-function renderCodexWorkspaceMemoryReference(params: {
-  files: EmbeddedContextFile[];
-  toolNames?: readonly string[];
-}): string | undefined {
-  if (params.files.length === 0) {
-    return undefined;
-  }
-  const toolNames = params.toolNames?.length
-    ? params.toolNames
-    : Array.from(CODEX_MEMORY_TOOL_NAMES);
-  const lines = [
-    "## OpenClaw Workspace Memory",
-    "",
-    `MEMORY.md exists in the active agent workspace as a memory file, not an instruction file. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
-    "",
-  ];
-  for (const file of params.files) {
-    lines.push(`- ${file.path}`);
-  }
-  return lines.join("\n").trim();
+    ...contextFiles.flatMap((file) => [`## ${file.path}`, "", file.content, ""]),
+  ]
+    .join("\n")
+    .trim();
 }
 
 function renderCodexWorkspaceMemoryInstructions(params: {
@@ -244,9 +221,24 @@ function renderCodexWorkspaceMemoryInstructions(params: {
         .join("\n")
         .trim()
     : undefined;
-  const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference(params);
-  const sections = [memoryRecallInstructions, memoryReferenceInstructions].filter(isNonEmptyString);
-  return sections.length > 0 ? sections.join("\n\n") : undefined;
+  const sections = [memoryRecallInstructions];
+  if (params.files.length > 0) {
+    const toolNames = params.toolNames.length
+      ? params.toolNames
+      : Array.from(CODEX_MEMORY_TOOL_NAMES);
+    sections.push(
+      [
+        "## OpenClaw Workspace Memory",
+        "",
+        `MEMORY.md exists in the active agent workspace as a memory file, not an instruction file. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
+        "",
+        ...params.files.map((file) => `- ${file.path}`),
+      ]
+        .join("\n")
+        .trim(),
+    );
+  }
+  return sections.filter(isNonEmptyString).join("\n\n") || undefined;
 }
 
 function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
