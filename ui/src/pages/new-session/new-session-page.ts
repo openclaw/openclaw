@@ -31,6 +31,7 @@ import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { renderCreationComposer } from "./creation-composer-render.ts";
 import { renderNewSessionBody } from "./draft-body.ts";
 import { renderNewSessionDraftComposer, renderNewSessionDraftErrors } from "./draft-composer.ts";
 import { NewSessionDraftController } from "./draft-controller.ts";
@@ -511,7 +512,13 @@ export class NewSessionPage extends OpenClawLightDomElement {
       assistantName: agent ? normalizeAgentTargetLabel(agent, identity) : "",
       assistantAvatar: resolveAgentTextAvatar(agent ?? {}, identity),
       assistantAvatarUrl: resolveAgentAvatarUrl(agent ?? {}, identity),
-      hint: t(catalog.isTarget(this.data) ? "newSession.nativeTerminalHint" : "newSession.hint"),
+      hint: t(
+        catalog.isTarget(this.data)
+          ? "newSession.nativeTerminalHint"
+          : this.place.requiredPlacement
+            ? "newSession.requiredWorkerHint"
+            : "newSession.hint",
+      ),
       composer: this.renderDraftBlock(),
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
@@ -593,6 +600,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
           renderDraft: () => (completed ? this.renderDraftBlock() : this.renderWelcome()),
           onOpenImage: this.setImageLightbox,
         })}
+        ${renderCreationComposer(this.submission.creationComposer, this.setImageLightbox)}
         ${this.connectMachine.render(this.place.isAdmin(), () => {
           this.connectMachine.close();
           this.context?.navigate("devices");

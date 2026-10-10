@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
+import { captureDelegatedToolPolicyAssertion } from "../agents/delegated-tool-policy.js";
 import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-route.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
 import { findModelCatalogEntry } from "../agents/model-catalog.js";
@@ -130,26 +131,6 @@ export function prepareSessionCreateModelSelection(params: {
   };
 }
 
-/** Title preparation and the row commit retain the same caller, model, and account fences. */
-export function createSessionCreateCommitGuard(params: {
-  assertCallerCurrent?: () => void;
-  operatorAuthority?: AdmittedRunOperatorAuthority;
-  selections: readonly ({ assertCurrent: () => void } | undefined)[];
-  validateSelection: () => ErrorShape | undefined;
-}): () => void {
-  return () => {
-    params.assertCallerCurrent?.();
-    params.operatorAuthority?.assertCurrent();
-    const error = params.validateSelection();
-    if (error) {
-      throw new Error(error.message);
-    }
-    for (const selection of params.selections) {
-      selection?.assertCurrent();
-    }
-  };
-}
-
 /** Assemble the creation lifetime once, including host-only publication intent. */
 export function resolveSessionCreationCommitGuard(
   params: CreateGatewaySessionParams,
@@ -159,12 +140,18 @@ export function resolveSessionCreationCommitGuard(
     validateSelection: () => ErrorShape | undefined;
   },
 ): (() => void) | undefined {
-  const assertCallerCurrent = params.childSessionPublication
-    ? () => {
-        params.commitGuard?.();
-        params.childSessionPublication?.assertCurrent();
-      }
-    : params.commitGuard;
+  const assertDelegationCurrent = captureDelegatedToolPolicyAssertion(
+    params.cfg,
+    params.spawnToolPolicy?.delegatedToolPolicy,
+  );
+  const assertCallerCurrent =
+    params.childSessionPublication || assertDelegationCurrent
+      ? () => {
+          params.commitGuard?.();
+          params.childSessionPublication?.assertCurrent();
+          assertDelegationCurrent?.();
+        }
+      : params.commitGuard;
   if (
     !(
       params.personalModelSelection ||
@@ -179,23 +166,25 @@ export function resolveSessionCreationCommitGuard(
   ) {
     return assertCallerCurrent;
   }
-  return createSessionCreateCommitGuard({
-    assertCallerCurrent: () => {
-      assertCallerCurrent?.();
-      prepared.assertPreparedTargetCurrent();
-    },
-    get operatorAuthority() {
-      return prepared.readOperatorAuthority();
-    },
-    selections: [
-      params.activeParentFork,
-      params.preparedModelSelection,
-      params.preparedPermissionSelection,
-      params.personalModelSelection,
-      params.personalAccountDefaults,
-    ],
-    validateSelection: prepared.validateSelection,
-  });
+  const selections = [
+    params.activeParentFork,
+    params.preparedModelSelection,
+    params.preparedPermissionSelection,
+    params.personalModelSelection,
+    params.personalAccountDefaults,
+  ];
+  return () => {
+    assertCallerCurrent?.();
+    prepared.assertPreparedTargetCurrent();
+    prepared.readOperatorAuthority()?.assertCurrent();
+    const error = prepared.validateSelection();
+    if (error) {
+      throw new Error(error.message);
+    }
+    for (const selection of selections) {
+      selection?.assertCurrent();
+    }
+  };
 }
 
 /** New unpinned sessions bind an account for the caller's permitted default without storing a model pin. */

@@ -305,14 +305,12 @@ async function fetchPreview(
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
-  if (token) {
-    await assertPublicRepository(previewRepositoryApiUrl(target, parsed));
-  }
   const { preview, avatarUrl } = parseControlUiGitHubPreviewResponse(target, parsed);
-  // Render only after rechecking the response's public repository.
+  // Anonymous decoration can overlap visibility validation; delivery still awaits both.
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl, signal),
     commits.then((value) => fetchCoAuthors(preview.login, value, fetchImpl, signal)),
+    token && assertPublicRepository(previewRepositoryApiUrl(target, parsed)),
   ]);
   return {
     ...preview,

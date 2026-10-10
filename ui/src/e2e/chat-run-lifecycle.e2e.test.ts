@@ -292,7 +292,7 @@ suite.define(() => {
       ],
       inFlightRun: {
         runId: "run-reconnected",
-        text: "Saved opening. Still working after reconnect.",
+        text: "Still working after reconnect.",
       },
       sessionInfo: {
         activeRunIds: ["run-reconnected"],

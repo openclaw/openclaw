@@ -1,4 +1,4 @@
-import { realpathSync, statSync, type BigIntStats } from "node:fs";
+import { fstatSync, readdirSync, realpathSync, statSync, type BigIntStats } from "node:fs";
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
@@ -90,6 +90,18 @@ function existingIdentity(
   };
 }
 
+function missingAncestorParent(ancestor: string, missing: string[], error: unknown): string {
+  if (!hasErrnoCode(error, "ENOENT")) {
+    throw error;
+  }
+  missing.unshift(path.basename(ancestor));
+  const parent = path.dirname(ancestor);
+  if (parent === ancestor) {
+    throw error;
+  }
+  return parent;
+}
+
 /** Inspect a native-owner path without replacing its diagnostic for a non-file target. */
 export function inspectDatabasePathIdentitySync(
   databasePath: string,
@@ -119,15 +131,7 @@ export function inspectDatabasePathIdentitySync(
       );
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      missing.unshift(path.basename(ancestor));
-      const parent = path.dirname(ancestor);
-      if (parent === ancestor) {
-        throw error;
-      }
-      ancestor = parent;
+      ancestor = missingAncestorParent(ancestor, missing, error);
     }
   }
 }
@@ -180,15 +184,7 @@ export async function readDatabasePathIdentity(
       const canonicalPath = normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
       return { key: `path:${canonicalPath}`, canonicalPath };
     } catch (error) {
-      if (!hasErrnoCode(error, "ENOENT")) {
-        throw error;
-      }
-      missing.unshift(path.basename(ancestor));
-      const parent = path.dirname(ancestor);
-      if (parent === ancestor) {
-        throw error;
-      }
-      ancestor = parent;
+      ancestor = missingAncestorParent(ancestor, missing, error);
     }
   }
 }
@@ -214,4 +210,30 @@ export function assertExistingDatabaseIdentity(
     key: expected,
     birthtime: expectedBirthtime,
   });
+}
+
+export function isSoleDatabaseFileDescriptor(descriptor: number, file: BigIntStats): boolean {
+  if (process.platform !== "linux") {
+    return false;
+  }
+  try {
+    for (const name of readdirSync("/proc/self/fd")) {
+      if (!/^\d+$/u.test(name) || Number(name) === descriptor) {
+        continue;
+      }
+      try {
+        const other = fstatSync(Number(name), { bigint: true });
+        if (other.dev === file.dev && other.ino === file.ino) {
+          return false;
+        }
+      } catch (error) {
+        if (!hasErrnoCode(error, "EBADF")) {
+          return false;
+        }
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }

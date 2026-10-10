@@ -313,6 +313,16 @@ export function registerActiveEmbeddedRunHumanInputWait(
   };
 }
 
+/** Tool-side waits know only their run id; the live registration supplies its authority. */
+export function registerActiveEmbeddedRunHumanInputWaitForRun(
+  runId: string,
+  isPending: () => boolean,
+): ((resolved: boolean) => void) | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId);
+  const authority = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.delegatedAuthority;
+  return authority ? registerActiveEmbeddedRunHumanInputWait(authority, isPending) : undefined;
+}
+
 /** Re-read at the recovery action, including after queued/lazy recovery dispatch. */
 export function resolveActiveEmbeddedRunRecoveryBlocker(
   sessionId: string,

@@ -32,7 +32,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { updateExecApprovals } from "../infra/exec-approvals-store.js";
+import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -498,16 +498,20 @@ describe("cron standing grants", () => {
       } else if (intervention === "cancel") {
         controller.abort();
       } else if (intervention === "policy deny" || intervention === "policy ask") {
+        const file = readExecApprovalsSnapshot().file;
         await updateExecApprovals({
-          update: (file) => ({
-            ...file,
-            defaults: {
-              ...file.defaults,
-              ...(intervention === "policy deny"
-                ? { security: "deny" as const }
-                : { ask: "always" as const }),
+          update: {
+            kind: "replace",
+            file: {
+              ...file,
+              defaults: {
+                ...file.defaults,
+                ...(intervention === "policy deny"
+                  ? { security: "deny" as const }
+                  : { ask: "always" as const }),
+              },
             },
-          }),
+          },
         });
       } else if (intervention === "fallback") {
         // A proven no-initiation retry reacquires its interval without another consume.
@@ -619,7 +623,12 @@ describe("cron standing grants", () => {
     await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
     const acknowledgement = createDeferredCore();
     const deny = () =>
-      updateExecApprovals({ update: (file) => ({ ...file, defaults: { security: "deny" } }) });
+      updateExecApprovals({
+        update: {
+          kind: "replace",
+          file: { ...readExecApprovalsSnapshot().file, defaults: { security: "deny" } },
+        },
+      });
     try {
       const launch = vi.fn();
       result.initiateSpawn?.(launch, acknowledgement.promise);

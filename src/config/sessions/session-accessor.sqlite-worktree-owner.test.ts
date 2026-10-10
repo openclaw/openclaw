@@ -8,7 +8,7 @@ import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import { readSessionWorktreeOwnerFactsInDatabase } from "./session-accessor.sqlite-worktree-owner.js";
-import { certifyCanonicalSessionValidationRow } from "./session-canonical-validation.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { readExactSessionEntriesWithLifecycle } from "./session-entry-read.worker.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-worktree-owner-facts-");
@@ -101,6 +101,7 @@ it.each([
   };
   replaceSessionEntrySync(scope, { sessionId: "owner", updatedAt: 1 });
   const database = openOpenClawAgentDatabase(scope);
+  markCanonicalSessionValidationPending(database, [scope.sessionKey]);
   database.db
     .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
     .run(payload, scope.sessionKey);
@@ -139,7 +140,7 @@ it.each(["archived_at", "last_interaction_at"] as const)(
   },
 );
 
-it("refuses a stale updatedAt projection even after canonical recertification", () => {
+it("refuses a stale updatedAt projection on an otherwise valid row", () => {
   const scope = {
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: sessionDirs.make() },
@@ -153,8 +154,6 @@ it("refuses a stale updatedAt projection even after canonical recertification", 
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(scope.sessionKey);
-    // Canonical admission validates keys and identity, not the activity-column projection.
-    certifyCanonicalSessionValidationRow(database, scope.sessionKey);
   }, scope);
   expect(() =>
     readSessionWorktreeOwnerFactsInDatabase(openOpenClawAgentDatabase(scope), [scope.sessionKey]),
@@ -178,7 +177,6 @@ it("refuses duplicate custody members admitted by the logical JSON reader", () =
     database.db
       .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
       .run(scope.sessionKey);
-    certifyCanonicalSessionValidationRow(database, scope.sessionKey);
   }, scope);
   expect(() =>
     readSessionWorktreeOwnerFactsInDatabase(openOpenClawAgentDatabase(scope), [scope.sessionKey]),

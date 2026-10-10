@@ -97,6 +97,16 @@ export type PrepareSimpleCompletionModelParams = {
   workerInferenceAuthority?: { assertCurrent: () => void };
 };
 
+function resolveSimpleCompletionWorkerBlock(
+  params: PrepareSimpleCompletionModelParams,
+  runtime: PreparedModelRuntimeSnapshot,
+) {
+  return (
+    requiredWorkerHelperError(runtime.config, Boolean(params.workerInferenceAuthority)) ??
+    requiredWorkerHelperError(params.cfg ?? {}, Boolean(params.workerInferenceAuthority))
+  );
+}
+
 /** Prepares a model within the exact generation already held by its caller. */
 export async function prepareSimpleCompletionModel(
   params: PrepareSimpleCompletionModelParams & {
@@ -106,11 +116,7 @@ export async function prepareSimpleCompletionModel(
 ): Promise<PreparedStreamCompletionModel> {
   params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
-  const blocked =
-    requiredWorkerHelperError(
-      params.preparedModelRuntime.config,
-      Boolean(params.workerInferenceAuthority),
-    ) ?? requiredWorkerHelperError(config, Boolean(params.workerInferenceAuthority));
+  const blocked = resolveSimpleCompletionWorkerBlock(params, params.preparedModelRuntime);
   if (blocked) {
     return blocked;
   }
@@ -145,11 +151,7 @@ async function prepareSimpleCompletionModelCore(
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
 ): Promise<PreparedStreamCompletionModel> {
-  const blocked =
-    requiredWorkerHelperError(
-      context.preparedModelRuntime.config,
-      Boolean(params.workerInferenceAuthority),
-    ) ?? requiredWorkerHelperError(params.cfg ?? {}, Boolean(params.workerInferenceAuthority));
+  const blocked = resolveSimpleCompletionWorkerBlock(params, context.preparedModelRuntime);
   if (blocked) {
     return blocked;
   }
@@ -479,27 +481,26 @@ export async function acquireSimpleCompletionModelWithSelection(
   }
   const tentativeSelection = tentativeRequest.selection;
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  const pluginIdScope = createAgentRuntimeMetadataPluginIdScope({
-    config: params.cfg,
-    workspaceDir,
-    selections: [
-      {
-        provider: tentativeSelection.provider,
-        modelId: tentativeSelection.modelId,
-        agentId,
-      },
-    ],
-    ...(tentativeRequest.shorthandModelId
-      ? { shorthandModelIds: [tentativeRequest.shorthandModelId] }
-      : {}),
-  });
-  let metadataSnapshot = resolvePluginMetadataSnapshot({
-    config: params.cfg,
-    env: process.env,
-    workspaceDir,
-    pluginIdScope,
-    allowWorkspaceScopedCurrent: true,
-  });
+  const resolvePluginIdScope = (
+    selection: Pick<AgentSimpleCompletionSelection, "provider" | "modelId">,
+    shorthandModelId?: string,
+  ) =>
+    createAgentRuntimeMetadataPluginIdScope({
+      config: params.cfg,
+      workspaceDir,
+      selections: [{ provider: selection.provider, modelId: selection.modelId, agentId }],
+      ...(shorthandModelId ? { shorthandModelIds: [shorthandModelId] } : {}),
+    });
+  const pluginIdScope = resolvePluginIdScope(tentativeSelection, tentativeRequest.shorthandModelId);
+  const resolveMetadata = (scope: ReturnType<typeof createAgentRuntimeMetadataPluginIdScope>) =>
+    resolvePluginMetadataSnapshot({
+      config: params.cfg,
+      env: process.env,
+      workspaceDir,
+      pluginIdScope: scope,
+      allowWorkspaceScopedCurrent: true,
+    });
+  let metadataSnapshot = resolveMetadata(pluginIdScope);
   const resolveSelection = () => {
     const request = resolveRequest(metadataSnapshot);
     return request ? { ...request.selection, agentDir } : null;
@@ -508,30 +509,15 @@ export async function acquireSimpleCompletionModelWithSelection(
   if (!selection) {
     return { error: `No model configured for agent ${agentId}.` };
   }
-  const canonicalPluginIdScope = createAgentRuntimeMetadataPluginIdScope({
-    config: params.cfg,
-    workspaceDir,
-    selections: [
-      {
-        provider: selection.provider,
-        modelId: selection.modelId,
-        agentId,
-      },
-    ],
-    ...(tentativeRequest.shorthandModelId &&
+  const canonicalPluginIdScope = resolvePluginIdScope(
+    selection,
     selection.provider === tentativeSelection.provider &&
-    selection.modelId === tentativeSelection.modelId
-      ? { shorthandModelIds: [tentativeRequest.shorthandModelId] }
-      : {}),
-  });
+      selection.modelId === tentativeSelection.modelId
+      ? tentativeRequest.shorthandModelId
+      : undefined,
+  );
   if (canonicalPluginIdScope.key !== pluginIdScope.key) {
-    metadataSnapshot = resolvePluginMetadataSnapshot({
-      config: params.cfg,
-      env: process.env,
-      workspaceDir,
-      pluginIdScope: canonicalPluginIdScope,
-      allowWorkspaceScopedCurrent: true,
-    });
+    metadataSnapshot = resolveMetadata(canonicalPluginIdScope);
     selection = resolveSelection();
     if (!selection) {
       return { error: `No model configured for agent ${agentId}.` };

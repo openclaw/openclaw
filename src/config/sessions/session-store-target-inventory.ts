@@ -1,7 +1,10 @@
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
-import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
+import {
+  assertDatabasePathIdentity,
+  assertExistingDatabaseIdentity,
+} from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -12,6 +15,7 @@ import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agen
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import { captureRuntimeConfig } from "../runtime-source-projection.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveSessionStorePathCore } from "./paths.js";
@@ -27,6 +31,9 @@ import {
 } from "./session-sqlite-target.js";
 import {
   captureSessionStoreReadCandidate,
+  captureSessionStoreCandidateIdentities,
+  qualifyAbsentSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
   assertSessionStoreReadCandidate,
   type CapturedSessionStorePaths,
   type SessionStoreReadCandidate,
@@ -128,23 +135,53 @@ export function readSessionStoreTargetResult(
   }
 }
 
-export function captureSessionStoreReadCandidates(storePath: string): SessionStoreReadCandidate[] {
+function captureSessionStoreCandidateInventory(storePath: string) {
   const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
-  const candidates = new Map<string, SessionStoreReadCandidate>();
-  const add = (candidate: SessionStoreReadCandidate) =>
-    candidates.set(JSON.stringify(candidate), candidate);
-  if (!target.agentId && !target.shared) {
-    add(captureSessionStoreReadCandidate(target.path, "sibling-family"));
+  const candidates = [captureSessionStoreReadCandidate(target.path)];
+  if (target.agentId || target.shared) {
+    return { candidates, familyListingComplete: false };
   }
-  add(captureSessionStoreReadCandidate(target.path));
+  candidates.unshift(captureSessionStoreReadCandidate(target.path, "sibling-family"));
+  let familyListingComplete = false;
   try {
     for (const candidate of listSqliteTargetCandidatePathsForSessionStorePath(storePath)) {
-      add(captureSessionStoreReadCandidate(candidate));
+      if (candidate !== target.path) {
+        candidates.push(captureSessionStoreReadCandidate(candidate));
+      }
     }
+    familyListingComplete = true;
   } catch {
     // The worker refuses an unreadable or changed target outside this captured family.
   }
-  return [...candidates.values()];
+  return { candidates, familyListingComplete };
+}
+
+export function captureSessionStoreReadCandidates(storePath: string): SessionStoreReadCandidate[] {
+  return captureSessionStoreCandidateInventory(storePath).candidates;
+}
+
+/** A complete initial listing proves absence for a later-selected sibling without predicting ownership. */
+export function captureSessionStoreWriteCandidates(storePath: string) {
+  const captured = captureSessionStoreCandidateInventory(storePath);
+  const identities = captureSessionStoreCandidateIdentities(captured.candidates);
+  const assertCurrent = () => {
+    if (!captured.candidates.every(isSessionStoreReadCandidateCurrent)) {
+      throw new Error("Session database selector changed during discovery");
+    }
+  };
+  return {
+    assertCurrent,
+    resolveIdentity(pathname: string) {
+      assertCurrent();
+      const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
+      const identity = identities.get(physicalPath);
+      if (identity) {
+        assertDatabasePathIdentity(pathname, identity);
+        return identity;
+      }
+      return qualifyAbsentSessionStoreReadCandidate(pathname, captured);
+    },
+  };
 }
 
 export type SessionStoreTargetInventoryRequest = {
@@ -272,7 +309,7 @@ export function prepareSessionStoreTargetInventory(
   const env = cloneEnvWithPlatformSemantics(inputEnv);
   const stateDir = resolveStateDir(env);
   env.OPENCLAW_STATE_DIR = stateDir;
-  const config = structuredClone(cfg);
+  const config = captureRuntimeConfig(cfg);
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
   const configured = listConfiguredSessionStoreAgentIds(config);
   const paths = new Map(
@@ -321,8 +358,6 @@ export function prepareSessionStoreTargetInventory(
     }
   }
   const candidates = new Map<string, SessionStoreReadCandidate>();
-  const add = (candidate: SessionStoreReadCandidate) =>
-    candidates.set(JSON.stringify(candidate), candidate);
   for (const storePath of logicalPaths) {
     const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath);
     // Locator-only inventories keep incognito reads with their process-held owner.
@@ -333,7 +368,7 @@ export function prepareSessionStoreTargetInventory(
       throw new Error("Incognito session discovery requires its process-held owner");
     }
     for (const candidate of captureSessionStoreReadCandidates(storePath)) {
-      add(candidate);
+      candidates.set(JSON.stringify(candidate), candidate);
     }
   }
   return {

@@ -1,15 +1,19 @@
 import { describe, expect, it } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewaySession } from "./session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "./session-create-service.types.js";
@@ -120,9 +124,9 @@ describe("session creation display titles", () => {
     },
   );
 
-  it.each(["durable", "incognito", "shared"])(
+  it.for(["durable", "incognito", "shared"])(
     "reserves concurrent explicit labels atomically in %s storage",
-    async (storage) => {
+    async (storage, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const incognito = storage === "incognito";
         const storePath = storage === "shared" ? state.statePath("shared.sqlite") : undefined;
@@ -133,48 +137,63 @@ describe("session creation display titles", () => {
           (name, index) =>
             `agent:${storage === "shared" && index === 1 ? "other" : "main"}:dashboard:${incognito ? "incognito-" : ""}${name}`,
         );
-        const outcomes = await Promise.all(
-          keys.map((key) => {
-            let joined = false;
-            const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = async (run) => {
-              if (!joined) {
-                joined = true;
-                if (++preparing === 2) {
-                  prepared.resolve();
-                }
-                await prepared.promise;
-              }
-              return run(() => {});
-            };
-            return createGatewaySession({
-              cfg,
-              key,
-              incognito,
-              label: " Shared label ",
-              commandSource: "test",
-              operatorRoleActor: { kind: "system" },
-              prepareLifecycle: async () => ({ ok: true, value: { withCommit } }),
-            });
-          }),
-        );
-        expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
-        expect(outcomes.find((outcome) => !outcome.ok)).toMatchObject({
-          ok: false,
-          error: { code: "INVALID_REQUEST", message: "label already in use: Shared label" },
+        const owner = acquireGatewayStateOwner({
+          databasePath: resolveOpenClawStateSqlitePath(),
+          payload: {
+            pid: process.pid,
+            createdAt: new Date().toISOString(),
+            configPath: state.configPath,
+            stateDir: state.stateDir,
+            role: "gateway",
+          },
         });
-        for (const [index, key] of keys.entries()) {
-          const stored = loadSessionEntry({ sessionKey: key, storePath });
-          if (outcomes[index]?.ok) {
-            expect(stored?.label).toBe("Shared label");
-          } else {
-            expect(stored?.label).toBeUndefined();
+        const creations = keys.map((key) => {
+          let joined = false;
+          const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = async (run) => {
+            if (!joined) {
+              joined = true;
+              if (++preparing === 2) {
+                prepared.resolve();
+              }
+              await prepared.promise;
+            }
+            return run(() => {});
+          };
+          return createGatewaySession({
+            cfg,
+            key,
+            incognito,
+            label: " Shared label ",
+            commandSource: "test",
+            operatorRoleActor: { kind: "system" },
+            prepareLifecycle: async () => ({ ok: true, value: { withCommit } }),
+          });
+        });
+        try {
+          const outcomes = await withinTest(Promise.all(creations), signal);
+          expect(outcomes.filter((outcome) => outcome.ok)).toHaveLength(1);
+          expect(outcomes.find((outcome) => !outcome.ok)).toMatchObject({
+            ok: false,
+            error: { code: "INVALID_REQUEST", message: "label already in use: Shared label" },
+          });
+          for (const [index, key] of keys.entries()) {
+            const stored = loadSessionEntry({ sessionKey: key, storePath });
+            if (outcomes[index]?.ok) {
+              expect(stored?.label).toBe("Shared label");
+            } else {
+              expect(stored?.label).toBeUndefined();
+            }
           }
+        } finally {
+          prepared.resolve();
+          await Promise.allSettled(creations);
+          owner.release();
         }
       });
     },
   );
 
-  it("rejects a label claimed by a raw metadata edit after creation preparation", async () => {
+  it("rejects a label claimed by a canonical write after creation preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const siblingKey = "agent:main:sibling";
       const sibling = await createGatewaySession({
@@ -190,9 +209,10 @@ describe("session creation display titles", () => {
       }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       const withCommit: PreparedGatewaySessionLifecycle["withCommit"] = async (run) => {
-        database.db
-          .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-          .run(JSON.stringify({ ...sibling.entry, label: "Claimed" }), siblingKey);
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey: siblingKey },
+          { ...sibling.entry, label: "Claimed" },
+        );
         return run(() => {});
       };
       await expect(

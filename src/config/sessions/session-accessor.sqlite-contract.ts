@@ -173,6 +173,7 @@ export type SessionTranscriptInstanceListOptions = {
   /** Include empty and internal windows when inspecting recorded source metadata. */
   includeAllWindows?: boolean;
   sessionId?: string;
+  sessionIds?: readonly string[];
 };
 
 export type TranscriptEventAppendOptions = {
@@ -207,7 +208,6 @@ export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,
   SessionAccessScope,
-  SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,

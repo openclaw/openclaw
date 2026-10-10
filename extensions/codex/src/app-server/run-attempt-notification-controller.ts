@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { acknowledgeInternalToolResult } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   isCodexTurnAbortMarkerNotification,
   completePendingOpenClawDynamicToolNotification,
@@ -16,6 +17,7 @@ import type { CodexServerNotification } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
+import { projectCodexSessionWarning } from "./session-warnings.js";
 import { waitForPromiseOrAbort } from "./timeout.js";
 import { CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS } from "./turn-router.js";
 import type { CodexThreadRouteScope } from "./turn-router.js";
@@ -42,6 +44,7 @@ export function createCodexAttemptNotificationController(
     deadlines,
   } = turnRuntime;
   const {
+    recordModelResponseNotification,
     scheduleTerminalDynamicToolReleaseCheck,
     reportExecutionNotification,
     maybeAnnounceFastModeAutoOff,
@@ -141,7 +144,36 @@ export function createCodexAttemptNotificationController(
           state.sawCodexInterruptMarker = true;
         }
       }
-      await projector.handleNotification(notification);
+      if (notification.method === "warning" || notification.method === "configWarning") {
+        const { params, sessionAgentId, assertCurrent } = runtime.connection;
+        await projectCodexSessionWarning({
+          session: {
+            agentId: sessionAgentId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionTarget?.sessionKey ?? params.sessionKey,
+            storePath:
+              params.sessionTarget?.storePath ??
+              resolveStorePath(params.config?.session?.store, { agentId: sessionAgentId }),
+            expectedLifecycleRevision: params.sessionTarget?.expectedLifecycleRevision,
+          },
+          threadId: resourceState.thread.threadId,
+          notification,
+          assertCurrent,
+          project: async () => {
+            if (
+              state.projectionClosed ||
+              projectorRef.current !== projector ||
+              turnIdRef.current !== turnId
+            ) {
+              return false;
+            }
+            await projector.handleNotification(notification);
+            return true;
+          },
+        });
+      } else {
+        await projector.handleNotification(notification);
+      }
       if (
         isCurrentTurn &&
         activeTurnItemIds.size === 0 &&
@@ -214,6 +246,8 @@ export function createCodexAttemptNotificationController(
       deadlines.beginSettlement(receivedAtMs);
     }
     if (scope.turnId === turnId) {
+      // Admission observes receipts before queued projection or concurrent tool responses.
+      recordModelResponseNotification(notification);
       const modelToolCallId = readRawResponseToolCallId(notification);
       if (modelToolCallId) {
         allocateCodexToolOutcomeOrdinal?.(modelToolCallId);

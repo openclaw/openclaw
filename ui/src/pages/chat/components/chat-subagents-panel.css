@@ -31,17 +31,6 @@
   height: 8px;
 }
 
-.chat-subagents__metadata {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 17px;
-  margin-top: 3px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-variant-numeric: tabular-nums;
-}
-
 .chat-subagents__work {
   display: flex;
   flex: 1;
@@ -89,12 +78,6 @@
   color: var(--danger);
   font-size: var(--control-ui-text-sm);
   overflow-wrap: anywhere;
-}
-
-.chat-subagents__load-more {
-  flex-shrink: 0;
-  align-self: center;
-  margin: 8px;
 }
 
 .chat-subagents__detail-pane,

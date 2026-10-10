@@ -5,6 +5,7 @@ import { isRouteId, isSessionRouteId } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
@@ -43,6 +44,7 @@ import { renderSessionGlyph, renderSessionUnreadBadge } from "./session-glyph.ts
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   teamOnlineExpanded: boolean;
@@ -114,7 +116,8 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
 }
 
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
-  const name = readSidebarNativeGateway()?.name.trim() || "OpenClaw";
+  const branding = host.sessionDataContext?.theme.branding ?? currentThemeBranding();
+  const name = readSidebarNativeGateway()?.name.trim() || branding.brandName;
   const menuOpen = host.sidebarMenus.agentMenuPosition !== null;
   return html`
     <div class="sidebar-workspace-header">
@@ -145,11 +148,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
         }}
       >
         ${
-          host.sessionDataContext?.theme.branding.mascot === "none"
+          branding.brandIcon !== "claw"
             ? html`<span
                 class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
                 aria-hidden="true"
-                >${icons.mark}</span
+                >${renderThemeBrandIcon(icons.lobster, branding)}</span
               >`
             : html`<span class="sidebar-workspace-header__mark" aria-hidden="true"
                 >${icons.lobster}</span
@@ -336,7 +339,7 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unkno
           aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
           aria-label=${t("nav.customize")}
           @click=${(event: MouseEvent) =>
-            host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
+            host.sidebarMenus.togglePositionedMenu("more", event.currentTarget as HTMLElement)}
         >
           ${icons.penLine}
         </button>

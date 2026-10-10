@@ -1,4 +1,3 @@
-/** Platform service registry and shared gateway service start/repair logic. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
@@ -75,11 +74,10 @@ export type {
   GatewayServiceState,
 } from "./service-types.js";
 
-// Platform service adapter used by CLI commands across launchd, systemd, and schtasks.
-function ignoreServiceWriteResult<TArgs extends GatewayServiceInstallArgs>(
-  write: (args: TArgs) => Promise<unknown>,
-): (args: TArgs) => Promise<void> {
-  return async (args: TArgs) => {
+function ignoreServiceWriteResult(
+  write: (args: GatewayServiceInstallArgs) => Promise<unknown>,
+): (args: GatewayServiceInstallArgs) => Promise<void> {
+  return async (args) => {
     await write(args);
   };
 }

@@ -1,5 +1,5 @@
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
-import { visitAgentEntries } from "./legacy-config-record-shared.js";
+import { someAgentEntry, visitAgentEntries } from "./legacy-config-record-shared.js";
 
 export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE: LegacyConfigMigrationSpec = {
   id: "tools.codeMode.javascript-only",
@@ -13,13 +13,10 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE: LegacyConfigMigrationSpe
       path: ["agents"],
       message:
         'Per-agent tools.codeMode.languages is retired; Code Mode now runs JavaScript only. Run "openclaw doctor --fix".',
-      match: (value) => {
-        let found = false;
-        visitAgentEntries({ agents: value }, (agent) => {
-          found ||= Object.hasOwn(getRecord(getRecord(agent.tools)?.codeMode) ?? {}, "languages");
-        });
-        return found;
-      },
+      match: (value) =>
+        someAgentEntry(value, (agent) =>
+          Object.hasOwn(getRecord(getRecord(agent.tools)?.codeMode) ?? {}, "languages"),
+        ),
     },
   ],
   apply: (raw, changes) => {
@@ -48,13 +45,10 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_CODE_MODE_EXECUTOR: LegacyConfigMig
       path: ["agents"],
       message:
         'Per-agent tools.codeMode.runtime moved to tools.codeMode.executor. Run "openclaw doctor --fix".',
-      match: (value) => {
-        let found = false;
-        visitAgentEntries({ agents: value }, (agent) => {
-          found ||= Object.hasOwn(getRecord(getRecord(agent.tools)?.codeMode) ?? {}, "runtime");
-        });
-        return found;
-      },
+      match: (value) =>
+        someAgentEntry(value, (agent) =>
+          Object.hasOwn(getRecord(getRecord(agent.tools)?.codeMode) ?? {}, "runtime"),
+        ),
     },
   ],
   apply: (raw, changes) => {

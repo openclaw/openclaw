@@ -20,6 +20,11 @@ report, preserving the live database and its WAL files. Each new report reads a
 fresh snapshot. Checks that need writable inspection state or independent database
 verification retain their own copies; `--only` checks prepare state on demand.
 
+Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
+including their modification times. An older shared-state schema produces a
+"migration pending" finding with `openclaw doctor --fix` guidance; inspection does
+not upgrade it. Ordinary Doctor and explicit repair retain their migration behavior.
+
 Doctor retires private database readers and writers before removing inspection
 snapshots. A cleanup failure preserves completed findings and check counts;
 updater runs report failed temporary-file removal as a warning. If database

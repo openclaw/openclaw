@@ -137,7 +137,7 @@ function createCodeModeExecDescription(
   const swarmEnabled = isCodeModeSwarmAvailable(ctx, catalog);
   const apiGuidance =
     !catalogKnown || (catalog?.length ?? 0) > 0 || swarmEnabled
-      ? " Read types with `API.list(prefix?)` and `API.read(path)`; native tools: `tools/`. Types are documentation; write plain JavaScript."
+      ? " Read types with `API.list(prefix?)` and `API.read(path)`; read returns `{ path, description, content, bytes }`, not a string. Use `.content` for declaration text. Native tools: `tools/`. Types are documentation; write plain JavaScript."
       : "";
   const mcpGuidance =
     !catalogKnown || hasMcp

@@ -1,4 +1,3 @@
-import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
@@ -10,7 +9,6 @@ import {
   accumulatedStreamText,
   advanceAccumulatedStreamText,
   streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
@@ -62,7 +60,6 @@ import {
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
-  userTurnRunId,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
 } from "./chat-thread-items.ts";
@@ -79,7 +76,6 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { latestPersistedSteerBoundary } from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
@@ -131,7 +127,9 @@ export function buildChatItems(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
   );
   const toolItems = buildMessageItems(tools).map((item) => {
-    const projection: ChatProjection<typeof item> = { item };
+    const projection: ChatProjection<typeof item> = {
+      item,
+    };
     return {
       projection,
       runId: normalizeOptionalString(item.message.runId),
@@ -180,16 +178,6 @@ export function buildChatItems(
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
-  const persistedCommentaryKeys = new Map<string, string>();
-  for (const [index, message] of history.entries()) {
-    const identity = readAssistantStreamSegmentIdentity(message);
-    if (identity) {
-      persistedCommentaryKeys.set(
-        `${identity.runId ?? ""}\u0000${identity.itemId}`,
-        historyItems[index]!.key,
-      );
-    }
-  }
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
     lastMatchingAssistantIndex: number;
@@ -339,6 +327,14 @@ export function buildChatItems(
   const currentTurnBounds =
     (currentRunId ? canvasRunBounds(currentRunId) : null) ??
     (activeInputKey ? { afterKey: activeInputKey } : historyTurnBounds);
+  const resolveRunBounds = (
+    lookup: typeof canvasRunBounds,
+    runId: unknown,
+    afterUserSendId?: string,
+  ) =>
+    (typeof runId === "string" && afterUserSendId ? lookup(runId, afterUserSendId) : null) ??
+    resolveRunInsertionBounds(lookup, runId, currentRunId, currentTurnBounds) ??
+    (!runId && activeInputKey ? currentTurnBounds : undefined);
   const boundToPendingInputs = (
     bounds: TurnInsertionBounds | null | undefined,
   ): TurnInsertionBounds | undefined => {
@@ -357,12 +353,11 @@ export function buildChatItems(
       continue;
     }
     const canvasBounds = boundToPendingInputs(
-      resolveRunInsertionBounds(
+      resolveRunBounds(
         canvasRunBounds,
         projection.item.message.runId,
-        currentRunId,
-        currentTurnBounds,
-      ) ?? (!projection.item.message.runId && activeInputKey ? currentTurnBounds : undefined),
+        normalizeOptionalString(projection.item.message.openclawToolStreamAfterSendId),
+      ),
     );
     const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
       items,
@@ -425,20 +420,8 @@ export function buildChatItems(
       },
     });
   }
-  const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
-  let latestBoundaryRunId: string | undefined;
-  for (const segment of segments) {
-    const afterBoundaryRunId =
-      normalizeOptionalString(segment.afterBoundaryRunId) ?? latestBoundaryRunId;
-    if (afterBoundaryRunId) {
-      afterBoundaryBySegment.set(segment, afterBoundaryRunId);
-    }
-    latestBoundaryRunId = normalizeOptionalString(segment.boundaryRunId) ?? latestBoundaryRunId;
-  }
   const keyedSegments = segments.filter(streamSegmentHasItemId);
-  const indexedSegments = segments.filter(
-    (segment) => !streamSegmentHasItemId(segment) && segment.boundaryMarker !== true,
-  );
+  const indexedSegments = segments.filter((segment) => !streamSegmentHasItemId(segment));
   const toolLookup = createToolCallLookup<ChatProjection>();
   for (const tool of toolItems) {
     toolLookup.add(tool.runId, tool.callId, tool.projection);
@@ -448,25 +431,9 @@ export function buildChatItems(
   const projectionRunBounds = createRunTurnLookup(executionItems());
   const resolveProjectionBounds = (
     runId: unknown,
-    boundaryRunId?: string,
-    afterBoundaryRunId?: string,
-  ): TurnInsertionBounds | undefined => {
-    const bounds =
-      resolveRunInsertionBounds(projectionRunBounds, runId, currentRunId, currentTurnBounds) ??
-      (!runId && activeInputKey ? currentTurnBounds : undefined);
-    const boundaryKey = boundaryRunId ? projectionRunBounds(boundaryRunId)?.afterKey : undefined;
-    const afterBounds = afterBoundaryRunId ? projectionRunBounds(afterBoundaryRunId) : undefined;
-    return boundToPendingInputs(
-      bounds || boundaryKey || afterBounds
-        ? {
-            ...bounds,
-            ...(afterBounds?.afterKey ? { afterKey: afterBounds.afterKey } : {}),
-            ...(afterBounds?.beforeKey ? { beforeKey: afterBounds.beforeKey } : {}),
-            ...(boundaryKey ? { beforeKey: boundaryKey } : {}),
-          }
-        : undefined,
-    );
-  };
+    afterUserSendId?: string,
+  ): TurnInsertionBounds | undefined =>
+    boundToPendingInputs(resolveRunBounds(projectionRunBounds, runId, afterUserSendId));
   if (!searchFiltering) {
     if (props.archiveNotice) {
       projections.push({ item: props.archiveNotice });
@@ -478,33 +445,7 @@ export function buildChatItems(
       });
     }
   }
-  const toolBeforeBoundaries = createToolCallLookup<string>();
-  const toolAfterBoundaries = createToolCallLookup<string>();
-  for (const segment of indexedSegments) {
-    const callId = normalizeOptionalString(segment.toolCallId);
-    const runId = normalizeOptionalString(segment.runId);
-    const boundaryRunId = normalizeOptionalString(segment.boundaryRunId);
-    const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
-    if (boundaryRunId) {
-      toolBeforeBoundaries.add(runId, callId, boundaryRunId);
-    }
-    if (afterBoundaryRunId) {
-      toolAfterBoundaries.add(runId, callId, afterBoundaryRunId);
-    }
-  }
   const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
-    const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
-    const pendingItemId = normalizeOptionalString(segment.pendingCommentaryPrefixFor);
-    const persistedCommentaryKey = pendingItemId
-      ? (persistedCommentaryKeys.get(
-          `${normalizeOptionalString(segment.runId) ?? ""}\u0000${pendingItemId}`,
-        ) ?? persistedCommentaryKeys.get(`\u0000${pendingItemId}`))
-      : undefined;
-    const bounds = resolveProjectionBounds(
-      segment.runId,
-      segment.boundaryRunId,
-      afterBoundaryRunId,
-    );
     projections.push({
       item: {
         kind: "stream",
@@ -513,9 +454,9 @@ export function buildChatItems(
         startedAt: segment.ts,
         isStreaming: false,
         ...optionalRunIdentity(segment.runId),
-        ...optionalBoundaryIdentity(afterBoundaryRunId ?? segment.runId),
+        ...optionalBoundaryIdentity(segment.runId),
       },
-      bounds: persistedCommentaryKey ? { ...bounds, beforeKey: persistedCommentaryKey } : bounds,
+      bounds: resolveProjectionBounds(segment.runId, segment.afterUserSendId),
     });
   };
   let previousAccumulatedStreamText: string | null = null;
@@ -524,16 +465,11 @@ export function buildChatItems(
     const segment = indexedSegments[i];
     if (segment) {
       const text = sanitizeStreamText(segment.text);
-      const usesAccumulatedText = streamSegmentUsesAccumulatedText(segment);
-      const visibleText = usesAccumulatedText
-        ? trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText)
-        : text;
-      if (usesAccumulatedText) {
-        previousAccumulatedStreamText = advanceAccumulatedStreamText(
-          previousAccumulatedStreamText,
-          text,
-        );
-      }
+      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+      previousAccumulatedStreamText = advanceAccumulatedStreamText(
+        previousAccumulatedStreamText,
+        text,
+      );
       if (visibleText.length > 0 && segment.persisted !== true) {
         const streamKey = `stream-seg:${props.sessionKey}:${i}`;
         appendStreamSegment(segment, streamKey, visibleText);
@@ -550,13 +486,10 @@ export function buildChatItems(
     }
     const tool = toolItems[i];
     if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
-      const before =
-        normalizeOptionalString(tool.projection.item.message.boundaryRunId) ??
-        toolBeforeBoundaries.get(tool.runId, tool.callId);
-      const after =
-        normalizeOptionalString(tool.projection.item.message.afterBoundaryRunId) ??
-        toolAfterBoundaries.get(tool.runId, tool.callId);
-      tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
+      tool.projection.bounds = resolveProjectionBounds(
+        tool.runId,
+        normalizeOptionalString(tool.projection.item.message.openclawToolStreamAfterSendId),
+      );
       projections.push(tool.projection);
     }
   }
@@ -614,22 +547,13 @@ export function buildChatItems(
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
-  const persistedBoundary = currentRunId
-    ? latestPersistedSteerBoundary(history, currentRunId)
-    : null;
-  const activeBoundaryRunId =
-    persistedBoundary &&
-    (!latestBoundaryRunId ||
-      history.findIndex((message) => userTurnRunId(message) === latestBoundaryRunId) <=
-        persistedBoundary.index)
-      ? persistedBoundary.runId
-      : latestBoundaryRunId;
-  const activeTurnRunId = activeBoundaryRunId ?? currentRunId;
   const activeTurnBounds = boundToPendingInputs(
-    (activeTurnRunId ? createRunTurnLookup(executionItems())(activeTurnRunId) : null) ??
+    (currentRunId ? createRunTurnLookup(executionItems())(currentRunId) : null) ??
       (activeInputKey ? { afterKey: activeInputKey } : null),
   );
-  const appendActiveRunItem = (item: ChatItem) => {
+  const appendActiveRunItem = (
+    item: Extract<ChatItem, { kind: "stream" | "reading-indicator" }>,
+  ) => {
     // Queued custody is a ceiling for the whole live response, not just its text.
     // Moving its working indicator past that ceiling splits and remeasures the run.
     if (activeTurnBounds) {
@@ -648,14 +572,12 @@ export function buildChatItems(
       const liveRunId = props.runId ?? liveProgress.runId;
       const liveStreamItem: ChatItem = {
         kind: "stream",
-        key: activeBoundaryRunId
-          ? `${liveProgress.key}:after:${activeBoundaryRunId}`
-          : liveProgress.key,
+        key: liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
         ...optionalRunIdentity(liveRunId),
-        ...optionalBoundaryIdentity(activeBoundaryRunId ?? liveRunId),
+        ...optionalBoundaryIdentity(liveRunId),
       };
       appendActiveRunItem(liveStreamItem);
     }
@@ -668,7 +590,7 @@ export function buildChatItems(
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
       ...optionalRunIdentity(workingRunId),
-      ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
+      ...optionalBoundaryIdentity(workingRunId),
     });
   } else if (props.subagentWait && !initialHistoryLoad) {
     // The handoff ended the parent's run, not its work. Carrying that run's

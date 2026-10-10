@@ -11,12 +11,21 @@ function fixture() {
   const replaceWith = vi.fn((next: { enabled: boolean }) => {
     enabled = next.enabled;
   });
+  const clearPending = vi.fn();
   const document = {
     hidden: false,
     title: "Before",
     getElementById: () => null,
+    // The copy-control enhancer scans the document and each refreshed main; this stub has no code blocks.
+    querySelectorAll: () => [],
     querySelector: (selector: string) =>
-      selector.includes("refresh") ? (enabled ? {} : null) : { replaceWith },
+      selector.includes("entry-pending")
+        ? null
+        : selector.includes("refresh")
+          ? enabled
+            ? {}
+            : null
+          : { replaceWith },
     addEventListener: (name: string, callback: () => void) => {
       listeners.set(name, callback);
     },
@@ -37,7 +46,16 @@ function fixture() {
     clearTimeout,
     DOMParser: class {
       parseFromString(body: string) {
-        return { title: body, querySelector: () => ({ enabled: body !== "revoked" }) };
+        return {
+          title: body,
+          querySelector: () => ({
+            enabled: body !== "revoked",
+            hasAttribute: () => body === "revoked",
+            removeAttribute: clearPending,
+            querySelectorAll: () => [],
+            querySelector: () => ({ textContent: "Conversation unavailable" }),
+          }),
+        };
       }
     },
   });
@@ -45,7 +63,7 @@ function fixture() {
     document.hidden = hidden;
     listeners.get("visibilitychange")?.();
   };
-  return { document, fetch, response, replaceWith, visibility };
+  return { document, fetch, response, replaceWith, visibility, clearPending };
 }
 
 describe("public reader refresh lifecycle", () => {
@@ -78,7 +96,8 @@ describe("public reader refresh lifecycle", () => {
     const f = fixture();
     f.fetch.mockResolvedValue(f.response(404, "revoked"));
     await vi.advanceTimersByTimeAsync(16500);
-    expect(f.document.title).toBe("revoked");
+    expect(f.document.title).toBe("Conversation unavailable · OpenClaw");
+    expect(f.clearPending).toHaveBeenCalledExactlyOnceWith("data-entry-pending");
     await vi.advanceTimersByTimeAsync(60000);
     expect(f.fetch).toHaveBeenCalledTimes(1);
   });

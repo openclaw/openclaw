@@ -219,8 +219,6 @@ type TelegramMenuLocaleLedgerNormalization = {
 };
 
 const syncTails = new Map<string, Promise<void>>();
-// Successful command hashes stay process-local so restarts always republish.
-const syncedCommandHashes = new Map<string, string>();
 const knownLanguageCodes = new Map<string, Set<LanguageCode>>();
 
 export function resolveTelegramMenuRemoteOwner(params: {
@@ -261,14 +259,6 @@ export function enqueueTelegramMenuSync(params: {
       syncTails.delete(params.ownerKey);
     }
   });
-}
-
-export function readTelegramMenuCommandHash(key: string): string | null {
-  return syncedCommandHashes.get(key) ?? null;
-}
-
-export function writeTelegramMenuCommandHash(key: string, hash: string): void {
-  syncedCommandHashes.set(key, hash);
 }
 
 export function getProcessKnownTelegramMenuLocales(ownerKey: string): Set<LanguageCode> {
@@ -334,14 +324,13 @@ function normalizeTelegramMenuLocaleLedger(stored: unknown): TelegramMenuLocaleL
     rawLanguageCodes.length === canonicalLanguageCodes.length &&
     rawLanguageCodes.every((languageCode, index) => languageCode === canonicalLanguageCodes[index]);
   return {
-    ...(canonicalLanguageCodes.length > 0
-      ? {
-          value: {
+    value:
+      canonicalLanguageCodes.length > 0
+        ? {
             version: TELEGRAM_MENU_LOCALE_LEDGER_VERSION,
             languageCodes: canonicalLanguageCodes,
-          },
-        }
-      : {}),
+          }
+        : undefined,
     isCanonical,
     unsupportedLanguageCodes: [...unsupportedLanguageCodes].toSorted(),
     malformedEntryCount,

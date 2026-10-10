@@ -37,12 +37,14 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedGatewayServiceObservation,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import {
   assertGatewayServiceAdmissionUnchanged,
   GATEWAY_SERVICE_INSPECTION_WARNING,
   GatewayServiceUpdateOwnershipError,
+  isUpdateServiceManagerAvailable,
   observedSystemdManagerUid,
   readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
@@ -74,7 +76,7 @@ export type UpdateCommandRecoveryState = {
 
 export function createWindowsTaskAutoStartGuard(params: {
   root: string;
-  before: Pick<PreManagedServiceStop, "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid">;
+  before: ManagedGatewayServiceObservation;
   timeoutMs?: number;
 }): () => Promise<void> {
   const before = params.before;
@@ -160,10 +162,7 @@ type ManagedServiceStopParams = {
   /** Package/helper root can differ from the inspected service during a rebind. */
   handoffRoot?: string;
   handoffFromGateway?: (state: GatewayServiceState) => Promise<boolean>;
-  expectedService?: Pick<
-    PreManagedServiceStop,
-    "serviceEnv" | "serviceUpdateVerdict" | "serviceManagerUid"
-  > &
+  expectedService?: ManagedGatewayServiceObservation &
     Partial<Pick<PreManagedServiceStop, "stopped">>;
   allowInstallRootChange?: boolean;
   onStopped?: (state: PreManagedServiceStop) => void;
@@ -362,16 +361,10 @@ async function stopManagedServiceBeforeMutableUpdate(
     assertCurrent();
     if (err instanceof GatewayServiceUpdateOwnershipError && service) {
       const inspectedService = service;
-      const available = await withCommandProcessScope(() =>
-        inspectedService.isLoaded({ env: serviceEnv, timeoutMs: params.timeoutMs }),
-      ).then(
-        () => true,
-        (error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return false;
-        },
+      const available = await isUpdateServiceManagerAvailable(
+        withCommandProcessScope(() =>
+          inspectedService.isLoaded({ env: serviceEnv, timeoutMs: params.timeoutMs }),
+        ),
       );
       assertCurrent();
       if (available) {
@@ -632,6 +625,7 @@ async function stopManagedServiceBeforeMutableUpdate(
         env: currentState.env,
         stdout: params.jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout,
         assertCurrent,
+        warn,
         ...(updateRun
           ? { updateHandoff: { root: params.handoffRoot ?? params.root, runId: updateRun.runId } }
           : {}),

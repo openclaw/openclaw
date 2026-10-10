@@ -19,6 +19,7 @@ import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js
 import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
 import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
+import { getProviderPromptState } from "../provider-prompt-state.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -191,6 +192,7 @@ export function installEmbeddedAttemptStreamGuards(
       );
     }
   };
+  const providerPromptState = getProviderPromptState(attempt.runId);
   const cacheObserver = createPromptCacheRequestObserver(
     {
       sessionId: attempt.sessionId,
@@ -207,7 +209,9 @@ export function installEmbeddedAttemptStreamGuards(
           "no tracked cache input change";
         log.warn(
           `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
-            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
+            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
+            `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
+            `providerPrefix=${observation.providerPrefix ?? "unavailable"}`,
         );
       }
       cacheTrace?.recordStage("cache:result", { options: { ...observation } });
@@ -431,7 +435,7 @@ export function installEmbeddedAttemptStreamGuards(
       // response before core commits its final fragment with normalized usage.
       if (modelResponseTerminal) {
         modelResponseTerminal = false;
-        cacheObserver.onModelUsage(usage);
+        cacheObserver.onModelUsage(usage, providerPromptState.lastAttempt);
       }
     },
     getPromptCacheObservation: cacheObserver.getObservation,

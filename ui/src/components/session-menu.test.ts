@@ -267,8 +267,10 @@ describe("session menu", () => {
       labels: [
         "Rename…",
         "Mark as unread",
+        "Move to top level",
         "Archive session",
         "Icon & color",
+        "Move to group",
         "Assign to…",
         "Fork conversation",
         "Copy",

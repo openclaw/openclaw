@@ -60,6 +60,14 @@ type ComfyWorkflow = Record<string, unknown>;
 type ComfyProviderConfig = Record<string, unknown>;
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
+type ComfyConnection = {
+  baseUrl: string;
+  headers: Headers;
+  timeoutMs: number;
+  policy?: SsrFPolicy;
+  dispatcherPolicy?: ComfyDispatcherPolicy;
+  mode: ComfyMode;
+};
 type ComfyPromptResponse = {
   prompt_id?: string;
 };
@@ -312,40 +320,34 @@ async function readJsonResponse<T>(params: {
   }
 }
 
-async function uploadInputImage(params: {
-  baseUrl: string;
-  headers: Headers;
-  timeoutMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
-  image: ComfySourceImage;
-  mode: ComfyMode;
-  capability: ComfyCapability;
-}): Promise<string> {
+async function uploadInputImage(
+  connection: ComfyConnection,
+  image: ComfySourceImage,
+  capability: ComfyCapability,
+): Promise<string> {
+  const { baseUrl, mode, headers: requestHeaders, ...request } = connection;
   const form = new FormData();
   form.set(
     "image",
-    new Blob([bufferToBlobPart(params.image.buffer)], { type: params.image.mimeType }),
-    normalizeOptionalString(params.image.fileName) ||
-      `input.${extensionForMime(params.image.mimeType)?.slice(1) || "bin"}`,
+    new Blob([bufferToBlobPart(image.buffer)], { type: image.mimeType }),
+    normalizeOptionalString(image.fileName) ||
+      `input.${extensionForMime(image.mimeType)?.slice(1) || "bin"}`,
   );
   form.set("type", "input");
   form.set("overwrite", "true");
 
-  const headers = new Headers(params.headers);
+  const headers = new Headers(requestHeaders);
   headers.delete("Content-Type");
 
   const payload = await readJsonResponse<ComfyUploadResponse>({
-    url: `${params.baseUrl}${params.mode === "cloud" ? "/api/upload/image" : "/upload/image"}`,
+    ...request,
+    url: `${baseUrl}${mode === "cloud" ? "/api/upload/image" : "/upload/image"}`,
     init: {
       method: "POST",
       headers,
       body: form,
     },
-    timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
-    auditContext: `comfy-${params.capability}-upload`,
+    auditContext: `comfy-${capability}-upload`,
     errorPrefix: "Comfy image upload failed",
   });
 
@@ -372,66 +374,54 @@ function extractHistoryEntry(history: unknown, promptId: string): ComfyHistoryEn
   return null;
 }
 
-async function waitForComfyHistory(params: {
-  baseUrl: string;
-  promptId: string;
-  headers: Headers;
-  timeoutMs: number;
-  pollIntervalMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
-  mode: ComfyMode;
-}): Promise<unknown> {
+async function waitForComfyHistory(
+  params: ComfyConnection,
+  promptId: string,
+  pollIntervalMs: number,
+): Promise<unknown> {
+  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
+  const headers = new Headers(requestHeaders);
   const deadline = Date.now() + params.timeoutMs;
   const read = <T>(path: string, kind: "history" | "status", timeoutMs: number) =>
     readJsonResponse<T>({
-      url: `${params.baseUrl}${path}`,
+      ...request,
+      url: `${baseUrl}${path}`,
       init: {
         method: "GET",
-        headers: params.headers,
+        headers,
       },
       timeoutMs,
-      policy: params.policy,
-      dispatcherPolicy: params.dispatcherPolicy,
       auditContext: `comfy-${kind}`,
       errorPrefix: `Comfy ${kind} lookup failed`,
     });
 
   for (;;) {
     const requestTimeoutMs = resolveComfyRemainingMs(deadline, params.timeoutMs);
-    if (params.mode === "cloud") {
+    if (mode === "cloud") {
       const status = await read<ComfyStatusResponse>(
-        `/api/job/${params.promptId}/status`,
+        `/api/job/${promptId}/status`,
         "status",
         requestTimeoutMs,
       );
       if (status.status === "completed") {
         // Cloud history gets a fresh request budget after the job completes.
-        return await read<unknown>(
-          `/api/history_v2/${params.promptId}`,
-          "history",
-          params.timeoutMs,
-        );
+        return await read<unknown>(`/api/history_v2/${promptId}`, "history", params.timeoutMs);
       }
       if (status.status === "failed" || status.status === "cancelled") {
         const detail = redactProviderResponseErrorText(
-          status.error ?? status.message ?? params.promptId,
-          params.headers,
+          status.error ?? status.message ?? promptId,
+          headers,
         );
         throw new Error(`Comfy workflow ${status.status}: ${detail}`);
       }
     } else {
-      const history = await read<unknown>(
-        `/history/${params.promptId}`,
-        "history",
-        requestTimeoutMs,
-      );
-      const entry = extractHistoryEntry(history, params.promptId);
+      const history = await read<unknown>(`/history/${promptId}`, "history", requestTimeoutMs);
+      const entry = extractHistoryEntry(history, promptId);
       if (entry && isTerminalComfyHistory(entry, params.headers)) {
         return entry;
       }
     }
-    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, params.pollIntervalMs);
+    const pollDelayMs = resolveComfyRemainingMs(deadline, params.timeoutMs, pollIntervalMs);
     await sleep(pollDelayMs);
   }
 }
@@ -489,59 +479,53 @@ function collectOutputFiles(params: {
   return files;
 }
 
-async function downloadOutputFile(params: {
-  baseUrl: string;
-  headers: Headers;
-  timeoutMs: number;
-  policy?: SsrFPolicy;
-  dispatcherPolicy?: ComfyDispatcherPolicy;
-  file: ComfyOutputFile;
-  mode: ComfyMode;
-  capability: ComfyCapability;
-  maxBytes: number;
-}): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
-  const fileName =
-    normalizeOptionalString(params.file.filename) || normalizeOptionalString(params.file.name);
+async function downloadOutputFile(
+  params: ComfyConnection,
+  file: ComfyOutputFile,
+  capability: ComfyCapability,
+  maxBytes: number,
+): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
+  const { baseUrl, headers: requestHeaders, mode, ...request } = params;
+  const headers = new Headers(requestHeaders);
+  const fileName = normalizeOptionalString(file.filename) || normalizeOptionalString(file.name);
   if (!fileName) {
     throw new Error("Comfy output entry missing filename");
   }
 
   const query = new URLSearchParams({
     filename: fileName,
-    subfolder: normalizeOptionalString(params.file.subfolder) ?? "",
-    type: normalizeOptionalString(params.file.type) ?? "output",
+    subfolder: normalizeOptionalString(file.subfolder) ?? "",
+    type: normalizeOptionalString(file.type) ?? "output",
   });
-  const viewPath = params.mode === "cloud" ? "/api/view" : "/view";
-  const auditContext = `comfy-${params.capability}-download`;
+  const viewPath = mode === "cloud" ? "/api/view" : "/view";
+  const auditContext = `comfy-${capability}-download`;
 
   const firstResponse = await fetchWithSsrFGuard({
-    url: `${params.baseUrl}${viewPath}?${query.toString()}`,
+    ...request,
+    url: `${baseUrl}${viewPath}?${query.toString()}`,
     init: {
       method: "GET",
-      headers: params.headers,
+      headers,
     },
-    timeoutMs: params.timeoutMs,
-    policy: params.policy,
-    dispatcherPolicy: params.dispatcherPolicy,
     auditContext,
   });
 
   try {
     await assertOkOrThrowHttpError(firstResponse.response, "Comfy output download failed", {
-      requestHeaders: params.headers,
+      requestHeaders: headers,
     });
     const mimeType =
       normalizeOptionalString(firstResponse.response.headers.get("content-type")) ||
       "application/octet-stream";
-    const downloadLabel = `Comfy ${params.capability} output download`;
+    const downloadLabel = `Comfy ${capability} output download`;
     const buffer = await readProviderBinaryResponse(
       firstResponse.response,
       downloadLabel,
-      params.capability,
+      capability,
       {
-        maxBytes: params.maxBytes,
+        maxBytes,
         chunkTimeoutMs: params.timeoutMs,
-        onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
+        onOverflow: ({ maxBytes: limit }) => new Error(`${downloadLabel} exceeds ${limit} bytes`),
         onIdleTimeout: ({ chunkTimeoutMs }) =>
           new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
       },
@@ -701,6 +685,14 @@ export async function runComfyWorkflow(params: {
     explicitAllowPrivateNetwork,
     mode,
   });
+  const connection: ComfyConnection = {
+    baseUrl,
+    headers,
+    timeoutMs,
+    policy: networkPolicy,
+    dispatcherPolicy,
+    mode,
+  };
 
   if (params.inputImage) {
     if (!inputImageNodeId) {
@@ -708,16 +700,7 @@ export async function runComfyWorkflow(params: {
         "Comfy edit requests require plugins.entries.comfy.config.<capability>.inputImageNodeId to be configured",
       );
     }
-    const uploadedName = await uploadInputImage({
-      baseUrl,
-      headers: new Headers(headers),
-      timeoutMs,
-      policy: networkPolicy,
-      dispatcherPolicy,
-      image: params.inputImage,
-      mode,
-      capability: params.capability,
-    });
+    const uploadedName = await uploadInputImage(connection, params.inputImage, params.capability);
     setWorkflowInput(workflow, inputImageNodeId, inputImageInputName, uploadedName);
   }
 
@@ -745,16 +728,7 @@ export async function runComfyWorkflow(params: {
     throw new Error("Comfy workflow submit response missing prompt_id");
   }
 
-  const history = await waitForComfyHistory({
-    baseUrl,
-    promptId,
-    headers: new Headers(headers),
-    timeoutMs,
-    pollIntervalMs,
-    policy: networkPolicy,
-    dispatcherPolicy,
-    mode,
-  });
+  const history = await waitForComfyHistory(connection, promptId, pollIntervalMs);
 
   const historyEntry = extractHistoryEntry(history, promptId);
   if (!historyEntry) {
@@ -780,17 +754,12 @@ export async function runComfyWorkflow(params: {
   const outputKind = params.capability === "music" ? "audio" : params.capability;
   const maxOutputBytes = resolveGeneratedMediaMaxBytes(params.cfg, outputKind);
   for (const output of outputFiles) {
-    const downloaded = await downloadOutputFile({
-      baseUrl,
-      headers: new Headers(headers),
-      timeoutMs,
-      policy: networkPolicy,
-      dispatcherPolicy,
-      file: output.file,
-      mode,
-      capability: params.capability,
-      maxBytes: maxOutputBytes,
-    });
+    const downloaded = await downloadOutputFile(
+      connection,
+      output.file,
+      params.capability,
+      maxOutputBytes,
+    );
     assets.push({
       ...downloaded,
       metadata: { nodeId: output.nodeId, promptId },

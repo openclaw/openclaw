@@ -21,6 +21,25 @@ function sourceLabel(source: string): string {
   );
 }
 
+function sharedUnavailableMessage(
+  reason: NonNullable<GitHubPublicationView["options"]>["sharedUnavailableReason"],
+): string {
+  switch (reason) {
+    case "unavailable":
+      return t("githubPublication.sharedUnavailable.unavailable");
+    case "changed":
+      return t("githubPublication.sharedUnavailable.changed");
+    case "rate_limited":
+      return t("githubPublication.sharedUnavailable.rate_limited");
+    case "unverified":
+      return t("githubPublication.sharedUnavailable.unverified");
+    case "unsupported_workspace":
+      return t("githubPublication.sharedUnavailable.unsupported_workspace");
+    default:
+      return t("githubPublication.sharedUnavailable.unknown");
+  }
+}
+
 export function renderGitHubPublicationAction(publication: GitHubPublicationView) {
   if (publication.result?.status === "published") {
     return html`<a
@@ -44,6 +63,13 @@ export function renderGitHubPublicationAction(publication: GitHubPublicationView
             </button>`
           : nothing
       }`;
+  }
+  // Nothing can be published without discovered accounts; offer a retry, not a dead button.
+  if (publication.optionsUnavailable) {
+    return renderPublicationRefresh(
+      publication,
+      `${t("githubPublication.statusUnavailable")}: ${publication.error}`,
+    );
   }
   const personal = personalGitHubPublicationSelection(publication.options);
   const shared = publication.options?.shared;
@@ -173,9 +199,9 @@ function renderPublicationAccount(publication: GitHubPublicationView) {
     : nothing;
 }
 
-function renderPublicationRefresh(publication: GitHubPublicationView) {
+function renderPublicationRefresh(publication: GitHubPublicationView, tooltip?: string) {
   const label = t("githubPublication.refresh");
-  return html`<openclaw-tooltip content=${label}>
+  return html`<openclaw-tooltip content=${tooltip ?? label}>
     <button
       class="btn btn--ghost btn--icon chat-icon-btn chat-pr__publication-refresh"
       type="button"
@@ -247,7 +273,8 @@ export function renderGitHubPublicationDetails(
 ) {
   const { result, confirmation, activity, locked, error, options } = publication;
   const selection = publicationButtonSelection(publication);
-  if (result?.status === "published" && !error) {
+  // The row action already carries the retry and the reason.
+  if ((result?.status === "published" && !error) || publication.optionsUnavailable) {
     return nothing;
   }
   const busy = activity !== null;
@@ -269,6 +296,7 @@ export function renderGitHubPublicationDetails(
   const refresh =
     !busy &&
     (error ||
+      noAccount ||
       result?.status === "failed" ||
       (result?.status === "needs_confirmation" && !publication.onConfirm));
   const more =
@@ -303,7 +331,14 @@ export function renderGitHubPublicationDetails(
           : nothing
     }
     ${refresh ? renderPublicationRefresh(publication) : nothing}
-    ${noAccount ? html`<span class="chat-pr__publication-note">${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
+    ${
+      noAccount
+        ? html`<span class="chat-pr__publication-note"
+            >${sharedUnavailableMessage(options.sharedUnavailableReason)}
+            ${options.personal === null ? t("githubPublication.unidentified") : nothing}</span
+          >`
+        : nothing
+    }
     ${
       confirmation
         ? html`<div class="chat-pr__publication-note">

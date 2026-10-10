@@ -401,7 +401,10 @@ describe("new-session composer keyboard submission", () => {
 
   it.each([
     { label: "Enter", requiresModifier: false, ctrlKey: false, metaKey: false },
-    { label: "Ctrl+Enter", requiresModifier: true, ctrlKey: true, metaKey: false },
+    { label: "Ctrl+Enter in Enter mode", requiresModifier: false, ctrlKey: true, metaKey: false },
+    { label: "Meta+Enter in Enter mode", requiresModifier: false, ctrlKey: false, metaKey: true },
+    { label: "Ctrl+Enter in modifier mode", requiresModifier: true, ctrlKey: true, metaKey: false },
+    { label: "Meta+Enter in modifier mode", requiresModifier: true, ctrlKey: false, metaKey: true },
   ])("submits once with $label when starting a session is enabled", (testCase) => {
     const onSubmit = vi.fn();
     const onBackgroundSubmit = vi.fn();
@@ -459,11 +462,11 @@ describe("new-session composer keyboard submission", () => {
 
   it.each([
     {
-      label: "Meta+Enter in Enter mode",
+      label: "Meta+Shift+Enter in Enter mode",
       ctrlKey: false,
       metaKey: true,
       requiresModifier: false,
-      shiftKey: false,
+      shiftKey: true,
     },
     {
       label: "Ctrl+Shift+Enter in modifier mode",

@@ -266,6 +266,7 @@ export {
   resolveTranscriptSessionKeyBySessionId,
   trimSessionTranscriptForManualCompact,
   withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   withTranscriptWriteTransaction,
 } from "./session-accessor.transcript.js";
 export {

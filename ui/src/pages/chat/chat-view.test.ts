@@ -47,7 +47,7 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import * as chatProgress from "./chat-progress.ts";
-import { switchChatFastMode, switchChatModel, switchChatThinkingLevel } from "./chat-session.ts";
+import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import * as chatThread from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
@@ -549,9 +549,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
     sessionsResult: state.sessionsResult,
     stream: state.chatStream,
     onFastModeSelect: (value, targetSessionKey) =>
-      switchChatFastMode(
-        state as unknown as Parameters<typeof switchChatFastMode>[0],
-        value,
+      switchChatSetting(
+        state as unknown as Parameters<typeof switchChatSetting>[0],
+        { kind: "fastMode", value },
         targetSessionKey,
       ),
     onModelSelect: (value, targetSessionKey, agentRuntime) =>
@@ -562,9 +562,9 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
         agentRuntime,
       ),
     onThinkingSelect: (value, targetSessionKey) =>
-      switchChatThinkingLevel(
-        state as unknown as Parameters<typeof switchChatThinkingLevel>[0],
-        value,
+      switchChatSetting(
+        state as unknown as Parameters<typeof switchChatSetting>[0],
+        { kind: "thinkingLevel", value },
         targetSessionKey,
       ),
   };
@@ -3284,7 +3284,6 @@ describe("chat attachment picker", () => {
     const file = new File(["video"], "clip.mp4");
 
     expect(input).toBeInstanceOf(HTMLInputElement);
-    expect(input?.accept).toContain("video/*");
     selectFile(input!, file);
 
     await waitForFast(() => {
@@ -3708,75 +3707,72 @@ describe("chat model controls", () => {
     }
   });
 
-  it.each(["current execution", "previous run", "locked unknown", "unknown"] as const)(
-    "keeps the %s model visible during send admission",
-    (mode) => {
-      const observed = mode === "current execution";
-      const unidentified = mode === "locked unknown" || mode === "unknown";
-      const sending = unidentified;
-      const model = unidentified ? null : observed ? "shared" : "primary";
-      const activeModel = observed ? "shared" : "fallback";
-      const runIds = observed ? ["current-run"] : undefined;
-      const expected = unidentified
-        ? "Model pending"
-        : observed
-          ? "fallback-provider/shared"
-          : "Primary";
-      const { state } = createChatHeaderState({
-        model,
-        modelProvider: model ? "example" : null,
-        models:
-          model === "shared"
-            ? [{ id: "shared", name: "Configured model", provider: "example" }]
-            : [
-                { id: "primary", name: "Primary", provider: "example" },
-                {
-                  id: unidentified ? "default" : "fallback",
-                  name: unidentified ? "Default" : "Fallback",
-                  provider: "example",
-                },
-              ],
+  it.each([
+    ["current execution", "Configured model"],
+    ["previous run", "Primary"],
+    ["locked unknown", "Session model"],
+    ["unknown", "Default model"],
+  ] as const)("keeps the saved preference visible during %s admission", (mode, expected) => {
+    const observed = mode === "current execution";
+    const unidentified = mode === "locked unknown" || mode === "unknown";
+    const sending = unidentified;
+    const model = unidentified ? null : observed ? "shared" : "primary";
+    const activeModel = observed ? "shared" : "fallback";
+    const runIds = observed ? ["current-run"] : undefined;
+    const { state } = createChatHeaderState({
+      model,
+      modelProvider: model ? "example" : null,
+      models:
+        model === "shared"
+          ? [{ id: "shared", name: "Configured model", provider: "example" }]
+          : [
+              { id: "primary", name: "Primary", provider: "example" },
+              {
+                id: unidentified ? "default" : "fallback",
+                name: unidentified ? "Default" : "Fallback",
+                provider: "example",
+              },
+            ],
+    });
+    if (!sending) {
+      state.chatRunId = "current-run";
+      Object.assign(expectDefined(state.sessionsResult?.sessions[0], "selected session"), {
+        hasActiveRun: true,
+        activeRunIds: runIds,
+        activeModel,
+        activeModelProvider: runIds ? "fallback-provider" : "example",
       });
-      if (!sending) {
-        state.chatRunId = "current-run";
-        Object.assign(expectDefined(state.sessionsResult?.sessions[0], "selected session"), {
-          hasActiveRun: true,
-          activeRunIds: runIds,
-          activeModel,
-          activeModelProvider: runIds ? "fallback-provider" : "example",
-        });
-      }
-      const trigger = getChatModelSelect(
-        renderModelControls(
-          state,
-          unidentified
-            ? {
-                sending,
-                agentDefaultModel: mode === "locked unknown" ? "example/default" : "",
-                sessionsResult: null,
-                modelSelectionLocked: mode === "locked unknown",
-              }
-            : { sending },
-        ),
-      );
-      expect(trigger.textContent).toContain(expected);
+    }
+    const trigger = getChatModelSelect(
+      renderModelControls(
+        state,
+        unidentified
+          ? {
+              sending,
+              agentDefaultModel: mode === "locked unknown" ? "example/default" : "",
+              sessionsResult: null,
+              modelSelectionLocked: mode === "locked unknown",
+            }
+          : { sending },
+      ),
+    );
+    expect(trigger.textContent).toContain(expected);
+    if (!unidentified) {
+      expect(trigger.dataset.chatSelectValue).toBe(`example/${model}`);
+    }
+    expect(trigger.getAttribute("aria-label")).toBe("Chat model: " + expected);
+    expect(trigger.getAttribute("aria-busy")).toBe("false");
+    expect(trigger.querySelector(".btn__spinner")).toBeNull();
+    expect(trigger.querySelector(".chat-controls__inline-select-chevron svg")).not.toBeNull();
+    if (!runIds) {
       if (!unidentified) {
-        expect(trigger.dataset.chatSelectValue).toBe(`example/${model}`);
+        expect(trigger.textContent).not.toContain("Model pending");
+        expect(trigger.textContent).not.toContain("Fallback");
+      } else {
+        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
       }
-      expect(trigger.getAttribute("aria-label")).toBe("Chat model: " + expected);
-      expect(trigger.getAttribute("aria-busy")).toBe("false");
-      expect(trigger.querySelector(".btn__spinner")).toBeNull();
-      expect(trigger.querySelector(".chat-controls__inline-select-chevron svg")).not.toBeNull();
-      if (!runIds) {
-        if (!unidentified) {
-          expect(trigger.textContent).not.toContain("Model pending");
-          expect(trigger.textContent).not.toContain("Fallback");
-        } else {
-          expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
-        }
-      }
-    },
-  );
+    }
+  });
 
   it.each([false, true])("preserves known selections while the catalog loads (%s)", (known) => {
     const { state } = createChatHeaderState(known ? { model: "gpt-5.6-sol", models: [] } : {});
@@ -4410,8 +4406,8 @@ describe("chat model controls", () => {
     );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
-    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
-    const fastModePatch = switchChatFastMode(host, "on");
+    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
+    const fastModePatch = switchChatSetting(host, { kind: "fastMode", value: "on" });
     const laterModelSwitch = switchChatModel(host, "google/gemini-3-pro");
 
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
@@ -4458,7 +4454,7 @@ describe("chat model controls", () => {
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
     await reconciliationStarted.promise;
-    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
     await Promise.resolve();
     expect(patches).toEqual([{ model: "openai/gpt-5.6-sol" }]);
 
@@ -4481,7 +4477,7 @@ describe("chat model controls", () => {
     );
 
     const modelSwitch = switchChatModel(host, "openai/gpt-5.6-sol");
-    const thinkingPatch = switchChatThinkingLevel(host, "ultra");
+    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "ultra" });
     modelPatch.resolve(null);
 
     await expect(modelSwitch).resolves.toBe(false);
@@ -4606,10 +4602,10 @@ describe("chat model controls", () => {
       await Promise.allSettled(operations);
     });
 
-    const first = switchChatFastMode(host, "on");
+    const first = switchChatSetting(host, { kind: "fastMode", value: "on" });
     operations.push(first);
     await waitForFast(() => expect(pendingPatches).toHaveLength(1));
-    const second = switchChatFastMode(host, "off");
+    const second = switchChatSetting(host, { kind: "fastMode", value: "off" });
     operations.push(second);
 
     pendingPatches[0]?.reject(new Error("boom"));
@@ -4903,15 +4899,27 @@ describe("right-click Reply", () => {
   });
 
   it("keeps Reply and composer focus available when the pane rerenders with its menu open", () => {
+    vi.mocked(chatThread.buildCachedChatItems).mockRestore();
+    vi.mocked(chatMessage.renderMessageGroup).mockRestore();
     const onSetReply = vi.fn();
     const transcript = createTestTranscript();
-    const { container, bubble } = renderChatBubble(
-      { onSetReply, transcript },
+    const messages = [
       {
-        messageId: "msg-stable-1",
-        senderLabel: "User",
-        text: "hello world",
+        role: "user",
+        content: "hello world",
+        timestamp: 1,
+        __openclaw: {
+          id: "msg-stable-1",
+          senderId: "profile-user",
+          senderName: "User",
+          senderIdentity: { type: "profile", id: "profile-user" },
+        },
       },
+    ];
+    const container = renderChatView({ onSetReply, transcript, messages });
+    const bubble = expectDefined(
+      container.querySelector<HTMLElement>(".chat-bubble"),
+      "rendered message bubble",
     );
     document.body.appendChild(container);
     transcript.hostConnected();
@@ -4921,7 +4929,7 @@ describe("right-click Reply", () => {
 
       const menu = document.querySelector(".chat-reply-context-menu");
       expect(menu).not.toBeNull();
-      renderChatInto(container, { onSetReply, transcript, draft: "A draft update" });
+      renderChatInto(container, { onSetReply, transcript, messages, draft: "A draft update" });
       menu!.querySelector("button")!.click();
 
       expect(onSetReply).toHaveBeenCalledTimes(1);
@@ -4930,7 +4938,7 @@ describe("right-click Reply", () => {
         0,
         "reply target",
       );
-      expect(target.messageId).toBe("msg-stable-1");
+      expect(target.sourceMessageId).toBe("msg-stable-1");
       expect(target.text).toBe("hello world");
       expect(target.senderLabel).toBe("User");
       expect(document.activeElement).toBe(

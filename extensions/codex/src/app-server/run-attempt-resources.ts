@@ -696,9 +696,6 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
     nativeModelAdmission,
     nativeProcessAuthority,
     releaseNativeProcessAuthority,
-    markTrajectoryEndRecorded: () => {
-      state.trajectoryEndRecorded = true;
-    },
     releaseSharedClientLeaseAndRetireOneShotClient,
     releaseSandboxExecEnvironment,
     runCleanupStep,

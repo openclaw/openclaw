@@ -43,9 +43,9 @@ budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
 most two concurrently. It allows 210 minutes for three waves of six source versions,
 the survivor, and setup.
-Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
+Authenticated update restart uses a 3,420-second container budget, a 62-minute lane
 budget, and a lane-specific 1,500-second command timeout. Its dedicated recovery
-chunk allows 55 minutes; the remaining OpenAI package chunk allows 60 minutes. See
+chunk allows 75 minutes; the remaining OpenAI package chunk allows 60 minutes. See
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
@@ -114,6 +114,12 @@ test rows (`core-runtime-config`, `agentic-cli-process`, and
 `agentic-control-plane-agent-chat`) have a 90-minute job cap until complete timing
 observations allow the release planner to split them. The targeted
 `update-restart-auth` lane has a 62-minute budget and a 75-minute job cap.
+Release-path migration matrices isolate channel switching and each published
+baseline on separate runners when multiple baselines are selected; per-host
+weighted resource limits and exact-candidate artifact checks remain unchanged.
+Package Acceptance admits its long standalone upgrade lanes before expanded
+scenario jobs and orders pinned baseline cohorts newest first, without changing
+its matrix cap or scenario coverage.
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
@@ -233,7 +239,8 @@ concurrency limits. Missing group capacity queues jobs. Shared workflows receive
 an optional `runner_group` from their release caller, including `docker-release.yml`
 and `vercel-container-registry-publish.yml` from Release Publish; `docker-image-refresh.yml`,
 ordinary CI, scheduled performance, and unrelated reusable callers retain their routing.
-Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker)
+Approval and credentialed publish jobs (npm trusted publishing, ClawHub, Docker,
+and GitHub App-backed release dispatch)
 keep their default GitHub-hosted labels, and the hourly plugin npm preview routes
 only when Release Publish dispatches it.
 The runner count, matrix caps, and default labels do not change.

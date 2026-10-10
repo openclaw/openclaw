@@ -211,12 +211,13 @@ describe("installed plugin index persistence", () => {
       setGatewayPluginMetadataSnapshot(boot, { config, env });
       expect(getCurrentPluginMetadataSnapshot({ config, env })).toBe(boot);
       const next = { ...index, plugins: [] };
-      const lease = { assertOwnedInTransaction: vi.fn() };
 
       if (operation === "rollback") {
         const revision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
         await expect(
-          restorePersistedInstalledPluginIndexIfCurrent(next, revision, { stateDir, lease }),
+          withPluginLifecycleLease({ env }, (lease) =>
+            restorePersistedInstalledPluginIndexIfCurrent(next, revision, { stateDir, lease }),
+          ),
         ).resolves.toBe(true);
       } else {
         await writePersistedInstalledPluginIndex(next, { stateDir });
@@ -230,17 +231,19 @@ describe("installed plugin index persistence", () => {
 
   it("conditionally restores matching prior index absence", async () => {
     const stateDir = makeTempDir();
-    const lease = { assertOwnedInTransaction: vi.fn() };
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     await writePersistedInstalledPluginIndex(createIndex({ policyHash: "tentative" }), {
       stateDir,
     });
     const tentativeRevision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
 
     await expect(
-      restorePersistedInstalledPluginIndexIfCurrent(null, tentativeRevision, {
-        stateDir,
-        lease,
-      }),
+      withPluginLifecycleLease({ env }, (lease) =>
+        restorePersistedInstalledPluginIndexIfCurrent(null, tentativeRevision, {
+          stateDir,
+          lease,
+        }),
+      ),
     ).resolves.toBe(true);
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
@@ -248,13 +251,24 @@ describe("installed plugin index persistence", () => {
 
   it("keeps a successor index when conditional rollback sees a newer revision", async () => {
     const stateDir = makeTempDir();
-    const lease = { assertOwnedInTransaction: vi.fn() };
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    try {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    await withPluginLifecycleLease({ env }, async (lease) => {
       await writePersistedInstalledPluginIndex(createIndex({ policyHash: "previous" }), {
         stateDir,
       });
       const previous = requirePersisted(await readPersistedInstalledPluginIndex({ stateDir }));
+      // A future persisted revision exercises collision fencing across worker clocks.
+      const futureRevision = Date.now() + 60_000;
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          db.prepare(
+            `UPDATE config_machine_state
+                SET value_json = json_set(value_json, '$.revision', ?), updated_at_ms = ?
+              WHERE state_key = 'plugins.installedIndex'`,
+          ).run(futureRevision, futureRevision);
+        },
+        { env },
+      );
       await writePersistedInstalledPluginIndex(createIndex({ policyHash: "tentative" }), {
         stateDir,
       });
@@ -264,7 +278,8 @@ describe("installed plugin index persistence", () => {
       });
       const successorRevision = requirePersistedRevision(readPersistedIndexRevision(stateDir));
 
-      expect(successorRevision).toBeGreaterThan(tentativeRevision);
+      expect(tentativeRevision).toBe(futureRevision + 1);
+      expect(successorRevision).toBe(tentativeRevision + 1);
       await expect(
         restorePersistedInstalledPluginIndexIfCurrent(previous, tentativeRevision, {
           stateDir,
@@ -274,9 +289,7 @@ describe("installed plugin index persistence", () => {
       expect(
         requirePersisted(await readPersistedInstalledPluginIndex({ stateDir })).policyHash,
       ).toBe("successor");
-    } finally {
-      nowSpy.mockRestore();
-    }
+    });
   });
 
   it("rejects a stale caller's registry refresh without replacing the successor index", async () => {
@@ -514,6 +527,8 @@ describe("installed plugin index persistence", () => {
     await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
     await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
+    fs.renameSync(databasePath, `${databasePath}.template`);
+    fs.copyFileSync(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
     database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);

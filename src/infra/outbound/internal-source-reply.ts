@@ -20,15 +20,6 @@ type InternalSourceReplySinkInput = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
-function hasExternalSessionDeliveryRoute(sessionKey: string | undefined): boolean {
-  const route = parseSessionDeliveryRoute(sessionKey);
-  if (!route) {
-    return false;
-  }
-  const channel = normalizeMessageChannel(route.channel);
-  return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL);
-}
-
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   return (
     readTrimmedStringAlias(params, ["channel", "target", "to", "channelId"]) !== undefined ||
@@ -45,7 +36,9 @@ function hasCurrentSourceReplyContext(input: InternalSourceReplySinkInput): bool
   if (provider === INTERNAL_MESSAGE_CHANNEL) {
     // The message tool replaces ambient webchat context with an external route
     // encoded in the session key. Do not classify that route as a private sink.
-    return !hasExternalSessionDeliveryRoute(input.sessionKey);
+    const route = parseSessionDeliveryRoute(input.sessionKey);
+    const channel = route ? normalizeMessageChannel(route.channel) : undefined;
+    return !channel || channel === INTERNAL_MESSAGE_CHANNEL;
   }
   const currentMessageId = input.toolContext?.currentMessageId;
   return Boolean(

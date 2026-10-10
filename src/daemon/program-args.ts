@@ -1,4 +1,3 @@
-/** Builds runtime command arguments for gateway and node service installs. */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -35,6 +34,27 @@ async function resolveCliEntrypointPathForService(argv1 = process.argv[1]): Prom
 
   const normalized = path.resolve(argv1);
   const resolvedPath = await fs.realpath(normalized).catch(() => normalized);
+  if (resolvedPath.includes(`${path.sep}.pnpm${path.sep}`)) {
+    const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+    const { resolvePnpmGlobalInstallOwner } = await import("../infra/update-global.js");
+    const packageRoot = await resolveOpenClawPackageRoot({ argv1: normalized });
+    const owner = packageRoot ? await resolvePnpmGlobalInstallOwner(packageRoot) : null;
+    if (
+      packageRoot &&
+      owner &&
+      (await fs.realpath(owner.packageRoot).catch(() => null)) ===
+        (await fs.realpath(packageRoot).catch(() => undefined))
+    ) {
+      // Persist the verified package link, never the replaceable store generation.
+      const stableEntrypoint = await findFirstAccessibleGatewayEntrypoint(
+        buildGatewayInstallEntrypointCandidates(owner.packageRoot),
+        canAccessEntrypoint,
+      );
+      if (stableEntrypoint) {
+        return stableEntrypoint;
+      }
+    }
+  }
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
     // Existing installed command lines may point at versioned pnpm realpaths.

@@ -25,27 +25,19 @@ export function renderToolOutcomeSummary(
     first?.exitCode === undefined
       ? t("chat.toolCards.failed")
       : t("chat.toolCards.exitCode", { code: String(first.exitCode) });
-  return html`${
-    failureCount > 0
-      ? html`<span class="chat-tool-failure"
+  const renderCount = (kind: "failure" | "skipped", count: number) =>
+    count > 0
+      ? html`<span class="chat-tool-${kind}"
           >${
             includeCount
-              ? t("chat.toolCards.failureCount", { count: String(failureCount) })
-              : outcome
+              ? t(`chat.toolCards.${kind}Count`, { count: String(count) })
+              : kind === "failure"
+                ? outcome
+                : t("chat.toolCards.skipped")
           }</span
         >`
-      : nothing
-  }${
-    skipped > 0
-      ? html`<span class="chat-tool-skipped"
-          >${
-            includeCount
-              ? t("chat.toolCards.skippedCount", { count: String(skipped) })
-              : t("chat.toolCards.skipped")
-          }</span
-        >`
-      : nothing
-  }`;
+      : nothing;
+  return html`${renderCount("failure", failureCount)}${renderCount("skipped", skipped)}`;
 }
 
 /** The approval verdict for a disclosure whose calls were reviewed. */

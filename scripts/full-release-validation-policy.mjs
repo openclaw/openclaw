@@ -25,6 +25,7 @@ import {
 import { changelogEntryPath, isReleaseChangelogPath } from "./lib/release-changelog.mjs";
 import { validateQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
+import { parseGithubResponse } from "./pr-lib/gh-api-preflight.mjs";
 import { validateQualificationCoverage } from "./release-qualification-coverage.mjs";
 
 export { MAX_RELEASE_ARTIFACT_BYTES, serializeReleaseArtifact, buildReleaseValidationManifest };
@@ -187,7 +188,7 @@ const HARD_GH_TRANSPORT_PATTERN =
 const RATE_LIMITED_403_PATTERN =
   /HTTP 403\b[\s\S]*(?:rate limit|abuse detection)|(?:rate limit|abuse detection)[\s\S]*HTTP 403\b/iu;
 const TRANSIENT_GH_TRANSPORT_PATTERN =
-  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|timed out|\btimeout\b|network is unreachable|unexpected EOF|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
+  /HTTP 429\b|HTTP 5[0-9][0-9]\b|Server Error|secondary rate limit|API rate limit|abuse detection|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i\/o timeout|timed out|\btimeout\b|network is unreachable|unexpected EOF|stream error: stream ID \d+; CANCEL; received from peer|ETIMEDOUT|ECONNRESET|EAI_AGAIN/iu;
 const RELEASE_GH_ARTIFACT_MISSING_LINE_PATTERN =
   /^(?:no valid artifacts found(?: to download)?|no artifact matches any of the names(?: or patterns)? provided|could not find any artifacts|artifact .+ not found)$/iu;
 const RELEASE_GH_ARTIFACT_CONTENT_ERROR_PATTERN =
@@ -382,9 +383,34 @@ function releaseGhTransportErrorText(error) {
   return parts.join("\n");
 }
 
+export function releaseGhRateLimitRetryAt(error, now = Date.now(), failures = 0) {
+  // gh retains successful pages before the failed response. Its final frame owns
+  // the throttle deadline; earlier quota headers must not override that failure.
+  const output = String(error?.stdout ?? "");
+  const response = parseGithubResponse(
+    output.split(/(?=^HTTP\/\d+(?:\.\d+)? [1-5]\d{2}\b)/mu).at(-1),
+  );
+  const text = releaseGhTransportErrorText(error);
+  const limited =
+    response.status === "429" ||
+    (response.status === "403" &&
+      (response.remaining === 0 || response.retryAfter !== undefined)) ||
+    RATE_LIMITED_403_PATTERN.test(text) ||
+    /HTTP 429\b|secondary rate limit|API rate limit|abuse detection/iu.test(text);
+  if (!limited || (response.status && !["403", "429"].includes(response.status))) {
+    return undefined;
+  }
+  const reset = response.remaining === 0 ? Date.parse(response.resetUtc) : Number.NaN;
+  const delay =
+    response.retryAfter === undefined
+      ? Math.min(60_000 * 2 ** failures, 15 * 60_000)
+      : response.retryAfter * 1000;
+  return Math.max(now + delay, Number.isFinite(reset) ? reset : 0);
+}
+
 export function classifyReleaseGhTransportError(error) {
   const text = releaseGhTransportErrorText(error);
-  if (RATE_LIMITED_403_PATTERN.test(text)) {
+  if (releaseGhRateLimitRetryAt(error) !== undefined) {
     return "transient";
   }
   if (HARD_GH_TRANSPORT_PATTERN.test(text)) {

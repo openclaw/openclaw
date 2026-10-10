@@ -11,26 +11,31 @@ import {
   loadTranscriptEvents,
   publishTranscriptUpdate,
   persistSessionTranscriptTurn,
-  readTranscriptRawDelta,
-  readSessionTranscriptVisibleMessageDeltaCore as readVisibleMessageDelta,
-  readLatestTranscriptAssistantText,
   resolveSessionTranscriptRuntimeTarget,
-  withTranscriptWriteLock,
+  withTranscriptWriteSequence,
   type TranscriptMessageAppendOptions,
   type TranscriptMessageAppendResult,
   type TranscriptUpdatePayload,
+  type SessionTranscriptWriteLockAccessorContext,
   type SessionTranscriptRawDeltaLimits,
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
+import { normalizeRawDeltaLimits } from "../config/sessions/session-accessor.sqlite-raw-delta-read.js";
+import { normalizeVisibleDeltaLimits } from "../config/sessions/session-accessor.sqlite-visible-cursor.js";
 import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
+import { readLatestTranscriptAssistantTextAsync } from "../config/sessions/session-transcript-assistant-read.js";
+import { withSessionTranscriptDeltaReader } from "../config/sessions/session-transcript-delta-read.js";
 import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
+import { assertLegacyTranscriptPreparation } from "../config/sessions/session-transcript-preparation.js";
+import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -76,6 +81,8 @@ export {
 export {
   createSessionCatalogGitHubLinker,
   createSessionCatalogSourceActorProjector,
+  prepareSessionCatalogGitHubLinker,
+  prepareSessionCatalogSourceActorProjector,
 } from "../gateway/session-catalog-identity.js";
 
 export {
@@ -99,6 +106,7 @@ export function composeSessionTranscriptWriteAssertion(
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check, {
     // A plugin's wrapper remains opaque even when all of its children are prepared.
+    hasOpaqueCheck: check !== undefined,
     preparedCheck: (assertSources) => assertSources(),
   });
 }
@@ -198,7 +206,12 @@ export type SessionTranscriptAppendMessagesParams<TMessage> = SessionTranscriptT
   cwd?: string;
   messages: readonly Omit<
     TranscriptMessageAppendOptions<TMessage>,
-    "config" | "cwd" | "parentId" | "prepareMessageAfterIdempotencyCheck" | "useRawWhenLinear"
+    | "config"
+    | "cwd"
+    | "parentId"
+    | "preparation"
+    | "prepareMessageAfterIdempotencyCheck"
+    | "useRawWhenLinear"
   >[];
 };
 
@@ -229,7 +242,25 @@ export type SessionTranscriptWriteLockContext = {
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
+  /** Exact-key facts from this captured transcript; never another session or store. */
+  readMessageFacts: SessionTranscriptWriteLockAccessorContext["readMessageFacts"];
   target: SessionTranscriptTarget;
+};
+
+/** Optimistic transcript operations; each accepted append commits independently. */
+export type SessionTranscriptWriteContext = Omit<
+  SessionTranscriptWriteLockContext,
+  "appendMessage"
+> & {
+  appendMessage: <TMessage>(
+    options: Omit<
+      LockedTranscriptMessageAppendOptions<TMessage>,
+      | "config"
+      | "prepareMessageAfterIdempotencyCheck"
+      | "prepareMessageAfterIdempotencyCheckAsync"
+      | "beforeFreshMessageCommit"
+    >,
+  ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
 };
 
 type SessionTranscriptMirrorAppendResult =
@@ -280,10 +311,9 @@ export async function readSessionTranscriptRawDelta(
 ): Promise<SessionTranscriptRawDeltaResult> {
   const { cursor, maxBytes, maxEvents, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  return readRestoredSessionTranscript(scope, () =>
-    readTranscriptRawDelta(scope, {
+  normalizeRawDeltaLimits({ maxBytes, maxEvents });
+  return withSessionTranscriptDeltaReader(scope, (reader) =>
+    reader.raw({
       ...(cursor !== undefined ? { cursor } : {}),
       ...(maxBytes !== undefined ? { maxBytes } : {}),
       ...(maxEvents !== undefined ? { maxEvents } : {}),
@@ -297,12 +327,11 @@ export async function readSessionTranscriptVisibleMessageDelta(
 ): Promise<SessionTranscriptVisibleMessageDeltaResult> {
   const { cursor, maxBytes, maxMessages, ...target } = params;
   const scope = bindSessionTranscriptStoreScope(target);
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  let result: ReturnType<typeof readVisibleMessageDelta>;
+  normalizeVisibleDeltaLimits({ maxBytes, maxMessages });
+  let result: import("../config/sessions/session-accessor.sqlite-contract.js").SessionTranscriptVisibleMessageDeltaResult;
   try {
-    result = await readRestoredSessionTranscript(scope, () =>
-      readVisibleMessageDelta(scope, {
+    result = await withSessionTranscriptDeltaReader(scope, (reader) =>
+      reader.visible({
         ...(cursor !== undefined ? { cursor } : {}),
         ...(maxBytes !== undefined ? { maxBytes } : {}),
         ...(maxMessages !== undefined ? { maxMessages } : {}),
@@ -339,15 +368,13 @@ export async function readVisibleSessionTranscriptMessageEntries(
 }
 
 /**
- * Reads the latest visible assistant text by scoped identity.
+ * Reads the latest persisted assistant text by scoped identity.
  */
 export async function readLatestAssistantTextByIdentity(
   params: SessionTranscriptTargetParams,
 ): Promise<LatestAssistantTranscriptText | undefined> {
   const scope = bindSessionTranscriptStoreScope(params);
-  const { readRestoredSessionTranscript } =
-    await import("../config/sessions/session-cold-storage-read.js");
-  return readRestoredSessionTranscript(scope, () => readLatestTranscriptAssistantText(scope));
+  return readLatestTranscriptAssistantTextAsync(scope);
 }
 
 /**
@@ -370,9 +397,19 @@ export async function appendAssistantMirrorMessageByIdentity(
     text,
   });
   const scope = bindSessionTranscriptStoreScope(params, params.config);
-  return await withTranscriptWriteLock(scope, async (locked) => {
+  const binding = captureIncognitoSessionBinding(scope);
+  return await withTranscriptWriteSequence(scope, async (locked) => {
     params.signal?.throwIfAborted();
-    const currentEntry = await readSessionEntryReadOnlyInWorker(scope);
+    const currentEntry = await readSessionEntryReadOnlyInWorker(
+      scope,
+      () => {
+        binding?.actor.assertCurrent();
+        binding?.admissionSignal?.throwIfAborted();
+        params.signal?.throwIfAborted();
+      },
+      undefined,
+      targetDiscoveryLane,
+    );
     if (!currentEntry?.sessionId) {
       return { ok: false, reason: "missing active session", code: "blocked" };
     }
@@ -406,18 +443,27 @@ export async function appendAssistantMirrorMessageByIdentity(
         }
       } else {
         let events: readonly SessionTranscriptEvent[];
-        try {
-          const latest = await prepareSessionTranscriptHydration({
-            ...scope,
-            agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
-            sessionId: currentEntry.sessionId,
-          }).readLatestActiveMessage();
-          events = latest ? [latest.event] : [];
-        } catch (error) {
-          if (!isSessionTranscriptProjectionUnavailableError(error)) {
-            throw error;
-          }
+        if (binding) {
           events = selectVisibleTranscriptEvents(await locked.readEvents());
+        } else {
+          try {
+            const latest = await prepareSessionTranscriptHydration(
+              {
+                ...scope,
+                agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
+                sessionId: currentEntry.sessionId,
+              },
+              undefined,
+              params.signal,
+              targetDiscoveryLane,
+            ).readLatestActiveMessage();
+            events = latest ? [latest.event] : [];
+          } catch (error) {
+            if (!isSessionTranscriptProjectionUnavailableError(error)) {
+              throw error;
+            }
+            events = selectVisibleTranscriptEvents(await locked.readEvents());
+          }
         }
         sourceAssistantMessageId = findLatestEquivalentAssistantMessageId(
           events,
@@ -479,7 +525,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
-    /** @deprecated Use prepareMessageAfterIdempotencyCheckAsync for preparation outside the transaction. */
+    /** @deprecated Use preparation.prepareMessage outside the transaction. Removed at the next Plugin SDK major. */
     prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
     /** Awaited after duplicate detection; undefined suppresses a fresh append. */
     prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
@@ -489,6 +535,7 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   if (!expectedSessionId) {
     throw new Error("Cannot strictly append a transcript message without an exact session id");
   }
+  assertLegacyTranscriptPreparation(params, params);
   const turn = await persistSessionTranscriptTurn(params, {
     ...(params.config ? { config: params.config } : {}),
     ...(params.cwd ? { cwd: params.cwd } : {}),
@@ -497,6 +544,13 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
     messages: [
       {
         ...(params.eventId !== undefined ? { eventId: params.eventId } : {}),
+        ...(params.expectedTranscript !== undefined
+          ? { expectedTranscript: params.expectedTranscript }
+          : {}),
+        ...(params.expectedMutationAt !== undefined
+          ? { expectedMutationAt: params.expectedMutationAt }
+          : {}),
+        ...(params.appendIntent !== undefined ? { appendIntent: params.appendIntent } : {}),
         ...(params.idempotencyLookup !== undefined
           ? { idempotencyLookup: params.idempotencyLookup }
           : {}),
@@ -507,6 +561,20 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
           ? {
               prepareMessageAfterIdempotencyCheck: (message: unknown) =>
                 params.prepareMessageAfterIdempotencyCheck?.(message as TMessage),
+            }
+          : {}),
+        ...(params.preparation
+          ? {
+              preparation: {
+                ...(params.preparation.prepareMessage
+                  ? {
+                      prepareMessage: (message: unknown) =>
+                        // SAFETY: Preparation receives this caller's supplied message.
+                        params.preparation!.prepareMessage!(message as TMessage),
+                    }
+                  : {}),
+                source: params.preparation.source,
+              },
             }
           : {}),
         ...(params.prepareMessageAfterIdempotencyCheckAsync || params.beforeFreshMessageCommit
@@ -551,6 +619,9 @@ export async function appendSessionTranscriptMessagesByIdentity<TMessage>(
 
 /**
  * Publishes a transcript update by scoped transcript target.
+ * `update.assistantItemIds` retires exact native display occurrences only after
+ * their row commits. It is internal provenance, not terminal/run authorization,
+ * and must be omitted for independently owned commentary and async rows.
  */
 export async function publishSessionTranscriptUpdateByIdentity(
   params: SessionTranscriptTargetParams & { update?: TranscriptUpdatePayload },
@@ -561,12 +632,26 @@ export async function publishSessionTranscriptUpdateByIdentity(
 
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
+ * @deprecated Use withSessionTranscriptWrite and preparation options. Removed at the next Plugin SDK major.
  */
 export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
   return await withProjectedSessionTranscriptWriteLock(params, run, (context) => context);
+}
+
+/** Runs ordered optimistic writes; captured transcript versions fence later mutations. */
+export async function withSessionTranscriptWrite<T>(
+  params: SessionTranscriptWriteLockParams,
+  run: (context: SessionTranscriptWriteContext) => Promise<T> | T,
+): Promise<T> {
+  return await withProjectedSessionTranscriptWriteLock(
+    params,
+    run,
+    (context) => context,
+    "sequence",
+  );
 }
 
 function createAssistantMirrorMessage(params: {

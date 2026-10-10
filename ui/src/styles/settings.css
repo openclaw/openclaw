@@ -148,7 +148,8 @@
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
 
-.settings-section {
+.settings-section,
+.config-tier-groups {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -299,13 +300,6 @@
 /* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 
-.config-tier-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-
 .config-advanced-disclosure {
   margin-top: var(--space-5);
 }
@@ -421,6 +415,98 @@
     max-width: 60%;
     justify-content: flex-end;
   }
+}
+
+.settings-tab-icon .settings-segmented > .settings-segmented__btn {
+  padding-inline: var(--space-2);
+}
+
+.settings-tab-icon__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.settings-tab-icon__lobsters,
+.settings-tab-icon__shapes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.settings-tab-icon__pick {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+
+.settings-tab-icon__pick:hover,
+.settings-tab-icon__pick[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+}
+
+.settings-tab-icon__pick:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-tab-icon .settings-tab-icon__lobster {
+  display: block;
+  position: relative;
+  left: auto;
+  bottom: auto;
+  width: 30px;
+  height: 30px;
+  transform: none;
+  pointer-events: none;
+}
+
+.settings-tab-icon__lobster,
+.settings-tab-icon__lobster * {
+  animation: none !important;
+  transition: none !important;
+}
+
+.settings-tab-icon__preview .settings-tab-icon__lobster {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-tab-icon__preview,
+.settings-tab-icon__preview img,
+.settings-tab-icon__preview.identity-avatar--agent img,
+.settings-tab-icon__preview svg {
+  width: 16px;
+  height: 16px;
+  object-fit: contain;
+}
+
+.settings-tab-icon__preview[data-avatar-shape] {
+  border-radius: 0;
+}
+
+.settings-tab-icon__preview[data-avatar-shape="rounded"] {
+  clip-path: inset(0 round 25%);
+}
+
+.settings-tab-icon__preview[data-avatar-shape="circle"] {
+  clip-path: circle(50%);
+}
+
+.settings-tab-icon__preview:not([data-avatar-shape="square"]) img {
+  object-fit: cover;
+}
+
+.settings-tab-icon__pick .settings-tab-icon__preview,
+.settings-tab-icon__pick .settings-tab-icon__preview img {
+  width: 30px;
+  height: 30px;
 }
 
 /* Trailing action rows hold only a button cluster: give it the full row

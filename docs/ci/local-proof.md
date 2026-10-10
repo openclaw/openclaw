@@ -327,6 +327,35 @@ expressions, steps, and scripts through YAML anchors and aliases.
 
 ## Local check gates and changed routing
 
+### Assertion inventory reports
+
+`pnpm check:assertion-safety --report <commit-or-ref>` writes a deterministic JSON
+inventory to stdout without changing the assertion baseline. The ref selects the
+committed source and baseline, including files omitted by a sparse checkout.
+Ordinary ratchet checks still inspect worktree or staged content; their `--base`
+option selects comparison ancestry, not source bytes.
+
+The report records source Git object IDs, SHA-256 hashes of the executing
+collector and policy files, and the installed parser and Node versions. It lists
+zero-count files, excluded declaration/test-support files, missing baseline paths,
+syntax diagnostics, and every parsed assertion's current policy exemption.
+Positions use one-based lines/columns and half-open source-text spans.
+
+Unused allowance means the baseline exceeds the observed policy count. It is
+accounting evidence, not proof of a repair: adding a SAFETY marker can reduce
+the count while retaining the assertion. Exemptions describe the existing guard's
+decision; they do not validate the stated invariant. Assertion fingerprints hash
+the exact assertion text, so repeated hashes are ambiguous and whitespace changes
+can change a hash. The report does not match sites between revisions or classify
+assertions semantically.
+
+Exit zero means inventory coverage is complete, not that the ratchet passed or
+debt was repaired. Parse failures or caught collection errors produce incomplete
+coverage and a nonzero exit; unknown counts and unused allowances stay `null`.
+Successful file records remain available when other files fail. A killed process
+can produce no report; absent or truncated output is incomplete evidence. Qualify
+the reported source, tooling and dependency inputs before comparing separate runs.
+
 ### Config baseline count ratchet
 
 `pnpm config:docs:check` rejects undocumented config-surface growth and corrupt or stale count snapshots. When a reviewed product change intentionally adds schema paths, run `pnpm config:docs:gen`, inspect the core/channel/plugin count deltas and generated SHA-256 files, and commit the conscious baseline bump with the schema, help, labels, migration, and tests. Do not hand-edit the counts file to bypass the ratchet.
@@ -372,9 +401,9 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.69.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.73.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.69.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.73.0 release
 before provider discovery or lease work. The original binary stays untouched.
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
@@ -396,7 +425,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.69.0 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.73.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.

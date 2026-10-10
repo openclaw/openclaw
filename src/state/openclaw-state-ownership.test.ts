@@ -633,6 +633,8 @@ describe("external shared-state ownership", () => {
     const env = createEnv();
     const databasePath = openOpenClawStateDatabase({ env }).path;
     closeOpenClawStateDatabaseForTest();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
     const drifted = new DatabaseSync(databasePath);
     try {
@@ -796,6 +798,8 @@ describe("external shared-state ownership", () => {
     const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
     const databaseLocation = seeded.location();
     closeOpenClawStateDatabaseForTest();
+    fs.renameSync(databasePath, `${databasePath}.seed`);
+    fs.copyFileSync(`${databasePath}.seed`, databasePath);
     const { DatabaseSync } = requireNodeSqlite();
     const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
       | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
@@ -859,7 +863,10 @@ describe("external shared-state ownership", () => {
       expect(reads.queries).toEqual([indexedOwnershipSql]);
       reads.queries.length = 0;
       runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
-      expect(reads.queries).toEqual(["PRAGMA data_version", indexedOwnershipSql]);
+      expect(reads.queries).toEqual([
+        expect.stringMatching(/^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu),
+        indexedOwnershipSql,
+      ]);
     } finally {
       reads.restore();
     }

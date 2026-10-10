@@ -32,22 +32,19 @@ export type CurrentUserTimestampMatch = {
 const LEADING_TIMESTAMP_ENVELOPE_RE = /^\[[A-Za-z]{3} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] */;
 const CONVERSATION_INFO_LABEL = markInboundContextLabel("Conversation info:");
 
-export function splitLeadingTimestampEnvelope(text: string): {
+function splitLeadingTimestampEnvelope(text: string): {
   body: string;
   envelope: string;
 } {
   const envelope = text.match(LEADING_TIMESTAMP_ENVELOPE_RE)?.[0] ?? "";
-  return { envelope, body: envelope ? text.slice(envelope.length) : text };
+  return { envelope, body: text.slice(envelope.length) };
 }
 
 function readFirstUserText(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  return content.find(isTextContentBlock)?.text;
+  return Array.isArray(content) ? content.find(isTextContentBlock)?.text : undefined;
 }
 
 export function hasNonBlankUserText(content: unknown): boolean {
@@ -75,7 +72,7 @@ export function resolveUserTranscriptMessages(
   }
   const resolved = Array.from(
     { length: messages.length },
-    () => undefined as AgentMessage | undefined,
+    (): AgentMessage | undefined => undefined,
   );
   const unusedContexts = new Set(contexts);
   const byRuntimeMessage = new Map<AgentMessage, UserTranscriptContext[]>();
@@ -169,8 +166,7 @@ function normalizePersistedSenderValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replaceAll("\u0000", "").trim();
-  return normalized || undefined;
+  return value.replaceAll("\u0000", "").trim() || undefined;
 }
 
 type PersistedSender = {
@@ -305,14 +301,11 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
   // historical, not the active prompt boundary.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!message) {
-      continue;
-    }
-    if (message.role === "user" && !message.operatorMessage) {
+    if (message?.role === "user" && !message.operatorMessage) {
       return index;
     }
     if (
-      message.role === "assistant" &&
+      message?.role === "assistant" &&
       (!Array.isArray(message.content) || !message.content.some(isRunnerToolCallBlock))
     ) {
       return -1;

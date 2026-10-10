@@ -137,10 +137,10 @@ function inferWhatsAppMediaKind(
     : inferredKind;
 }
 
-function normalizeWhatsAppLoadedMedia(
+export async function prepareWhatsAppOutboundMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
-): CanonicalWhatsAppLoadedMedia {
+): Promise<CanonicalWhatsAppLoadedMedia> {
   // Infer the kind and native payload MIME from the same filename fact; Baileys
   // does not replace an explicit application/octet-stream on images or videos.
   const filenameMimeType = mimeTypeFromFilePath(media.fileName);
@@ -152,15 +152,16 @@ function normalizeWhatsAppLoadedMedia(
   const kind = inferWhatsAppMediaKind(media, resolvedContentType);
   // Match the existing URL/filename voice rule used by the transcode decision;
   // otherwise native .ogg/.opus uploads carry an inconsistent payload MIME.
-  const mimetype =
+  const nativeVoice =
     kind === "audio" &&
     isWhatsAppNativeVoiceAudio({
       contentType: media.contentType,
       fileName: media.fileName,
       mediaUrl,
-    })
-      ? WHATSAPP_VOICE_MIMETYPE
-      : (resolvedContentType ?? "application/octet-stream");
+    });
+  const mimetype = nativeVoice
+    ? WHATSAPP_VOICE_MIMETYPE
+    : (resolvedContentType ?? "application/octet-stream");
   const fileName =
     kind === "document"
       ? resolveWhatsAppDocumentFileName({
@@ -168,29 +169,13 @@ function normalizeWhatsAppLoadedMedia(
           mimetype,
         })
       : media.fileName;
-  return {
+  const normalized = {
     buffer: media.buffer,
     kind,
     mimetype,
     ...(fileName ? { fileName } : {}),
   };
-}
-
-export async function prepareWhatsAppOutboundMedia(
-  media: WhatsAppLoadedMediaLike,
-  mediaUrl?: string,
-): Promise<CanonicalWhatsAppLoadedMedia> {
-  const normalized = normalizeWhatsAppLoadedMedia(media, mediaUrl);
-  if (normalized.kind !== "audio") {
-    return normalized;
-  }
-  if (
-    isWhatsAppNativeVoiceAudio({
-      contentType: media.contentType,
-      fileName: media.fileName,
-      mediaUrl,
-    })
-  ) {
+  if (kind !== "audio" || nativeVoice) {
     return normalized;
   }
 

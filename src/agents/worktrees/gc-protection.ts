@@ -27,7 +27,7 @@ export async function autoRemovalProtectionReason(
 ): Promise<string | undefined> {
   if (
     record.ownerId !== undefined &&
-    policy.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true
+    policy.readOwnerState?.(record.ownerKind, record.ownerId) === "active"
   ) {
     return "owner is active";
   }

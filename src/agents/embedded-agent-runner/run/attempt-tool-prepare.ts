@@ -1,4 +1,5 @@
 import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import { messageToolOwnsVisibleReply } from "../../../auto-reply/source-reply-delivery-mode.js";
 import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isEmbeddedMode } from "../../../infra/embedded-mode.js";
@@ -101,6 +102,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   });
   const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntimeCore({
     config: attempt.config,
+    trigger: attempt.trigger,
     agentId: params.setup.sessionAgentId,
     sessionKey: params.setup.sandboxSessionKey,
     forceMessageTool: forceDirectMessageTool,
@@ -171,9 +173,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     const cleanups = generationCleanups.splice(0);
     const settled = Promise.allSettled(cleanups.map(async (cleanup) => await cleanup(reason))).then(
       (results) => {
-        if (results.some((result) => result.status === "rejected")) {
-          retiredCleanupFailed = true;
-        }
+        retiredCleanupFailed ||= results.some((result) => result.status === "rejected");
       },
     );
     retiringGenerations.add(settled);
@@ -368,6 +368,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         undefined,
         undefined,
         {
+          reader: getReplyOperationSessionReader(attempt.replyOperation),
           assertCurrent: resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, abortSignal),
         },
       );

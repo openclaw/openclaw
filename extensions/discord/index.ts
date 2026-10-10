@@ -24,21 +24,16 @@ export default defineBundledChannelEntry({
   },
   registerFull(api) {
     // Account inspection loads this entry too; runtime registration must stay behind its owner mode.
-    const registerActivities = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(
-      import.meta.url,
-      { specifier: "./activities-api.js", exportName: "registerDiscordActivities" },
-    );
-    registerActivities(api);
+    loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+      specifier: "./activities-api.js",
+      exportName: "registerDiscordActivities",
+    })(api);
     registerDiscordSubagentHooks(api);
   },
   registerCapabilities(api) {
-    const registerTranscriptSource = loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(
-      import.meta.url,
-      {
-        specifier: "./transcripts-source-api.js",
-        exportName: "registerDiscordTranscriptSourceProvider",
-      },
-    );
-    registerTranscriptSource(api);
+    loadBundledEntryExportSync<(api: OpenClawPluginApi) => void>(import.meta.url, {
+      specifier: "./transcripts-source-api.js",
+      exportName: "registerDiscordTranscriptSourceProvider",
+    })(api);
   },
 });

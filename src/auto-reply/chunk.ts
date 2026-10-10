@@ -469,11 +469,5 @@ function pickSafeBreakIndex(
       : undefined,
   );
 
-  if (lastNewline > start) {
-    return lastNewline;
-  }
-  if (lastWhitespace > start) {
-    return lastWhitespace;
-  }
-  return -1;
+  return lastNewline > start ? lastNewline : lastWhitespace > start ? lastWhitespace : -1;
 }

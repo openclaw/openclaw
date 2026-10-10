@@ -14,6 +14,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   createLeaseHeartbeatCleanup,
   type LeaseHeartbeatCleanup,
@@ -49,7 +50,7 @@ export function startOpenClawStateLeaseTimer(params: {
   let stopped = false;
   let expiryClosed = false;
   let renewal: Promise<void> | undefined;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExpiry: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
     if (stopped || renewal) {
       return;
@@ -70,13 +71,13 @@ export function startOpenClawStateLeaseTimer(params: {
   }, params.heartbeatMs);
   heartbeat.unref?.();
   const checkExpiry = () => {
-    expiryTimer = undefined;
+    cancelExpiry = undefined;
     if (expiryClosed) {
       return;
     }
     // Commit publication can precede the actor reply in the parent's event queue.
-    const remainingMs = Number(Atomics.load(params.observation, state.expiresAt)) - Date.now();
-    if (remainingMs <= 0) {
+    const expiresAt = Number(Atomics.load(params.observation, state.expiresAt));
+    if (expiresAt <= Date.now()) {
       stopped = true;
       expiryClosed = true;
       clearInterval(heartbeat);
@@ -84,14 +85,13 @@ export function startOpenClawStateLeaseTimer(params: {
       params.onLost(new Error("state lease expired"));
       return;
     }
-    expiryTimer = setTimeout(checkExpiry, remainingMs);
-    expiryTimer.unref?.();
+    cancelExpiry = scheduleAbsoluteDeadline(expiresAt, checkExpiry, undefined, { unref: true });
   };
   try {
     checkExpiry();
   } catch (error) {
     clearInterval(heartbeat);
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     throw error;
   }
   const stopRenewal = async () => {
@@ -109,8 +109,8 @@ export function startOpenClawStateLeaseTimer(params: {
     async close() {
       await stopRenewal();
       expiryClosed = true;
-      clearTimeout(expiryTimer);
-      expiryTimer = undefined;
+      cancelExpiry?.();
+      cancelExpiry = undefined;
     },
   };
 }
@@ -124,7 +124,7 @@ type PendingHeartbeatRequest = {
 export function startOpenClawStateLeaseHeartbeat(
   params: Omit<
     LeaseHeartbeatWorkerData,
-    "shared" | "expectedIdentity" | "renewalProgress" | "deferActivation"
+    "shared" | "expectedIdentity" | "renewalProgress" | "completedRequest" | "deferActivation"
   > & {
     /** The caller retains its shared-state actor through startup and failure teardown. */
     startupContext?: OpenClawStateWorkerContext;
@@ -155,13 +155,16 @@ export function startOpenClawStateLeaseHeartbeat(
       new SharedArrayBuffer((state.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT),
     );
   const renewalProgress = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
+  const completedRequest = new BigInt64Array(
+    new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+  );
   Atomics.store(shared, state.expiresAt, BigInt(params.expiresAt));
   const ready = createDeferredCore();
   // Synchronous startup failures can occur before the caller receives ready.
   void ready.promise.catch(() => {});
   const pending = new Map<number, PendingHeartbeatRequest>();
   let nextRequestId = 0;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExpiry: (() => void) | undefined;
   const rejectPending = (error: Error) => {
     for (const reply of pending.values()) {
       clearTimeout(reply.timer);
@@ -181,7 +184,7 @@ export function startOpenClawStateLeaseHeartbeat(
     Atomics.store(shared, state.status, state.closed);
     Atomics.notify(shared, state.ack);
     clearStartupTimers();
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     const error = new Error("state lease heartbeat closed");
     ready.reject(error);
     rejectPending(error);
@@ -205,13 +208,13 @@ export function startOpenClawStateLeaseHeartbeat(
     Atomics.store(shared, state.status, state.lost);
     Atomics.notify(shared, state.ack);
     clearStartupTimers();
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     ready.reject(error);
     rejectPending(error);
     params.onLost(error);
   };
   const remainingLeaseMs = () => Number(Atomics.load(shared, state.expiresAt)) - Date.now();
-  const responseBudget = (leaseRemaining: () => number, maximumMs: number) => {
+  const responseBudget = (leaseRemaining: () => number, maximumMs: number, requestId?: bigint) => {
     let observedProgress = Atomics.load(renewalProgress, 0);
     let responseDeadline = performance.now() + WORKER_RESPONSE_TIMEOUT_MS;
     const operationDeadline = performance.now() + maximumMs;
@@ -221,17 +224,18 @@ export function startOpenClawStateLeaseHeartbeat(
         observedProgress = progress;
         responseDeadline = performance.now() + WORKER_RESPONSE_TIMEOUT_MS;
       }
-      // A busy worker may finish its native renewal within the lease bound.
+      // Completion survives delayed delivery, not lease or operation expiry.
       // Occupancy never satisfies the request or extends the operation forever.
+      const completed = requestId !== undefined && Atomics.load(completedRequest, 0) >= requestId;
       return Math.min(
         leaseRemaining(),
         operationDeadline - performance.now(),
-        progress % 2n === 1n ? Infinity : responseDeadline - performance.now(),
+        completed || progress % 2n === 1n ? Infinity : responseDeadline - performance.now(),
       );
     };
   };
   const watchExpiry = () => {
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     const observedStatus = Atomics.load(shared, state.status);
     if (observedStatus === state.closed) {
       return;
@@ -240,12 +244,12 @@ export function startOpenClawStateLeaseHeartbeat(
       fail(new Error("state lease heartbeat is not running"));
       return;
     }
-    const remainingMs = remainingLeaseMs();
-    if (remainingMs <= 0) {
+    const expiresAt = Number(Atomics.load(shared, state.expiresAt));
+    if (expiresAt <= Date.now()) {
       fail(new Error("state lease heartbeat lease expired"));
       return;
     }
-    expiryTimer = setTimeout(watchExpiry, remainingMs);
+    cancelExpiry = scheduleAbsoluteDeadline(expiresAt, watchExpiry);
   };
   const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);
@@ -397,6 +401,7 @@ export function startOpenClawStateLeaseHeartbeat(
             processOwner: params.processOwner,
             shared: shared.buffer,
             renewalProgress: renewalProgress.buffer,
+            completedRequest: completedRequest.buffer,
           } satisfies LeaseHeartbeatWorkerData,
           env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
           execArgv,
@@ -468,7 +473,7 @@ export function startOpenClawStateLeaseHeartbeat(
     if (!request) {
       return;
     }
-    if (reply.ok && request.remainingMs() <= 0) {
+    if (reply.ok && (request.remainingMs() <= 0 || reply.expiresAt <= Date.now())) {
       fail(new Error("state lease heartbeat is not responsive"));
       return;
     }
@@ -502,6 +507,7 @@ export function startOpenClawStateLeaseHeartbeat(
       remainingMs: responseBudget(
         remainingLeaseMs,
         Math.max(WORKER_RESPONSE_TIMEOUT_MS, params.leaseMs),
+        BigInt(id),
       ),
     };
     pending.set(id, awaiting);

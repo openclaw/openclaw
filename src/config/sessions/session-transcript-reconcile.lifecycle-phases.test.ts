@@ -1,17 +1,19 @@
 import { execFile } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admissionOwner from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import {
   claimOpenClawAgentDatabaseLease,
@@ -37,17 +39,22 @@ import type {
 } from "./session-transcript-reconcile.worker.js";
 
 type Pool = WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>;
-function createPool(failNativeCloseAt?: string): Pool {
+function createPool(
+  failNativeCloseAt?: string,
+  schemaTrace?: { path: string; databasePaths: string[] },
+): Pool {
   return new WorkerTaskPool<SessionTranscriptReconcileWorkerTask, void>({
-    workerUrl: failNativeCloseAt
-      ? new URL("./session-transcript-reconcile.close-failure.test-support.mjs", import.meta.url)
-      : resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
-    ...(failNativeCloseAt
+    workerUrl:
+      failNativeCloseAt || schemaTrace
+        ? new URL("./session-transcript-reconcile.close-failure.test-support.mjs", import.meta.url)
+        : resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptReconcile),
+    ...(failNativeCloseAt || schemaTrace
       ? {
           workerOptions: {
             workerData: {
               sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
               databasePath: failNativeCloseAt,
+              schemaTrace,
             },
           },
         }
@@ -237,25 +244,20 @@ describe("reconciliation cleanup transport native custody", () => {
           },
         };
         const pool = createPool();
-        const createAdmission = admissionOwner.createSqliteWorkerOperationAdmission;
         let reachedAdmission = false;
-        const admissions = vi
-          .spyOn(admissionOwner, "createSqliteWorkerOperationAdmission")
-          .mockImplementation((admit, attachment) =>
-            createAdmission((request, grant) => {
-              if (
-                request.stage === "prepare" &&
-                typeof request.facts === "object" &&
-                request.facts !== null &&
-                "kind" in request.facts &&
-                request.facts.kind === "transcript-reconciliation"
-              ) {
-                reachedAdmission = true;
-                revoked = true;
-              }
-              admit(request, grant);
-            }, attachment),
-          );
+        const admissions = probe.admission(admissionOwner, (request, grant, admit) => {
+          if (
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "transcript-reconciliation"
+          ) {
+            reachedAdmission = true;
+            revoked = true;
+          }
+          admit(request, grant);
+        });
         const observation = observe(context);
         try {
           await expect(
@@ -280,8 +282,8 @@ describe("reconciliation cleanup transport native custody", () => {
   });
 });
 
-it.each(["exclude", "schema", "version"] as const)(
-  "preserves deletion and schema checks across the phase yield against foreign %s",
+it.each(["exclude", "schema", "version", "own-schema"] as const)(
+  "keeps phase authority and admitted format across %s changes without version polling",
   async (operation) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "reconcile-phase-yield" },
@@ -291,10 +293,44 @@ it.each(["exclude", "schema", "version"] as const)(
         closeOpenClawAgentDatabaseByPath(options.path);
         closeOpenClawStateDatabaseForTest();
         const context = captureOpenClawStateWorkerContext();
-        const pool = createPool();
+        const tracePath = state.path("reconcile-schema-sql.jsonl");
+        const pool = createPool(undefined, {
+          path: tracePath,
+          databasePaths: [context.admission.databasePath, options.path],
+        });
         const ready = createDeferred<MessagePort>();
         const leaseId = `phase-yield-${operation}`;
         const observation = observe(context);
+        let closeGranted = false;
+        const createAdmission = admissionOwner.createSqliteWorkerOperationAdmission;
+        const admissions =
+          operation === "own-schema"
+            ? vi
+                .spyOn(admissionOwner, "createSqliteWorkerOperationAdmission")
+                .mockImplementation((admit, attachment) =>
+                  createAdmission(
+                    (request, grant) =>
+                      admit(request, (beforeRelease) => {
+                        const granted = grant(beforeRelease);
+                        const facts = request.facts;
+                        if (
+                          granted &&
+                          request.stage === "prepare" &&
+                          typeof facts === "object" &&
+                          facts !== null &&
+                          "kind" in facts &&
+                          facts.kind === "transcript-reconciliation" &&
+                          "phase" in facts &&
+                          facts.phase === "close"
+                        ) {
+                          closeGranted = true;
+                        }
+                        return granted;
+                      }),
+                    attachment,
+                  ),
+                )
+            : undefined;
         let parent: MessagePort | undefined;
         let completed = false;
         const task = releaseInRealWorker(pool, context, leaseId, options.path, {
@@ -317,38 +353,59 @@ it.each(["exclude", "schema", "version"] as const)(
               throw new Error("Reconciliation settled before the phase-yield witness");
             }),
           ]);
-          const child = await promisify(execFile)(process.execPath, [
-            fileURLToPath(
-              new URL(
-                "./session-transcript-reconcile.foreign-owner.test-support.mjs",
-                import.meta.url,
-              ),
-            ),
-            JSON.stringify({
-              operation,
-              statePath: context.admission.databasePath,
-              agentPath: options.path,
-              environment: context.environment,
-              sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
-            }),
-          ]);
-          const verdict: unknown = JSON.parse(child.stdout);
-          if (operation === "exclude") {
-            expect(verdict).toEqual({ agentCleanupRefused: true });
-          } else if (operation === "version") {
-            expect(verdict).toEqual({ changed: true, unchangedSchemaCookie: true });
+          if (operation === "own-schema") {
+            expect(observation.calls).toEqual([]);
+            const sibling = openNodeSqliteDatabase(options.path);
+            try {
+              const previousAdmission = getAdmittedSqliteSchemaFacts(sibling)?.admissionId;
+              expect(typeof previousAdmission).toBe("string");
+              sibling.exec("CREATE TABLE synthetic_schema_reentry_guard (value INTEGER)");
+              const publishedAdmission = getAdmittedSqliteSchemaFacts(sibling)?.admissionId;
+              expect(typeof publishedAdmission).toBe("string");
+              expect(publishedAdmission).not.toBe(previousAdmission);
+            } finally {
+              sibling.close();
+            }
+            // The synchronous fixture mutation is separate from both worker lifecycle phases.
+            observation.calls.length = 0;
           } else {
-            expect(verdict).toEqual({ changed: true });
+            const child = await promisify(execFile)(process.execPath, [
+              fileURLToPath(
+                new URL(
+                  "./session-transcript-reconcile.foreign-owner.test-support.mjs",
+                  import.meta.url,
+                ),
+              ),
+              JSON.stringify({
+                operation,
+                statePath: context.admission.databasePath,
+                agentPath: options.path,
+                environment: context.environment,
+                sourceLoaderUrl: import.meta.resolve("tsx/esm/api"),
+              }),
+            ]);
+            const verdict: unknown = JSON.parse(child.stdout);
+            if (operation === "exclude") {
+              expect(verdict).toEqual({ agentCleanupRefused: true });
+            } else if (operation === "version") {
+              expect(verdict).toEqual({ changed: true, unchangedSchemaCookie: true });
+            } else {
+              expect(verdict).toEqual({ changed: true });
+            }
           }
           parent.postMessage({ type: "release" }, []);
-          if (operation === "exclude") {
-            await expect(task).resolves.toContainEqual({ type: "lease-released" });
+          if (operation === "own-schema") {
+            // Native-phase failures retire the isolate instead of transporting its internal error.
+            await expect(task).rejects.toThrow("worker exited with code 1");
+            expect(closeGranted).toBe(true);
           } else {
-            await expect(task).rejects.toThrow();
+            await expect(task).resolves.toContainEqual({ type: "lease-released" });
           }
           completed = true;
           await pool.close();
+          expect(pool.getSnapshot().workers).toBe(0);
           expect(observation.calls).toEqual([]);
+          expect(existsSync(tracePath) ? readFileSync(tracePath, "utf8") : "").toBe("");
         } finally {
           if (!completed) {
             parent?.postMessage({ type: "release" }, []);
@@ -356,11 +413,12 @@ it.each(["exclude", "schema", "version"] as const)(
           await task.catch(() => {});
           await pool.close();
           observation.restore();
+          admissions?.mockRestore();
         }
         const lease = openOpenClawStateDatabase()
           .db.prepare("SELECT lease_id FROM agent_database_leases WHERE lease_id = ?")
           .get(leaseId);
-        if (operation !== "exclude") {
+        if (operation === "own-schema") {
           expect(lease).toEqual({ lease_id: leaseId });
           releaseOpenClawAgentDatabaseLease(leaseId);
         } else {

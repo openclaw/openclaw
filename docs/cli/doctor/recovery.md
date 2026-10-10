@@ -67,6 +67,25 @@ If it must cancel before repair starts, it reverses its own stop while its nativ
 service custody remains valid. Normal post-repair restoration still requires
 current update admission.
 
+During service inspection, Doctor reuses already recorded update continuation
+receipts after rechecking live update ownership. This avoids repeating full
+database integrity scans for unchanged receipts within the service manager's
+inspection deadline. New continuation or takeover receipts still use the
+validated ledger writer.
+
+On Linux, nested service-manager inspections share deadline accounting that
+excludes synchronous ownership and admission checks. Slow database inspection
+therefore does not consume the manager I/O allowance. Every authority check
+still runs; manager calls, cancellation, and service stop and drain deadlines
+remain bounded. Database inspection can still increase the total command time.
+
+After restoration, Doctor verifies the Gateway with the shared health probe used
+by `openclaw gateway start`. A running process or owned listener alone does not
+mean it is ready. If the readiness budget expires while the service is running,
+Doctor leaves it running and warns that readiness was not verified, including
+the observed startup phase when available. Run `openclaw gateway status --deep`
+or `openclaw gateway diagnostics export` to investigate; repair still completes.
+
 When an exited container leaves a Gateway lock in a bind-mounted state directory,
 Doctor uses Gateway startup's namespace and heartbeat policy. It waits up to
 95 seconds for an unverifiable container owner, bounded by any active service

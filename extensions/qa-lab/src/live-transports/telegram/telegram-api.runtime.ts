@@ -1,21 +1,7 @@
-import { setTimeout as sleep } from "node:timers/promises";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
-
-type TelegramChannelStatus = Pick<
-  ChannelAccountSnapshot,
-  | "accountId"
-  | "connected"
-  | "lastConnectedAt"
-  | "lastDisconnect"
-  | "lastError"
-  | "restartPending"
-  | "running"
->;
+import { waitForLiveQaChannelAccount } from "../shared/live-channel-status.js";
 
 type TelegramGatewayClient = {
   call: (method: string, params?: unknown, options?: { timeoutMs?: number }) => Promise<unknown>;
@@ -100,29 +86,21 @@ export async function waitForTelegramChannelRunning(
   accountId: string,
   options?: { env?: NodeJS.ProcessEnv; pollMs?: number; timeoutMs?: number },
 ) {
-  const startedAt = Date.now();
-  const timeoutMs = options?.timeoutMs ?? resolveTelegramQaReadyTimeoutMs(options?.env);
-  const pollMs = options?.pollMs ?? 500;
-  let lastProbeError: string | undefined;
-  let lastStatus: TelegramChannelStatus | undefined;
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const accounts = await readLiveQaChannelAccounts(gateway, "telegram");
-      const match = accounts.find((entry) => entry.accountId === accountId);
-      lastProbeError = undefined;
-      lastStatus = match;
-      if (match?.running && match.connected === true && match.restartPending !== true) {
-        return;
-      }
-    } catch (error) {
-      lastProbeError = formatErrorMessage(error);
-    }
-    await sleep(pollMs);
-  }
-  const details = lastStatus
-    ? `; last status: ${JSON.stringify(lastStatus)}`
-    : lastProbeError
-      ? `; last check error: ${lastProbeError}`
-      : "";
-  throw new Error(`telegram account "${accountId}" did not become ready${details}`);
+  await waitForLiveQaChannelAccount({
+    gateway,
+    channel: "telegram",
+    accountId,
+    timeoutMs: options?.timeoutMs ?? resolveTelegramQaReadyTimeoutMs(options?.env),
+    pollMs: options?.pollMs ?? 500,
+    isReady: (status) =>
+      Boolean(status.running && status.connected === true && status.restartPending !== true),
+    describeTimeout: (lastStatus, lastProbeError) => {
+      const details = lastStatus
+        ? `; last status: ${JSON.stringify(lastStatus)}`
+        : lastProbeError
+          ? `; last check error: ${lastProbeError}`
+          : "";
+      return `telegram account "${accountId}" did not become ready${details}`;
+    },
+  });
 }

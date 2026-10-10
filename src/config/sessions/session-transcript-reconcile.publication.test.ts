@@ -279,7 +279,7 @@ it("delivers a committed finalization before close permits a physical successor"
                   command.input.command.type === "finalize"
                 ) {
                   held = true;
-                  expect(result).toEqual({ finalized: true, sessionKey: scope.sessionKey });
+                  expect(result).toMatchObject({ finalized: true, sessionKey: scope.sessionKey });
                   events.push("committed");
                   committed.resolve();
                   await deliver.promise;

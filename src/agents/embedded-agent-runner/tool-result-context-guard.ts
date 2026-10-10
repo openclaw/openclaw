@@ -4,12 +4,14 @@ import type {
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import { estimateTokens, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { log } from "./logger.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./run/midturn-precheck.js";
 import {
+  estimateRenderedLlmBoundaryTokenPressure,
   shouldPreemptivelyCompactBeforePrompt,
   type CompactionReplayPressureContext,
 } from "./run/preemptive-compaction.js";
@@ -25,8 +27,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-const TRANSCRIPT_PROMPT_TEXT_KEY = "__openclawTranscriptPromptText";
 
 type GuardableTransformContext = (
   messages: AgentMessage[],
@@ -47,63 +47,6 @@ type MidTurnPrecheckOptions = {
   getPrePromptMessageCount?: () => number;
   onMidTurnPrecheck?: (request: MidTurnPrecheckRequest) => void;
 };
-
-export function markTranscriptPromptText(message: AgentMessage, text: string): void {
-  Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
-    configurable: true,
-    enumerable: true,
-    value: text,
-  });
-}
-
-function getTranscriptPromptText(message: AgentMessage): string | undefined {
-  const value = Reflect.get(message, TRANSCRIPT_PROMPT_TEXT_KEY);
-  return typeof value === "string" ? value : undefined;
-}
-
-function restoreTranscriptPromptText(
-  message: AgentMessage,
-  cache: WeakMap<AgentMessage, AgentMessage>,
-): AgentMessage {
-  const transcriptText = getTranscriptPromptText(message);
-  if (transcriptText === undefined || message.role !== "user") {
-    return message;
-  }
-  const cached = cache.get(message);
-  if (cached) {
-    return cached;
-  }
-  const content = (message as { content?: unknown }).content;
-  const messageRest = { ...message };
-  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
-  let restoredMessage: AgentMessage = message;
-  if (typeof content === "string") {
-    restoredMessage = Object.assign(messageRest, { content: transcriptText });
-  } else if (Array.isArray(content)) {
-    let restored = false;
-    const nextContent = content.map((block) => {
-      if (restored || !isToolResultTextBlock(block) || block.type !== "text") {
-        return block;
-      }
-      restored = true;
-      return Object.assign({}, block, { text: transcriptText });
-    });
-    if (restored) {
-      restoredMessage = Object.assign(messageRest, { content: nextContent });
-    }
-  }
-  cache.set(message, restoredMessage);
-  return restoredMessage;
-}
-
-function stripTranscriptPromptMarker(message: AgentMessage): AgentMessage {
-  if (getTranscriptPromptText(message) === undefined) {
-    return message;
-  }
-  const messageRest = { ...message };
-  Reflect.deleteProperty(messageRest, TRANSCRIPT_PROMPT_TEXT_KEY);
-  return messageRest;
-}
 
 function projectMessages(
   messages: AgentMessage[],
@@ -240,6 +183,8 @@ export function installContextEngineLoopHook(params: {
   sessionTarget?: ContextEngineSessionTarget;
   sessionFile: string;
   tokenBudget?: number;
+  reserveTokens?: () => number;
+  getSystemPrompt?: () => string | undefined;
   modelId: string;
   repairAssembledMessages?: (messages: AgentMessage[]) => AgentMessage[];
   getPrePromptMessageCount?: () => number;
@@ -260,7 +205,6 @@ export function installContextEngineLoopHook(params: {
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
   let lastSourceMessages: AgentMessage[] | null = null;
-  const transcriptProjectionCache = new WeakMap<AgentMessage, AgentMessage>();
 
   mutableAgent.transformContext = async (messages, signal) => {
     signal?.throwIfAborted();
@@ -269,12 +213,8 @@ export function installContextEngineLoopHook(params: {
       : messages;
     signal?.throwIfAborted();
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const transcriptMessages = params.deferredTurn
-      ? sourceMessages
-      : projectMessages(sourceMessages, (message) =>
-          restoreTranscriptPromptText(message, transcriptProjectionCache),
-        );
-    const providerMessages = projectMessages(sourceMessages, stripTranscriptPromptMarker);
+    const transcriptMessages = sourceMessages;
+    const providerMessages = sourceMessages;
     const sourceHistoryChanged =
       lastSeenLength != null &&
       lastSourceMessages != null &&
@@ -351,15 +291,24 @@ export function installContextEngineLoopHook(params: {
         : providerMessages.length;
       const pendingMessages = providerMessages.slice(historyLength);
       const pendingTokens = pendingMessages.reduce(
-        (sum, message) => sum + estimateTokens(message),
+        (sum, message) => sum + estimateTokens(projectRecordedModelPrompt(message)),
         0,
       );
+      // The pending exchange already includes the active prompt; reserve only
+      // the system prompt here, using the same pressure estimate as turn start.
+      const systemTokens = estimateRenderedLlmBoundaryTokenPressure({
+        systemPrompt: params.getSystemPrompt?.(),
+        prompt: "",
+      });
+      const reserve = Math.max(0, Math.floor(params.reserveTokens?.() ?? 0));
       const assembled = await contextEngine.assemble({
         ...sessionIdentity,
         messages: providerMessages.slice(0, historyLength),
         ...params.deferredTurn,
         tokenBudget:
-          tokenBudget === undefined ? undefined : Math.max(1, tokenBudget - pendingTokens),
+          tokenBudget === undefined
+            ? undefined
+            : Math.max(1, tokenBudget - reserve - systemTokens - pendingTokens),
         model: modelId,
         runtimeSettings: params.runtimeSettings,
       });
@@ -430,7 +379,7 @@ export function installToolResultContextGuard(params: {
         // this precheck is only a routing signal, not the source of truth.
         const precheck = shouldPreemptivelyCompactBeforePrompt({
           replay: params.midTurnPrecheck.getReplay?.(),
-          messages: contextMessages,
+          messages: contextMessages.map((message) => projectRecordedModelPrompt(message)),
           systemPrompt: params.midTurnPrecheck.getSystemPrompt?.(),
           // During a tool loop, the active user prompt is already part of messages.
           prompt: "",

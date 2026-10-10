@@ -362,6 +362,10 @@ export function runStatusLabel(
   return t(RUN_STATUS_LABELS.get(value) ?? "cron.runs.runStatusUnknown");
 }
 
+function renderRunError(error: CronRunLogEntry["error"]) {
+  return html`<div class="muted">${formatUiExternalText(error)}</div>`;
+}
+
 function renderRun(
   entry: CronRunLogEntry,
   formatTimestamp: ReturnType<typeof createMsFormatter>,
@@ -441,16 +445,8 @@ function renderRun(
                 </div>`
               : nothing
           }
-          ${
-            showErrorInMeta
-              ? html`<div class="muted">${formatUiExternalText(entry.error)}</div>`
-              : nothing
-          }
-          ${
-            entry.deliveryError
-              ? html`<div class="muted">${formatUiExternalText(entry.deliveryError)}</div>`
-              : nothing
-          }
+          ${showErrorInMeta ? renderRunError(entry.error) : nothing}
+          ${entry.deliveryError ? renderRunError(entry.deliveryError) : nothing}
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">

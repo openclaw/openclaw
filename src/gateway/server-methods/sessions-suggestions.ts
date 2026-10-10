@@ -1,4 +1,3 @@
-import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import {
   ErrorCodes,
   errorShape,
@@ -7,6 +6,7 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
+  type SessionSuggestionEvent,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -46,6 +46,7 @@ import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import {
   broadcastTypingThrottled,
   liveViewerIdentities,
+  normalizeTypingRequestParams,
   TYPING_PREVIEW_THROTTLE_MS,
   TYPING_THROTTLE_MS,
   updateTypingConnections,
@@ -55,12 +56,11 @@ import {
   authorizeSessionSuggestionMutation,
   createSessionSuggestionMutation,
   suggestionScope,
-  publishSuggestion,
   requireSuggestionTarget,
   requireVisibleSuggestionRole,
 } from "./sessions-suggestions-access.js";
 import { dispatchSuggestion } from "./sessions-suggestions-dispatch.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
@@ -80,6 +80,27 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
+}
+
+function publishSuggestion(
+  context: GatewayRequestContext,
+  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  requestedSessionKey: string,
+  action: SessionSuggestionEvent["action"],
+  stored: StoredSessionSuggestion,
+): SessionSuggestion {
+  const suggestion = protocolSuggestion(target, stored);
+  context.broadcast(
+    "session.suggestion",
+    { action, suggestion },
+    {
+      sessionKeys: [
+        ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
+      ].toSorted(),
+      agentId: suggestion.agentId,
+    },
+  );
+  return suggestion;
 }
 
 function respondSuggestionDispatchError(respond: RespondFn, error: unknown): void {
@@ -185,12 +206,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
               assertCurrent,
             );
             mutation.readCurrent();
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "added",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "added", suggestion);
           },
         });
         if (added.ok) {
@@ -481,12 +497,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             if (!suggestion) {
               return null;
             }
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "resolved",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "resolved", suggestion);
           },
         });
         if (!finalizeResult.ok) {
@@ -523,13 +534,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     context,
     hasCurrentClientAuthority,
   }) => {
-    const params =
-      typeof requestParams.preview === "string"
-        ? {
-            ...requestParams,
-            preview: truncateCodePoints(requestParams.preview.trim(), 400),
-          }
-        : requestParams;
+    const params = normalizeTypingRequestParams(requestParams);
     if (!assertValidParams(params, validateSessionTypingParams, "session.typing", respond)) {
       return;
     }
@@ -622,17 +627,22 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
     ]);
     const now = Date.now();
     const typingKey = `${actor.id}\0${target.agentId}\0${target.canonicalKey}\0${target.entry.sessionId}\0${target.entry.lifecycleRevision ?? 0}`;
-    const { typing: effectiveTyping, preview } = updateTypingConnections({
+    const {
+      typing: effectiveTyping,
+      preview,
+      cursor,
+    } = updateTypingConnections({
       key: typingKey,
       connectionId: client?.connId ?? actor.id,
       typing: params.typing,
-      ...(params.typing && params.preview ? { preview: params.preview } : {}),
+      preview: params.preview,
+      cursor: params.cursor,
       now,
     });
     const broadcast = broadcastTypingThrottled({
       key: typingKey,
       typing: effectiveTyping,
-      signature: `${effectiveTyping}\0${preview ?? ""}`,
+      signature: `${effectiveTyping}\0${preview ?? ""}\0${cursor ?? ""}`,
       intervalMs: preview ? TYPING_PREVIEW_THROTTLE_MS : TYPING_THROTTLE_MS,
       now,
       emit: () => {
@@ -671,6 +681,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
           actor,
           typing: effectiveTyping,
           ...(preview ? { preview } : {}),
+          ...(cursor !== undefined ? { cursor } : {}),
           ts: Date.now(),
         };
         context.broadcast("session.typing", event, {

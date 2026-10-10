@@ -109,7 +109,7 @@ async function loadCombinedSessionStore(
         const entries = new Map<string, SessionEntrySummary[]>();
         for (const [index, { storeTarget }] of prepared.reads.entries()) {
           const owner = expectDefined(owners[index], "retained session store");
-          const rows = await owner.readEntries(
+          const { entries: rows } = await owner.readEntries(
             { ...storeTarget, env: transferEnv, projection: prepared.projection, clone: false },
             undefined,
             identities[index],

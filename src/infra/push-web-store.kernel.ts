@@ -40,6 +40,7 @@ const WEB_PUSH_APPROVAL_RECOVERY_MAX_APPROVALS = 1_024;
 const ensuredWebPushBindingDatabases = new WeakSet<DatabaseSync>();
 const ensureWebPushApprovalDeliveryStateSchema = createOpenClawStateSchemaEnsurer({
   table: "web_push_approval_deliveries",
+  indexes: ["idx_web_push_approval_deliveries_subscription"],
   endMarker: "  ON web_push_approval_deliveries(subscription_id, approval_id);\n",
   operationLabel: "web-push.approval-delivery.schema.ensure",
 });

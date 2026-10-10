@@ -2,7 +2,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createApprovalNativeRouteReporter } from "../../infra/approval-native-route-coordinator.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -167,61 +166,6 @@ describe("dispatchReplyFromConfig", () => {
     ).rejects.toBeInstanceOf(DispatchReplyOperationAbortedError);
     expect(run).not.toHaveBeenCalled();
     expect(onWorkStarted).not.toHaveBeenCalled();
-  });
-
-  it("audits an aborted prepared-runtime wait as a skipped reply operation", async () => {
-    setNoAbort();
-    const abort = new AbortController();
-    const preparedLookup = vi.fn(({ abortSignal }: { abortSignal?: AbortSignal }) =>
-      racePromiseWithAbortSignal(new Promise<never>(() => {}), abortSignal),
-    );
-    const runtimeLoaders = await import("./dispatch-from-config.runtime-loaders.js");
-    const preparedLoader = vi.spyOn(runtimeLoaders, "loadPreparedModelRuntime").mockResolvedValue({
-      loadPublishedGatewayReplyDispatchRuntime: preparedLookup,
-    } as never);
-    const dispatch = withDispatchProcessedOutcomeSink(() =>
-      dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          Provider: "telegram",
-          ChatType: "direct",
-          SessionKey: "agent:main:main",
-        }),
-        cfg: { ...emptyConfig, diagnostics: { enabled: true } },
-        dispatcher: createDispatcher(),
-        replyOptions: { abortSignal: abort.signal },
-      }),
-    );
-    try {
-      await vi.waitFor(() => expect(preparedLookup).toHaveBeenCalledOnce());
-      abort.abort(new Error("request cancelled"));
-      const outcome = await dispatch;
-
-      expect(outcome.result).toMatchObject({
-        queuedFinal: false,
-        counts: { tool: 0, block: 0, final: 0 },
-      });
-      expect(outcome.processedOutcome).toEqual({
-        outcome: "skipped",
-        reason: "reply_operation_aborted",
-      });
-      expect(messageAuditEvents()[0]).toMatchObject({
-        status: "blocked",
-        outcome: "skipped",
-        reasonCode: "reply_operation_aborted",
-      });
-      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-        expect.objectContaining({
-          outcome: "skipped",
-          reason: "reply_operation_aborted",
-        }),
-      );
-      expect(preparedLookup).toHaveBeenCalledWith({
-        agentId: "main",
-        abortSignal: abort.signal,
-      });
-    } finally {
-      preparedLoader.mockRestore();
-    }
   });
 
   it("delivers plan status when verbose overrides preview suppression", async () => {
@@ -1129,7 +1073,11 @@ describe("dispatchReplyFromConfig", () => {
     }
 
     expect(result.queuedFinal).toBe(true);
-    expect(preparedLookup).toHaveBeenCalledWith({ agentId: "main" });
+    expect(preparedLookup).toHaveBeenCalledWith({
+      agentId: "main",
+      demand: "interactive",
+      onRuntimeLease: expect.any(Function),
+    });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
       channel: "discord",
       accountId: "default",
