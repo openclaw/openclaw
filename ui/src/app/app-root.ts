@@ -1,7 +1,7 @@
 import { ContextProvider } from "@lit/context";
 import { buildControlUiFocusPath, type ControlUiFocusTarget } from "@openclaw/session-url-contract";
 import type { RouteLocation, RouteNotFound } from "@openclaw/uirouter";
-import { html, nothing, type LitElement } from "lit";
+import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -19,11 +19,7 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import type { ChatRouteData } from "../pages/chat/route-loader.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import { applicationContext, type ApplicationContext } from "./context.ts";
-import type {
-  ControlUiReadiness,
-  ControlUiReadinessShell,
-  ControlUiCommittedPresentation,
-} from "./control-ui-readiness.ts";
+import type { ControlUiReadiness } from "./control-ui-readiness.ts";
 import {
   APPROVAL_PAGE_ELEMENT,
   BROWSER_DOCUMENT_ELEMENT,
@@ -78,13 +74,12 @@ export class OpenClawApp extends OpenClawLightDomElement {
   private readonly loadReadiness = () => {
     const runtime = this.runtime;
     if (runtime && !this.readiness && !this.readinessLoad) {
-      this.readinessLoad = import("./control-ui-readiness.ts")
-        .then(({ ControlUiReadiness }) => {
+      this.readinessLoad = import("./control-ui-readiness-lit.ts")
+        .then(({ createLitControlUiReadiness }) => {
           if (this.runtime !== runtime) {
             return;
           }
-          this.readiness = new ControlUiReadiness(this);
-          this.readiness.connect(runtime, () => this.settleReadiness());
+          this.readiness = createLitControlUiReadiness(this, runtime);
           this.requestUpdate();
         })
         .catch((error: unknown) => {
@@ -245,30 +240,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
 
   protected override updated(): void {
     this.readiness?.commitRoot();
-  }
-
-  private async settleReadiness() {
-    await this.updateComplete;
-    let presentation: ControlUiCommittedPresentation;
-    if (this.runtime?.documentMode || this.runtime?.focusLocation) {
-      presentation = { kind: "standalone", navigationVisible: false };
-    } else if (this.querySelector("openclaw-login-gate")) {
-      presentation = { kind: "login", navigationVisible: false };
-    } else {
-      const shell = this.querySelector<ControlUiReadinessShell>("openclaw-app-shell");
-      presentation = shell
-        ? await shell.settleReadiness()
-        : { kind: "loading", navigationVisible: false };
-    }
-    const terminal = this.querySelector<LitElement & { available?: boolean }>(
-      "openclaw-terminal-panel",
-    );
-    await terminal?.updateComplete;
-    return {
-      ...presentation,
-      // The activation shortcut owns lazy registration; waiting for it here would deadlock.
-      terminalActivationReady: terminal?.available === true,
-    };
   }
 
   private synchronizeGateway(gateway: ApplicationContext["gateway"]) {
