@@ -20,7 +20,7 @@ export async function executePluginInstall(
     throw new Error(validationError);
   }
   const { runPluginInstallCommand } = await import("../cli/plugins-install-command.js");
-  const result = await applyPersistentOperation({
+  return await applyPersistentOperation({
     auditOperation: "plugin.install",
     operation,
     runtime,
@@ -41,5 +41,4 @@ export async function executePluginInstall(
       return { summary: `Installed plugin ${operation.spec}`, details: { spec: operation.spec } };
     },
   });
-  return result;
 }

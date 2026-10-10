@@ -17,7 +17,6 @@ import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { persistProviderAuthProfilesAfterLogin } from "../plugins/provider-auth-persistence.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -56,13 +55,57 @@ afterEach(async () => {
 });
 
 describe("setup activation credentials and configuration", () => {
+  it.each([
+    { target: "utility" as const, requested: undefined },
+    { target: undefined, requested: "utility" as const },
+  ])(
+    "rejects mismatched setup-role acknowledgement before login ($target/$requested)",
+    async ({ target, requested }) => {
+      const setup = await fixture({ modelTarget: target });
+      const result = await setup.activate("provider-auth", undefined, { modelTarget: requested });
+      expect(result).toMatchObject({ ok: false, status: "unavailable" });
+      expect(setup.login).not.toHaveBeenCalled();
+      expect(setup.run).not.toHaveBeenCalled();
+      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+    },
+  );
+
+  it.each([
+    { primaryModel: "stable/working-model", fail: false },
+    { primaryModel: "stable/working-model", fail: true },
+  ])(
+    "isolates utility activation from primary $primaryModel (failure: $fail)",
+    async ({ primaryModel, fail }) => {
+      const setup = await fixture({ modelTarget: "utility", primaryModel });
+      if (fail) {
+        setup.run.mockRejectedValueOnce(new Error("Utility inference unavailable"));
+      }
+      const result = await setup.activate();
+      expect(result).toMatchObject({ ok: !fail });
+      const saved = await readConfigFileSnapshot();
+      expect(saved.sourceConfig.agents?.defaults?.model).toEqual(
+        setup.config.agents?.defaults?.model,
+      );
+      if (fail) {
+        expect(saved.sourceConfig.agents?.defaults?.utilityModel).toBeUndefined();
+      } else {
+        expect(result).toMatchObject({ modelTarget: "utility", modelRef });
+        expect(saved.sourceConfig.agents?.defaults?.utilityModel).toContain(modelRef);
+        expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+          provider: "openai",
+          model: "gpt-5.4-mini",
+        });
+      }
+    },
+  );
+
   it.each([true, false])(
     "signs in before verifying an isolated detected Codex installation (fresh: %s)",
     async (fresh) => {
       const setup = await fixture({ codex: true, fresh, subscription: true });
       const result = await setup.activate("codex-cli");
       expect(setup.login).toHaveBeenCalledOnce();
-      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true });
+      expect(result).toMatchObject({ ok: true });
       expect(setup.run).toHaveBeenCalledOnce();
       expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
         authProfileId: setup.readProfile()?.[0],
@@ -96,7 +139,7 @@ describe("setup activation credentials and configuration", () => {
       params.onSuccessfulAuthBinding?.({
         agentHarnessId: "codex",
         authFingerprint: fingerprintResolvedProviderAuth(nativeAuth),
-        modelId: "gpt-4.1-mini",
+        modelId: "gpt-5.4-mini",
         modelApi: "openai-responses",
         runtimeOwnerKind: "plugin-harness",
         runtimeOwnerId: "codex",
@@ -106,12 +149,12 @@ describe("setup activation credentials and configuration", () => {
         payloads: [{ text: "OK" }],
         meta: {
           durationMs: 1,
-          executionTrace: { winnerProvider: "openai", winnerModel: "gpt-4.1-mini" },
+          executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
         },
       };
     });
     const result = await setup.activate("codex-cli");
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
     expect(readNativeKey).not.toHaveBeenCalled();
     expect(setup.readProfile()).toBeUndefined();
@@ -142,7 +185,7 @@ describe("setup activation credentials and configuration", () => {
       profiles: [{ profileId: "openai:existing", credential }],
     });
     const result = await setup.activate("codex-cli");
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
     expect(setup.run.mock.calls[0]?.[0].authProfileId).toBe("openai:existing");
   });
@@ -158,7 +201,7 @@ describe("setup activation credentials and configuration", () => {
     expect(saved[1].setup?.agentRuntimeId).toBe("codex");
     expect(JSON.parse(saved[1].setup!.configJson).plugins.entries.codex.enabled).toBe(true);
     const retry = await setup.activate(`saved-auth:${encodeURIComponent(saved[0])}`, true);
-    expect(retry, await setup.diagnostics(retry)).toMatchObject({ ok: true });
+    expect(retry).toMatchObject({ ok: true });
     expect(setup.login).toHaveBeenCalledOnce();
     expect(setup.run).toHaveBeenCalledTimes(2);
     expect(setup.run.mock.calls[1]?.[0].agentHarnessRuntimeOverride).toBe("codex");
@@ -168,7 +211,7 @@ describe("setup activation credentials and configuration", () => {
     const setup = await fixture({ codex: true });
     setup.deps.readCodexCliActiveApiKey = () => credential;
     const result = await setup.activate("codex-cli");
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: true });
     expect(setup.login).not.toHaveBeenCalled();
     expect(setup.run).toHaveBeenCalledOnce();
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
@@ -227,12 +270,54 @@ describe("setup activation credentials and configuration", () => {
       );
       const result = await setup.activate();
       expect(revoked).toHaveBeenCalledOnce();
-      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: false });
+      expect(result).toMatchObject({ ok: false });
       expect(setup.readProfile()?.[1].setup).toBeDefined();
       expect(setup.readProfile()?.[1]).not.toHaveProperty("key");
       expect(setup.run).toHaveBeenCalledOnce();
     },
   );
+
+  it("offers matching saved registrations for interactive setup", async () => {
+    const setup = await fixture();
+    vi.mocked(setup.prompter.confirm).mockImplementation(
+      async ({ message }) => message === "Connection verified. Activate this saved sign-in?",
+    );
+    const savedCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: "synthetic-expired-access",
+      refresh: "synthetic-saved-refresh",
+      expires: 1,
+      clientId: "saved-registration",
+      authorizationScope: "openid profile resource.invoke offline_access",
+    } as const;
+    await upsertAuthProfileWithLock({
+      profileId: "openai:saved",
+      credential: savedCredential,
+      agentDir: setup.agentDir,
+    });
+    await upsertAuthProfileWithLock({
+      profileId: "other:saved",
+      credential: { ...savedCredential, provider: "other" },
+      agentDir: setup.agentDir,
+    });
+
+    const result = await setup.activate();
+
+    expect(result).toMatchObject({ ok: true });
+    expect(setup.prompter.confirm).toHaveBeenCalledWith({
+      message: "Connection verified. Activate this saved sign-in?",
+      initialValue: true,
+    });
+    expect(setup.login).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingProfiles: [{ profileId: "openai:saved", credential: savedCredential }],
+      }),
+    );
+    expect(
+      loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles["openai:saved"],
+    ).toEqual(savedCredential);
+  });
 
   it.each([false, true])(
     "preserves first-team provisioning across provider activation (rejected: %s)",
@@ -242,7 +327,7 @@ describe("setup activation credentials and configuration", () => {
         setup.run.mockRejectedValueOnce(new Error("fixture provider unavailable"));
       }
       const result = await setup.activate();
-      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: !rejected });
+      expect(result).toMatchObject({ ok: !rejected });
       const activated = await readConfigFileSnapshot();
       expect(hasResolvedRosterBeforeMigrations(activated)).toBe(false);
       if (rejected) {
@@ -298,49 +383,6 @@ describe("setup activation credentials and configuration", () => {
   );
 
   it.each([
-    {
-      name: "matching-last",
-      matching: true,
-      expectedCredentials: [credential],
-      expectedTurns: 1,
-    },
-    { name: "missing-match", matching: false, expectedCredentials: [], expectedTurns: 0 },
-  ])(
-    "saves only the selected provider credential ($name)",
-    async ({ matching, expectedCredentials, expectedTurns }) => {
-      const unrelated = {
-        profileId: "anthropic:unrelated",
-        credential: {
-          type: "api_key",
-          provider: "anthropic",
-          key: "unrelated-fixture-key",
-        } as const,
-      };
-      const setup = await fixture({
-        profiles: matching ? [unrelated, { profileId: "openai:fixture", credential }] : [unrelated],
-      });
-      setup.run.mockImplementation(async (params) => {
-        expect(
-          Object.values(loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles),
-        ).toEqual([expect.objectContaining(credential)]);
-        return setup.reply(params);
-      });
-
-      const result = await setup.activate();
-
-      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: matching });
-      expect(
-        Object.values(loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles),
-      ).toEqual(expectedCredentials);
-      expect(setup.run).toHaveBeenCalledTimes(expectedTurns);
-      if (!matching) {
-        expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-      }
-    },
-  );
-
-  it.each([
-    { name: "existing provider", localService: false, addProviderDuringLogin: false },
     { name: "local service", localService: true, addProviderDuringLogin: false },
     { name: "new provider", localService: false, addProviderDuringLogin: true },
   ])(
@@ -358,7 +400,7 @@ describe("setup activation credentials and configuration", () => {
       });
 
       const result = await setup.activate();
-      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true, modelRef });
+      expect(result).toMatchObject({ ok: true, modelRef });
       expect(setup.readProfile()?.[1]).not.toHaveProperty("setup");
 
       expect(setup.run).toHaveBeenCalledOnce();
@@ -383,7 +425,7 @@ describe("setup activation credentials and configuration", () => {
 
     const result = await setup.activate();
 
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true, modelRef });
+    expect(result).toMatchObject({ ok: true, modelRef });
     const after = await fs.readFile(setup.configPath, "utf8");
     const afterSnapshot = await readConfigFileSnapshot();
     expect(after).not.toBe(before);
@@ -411,10 +453,10 @@ describe("setup activation credentials and configuration", () => {
     });
 
     const rejected = await setup.activate();
-    expect(rejected, await setup.diagnostics(rejected)).toMatchObject({ ok: false });
+    expect(rejected).toMatchObject({ ok: false });
 
     expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
-    expect(setup.readProfile()?.[1], await setup.diagnostics(rejected)).toMatchObject(credential);
+    expect(setup.readProfile()?.[1]).toMatchObject(credential);
     const detection = await setup.detect();
     const saved = detection.candidates.find((candidate) =>
       candidate.kind.startsWith("saved-auth:"),
@@ -425,7 +467,7 @@ describe("setup activation credentials and configuration", () => {
     }
 
     const retried = await setup.activate(saved.kind);
-    expect(retried, await setup.diagnostics(retried)).toMatchObject({ ok: true, modelRef });
+    expect(retried).toMatchObject({ ok: true, modelRef });
 
     expect(setup.login).toHaveBeenCalledOnce();
     expect(setup.run).toHaveBeenCalledTimes(2);
@@ -433,33 +475,22 @@ describe("setup activation credentials and configuration", () => {
   });
 
   it.each([
-    { explicitProfile: true, restartRequired: false, activationConfirmed: undefined },
-    { explicitProfile: false, restartRequired: false, activationConfirmed: undefined },
-    { explicitProfile: true, restartRequired: true, activationConfirmed: undefined },
-    { explicitProfile: true, restartRequired: false, activationConfirmed: true as const },
+    { explicitProfile: true, activationConfirmed: undefined },
+    { explicitProfile: false, activationConfirmed: true as const },
   ])(
-    "keeps a working credential and rotation when a replacement is rejected (configured: $explicitProfile, restart: $restartRequired, confirmed: $activationConfirmed)",
-    async ({ explicitProfile, restartRequired, activationConfirmed }) => {
-      const setup = await fixture({ restartRequired });
+    "keeps a working credential and rotation when a replacement is rejected (configured: $explicitProfile, confirmed: $activationConfirmed)",
+    async ({ explicitProfile, activationConfirmed }) => {
+      const setup = await fixture();
       const originalProfileId = "openai:fixture";
       const originalCredential = { ...credential, key: "working-original-key" };
-      const configured: OpenClawConfig = {
-        ...setup.config,
-        agents: {
-          ...setup.config.agents,
-          defaults: {
-            ...setup.config.agents?.defaults,
-            model: { primary: `${modelRef}@${originalProfileId}` },
-          },
-        },
-        ...(explicitProfile
-          ? {
-              auth: {
-                profiles: { [originalProfileId]: { provider: "openai", mode: "api_key" as const } },
-              },
-            }
-          : {}),
-      };
+      const configured = structuredClone(setup.config);
+      assert(configured.agents?.defaults);
+      configured.agents.defaults.model = { primary: `${modelRef}@${originalProfileId}` };
+      if (explicitProfile) {
+        configured.auth = {
+          profiles: { [originalProfileId]: { provider: "openai", mode: "api_key" } },
+        };
+      }
       await persistProviderAuthProfilesAfterLogin({
         config: configured,
         agentDir: setup.agentDir,
@@ -472,7 +503,7 @@ describe("setup activation credentials and configuration", () => {
 
       const result = await setup.activate();
 
-      expect(result, await setup.diagnostics(result)).toMatchObject({ ok: false });
+      expect(result).toMatchObject({ ok: false });
       expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
       const store = loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir);
       expect(resolveAuthProfileOrder({ cfg: configured, store, provider: "openai" })).toEqual([
@@ -532,7 +563,7 @@ describe("setup activation credentials and configuration", () => {
 
       const retryKind = `saved-auth:${encodeURIComponent(savedId)}` as const;
       const declined = await setup.activate(retryKind);
-      expect(declined, await setup.diagnostics(declined)).toMatchObject({ ok: false });
+      expect(declined).toMatchObject({ ok: false });
       expect(setup.prompter.confirm).toHaveBeenCalledWith({
         message: "Connection verified. Activate this saved sign-in?",
         initialValue: true,
@@ -547,7 +578,7 @@ describe("setup activation credentials and configuration", () => {
         async ({ initialValue }) => initialValue ?? false,
       );
       const accepted = await setup.activate(retryKind, activationConfirmed);
-      expect(accepted, await setup.diagnostics(accepted)).toMatchObject({ ok: true });
+      expect(accepted).toMatchObject({ ok: true });
       expect(setup.readProfile()).toEqual([savedId, credential]);
       expect(setup.login).toHaveBeenCalledOnce();
       expect(setup.run).toHaveBeenCalledTimes(3);
@@ -559,13 +590,9 @@ describe("setup activation credentials and configuration", () => {
 
   it("activates saved sparse model settings without treating runtime defaults as a changed connection", async () => {
     const setup = await fixture();
-    const configured: OpenClawConfig = {
-      ...setup.config,
-      agents: {
-        ...setup.config.agents,
-        defaults: { ...setup.config.agents?.defaults, model: `${modelRef}@openai:original` },
-      },
-    };
+    const configured = structuredClone(setup.config);
+    assert(configured.agents?.defaults);
+    configured.agents.defaults.model = `${modelRef}@openai:original`;
     await persistProviderAuthProfilesAfterLogin({
       config: configured,
       agentDir: setup.agentDir,
@@ -582,7 +609,7 @@ describe("setup activation credentials and configuration", () => {
           openai: {
             baseUrl: "https://provider.example/v1",
             api: "openai-responses",
-            models: [{ id: "gpt-4.1-mini", name: "Sparse saved model" }],
+            models: [{ id: "gpt-5.4-mini", name: "Sparse saved model" }],
           },
         },
       },
@@ -603,11 +630,11 @@ describe("setup activation credentials and configuration", () => {
       true,
     );
 
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true });
+    expect(result).toMatchObject({ ok: true });
     expect(setup.readProfile()).toEqual([saved.profile.profileId, credential]);
     const snapshot = await readConfigFileSnapshot();
     expect(snapshot.sourceConfig.models?.providers?.openai?.models).toEqual([
-      { id: "gpt-4.1-mini", name: "Sparse saved model" },
+      { id: "gpt-5.4-mini", name: "Sparse saved model" },
     ]);
   });
 
@@ -621,7 +648,7 @@ describe("setup activation credentials and configuration", () => {
     });
 
     const result = await setup.activate();
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true, modelRef });
+    expect(result).toMatchObject({ ok: true, modelRef });
 
     const persisted = await readConfigFileSnapshot();
     expect(persisted.sourceConfig.messages?.ackReaction).toBe("seen");
@@ -651,10 +678,51 @@ describe("setup activation credentials and configuration", () => {
     }
     const result = await setup.activate(saved.kind);
 
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: true, modelRef });
+    expect(result).toMatchObject({ ok: true, modelRef });
     expect(setup.login).not.toHaveBeenCalled();
     expect(setup.run).toHaveBeenCalledOnce();
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
+  });
+
+  it("activates a saved account for an agent whose selected account was removed, preserving its model", async () => {
+    const setup = await fixture({ authMethod: "api_key", primaryModel: "stable/global-model" });
+    const configured = structuredClone(setup.config);
+    assert(configured.agents?.defaults);
+    configured.agents.ownership = "explicit";
+    configured.agents.defaults.systemAgent = { agentId: "main" };
+    configured.agents.entries = {
+      main: { model: `${modelRef}@openai:removed` },
+      other: { model: `${modelRef}@openai:other` },
+    };
+    await fs.writeFile(setup.configPath, JSON.stringify(configured));
+    clearConfigCache();
+    await persistProviderAuthProfilesAfterLogin({
+      config: configured,
+      agentDir: setup.agentDir,
+      profiles: [{ profileId: "openai:replacement", credential }],
+    });
+    const method = setup.deps.resolvePluginProviders?.({ config: configured })[0]?.auth[0];
+    assert.ok(method);
+    method.starterModel = "openai/provider-default";
+
+    const result = await setup.activate("saved-auth:openai%3Areplacement", true, {
+      agentId: "main",
+      modelRef,
+    });
+
+    expect(result).toMatchObject({ ok: true, modelRef });
+    expect(setup.login).not.toHaveBeenCalled();
+    expect(setup.run).toHaveBeenCalledOnce();
+    expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+      authProfileId: "openai:replacement",
+      model: "gpt-5.4-mini",
+      allowAuthProfileFallback: false,
+    });
+    expect(setup.readProfile()).toEqual(["openai:replacement", credential]);
+    const saved = (await readConfigFileSnapshot()).sourceConfig;
+    expect(saved.agents?.entries?.main?.model).toBe(`${modelRef}@openai:replacement`);
+    expect(saved.agents?.defaults?.model).toEqual(configured.agents?.defaults?.model);
+    expect(saved.agents?.entries?.other).toEqual(configured.agents?.entries?.other);
   });
 
   it("rejects a concurrent provider change without overwriting it or removing the sign-in", async () => {
@@ -669,117 +737,123 @@ describe("setup activation credentials and configuration", () => {
     });
 
     const result = await setup.activate();
-    expect(result, await setup.diagnostics(result)).toMatchObject({ ok: false });
+    expect(result).toMatchObject({ ok: false });
 
-    expect(await fs.readFile(setup.configPath, "utf8"), await setup.diagnostics(result)).toBe(
-      changed,
-    );
+    expect(await fs.readFile(setup.configPath, "utf8")).toBe(changed);
     expect(setup.readProfile()?.[1]).toMatchObject(credential);
     expect(setup.run).toHaveBeenCalledOnce();
   });
 });
 
-describe.each(["initial", "deferred"] as const)("setup %s error boundary", (phase) => {
+describe("setup activation error boundaries", () => {
+  // Both entry points share redaction; the initial path also maps typed failures to results.
   it.each([
-    { name: "unknown", create: () => new Error(), status: null, abort: false },
-    {
-      name: "wizard cancellation",
-      create: () => new WizardCancelledError(),
-      status: null,
-      abort: true,
-    },
-    {
-      name: "wizard navigation",
-      create: () => new WizardNavigationError("back"),
-      status: null,
-      abort: true,
-    },
-    {
-      name: "setup cancellation",
-      create: () => new SetupInferenceCancelledError(),
-      status: "unavailable",
-      abort: false,
-    },
-    {
-      name: "unavailable",
-      create: () => new SetupInferenceActivationUnavailableError(),
-      status: "unavailable",
-      abort: false,
-    },
-    {
-      name: "owner drift",
-      create: () => new SetupInferenceOwnerDriftError(),
-      status: "auth",
-      abort: false,
-    },
-    {
-      name: "indeterminate",
-      create: () => new SetupInferenceActivationIndeterminateError(),
-      status: null,
-      abort: false,
-    },
-    { name: "aborted signal", create: () => new Error(), status: "unavailable", abort: true },
-  ])("preserves $name without exposing submitted secrets", async ({ create, status, abort }) => {
-    const setup = await fixture({ authMethod: "api_key" });
-    const controller = new AbortController();
-    const submitted = "opaque-submitted-setup-secret";
-    const payload = `activation failed: ${submitted}; {"access_token":"structured-setup-secret"}`;
-    const fault = Object.assign(create(), {
-      message: payload,
-      cause: new Error(payload),
-      stack: payload,
-    });
-    const fail = async (): Promise<never> => {
-      if (abort) {
-        controller.abort();
-      }
-      throw fault;
-    };
-    let complete: (() => Promise<boolean>) | undefined;
-    const transition = vi
-      .spyOn(activationTransition, "commitSetupInferenceActivation")
-      .mockImplementation(async (params) => {
-        if (phase === "initial") {
-          return await fail();
-        }
-        assert(params.deferCompletion);
-        params.deferCompletion(fail);
-        return params.config;
+    ["initial", "unknown", () => new Error(), null, false],
+    ["initial", "wizard cancellation", () => new WizardCancelledError(), null, true],
+    ["initial", "wizard navigation", () => new WizardNavigationError("back"), null, true],
+    [
+      "initial",
+      "setup cancellation",
+      () => new SetupInferenceCancelledError(),
+      "unavailable",
+      false,
+    ],
+    [
+      "initial",
+      "unavailable",
+      () => new SetupInferenceActivationUnavailableError(),
+      "unavailable",
+      false,
+    ],
+    ["initial", "owner drift", () => new SetupInferenceOwnerDriftError(), "auth", false],
+    [
+      "initial",
+      "indeterminate",
+      () => new SetupInferenceActivationIndeterminateError(),
+      null,
+      false,
+    ],
+    ["initial", "aborted signal", () => new Error(), "unavailable", true],
+    ["deferred", "unknown", () => new Error(), null, false],
+    [
+      "deferred",
+      "setup cancellation",
+      () => new SetupInferenceCancelledError(),
+      "unavailable",
+      false,
+    ],
+    [
+      "deferred",
+      "unavailable",
+      () => new SetupInferenceActivationUnavailableError(),
+      "unavailable",
+      false,
+    ],
+    ["deferred", "owner drift", () => new SetupInferenceOwnerDriftError(), "auth", false],
+  ] as const)(
+    "%s boundary preserves %s without exposing submitted secrets",
+    async (phase, _name, create, status, abort) => {
+      const setup = await fixture({ authMethod: "api_key" });
+      const controller = new AbortController();
+      const submitted = "opaque-submitted-setup-secret";
+      const payload = `activation failed: ${submitted}; {"access_token":"structured-setup-secret"}`;
+      const fault = Object.assign(create(), {
+        message: payload,
+        cause: new Error(payload),
+        stack: payload,
       });
-    const activation = setup.activate("api-key", true, {
-      apiKey: submitted,
-      signal: controller.signal,
-      ...(phase === "deferred"
-        ? {
-            onActivationCompletion: (completion: () => Promise<boolean>) => {
-              complete = completion;
-            },
+      const fail = async (): Promise<never> => {
+        if (abort) {
+          controller.abort();
+        }
+        throw fault;
+      };
+      let complete: (() => Promise<boolean>) | undefined;
+      const transition = vi
+        .spyOn(activationTransition, "commitSetupInferenceActivation")
+        .mockImplementation(async (params) => {
+          if (phase === "initial") {
+            return await fail();
           }
-        : {}),
-    });
-    let operation: Promise<unknown> = activation;
-    if (phase === "deferred") {
-      expect(await activation).toMatchObject({ ok: true });
-      assert(complete);
-      operation = complete();
-    }
-    if (phase === "initial" && status) {
-      const result = await operation;
-      expect(result).toMatchObject({ ok: false, status });
-      expect(JSON.stringify(result)).not.toContain(submitted);
-      expect(JSON.stringify(result)).not.toContain("structured-setup-secret");
-    } else {
-      const safe = await operation.catch((error: unknown) => error);
-      expect(safe, JSON.stringify(safe)).toBeInstanceOf(fault.constructor);
-      assert(safe instanceof Error);
-      expect(safe).not.toBe(fault);
-      expect(safe.cause).toBeUndefined();
-      expect(`${safe.message}\n${safe.stack}`).not.toContain(submitted);
-      expect(`${safe.message}\n${safe.stack}`).not.toContain("structured-setup-secret");
-      if (fault instanceof WizardNavigationError) {
-        expect(safe).toMatchObject({ direction: "back" });
+          assert(params.deferCompletion);
+          params.deferCompletion(fail);
+          return params.config;
+        });
+      const activation = setup.activate("api-key", true, {
+        apiKey: submitted,
+        signal: controller.signal,
+        ...(phase === "deferred"
+          ? {
+              onActivationCompletion: (completion: () => Promise<boolean>) => {
+                complete = completion;
+              },
+            }
+          : {}),
+      });
+      let operation: Promise<unknown> = activation;
+      if (phase === "deferred") {
+        expect(await activation).toMatchObject({ ok: true });
+        assert(complete);
+        operation = complete();
       }
-    }
-    expect(transition).toHaveBeenCalledOnce();
-  });
+      if (phase === "initial" && status) {
+        const result = await operation;
+        expect(result).toMatchObject({ ok: false, status });
+        expect(JSON.stringify(result)).not.toContain(submitted);
+        expect(JSON.stringify(result)).not.toContain("structured-setup-secret");
+      } else {
+        const safe = await operation.catch((error: unknown) => error);
+        expect(safe, JSON.stringify(safe)).toBeInstanceOf(fault.constructor);
+        assert(safe instanceof Error);
+        expect(safe).not.toBe(fault);
+        expect(safe.cause).toBeUndefined();
+        expect(`${safe.message}\n${safe.stack}`).not.toContain(submitted);
+        expect(`${safe.message}\n${safe.stack}`).not.toContain("structured-setup-secret");
+        if (fault instanceof WizardNavigationError) {
+          expect(safe).toMatchObject({ direction: "back" });
+        }
+      }
+      expect(transition).toHaveBeenCalledOnce();
+    },
+  );
 });

@@ -17,15 +17,19 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
-
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    # id-token proves this repository, event, branch, and run to ClawSweeper's
+    # direct queue intake. The job never checks out or executes pull request code.
+    permissions:
+      contents: read
+      id-token: write
     if: >-
-      ${{
+      ${{ (
+        (github.event.action != 'edited' ||
+          (github.event_name != 'issues' && github.event_name != 'pull_request_target') ||
+          !github.event.changes || toJSON(github.event.changes) != '{}') &&
         (github.event_name != 'issue_comment' ||
           (github.actor != 'clawsweeper[bot]' && github.actor != 'openclaw-clawsweeper[bot]')) &&
         !(
@@ -39,7 +43,12 @@ jobs:
             (github.actor_id == '257215752' || github.actor_id == '264559031')
           )
         )
-      }}
+      ) }}
+    # Admission runs before job concurrency, so an empty metadata edit cannot
+    # cancel a useful dispatch. Other changes retain the receiver's policy.
+    concurrency:
+      group: ${{ github.event_name == 'push' && format('clawsweeper-dispatch-{0}-{1}', github.repository, github.ref) || format('clawsweeper-dispatch-{0}-{1}', github.repository, github.event.issue.number || github.event.pull_request.number || github.run_id) }}
+      cancel-in-progress: ${{ github.event_name == 'push' || github.event.action == 'edited' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review' }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093
@@ -285,6 +294,13 @@ jobs:
             echo "::warning::Skipping GitHub activity dispatch because the configured credential could not dispatch to openclaw/clawsweeper."
           fi
 
+      - name: Setup supported Node runtime
+        if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
+
       - name: Dispatch exact ClawSweeper review
         if: ${{ github.event_name == 'issues' || github.event_name == 'pull_request_target' }}
         env:
@@ -295,6 +311,7 @@ jobs:
           ITEM_KIND: ${{ github.event_name == 'pull_request_target' && 'pull_request' || 'issue' }}
           SOURCE_EVENT: ${{ github.event_name }}
           SOURCE_ACTION: ${{ github.event.action }}
+          TARGET_DISPATCH_URL: https://clawsweeper.openclaw.ai/github/target-dispatch
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::notice::Skipping ClawSweeper dispatch because no ClawSweeper app token is configured. Not falling back to a maintainer token."
@@ -347,6 +364,36 @@ jobs:
             --arg ingress_fingerprint "$ingress_fingerprint" \
             --argjson supersedes_in_progress "$SUPERSEDES_IN_PROGRESS" \
             '{event_type:"clawsweeper_item",client_payload:({target_repo:$target_repo,target_branch:$target_branch,item_number:$item_number,item_kind:$item_kind,source_event:$source_event,source_action:$source_action,supersedes_in_progress:$supersedes_in_progress} + (if $ingress_fingerprint != "" then {ingress_route:"target_dispatcher",ingress_fingerprint:$ingress_fingerprint} else {} end))}')"
+          # Direct queue intake costs no ClawSweeper Actions relay run. Any failure
+          # falls back to the repository_dispatch relay below, so no event is lost.
+          if [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] &&
+            [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] &&
+            oidc_token="$(curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
+              --header "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+              --get --data-urlencode "audience=$TARGET_DISPATCH_URL" \
+              "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -er '.value | strings | select(length > 0)')" &&
+            # jq 1.6 exits 0 on empty input, and the step runs without pipefail.
+            [ -n "$oidc_token" ]; then
+            echo "::add-mask::$oidc_token"
+            direct_body="$RUNNER_TEMP/clawsweeper-direct-intake.json"
+            # Only a 2xx answer means the queue took the item; --fail would also
+            # accept a 3xx and drop the event without reaching the relay.
+            if direct_status="$(jq -c '.client_payload' <<< "$payload" |
+              curl --silent --show-error --connect-timeout 5 --max-time 20 \
+                --request POST \
+                --header "authorization: Bearer $oidc_token" \
+                --header "content-type: application/json" \
+                --data-binary @- \
+                --output "$direct_body" \
+                --write-out '%{http_code}' \
+                "$TARGET_DISPATCH_URL")" &&
+              [[ "$direct_status" == 2[0-9][0-9] ]]; then
+              echo "Queued ClawSweeper review directly: $(jq -c . "$direct_body" 2>/dev/null || echo '{}')"
+              exit 0
+            fi
+            echo "Direct ClawSweeper queue intake answered HTTP ${direct_status:-none}."
+          fi
+          echo "::notice::Direct ClawSweeper queue intake was unavailable; dispatching through repository_dispatch."
           if gh_api_with_retry repos/openclaw/clawsweeper/dispatches \
             --method POST \
             --input - <<< "$payload"; then

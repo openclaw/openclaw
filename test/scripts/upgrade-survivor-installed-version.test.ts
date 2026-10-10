@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -19,8 +20,75 @@ type UpdateFault = {
 };
 
 describe.skipIf(process.platform === "win32")(
-  "survivor installed version after update failure",
+  "survivor installed version during admission and after update failure",
   () => {
+    it.each([
+      { requested: "2026.5.31", installed: "2026.5.31", expectedCalls: [], accepted: false },
+      { requested: "latest", installed: "2026.5.31", expectedCalls: ["npm"], accepted: false },
+      {
+        requested: "latest",
+        installed: "2026.6.1",
+        expectedCalls: ["npm", "--version"],
+        accepted: true,
+      },
+    ])("admits $requested resolved to $installed before running the baseline", (fixture) => {
+      const home = tempDirs.make("survivor-baseline-floor-");
+      const paths = readUpgradeSurvivorPaths(home);
+      const calls = join(home, "calls");
+      for (const directory of [paths.packageRoot, paths.binDir]) {
+        mkdirSync(directory, { recursive: true });
+      }
+      writeFileSync(calls, "");
+      writeFileSync(
+        join(paths.packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: fixture.installed }),
+      );
+      writeFileSync(join(paths.binDir, "npm"), '#!/bin/sh\nprintf "npm\\n" >> "$FIXTURE_CALLS"\n', {
+        mode: 0o755,
+      });
+      writeFileSync(
+        join(paths.binDir, "openclaw"),
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> "$FIXTURE_CALLS"\nprintf '%s\\n' '${fixture.installed}'\n`,
+        { mode: 0o755 },
+      );
+      const prelude = join(home, "bash-env");
+      // Exercise the real install/admission phase with inert package-manager and CLI boundaries.
+      writeFileSync(
+        prelude,
+        `install_fixture_phases() {
+  trap - DEBUG EXIT ERR
+  phase() {
+    local name="$1"
+    shift
+    if [ "$name" = install-baseline ]; then
+      "$@"
+      exit 0
+    fi
+  }
+}
+trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
+`,
+      );
+      const result = spawnSync("bash", [runner], {
+        encoding: "utf8",
+        env: {
+          PATH: `${dirname(testNodeExecPath)}:/usr/bin:/bin`,
+          HOME: home,
+          FIXTURE_CALLS: calls,
+          ...paths.env,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE: fixture.requested,
+          BASH_ENV: prelude,
+        },
+      });
+      expect(result.status, result.stderr).toBe(fixture.accepted ? 0 : 1);
+      expect(readFileSync(calls, "utf8").trim().split("\n").filter(Boolean)).toEqual(
+        fixture.expectedCalls,
+      );
+      if (!fixture.accepted) {
+        expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+      }
+    });
+
     it.each<UpdateFault>([
       { packageState: "not-started", installedVersion: baselineVersion, exitCode: 17 },
       { packageState: "swapped", installedVersion: candidateVersion, exitCode: 1 },
@@ -37,10 +105,8 @@ describe.skipIf(process.platform === "win32")(
       const home = tempDirs.make("survivor-installed-version-");
       const state = join(home, "state");
       const tmp = join(home, "tmp");
-      const artifacts = join(home, "artifacts");
-      const prefix = join(artifacts, "npm-prefix");
-      const packageRoot = join(prefix, "lib", "node_modules", "openclaw");
-      const bin = join(prefix, "bin");
+      const paths = readUpgradeSurvivorPaths(home);
+      const { artifactRoot: artifacts, packageRoot, binDir: bin, summaryJson: summaryPath } = paths;
       for (const directory of [state, tmp, packageRoot, bin]) {
         mkdirSync(directory, { recursive: true });
       }
@@ -119,7 +185,6 @@ if (args[0] === 'update') {
 trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
 `,
       );
-      const summaryPath = join(artifacts, "summary.json");
       const result = spawnSync("bash", [runner], {
         encoding: "utf8",
         timeout: 15_000,
@@ -132,8 +197,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
           OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
           OPENCLAW_E2E_REDACTOR_MODULE: redactor,
           TMPDIR: tmp,
-          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(home, "runtime"),
-          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryPath,
+          ...paths.env,
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
           OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(home, "candidate.tgz"),
           BASH_ENV: prelude,
@@ -162,9 +226,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         expect(diagnostics.logs["update.json"]).toBeNull();
         return;
       }
-      expect(readFileSync(join(artifacts, "update.err"), "utf8")).toContain(
-        "target Doctor fixture failed",
-      );
+      expect(readFileSync(paths.updateErr, "utf8")).toContain("target Doctor fixture failed");
       const calls: string[][] = readFileSync(join(home, "calls"), "utf8")
         .trim()
         .split("\n")

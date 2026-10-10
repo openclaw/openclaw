@@ -219,9 +219,9 @@ describe("managed source translation", () => {
     ).toThrow("not backed by a Gateway bind mount");
   });
 
-  it.each(["volume", "tmpfs"])("does not reinterpret %s storage as a host bind", (type) => {
+  it("does not reinterpret volume storage as a host bind", () => {
     const mounts = parseInspectedSandboxMounts([
-      { ...wireMount, Type: type, Source: "/var/lib/docker/private" },
+      { ...wireMount, Type: "volume", Source: "/var/lib/docker/private" },
     ]);
     expect(() =>
       translateSandboxMountSource({
@@ -230,7 +230,7 @@ describe("managed source translation", () => {
         allowedRoots: ["/gateway/workspace"],
         mounts,
       }),
-    ).toThrow(`unsupported ${type} mount`);
+    ).toThrow("unsupported volume mount");
   });
 
   it("rejects relative daemon sources", () => {

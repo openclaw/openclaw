@@ -5,9 +5,9 @@ import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js"
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getDeliveryQueueEntryStatus } from "../../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../../infra/delivery-queue-sqlite.test-support.js";
 import { isDeliveryRecoveryRetryEligible } from "../../infra/delivery-recovery.shared.js";
-import { resolveDeferredDeliveryAdmission } from "../../infra/outbound/deferred-delivery-admission.js";
+import { prepareDeferredDeliveryAdmission } from "../../infra/outbound/deferred-delivery-admission.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
@@ -190,18 +190,17 @@ describe("Gateway send through Discord's default request scheduler", () => {
                 expect(isDeliveryRecoveryRetryEligible(unfinished, Date.now())).toEqual({
                   eligible: true,
                 });
-                expect(
-                  resolveDeferredDeliveryAdmission(
-                    {
-                      cfg: fixture.cfg,
-                      channel: unfinished.channel,
-                      to: unfinished.to,
-                      accountId: unfinished.accountId,
-                      phase: "recovery",
-                    },
-                    { agentId: unfinished.session?.agentId },
-                  ),
-                ).toMatchObject({ status: "allowed" });
+                const resolveAdmission = await prepareDeferredDeliveryAdmission(
+                  {
+                    cfg: fixture.cfg,
+                    channel: unfinished.channel,
+                    to: unfinished.to,
+                    accountId: unfinished.accountId,
+                    phase: "recovery",
+                  },
+                  { agentId: unfinished.session?.agentId },
+                );
+                expect(resolveAdmission()).toMatchObject({ status: "allowed" });
               }
               const beforeRecovery = fixture.httpRequests.length;
               const recovery = await recoverPendingDeliveries({

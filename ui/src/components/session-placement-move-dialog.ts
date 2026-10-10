@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
-  renderCloudMachineMenuItems,
-  renderCloudOsMenuItems,
+  renderCloudChoiceMenuItems,
   renderCloudProfileMenuItems,
   renderSessionMenuItem,
 } from "../pages/new-session/cloud-target.ts";
@@ -14,6 +14,9 @@ import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+import { compareCloudProfiles } from "./provider-icon.ts";
+
+registerNewSessionSetupEnglish();
 
 type Catalog = {
   profiles: readonly DraftCloudProfile[];
@@ -41,10 +44,9 @@ function targetKey(target: SessionMoveTarget | null): string {
       return "gateway";
     case "profile":
       return `profile:${target.profileId}`;
-    case "device":
+    default:
       return `device:${target.deviceId}`;
   }
-  throw new Error("Unknown session placement move target");
 }
 
 export function showSessionPlacementTargetDialog(
@@ -91,6 +93,7 @@ export function showSessionPlacementTargetDialog(
 
     function paint() {
       const selectedKey = targetKey(selected);
+      const profiles = catalog.profiles.toSorted(compareCloudProfiles);
       const restart = options.mode === "restart";
       const dispatch = options.mode === "dispatch";
       const title = t(`sessionsView.${options.mode}SessionTitle`);
@@ -182,7 +185,7 @@ export function showSessionPlacementTargetDialog(
                                   <div class="new-session-page__menu-title">
                                     ${t("newSession.cloud")}
                                   </div>
-                                  ${catalog.profiles.map((profile) => {
+                                  ${profiles.map((profile) => {
                                     const profileSelected =
                                       selected?.kind === "profile" &&
                                       selected.profileId === profile.id;
@@ -197,55 +200,44 @@ export function showSessionPlacementTargetDialog(
                                         profiles: [profile],
                                         selectedId: profileSelected ? profile.id : "",
                                         submitting: false,
-                                        icon: icons.server,
                                         profileDisabledReason: options.profileDisabledReason,
                                         onSelect: (profileId) =>
                                           select({ kind: "profile", profileId }),
                                       })}
-                                      ${
-                                        profileSelected && operatingSystems.length >= 2
+                                      ${[
+                                        {
+                                          kind: "os" as const,
+                                          label: t("newSession.operatingSystem"),
+                                          choices: operatingSystems,
+                                          visible: profileSelected && operatingSystems.length >= 2,
+                                          selectedId: cloudMachines.selectedOs(profile),
+                                        },
+                                        {
+                                          kind: "machine" as const,
+                                          label: t("newSession.machine"),
+                                          choices: machines,
+                                          visible: profileSelected && machines.length > 0,
+                                          selectedId: selectedMachineId,
+                                        },
+                                      ].map(({ kind, label, choices, visible, selectedId }) =>
+                                        visible
                                           ? html`
                                               <div class="new-session-page__menu-title">
-                                                ${t("newSession.operatingSystem")}
+                                                ${label}
                                               </div>
-                                              ${renderCloudOsMenuItems({
-                                                operatingSystems,
-                                                selectedId: cloudMachines.selectedOs(profile),
+                                              ${renderCloudChoiceMenuItems({
+                                                kind,
+                                                choices,
+                                                selectedId,
                                                 submitting: false,
-                                                onSelect: (osId) =>
-                                                  cloudMachines.selectOs(
-                                                    profile.id,
-                                                    osId,
-                                                    catalog.profiles,
-                                                    false,
-                                                    paint,
-                                                  ),
+                                                onSelect: (id) =>
+                                                  cloudMachines[
+                                                    kind === "os" ? "selectOs" : "select"
+                                                  ](profile.id, id, catalog.profiles, false, paint),
                                               })}
                                             `
-                                          : nothing
-                                      }
-                                      ${
-                                        profileSelected && machines.length > 0
-                                          ? html`
-                                              <div class="new-session-page__menu-title">
-                                                ${t("newSession.machine")}
-                                              </div>
-                                              ${renderCloudMachineMenuItems({
-                                                machines,
-                                                selectedId: selectedMachineId,
-                                                submitting: false,
-                                                onSelect: (machineId) =>
-                                                  cloudMachines.select(
-                                                    profile.id,
-                                                    machineId,
-                                                    catalog.profiles,
-                                                    false,
-                                                    paint,
-                                                  ),
-                                              })}
-                                            `
-                                          : nothing
-                                      }
+                                          : nothing,
+                                      )}
                                     `;
                                   })}
                                 `

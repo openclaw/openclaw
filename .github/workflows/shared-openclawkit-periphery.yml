@@ -52,6 +52,7 @@ jobs:
 
             // pull_request checks out GitHub's synthetic merge commit. Its first
             // parent is the exact base tree used to produce the tested result.
+            const protocolInputs = JSON.parse(require("node:fs").readFileSync("scripts/native-protocol-inputs.json", "utf8"));
             const result = await exec.getExecOutput("git", [
               "diff",
               "--quiet",
@@ -61,8 +62,11 @@ jobs:
               "apps/ios/",
               "apps/macos/",
               "apps/shared/OpenClawKit/",
+              ...protocolInputs.directories.map((directory) => `${directory}/`),
+              ...protocolInputs.files,
               ".github/workflows/shared-openclawkit-periphery.yml",
               "scripts/install-periphery.sh",
+              "scripts/lib/swift-toolchain.sh",
               "scripts/periphery-intersection.mjs",
               "scripts/ios-configure-signing.sh",
               "scripts/ios-write-swift-filelist.mjs",
@@ -79,7 +83,7 @@ jobs:
     name: Scan shared kit from iOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -93,19 +97,8 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -120,6 +113,21 @@ jobs:
           watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"
           test -n "$watch_toolchain"
           rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src
+
+      - name: Identify Watch RTC cache inputs
+        id: ios-cache-inputs
+        run: |
+          echo "xcode=$(xcodebuild -version | shasum -a 256 | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+          echo "OPENCLAW_WATCH_RTC_CACHE_DIR=$RUNNER_TEMP/openclaw-watch-rtc-libraries" >> "$GITHUB_ENV"
+
+      # Consume the exact cache published by trusted main CI; this workflow never writes it.
+      - name: Restore Watch RTC build inputs
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ${{ runner.temp }}/openclaw-watch-rtc-libraries
+          key: watch-rtc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.ios-cache-inputs.outputs.xcode }}-${{ hashFiles('apps/shared/OpenClawWatchRTC/Cargo.lock', 'apps/shared/OpenClawWatchRTC/Cargo.toml', 'apps/shared/OpenClawWatchRTC/rust-toolchain.toml', 'apps/shared/OpenClawWatchRTC/build.sh', 'apps/shared/OpenClawWatchRTC/src/**', 'apps/ios/project.yml') }}
 
       - name: Install iOS scan tooling
         run: |
@@ -145,6 +153,22 @@ jobs:
           cd apps/ios
           xcodegen generate
 
+      - name: Build iOS consumer index
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/shared-periphery-ios"
+          mkdir -p "$output_dir"
+          cd apps/ios
+          # Match Periphery's build-for-testing contract, with a fresh run-owned index.
+          /usr/bin/time -p xcodebuild \
+            -project OpenClaw.xcodeproj -scheme OpenClaw -parallelizeTargets \
+            -derivedDataPath "$RUNNER_TEMP/shared-periphery-ios-derived" \
+            -destination 'generic/platform=iOS Simulator' \
+            build-for-testing CODE_SIGNING_ALLOWED=NO ENABLE_BITCODE=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf COMPILER_INDEX_STORE_ENABLE=YES \
+            INDEX_ENABLE_DATA_STORE=YES \
+            2>&1 | tee "$output_dir/build.log"
+
       - name: Scan shared kit
         run: |
           set -euo pipefail
@@ -154,10 +178,11 @@ jobs:
           set +e
           periphery scan \
             --config .periphery.yml \
-            --clean-build \
+            --skip-build \
+            --index-store-path "$RUNNER_TEMP/shared-periphery-ios-derived/Index.noindex/DataStore" \
             --format json \
             --report-include '../shared/OpenClawKit/Sources/**' \
-            --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
+            --retain-files '**/GenerateGatewayProtocol/GatewayModels.swift' \
             --write-results "$output_dir/periphery.json" \
             >"$output_dir/periphery.stdout.json" \
             2>"$output_dir/periphery.stderr.log"
@@ -184,7 +209,7 @@ jobs:
     name: Scan shared kit from macOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -198,25 +223,27 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+          source scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           cache-mode: restore
           install-bun: "false"
+          install-deps: "false"
+
+      - name: Install native asset dependencies
+        env:
+          CI: "true"
+        run: >-
+          pnpm install --frozen-lockfile --prefer-offline --optional
+          --filter '@openclaw/mermaid-renderer...'
+          --filter '@openclaw/gateway-protocol...'
+          --config.ignore-scripts=false
+          --config.engine-strict=false
+          --config.enable-pre-post-scripts=true
+          --config.side-effects-cache=true
 
       - name: Prepare Apple Mermaid assets
         run: node scripts/prepare-apple-mermaid.mjs
@@ -227,19 +254,28 @@ jobs:
           ./scripts/install-periphery.sh "$periphery_dir"
           echo "$periphery_dir" >> "$GITHUB_PATH"
 
-      - name: Scan shared kit
+      - name: Build macOS consumer index
         run: |
           set -euo pipefail
           output_dir="$RUNNER_TEMP/shared-periphery-macos"
           mkdir -p "$output_dir"
           cd apps/macos
+          swift package --scratch-path ../../.cache/periphery-swift clean
+          /usr/bin/time -p swift build --build-system native --scratch-path ../../.cache/periphery-swift --build-tests --enable-index-store \
+            2>&1 | tee "$output_dir/build.log"
+
+      - name: Scan shared kit
+        run: |
+          set -euo pipefail
+          output_dir="$RUNNER_TEMP/shared-periphery-macos"
+          cd apps/macos
           set +e
           periphery scan \
             --config .periphery.yml \
-            --clean-build \
+            --skip-build \
             --format json \
             --report-include '../shared/OpenClawKit/Sources/**' \
-            --retain-files '../shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift' \
+            --retain-files '**/GenerateGatewayProtocol/GatewayModels.swift' \
             --write-results "$output_dir/periphery.json" \
             >"$output_dir/periphery.stdout.json" \
             2>"$output_dir/periphery.stderr.log"
@@ -285,6 +321,12 @@ jobs:
         with:
           name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Intersect exact Swift identities
         run: |

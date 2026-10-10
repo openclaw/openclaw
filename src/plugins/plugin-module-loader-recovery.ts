@@ -1,9 +1,11 @@
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import type { PluginRecoverySource } from "./plugin-generation-source-lookup.js";
 import type {
   PluginModuleLoaderOwner,
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
+import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
@@ -18,18 +20,16 @@ export type PluginInstanceModuleLoaderParams = {
   expectedSourceDigest?: string;
   createHostModuleLoader?: () => PluginModuleLoader;
   recoverySourceMap?: (source: string) => string;
+  nativeRecovery?: PluginNativeRecovery;
 };
 
 type RecoveryLoadFacts = Pick<
   PluginInstanceModuleLoaderParams,
   "origin" | "source" | "devSourceRoot" | "standalone" | "pluginSdkResolution" | "recoverySourceMap"
 > & { sourceDigest?: string };
-type RecoverySource = ReturnType<
-  ReturnType<typeof capturePluginGenerationArtifact>["captureRecoverySource"]
->;
 
 function createRecoverySourceMap(
-  resolve: RecoverySource["resolve"],
+  resolve: PluginRecoverySource["resolve"],
   previous: RecoveryLoadFacts["recoverySourceMap"],
 ) {
   return (source: string) => resolve(previous?.(source) ?? source);
@@ -39,7 +39,7 @@ function createRecoverySourceMap(
 // of the predecessor instance, registry, artifact, and host-loader factory.
 function createSourceModuleRecovery(
   facts: RecoveryLoadFacts,
-  recovery: RecoverySource,
+  recovery: PluginRecoverySource,
   bindInstance: (params: PluginInstanceModuleLoaderParams) => void,
 ): PluginModuleLoaderRecovery {
   let state: "available" | "bound" | "disposed" = "available";
@@ -59,6 +59,7 @@ function createSourceModuleRecovery(
         standalone: facts.standalone,
         pluginSdkResolution: facts.pluginSdkResolution,
         recoverySourceMap: createRecoverySourceMap(recovery.resolve, facts.recoverySourceMap),
+        nativeRecovery: recovery.native,
       });
       instance.sourceDigest = facts.sourceDigest;
     },

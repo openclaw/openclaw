@@ -35,7 +35,12 @@ import {
 } from "./view-card-content.ts";
 import { openCardDetails, workboardCardDetailDrawerId } from "./view-card-details.ts";
 import { openCreateModal, workboardCardModalId } from "./view-card-modal.ts";
-import { canMutate, formatStatusLabel, type WorkboardProps } from "./view-helpers.ts";
+import {
+  canMutate,
+  formatStatusLabel,
+  workboardMutationContext,
+  type WorkboardProps,
+} from "./view-helpers.ts";
 import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { workboardScrollFadeRef } from "./view-scroll-fade.ts";
 import { getSessionStatus } from "./view-session-status.ts";
@@ -51,9 +56,7 @@ type WorkboardCardSurface = "page" | "widget" | "list";
 function renderCard(props: WorkboardProps, card: WorkboardCard, surface: WorkboardCardSurface) {
   const {
     state,
-    task,
     busy,
-    activeTask,
     live,
     linkedSessionKey,
     sessionTarget,
@@ -63,10 +66,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
   } = getCardActionState(props, card);
   const widget = surface === "widget";
   const dependencies = getWorkboardDependencyState(card, state.cards);
-  const lifecycle = getWorkboardLifecycle(card, props.sessions, task, props.sessionResolution);
+  const lifecycle = getWorkboardLifecycle(card, props.sessions, props.sessionResolution);
   const now = Date.now();
   const updatedAt = asDateTimestampMs(card.updatedAt);
-  const sessionStatus = getSessionStatus(card, lifecycle, task, now);
+  const sessionStatus = getSessionStatus(card, lifecycle, now);
   const alerts = visibleCardAlerts(
     getCardAlerts(card, lifecycle, dependencies, now),
     sessionStatus.visible || sessionStatus.state === "running" ? sessionStatus.state : undefined,
@@ -78,6 +81,10 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
   const editAction = !widget && writable && !archived ? renderEditCardAction(props, card) : nothing;
   const archiveAction =
     !widget && writable ? renderArchiveCardAction(props, card, busy, archived) : nothing;
+  const showDetails = () => {
+    openCardDetails(state, card);
+    props.onRequestUpdate?.();
+  };
   const detailAction = widget
     ? nothing
     : html`
@@ -88,17 +95,14 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
           aria-haspopup="dialog"
           aria-expanded=${state.detailCardId === card.id ? "true" : "false"}
           aria-controls=${workboardCardDetailDrawerId}
-          @click=${() => {
-            openCardDetails(state, card);
-            props.onRequestUpdate?.();
-          }}
+          @click=${showDetails}
         >
           ${icons.eye}<span>${t("workboard.viewDetails")}</span>
         </button>
       `;
   const sessionAction = widget ? nothing : renderOpenSessionCardAction(props, sessionTarget);
   const stopAction =
-    !widget && writable && (linkedSessionKey ? live : activeTask)
+    !widget && writable && linkedSessionKey && live
       ? renderStopCardAction(props, card, busy)
       : nothing;
   const moveAction =
@@ -232,7 +236,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
             </div>
           </div>
           <div class="workboard-list-row__session">
-            ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+            ${renderCardSession(props, card, lifecycle, sessionStatus)}
           </div>
           <div class="workboard-list-row__updated">${updatedTime}</div>
           <div class="workboard-list-row__actions">${actionsMenu}</div>
@@ -278,8 +282,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
             toggleSelection();
             return;
           }
-          openCardDetails(state, card);
-          props.onRequestUpdate?.();
+          showDetails();
         }
       }}
       @keydown=${(event: KeyboardEvent) => {
@@ -289,8 +292,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
         if (selectionMode || (event.shiftKey && selectable)) {
           toggleSelection();
         } else {
-          openCardDetails(state, card);
-          props.onRequestUpdate?.();
+          showDetails();
         }
         event.preventDefault();
       }}
@@ -332,7 +334,7 @@ function renderCard(props: WorkboardProps, card: WorkboardCard, surface: Workboa
                 <h3 class="workboard-truncate-two" title=${card.title}>${card.title}</h3>
                 <div class="workboard-card__header-actions">${actionsMenu}</div>
               </header>
-              ${renderCardSession(props, card, lifecycle, task, sessionStatus)}
+              ${renderCardSession(props, card, lifecycle, sessionStatus)}
               ${renderCardMeta(card, archived)} ${renderCardAlert(alerts, alertDescriptionId)}
               ${renderCardCounts(card)}
               <footer class="workboard-card__footer">${priority} ${updatedTime}</footer>
@@ -510,13 +512,11 @@ export function renderColumn(
           return;
         }
         void moveWorkboardCard({
-          host: props.host,
-          client: props.client,
+          ...workboardMutationContext(props),
           cardId: card.id,
           status,
           beforeCardId,
           boardFilter: options.boardFilter ?? state.boardFilter,
-          requestUpdate: props.onRequestUpdate,
         });
       }}
     >

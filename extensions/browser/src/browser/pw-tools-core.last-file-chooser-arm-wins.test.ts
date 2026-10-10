@@ -1,4 +1,3 @@
-// Browser tests cover pw tools core.last file chooser arm wins plugin behavior.
 import crypto from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
@@ -17,6 +16,8 @@ import {
 installPwToolsCoreTestHooks();
 const mod = await import("./pw-tools-core.downloads.js");
 const interactions = await import("./pw-tools-core.interactions.js");
+const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
+const target = { cdpUrl: "http://127.0.0.1:18792" };
 
 describe("pw-tools-core", () => {
   it("preserves an accepted download waiter when a stale successor finishes page preparation", async () => {
@@ -33,7 +34,7 @@ describe("pw-tools-core", () => {
     const captured = createDeferred<typeof result>();
     setPwToolsCoreDownloadCapture({ armed: true, promise: captured.promise, cancel: vi.fn() });
     const accepted = mod.waitForDownloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      ...target,
       targetId: "T1",
     });
     const acceptedResult = Promise.allSettled([accepted]);
@@ -46,7 +47,7 @@ describe("pw-tools-core", () => {
       return page;
     });
     const successor = mod.downloadViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      ...target,
       targetId: "T1",
       ref: "e1",
       path: "/tmp/rejected.txt",
@@ -101,7 +102,7 @@ describe("pw-tools-core", () => {
       }
       let current = true;
       const operation = mod.armDialogViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
+        ...target,
         accept: true,
         assertCurrent: async () => {
           if (!current) {
@@ -161,11 +162,11 @@ describe("pw-tools-core", () => {
 
     try {
       await mod.armFileUploadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
+        ...target,
         paths: [firstPath],
       });
       await mod.armFileUploadViaPlaywright({
-        cdpUrl: "http://127.0.0.1:18792",
+        ...target,
         paths: [secondPath],
       });
 
@@ -189,13 +190,13 @@ describe("pw-tools-core", () => {
       await Promise.all([fs.rm(firstPath, { force: true }), fs.rm(secondPath, { force: true })]);
     }
   });
-  it("arms the next dialog and accepts/dismisses (default timeout)", async () => {
+  it("arms the next dialog with the default timeout", async () => {
     const sessionMocks = getPwToolsCoreSessionMocks();
     const page = {};
     setPwToolsCoreCurrentPage(page);
 
     await mod.armDialogViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      ...target,
       accept: true,
       promptText: "x",
     });
@@ -210,20 +211,6 @@ describe("pw-tools-core", () => {
       page,
       accept: true,
       promptText: "x",
-      timeoutMs: 120_000,
-    });
-
-    sessionMocks.respondToObservedDialogOnPage.mockClear();
-    sessionMocks.armObservedDialogResponseOnPage.mockClear();
-
-    await mod.armDialogViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      accept: false,
-    });
-
-    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
-      page,
-      accept: false,
       timeoutMs: 120_000,
     });
   });
@@ -246,12 +233,11 @@ describe("pw-tools-core", () => {
       waitForLoadState,
       waitForFunction,
       waitForTimeout,
-      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
     };
     setPwToolsCoreCurrentPage(page);
 
-    await interactions.waitForViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+    await waitForViaPlaywright({
+      ...target,
       selector: "#main",
       url: "**/dash",
       loadState: "networkidle",
@@ -261,7 +247,7 @@ describe("pw-tools-core", () => {
     });
 
     expect(waitForTimeout).toHaveBeenCalledWith(50);
-    expect(page.locator as ReturnType<typeof vi.fn>).toHaveBeenCalledWith("#main");
+    expect(page.locator).toHaveBeenCalledWith("#main");
     expect(waitForSelector).toHaveBeenCalledWith({
       state: "visible",
       timeout: 1234,
@@ -275,34 +261,14 @@ describe("pw-tools-core", () => {
       { document: documentHandle },
       { timeout: 1234 },
     );
-    expect(String(waitForFunction.mock.calls[0]?.[0])).toContain("window.ready===true");
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
   });
 
-  it("clamps wait timeoutMs to 120000 for wait steps", async () => {
-    const waitForSelector = vi.fn(async () => {});
-    const page = {
-      locator: vi.fn(() => ({
-        first: () => ({ waitFor: waitForSelector }),
-      })),
-      waitForURL: vi.fn(async () => {}),
-      waitForLoadState: vi.fn(async () => {}),
-      waitForFunction: vi.fn(async () => {}),
-      waitForTimeout: vi.fn(async () => {}),
-      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
-    };
-    setPwToolsCoreCurrentPage(page);
-
-    await interactions.waitForViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
-      selector: "#main",
-      timeoutMs: 999_999,
-    });
-
-    expect(waitForSelector).toHaveBeenCalledWith({
-      state: "visible",
-      timeout: 120_000,
-    });
+  it("clamps passive wait deadlines without running an executable predicate", async () => {
+    const waitFor = vi.fn(async () => {});
+    setPwToolsCoreCurrentPage({ locator: () => ({ first: () => ({ waitFor }) }) });
+    await waitForViaPlaywright({ ...target, selector: "#main", timeoutMs: 999_999 });
+    expect(waitFor).toHaveBeenCalledWith({ state: "visible", timeout: 120_000 });
   });
 
   it("clamps interaction timeoutMs to 60000 for click steps", async () => {
@@ -314,7 +280,7 @@ describe("pw-tools-core", () => {
     setPwToolsCoreCurrentPage(page);
 
     await interactions.clickViaPlaywright({
-      cdpUrl: "http://127.0.0.1:18792",
+      ...target,
       selector: "#main",
       timeoutMs: 999_999,
     });

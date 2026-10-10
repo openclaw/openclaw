@@ -204,7 +204,10 @@ describe("Anthropic compaction replay", () => {
   it("uses a matching suppression tombstone to stop replaying a rejected checkpoint", () => {
     const context = contextWithCheckpoint();
     const rejected = assistant([]);
-    suppressAnthropicCompaction(rejected, model, replayOptions);
+    suppressAnthropicCompaction(rejected, model, replayOptions, {
+      type: "compaction",
+      content: "summary of the earlier conversation",
+    });
     context.messages.push(rejected);
 
     const plan = buildAnthropicReplayPlan(context.messages, model, replayOptions);

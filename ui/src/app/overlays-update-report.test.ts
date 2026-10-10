@@ -48,6 +48,17 @@ function harnessFor(request: RequestFn) {
   return harness;
 }
 
+const requestForStatus = (run: typeof FAILED_RUN | null = FAILED_RUN) =>
+  vi.fn<RequestFn>(async (method) => {
+    if (method === "update.status") {
+      return { lastRun: run, sentinel: FAILURE };
+    }
+    if (method === "update.runs.get") {
+      return { run };
+    }
+    return {};
+  });
+
 beforeEach(() => {
   vi.stubGlobal("sessionStorage", createStorageMock());
   reportUpdateFailure.mockReset();
@@ -59,7 +70,6 @@ afterEach(() => {
 
 it.each([
   { reason: "dirty", reportable: true },
-  { reason: "not-git-install", reportable: true },
   { reason: "already-current", reportable: false },
   { reason: "dry-run", reportable: false },
   { reason: "cancelled", reportable: false },
@@ -94,37 +104,42 @@ describe.each([
     run: createUpdateRunFixture({ ...FAILED_RUN, status: "rolled-back" }),
     attemptId: FAILED_RUN.runId,
   },
-])("update failure report continuity: $label", ({ run, attemptId }) => {
-  const requestForStatus = () =>
-    vi.fn<RequestFn>(async (method) => {
-      if (method === "update.status") {
-        return { lastRun: run, sentinel: FAILURE };
-      }
-      if (method === "update.runs.get") {
-        return { run };
-      }
-      return {};
+])("update failure report admission: $label", ({ run, attemptId }) => {
+  it.each([
+    { profileId: "other-operator", allowed: true },
+    { profileId: null, allowed: false },
+  ])("admits only identified administrator profile $profileId", async ({ profileId, allowed }) => {
+    const request = requestForStatus(run);
+    const harness = harnessFor(request);
+    harness.update({ selfUser: profileId ? { id: profileId } : null });
+    reportUpdateFailure.mockImplementation(async ({ isCurrent }) => {
+      expect(isCurrent()).toBe(true);
+      return null;
     });
-  it.each(["other-operator", null])(
-    "refuses report admission for administrator profile %s",
-    async (profileId) => {
-      const request = requestForStatus();
-      const harness = harnessFor(request);
-      harness.update({ selfUser: profileId ? { id: profileId } : null });
-      const overlays = createApplicationOverlays(harness.gateway);
-      try {
-        await flushMicrotasks();
-        expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
-        await overlays.reportUpdateFailure(attemptId);
-        expect(reportUpdateFailure).not.toHaveBeenCalled();
-        expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
-        expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
-      } finally {
-        overlays.dispose();
+    const overlays = createApplicationOverlays(harness.gateway);
+    try {
+      await flushMicrotasks();
+      expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+      await overlays.reportUpdateFailure(attemptId);
+      expect(reportUpdateFailure).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        expect(reportUpdateFailure).toHaveBeenCalledWith({
+          attemptId,
+          client: harness.gateway.snapshot.client,
+          isCurrent: expect.any(Function),
+        });
+        expect(reportUpdateFailure.mock.calls[0]?.[0].isCurrent()).toBe(false);
       }
-    },
-  );
+      expect(overlays.snapshot.updateFailureReportBusy).toBe(false);
+      expect(overlays.snapshot.updateFailureReportNotice).toBeNull();
+    } finally {
+      overlays.dispose();
+    }
+  });
+});
 
+describe("update failure report continuity", () => {
+  const attemptId = FAILED_RUN.runId;
   it("never reports during status hydration and suppresses duplicate clicks", async () => {
     const request = requestForStatus();
     const harness = harnessFor(request);
@@ -217,9 +232,20 @@ describe.each([
       overlays.dispose();
     }
   });
+});
 
-  it("keeps a created URL across an identical reconnect without reporting again", async () => {
-    const request = requestForStatus();
+it.each([
+  { label: "failed run", run: FAILED_RUN, attemptId: FAILED_RUN.runId },
+  { label: "legacy sentinel", run: null, attemptId: "handoff-failed" },
+  {
+    label: "rolled-back run",
+    run: { ...FAILED_RUN, status: "rolled-back" as const },
+    attemptId: FAILED_RUN.runId,
+  },
+])(
+  "keeps a reported $label across reconnect without reporting again",
+  async ({ run, attemptId }) => {
+    const request = requestForStatus(run);
     const harness = harnessFor(request);
     const hello = harness.gateway.snapshot.hello;
     reportUpdateFailure.mockResolvedValue({
@@ -245,13 +271,16 @@ describe.each([
     } finally {
       overlays.dispose();
     }
-  });
-});
+  },
+);
 
-it.each(["changed-facts", "running", "succeeded"] as const)(
+it.each(["changed-facts", "running", "succeeded", "reconciled"] as const)(
   "invalidates report consent when authoritative run becomes %s",
   async (change) => {
-    let run = FAILED_RUN;
+    let run =
+      change === "reconciled"
+        ? createUpdateRunFixture({ ...FAILED_RUN, reason: "abandoned" })
+        : FAILED_RUN;
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "update.status") {
         return { lastRun: run, sentinel: FAILURE };
@@ -276,7 +305,14 @@ it.each(["changed-facts", "running", "succeeded"] as const)(
         updatedAtMs: run.updatedAtMs + 1,
         ...(change === "changed-facts"
           ? { after: { version: "2026.9.3" } }
-          : { status: change, phase: change === "running" ? "staging" : "finished" }),
+          : change === "reconciled"
+            ? {
+                steps: [
+                  ...run.steps,
+                  { step: "reconcile:acknowledged", status: "completed" as const },
+                ],
+              }
+            : { status: change, phase: change === "running" ? "staging" : "finished" }),
       });
       harness.emitEvent("update.run.changed", { runId: run.runId, updatedAtMs: run.updatedAtMs });
       expect(admission?.isCurrent?.()).toBe(false);
@@ -284,6 +320,12 @@ it.each(["changed-facts", "running", "succeeded"] as const)(
       expect(overlays.snapshot.reportableUpdateFailureId).toBe(
         change === "changed-facts" ? run.runId : null,
       );
+      if (change === "reconciled") {
+        expect(overlays.snapshot.updateStatusBanner).toBeNull();
+        expect(overlays.snapshot.recordedUpdateAttempt).toBeNull();
+        expect(overlays.snapshot.updateRunAcknowledged).toBe(true);
+        expect(overlays.snapshot.updateRun?.status).toBe("failed");
+      }
       pending.resolve(null);
       await reporting;
       expect(overlays.snapshot.updateFailureReportNotice).toBeNull();

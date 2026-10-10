@@ -4,7 +4,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../src/agents/internal-runtime-context.js";
-import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
@@ -173,6 +173,8 @@ function config(url: string): OpenClawConfig {
     },
     tools: {
       profile: "coding",
+      codeMode: false,
+      toolSearch: false,
       allow: ["sessions_spawn", "exec"],
       exec: { security: "full", ask: "off" },
     },

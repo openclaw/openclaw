@@ -1,7 +1,10 @@
-import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
+import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
+import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
-import type { UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
@@ -36,12 +39,11 @@ export function updateStepDiagnostics(
     }
     return tail
       .split(/\r?\n/u)
-      .filter((line) => {
-        if (/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line)) {
-          return false;
-        }
-        return !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim());
-      })
+      .filter(
+        (line) =>
+          !/^\[openclaw\] (?:The CLI command failed\.$|Debug: |Try: |Help: )/u.test(line) &&
+          !messages.has(line.replace(/^\[openclaw\] Reason: /u, "").trim()),
+      )
       .join("\n");
   });
   return { tails: filtered, reasonDetails };
@@ -51,7 +53,7 @@ export function updateStepDiagnostics(
 export function summarizeUpdateStepFailure(
   step: Pick<
     UpdateStepResult,
-    "name" | "exitCode" | "termination" | "stdoutTail" | "stderrTail" | "failureFacts"
+    "name" | "exitCode" | "termination" | "signal" | "stdoutTail" | "stderrTail" | "failureFacts"
   >,
 ): string {
   const diagnostics = updateStepDiagnostics(step);
@@ -60,23 +62,36 @@ export function summarizeUpdateStepFailure(
     step.name === "database-schema-preflight"
       ? [(step.stderrTail?.trim() || step.stdoutTail?.trim())?.split(/\r?\n/u)[0]]
       : diagnostics.tails.map((tail, index) => {
-          const lastLine = tail.trim().split(/\r?\n/u).at(-1) ?? "";
-          const excerpt = sliceUtf16Safe(lastLine, -120);
-          if (index !== 1 || !diagnostics.reasonDetails) {
-            return excerpt;
+          const lines = tail.trim().split(/\r?\n/u);
+          const lastLine =
+            lines.findLast(
+              (line) =>
+                line.trim() && !line.trim().startsWith("Installation recovery is unverified;"),
+            ) ??
+            lines.at(-1) ??
+            "";
+          const cause =
+            index === 1
+              ? diagnostics.reasonDetails ||
+                step.failureFacts?.map((fact) => fact.message?.trim() || fact.code).join("; ") ||
+                lastLine
+              : lastLine;
+          // Recovery advice must not displace the initiating error inside this budget.
+          const causeOnly = cause.split(/(?<=\.)\s+Installation recovery is unverified;/u)[0] ?? "";
+          if (index !== 1 || !diagnostics.reasonDetails || causeOnly.includes(lastLine)) {
+            return truncateUtf16Safe(causeOnly, 120);
           }
-          if (!lastLine || diagnostics.reasonDetails.includes(lastLine)) {
-            return truncateUtf16Safe(diagnostics.reasonDetails, 120);
-          }
-          // Preserve the final outcome inside the existing per-stream excerpt budget.
-          const details = truncateUtf16Safe(
-            diagnostics.reasonDetails,
-            Math.max(0, 120 - excerpt.length - 2),
-          );
-          return [details, excerpt].filter(Boolean).join("; ");
+          // A distinct terminal outcome shares the budget, but cannot crowd out the cause.
+          const outcome = truncateUtf16Safe(lastLine, 60);
+          return [truncateUtf16Safe(causeOnly, 120 - outcome.length - 2), outcome].join("; ");
         });
   return truncateUtf16Safe(
-    [step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`, ...excerpts]
+    [
+      step.termination === "signal"
+        ? `signal: ${step.signal ?? "unknown"}`
+        : (step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`),
+      ...excerpts,
+    ]
       .filter(Boolean)
       .join("; "),
     300,
@@ -84,12 +99,41 @@ export function summarizeUpdateStepFailure(
 }
 
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
+
+/** Operational capture receipts stay in the private ledger, not status or diagnostic exports. */
+export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
+  const origin = { ...record.origin };
+  delete origin.updateRecoveryCapture;
+  return { ...record, origin };
+}
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
+
+// Record recovery depends on legacy expiry for its reason; both use the leaf recovery-state type.
+export function isAbandonedUpdateRun(
+  record: Pick<UpdateRunRecoveryState, "status" | "reason">,
+): boolean {
+  return (
+    record.status === "failed" &&
+    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+  );
+}
+
+export function isAcknowledgedAbandonedUpdateRun(
+  record: Pick<UpdateRunRecoveryState, "status" | "reason" | "steps">,
+): boolean {
+  return (
+    isAbandonedUpdateRun(record) &&
+    record.steps.some(
+      (step) => step.step === "reconcile:acknowledged" && step.status === "completed",
+    )
+  );
+}
 
 export type FinishUpdateRunResult = {
   status: Exclude<UpdateRunRecord["status"], "running">;
   reason?: string;
+  nextAction?: string;
   after?: UpdateRunRecord["after"];
   downtimeMs?: number;
 };
@@ -108,20 +152,51 @@ export function finishUpdateRunRecord(
   for (const step of record.steps) {
     if (step.step === record.phase || step.status === "in_progress") {
       step.status =
-        result.status === "failed"
-          ? "failed"
-          : result.status === "skipped"
-            ? "skipped"
-            : "completed";
+        result.status === "failed" || result.status === "skipped" ? result.status : "completed";
       step.endedAtMs = now;
     }
   }
   record.status = result.status;
   record.phase = "finished";
   record.reason = result.reason ?? (result.status === "failed" ? record.reason : null);
+  if (result.nextAction !== undefined) {
+    record.origin.nextAction = result.nextAction;
+  }
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;
+}
+
+/** Only the package-owner refusal before update work can bypass repair finalization. */
+export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): boolean {
+  const requested = record.steps.find((step) => step.step === "requested");
+  return (
+    record.trigger === "cli" &&
+    record.phase === "finished" &&
+    record.target.kind !== "git" &&
+    !Object.keys(record.after).length &&
+    !Object.keys(record.verification).length &&
+    !record.repair.length &&
+    record.steps.every(
+      (step) =>
+        step.step === "requested" ||
+        (step.status === "completed" &&
+          (step.step === "driver:adopted" ||
+            step.step === "original-state-capture" ||
+            /^warning:original-state-capture:[1-9]\d*$/u.test(step.step))) ||
+        (step.step === "installation-inspection" && step.status === "skipped"),
+    ) &&
+    ((record.status === "skipped" &&
+      record.reason === "unmanaged-package-install" &&
+      requested?.status === "skipped") ||
+      // 2026.9.4 threw this exact error before it could record a structured refusal.
+      (record.status === "failed" &&
+        record.reason === "update-failed" &&
+        requested?.status === "failed" &&
+        requested.detail?.startsWith(
+          "Update refused: package manager owner is unknown; no changes were made.",
+        ) === true))
+  );
 }
 
 export type UpdateFetchFailure = {

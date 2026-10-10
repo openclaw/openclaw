@@ -1,13 +1,25 @@
 import { execFile } from "node:child_process";
+import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it } from "vitest";
+import { matrixConfigImportEntrypoints } from "./config-update-runtime.test-support.js";
 
-async function runSourceImportSmoke(code: string): Promise<string> {
+const updateUrl = resolveRuntimeWorkerUrl(matrixConfigImportEntrypoints.update);
+const accountUrl = resolveRuntimeWorkerUrl(matrixConfigImportEntrypoints.account);
+const moduleExtension = extname(updateUrl.pathname);
+const setupUrl = new URL(`../../../../src/secrets/plugin-setup-plan${moduleExtension}`, updateUrl);
+const resolverUrl = new URL(`../../../../src/secrets/resolve${moduleExtension}`, updateUrl);
+
+async function runImportSmoke(code: string): Promise<string> {
   const repoRoot = new URL("../../../../", import.meta.url);
   const runtimeArgs = process.versions.bun
     ? ["--tsconfig-override", fileURLToPath(new URL("tsconfig.json", repoRoot))]
-    : ["--import", "tsx"];
+    : resolveRuntimeWorkerArgv(updateUrl).slice(0, -1);
   const { stdout } = await promisify(execFile)(process.execPath, [...runtimeArgs, "-e", code], {
     cwd: fileURLToPath(repoRoot),
     env: {
@@ -24,14 +36,14 @@ async function runSourceImportSmoke(code: string): Promise<string> {
 
 describe("matrix config update import boundary", () => {
   it("updates secret inputs without loading secret setup or resolution", async () => {
-    const stdout = await runSourceImportSmoke(String.raw`
+    const stdout = await runImportSmoke(String.raw`
 import { realpathSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
-const entryUrl = pathToFileURL(realpathSync("./extensions/matrix/src/matrix/config-update.ts")).href;
+const entryUrl = pathToFileURL(realpathSync(fileURLToPath(${JSON.stringify(updateUrl.href)}))).href;
 const watchedUrls = new Map([
   [entryUrl, "entry"],
-  [pathToFileURL(realpathSync("./src/secrets/plugin-setup-plan.ts")).href, "setup"],
-  [pathToFileURL(realpathSync("./src/secrets/resolve.ts")).href, "resolver"],
+  [pathToFileURL(realpathSync(fileURLToPath(${JSON.stringify(setupUrl.href)}))).href, "setup"],
+  [pathToFileURL(realpathSync(fileURLToPath(${JSON.stringify(resolverUrl.href)}))).href, "resolver"],
 ]);
 const observed = { entry: false, setup: false, resolver: false };
 let deregister = () => {};
@@ -71,7 +83,7 @@ try {
     accessToken: ref,
     password: "  synthetic-password  ",
   });
-  const { hasExplicitMatrixAccountConfig } = await import("./extensions/matrix/src/matrix/account-config.ts");
+  const { hasExplicitMatrixAccountConfig } = await import(${JSON.stringify(accountUrl.href)});
   process.stdout.write(JSON.stringify({
     observed,
     account: updated.channels.matrix,

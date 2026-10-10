@@ -59,12 +59,14 @@ export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams
   );
 }
 
+type CodexConnectionFingerprintOptions = Pick<
+  CodexAppServerRuntimeOptions,
+  "start" | "connectionClass" | "remoteWorkspaceRoot"
+>;
+
 /** Builds a durable thread-binding fingerprint for one initialized app-server runtime. */
 export function buildCodexAppServerRuntimeFingerprint(params: {
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >;
+  appServer: CodexConnectionFingerprintOptions;
   appServerVersion?: string;
   runtimeIdentity?: CodexAppServerRuntimeIdentity;
 }): string {
@@ -79,10 +81,7 @@ export function buildCodexAppServerRuntimeFingerprint(params: {
 
 /** Fingerprints the configured connection that owns a supervised source thread. */
 export function buildCodexAppServerConnectionFingerprint(
-  appServer: Pick<
-    CodexAppServerRuntimeOptions,
-    "start" | "connectionClass" | "remoteWorkspaceRoot"
-  >,
+  appServer: CodexConnectionFingerprintOptions,
   agentDir?: string,
 ): string {
   return JSON.stringify({
@@ -99,7 +98,7 @@ function resolveCodexAppServerConnectionHome(
   start: CodexAppServerStartOptions,
   agentDir?: string,
 ): string | null {
-  const configured = start.env?.CODEX_HOME?.trim();
+  const configured = start.codexHome ?? start.env?.CODEX_HOME?.trim();
   if (configured) {
     return configured;
   }
@@ -133,7 +132,7 @@ function resolveCodexPluginAppCacheCodexHome(
   appServer: Pick<CodexAppServerRuntimeOptions, "start">,
   agentDir?: string,
 ): string | undefined {
-  const configuredCodexHome = appServer.start.env?.CODEX_HOME?.trim();
+  const configuredCodexHome = appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME?.trim();
   if (configuredCodexHome) {
     return configuredCodexHome;
   }

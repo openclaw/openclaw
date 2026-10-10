@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
+import { captureEnv } from "../test-utils/env.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import {
@@ -22,8 +23,10 @@ import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } fr
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDirSync } = createPluginSdkTestHarness();
-const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const originalEnv = captureEnv([
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+]);
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const trustedBundledPluginFixtureRoots: string[] = [];
@@ -215,16 +218,7 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   delete (globalThis as typeof globalThis & Record<string, unknown>)[FACADE_LOADER_GLOBAL];
-  if (originalBundledPluginsDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-  }
-  if (originalDisableBundledPlugins === undefined) {
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-  } else {
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
-  }
+  originalEnv.restore();
 });
 
 describe("plugin-sdk facade loader", () => {
@@ -456,6 +450,28 @@ describe("plugin-sdk facade loader", () => {
     expect(error.message).toBe(
       `Unable to open bundled plugin public surface ${outsidePath}: outside plugin root`,
     );
+  });
+
+  it("loads a facade when Windows reports the root and module through physical aliases", () => {
+    const tempRoot = createTempDirSync("openclaw-facade-loader-root-alias-");
+    const physicalRoot = path.join(tempRoot, "physical-root");
+    const admittedRoot = path.join(tempRoot, "admitted-root");
+    const modulePath = path.join(physicalRoot, "api.js");
+    fs.mkdirSync(physicalRoot);
+    fs.writeFileSync(modulePath, 'module.exports = { marker: "alias" };\n', "utf8");
+    fs.symlinkSync(physicalRoot, admittedRoot, process.platform === "win32" ? "junction" : "dir");
+    const loadModule = vi.fn(() => ({ marker: "alias" }));
+
+    withMockedWindowsPlatform(() => {
+      expect(
+        loadFacadeModuleAtLocationSync<{ marker: string }>({
+          location: { modulePath, boundaryRoot: admittedRoot },
+          trackedPluginId: "root-alias",
+          loadModule,
+        }).marker,
+      ).toBe("alias");
+    });
+    expect(loadModule).toHaveBeenCalledWith(modulePath);
   });
 
   it("shares loaded facade ids with facade-runtime", () => {

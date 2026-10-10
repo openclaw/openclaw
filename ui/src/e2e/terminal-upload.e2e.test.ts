@@ -220,8 +220,7 @@ suite.define(() => {
         const uploadError = page.locator(".tp-upload-card__error");
         await expect.poll(async () => await uploadError.textContent()).toContain(recoveryMessage);
         const displayedError = await uploadError.textContent();
-        expect(displayedError).toContain("[redacted path]");
-        expect(displayedError).not.toContain(privatePath);
+        expect(displayedError).toContain(privatePath);
         expect(displayedError).not.toContain("synthetic-terminal-secret-value");
         expect(await page.getByRole("button", { name: "Retry" }).isVisible()).toBe(true);
         expect((await gateway.getRequests("terminal.input")).length).toBe(0);

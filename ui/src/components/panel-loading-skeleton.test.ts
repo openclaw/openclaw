@@ -11,9 +11,10 @@ const variants = [
   "browser",
   "chat",
   "discussion",
+  "document",
+  "file-list",
   "files",
   "review",
-  "tasks",
   "terminal",
 ] satisfies PanelLoadingSkeletonVariant[];
 

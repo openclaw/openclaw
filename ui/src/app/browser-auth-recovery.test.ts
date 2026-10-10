@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { startBrowserAuthRecovery } from "./browser-auth-recovery.ts";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "./browser-http.ts";
@@ -52,60 +53,86 @@ describe("browser sign-in recovery", () => {
     vi.useRealTimers();
   });
 
-  it("deduplicates failed reads and retries their owners after sign-in without navigating the chat", async () => {
-    let authenticated = false;
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
-      if (init?.method === "HEAD") {
-        return authenticated
-          ? new Response(null, { headers: { "content-type": "application/json" } })
-          : redirectResponse();
+  it.each(["browser", "native"])(
+    "recovers failed reads through %s sign-in without navigating the chat",
+    async (host) => {
+      const reconnect = vi.fn();
+      if (host === "native") {
+        vi.stubGlobal("webkit", {
+          messageHandlers: { openclawGateways: { postMessage: reconnect } },
+        });
+        vi.stubGlobal("__OPENCLAW_NATIVE_GATEWAYS__", {
+          currentId: "profile:example",
+          gateways: [],
+        });
       }
-      throw new TypeError("Failed to fetch");
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const restored = vi.fn();
-    onTestFinished(subscribeBrowserAuthRestored(restored));
-    const opened = vi.spyOn(window, "open").mockReturnValue(null);
-    const initialLocation = window.location.href;
-    const requests = ["image-a", "image-b"].map((name) =>
-      fetchControlUiResource(`/nested/__openclaw__/assistant-media?source=${name}`),
-    );
-    const results = await Promise.allSettled(requests);
-    expect(results.every((result) => result.status === "rejected")).toBe(true);
-    await finishRenewal();
-    await expect.poll(() => document.querySelector("openclaw-modal-dialog")).not.toBeNull();
-    const { dialog } = await getRenderedModalDialog(document.body);
-    expect(dialog.getAttribute("aria-label")).toBe("Sign in to continue loading content");
-    expect(document.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
-    const probes = fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD");
-    expect(probes).toHaveLength(2);
-    expect(probes).toEqual(
-      Array.from({ length: 2 }, () => [
-        `${window.location.origin}/nested/control-ui-config.json`,
-        expect.objectContaining({
-          redirect: "manual",
-          cache: "no-store",
-          credentials: "same-origin",
-        }),
-      ]),
-    );
+      // Opening Gateway settings must not replace website-session recovery copy.
+      registerSettingsEnglish();
+      let authenticated = false;
+      const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === "HEAD") {
+          return authenticated
+            ? new Response(null, { headers: { "content-type": "application/json" } })
+            : redirectResponse();
+        }
+        throw new TypeError("Failed to fetch");
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const restored = vi.fn();
+      onTestFinished(subscribeBrowserAuthRestored(restored));
+      const opened = vi.spyOn(window, "open").mockReturnValue(null);
+      const initialLocation = window.location.href;
+      const requests = ["image-a", "image-b"].map((name) =>
+        fetchControlUiResource(`/nested/__openclaw__/assistant-media?source=${name}`),
+      );
+      const results = await Promise.allSettled(requests);
+      expect(results.every((result) => result.status === "rejected")).toBe(true);
+      await finishRenewal();
+      await expect.poll(() => document.querySelector("openclaw-modal-dialog")).not.toBeNull();
+      const { dialog } = await getRenderedModalDialog(document.body);
+      expect(dialog.getAttribute("aria-label")).toBe("Sign in to continue loading content");
+      expect(document.querySelectorAll("openclaw-modal-dialog")).toHaveLength(1);
+      const probes = fetchMock.mock.calls.filter(([, init]) => init?.method === "HEAD");
+      expect(probes).toHaveLength(2);
+      expect(probes).toEqual(
+        Array.from({ length: 2 }, () => [
+          `${window.location.origin}/nested/control-ui-config.json`,
+          expect.objectContaining({
+            redirect: "manual",
+            cache: "no-store",
+            credentials: "same-origin",
+          }),
+        ]),
+      );
 
-    button("Sign in").click();
-    expect(opened).toHaveBeenCalledExactlyOnceWith(
-      `${window.location.origin}/nested/`,
-      "_blank",
-      "noopener,noreferrer",
-    );
-    button("Check again").click();
-    await expect.poll(() => document.body.textContent).toContain("Sign-in is still required");
-    expect(restored).not.toHaveBeenCalled();
+      button("Sign in").click();
+      if (host === "native") {
+        await vi.dynamicImportSettled();
+        expect(reconnect).toHaveBeenCalledExactlyOnceWith({
+          type: "reconnect",
+          id: "profile:example",
+        });
+        expect(opened).not.toHaveBeenCalled();
+        expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull();
+        expect(document.body.textContent).not.toContain("Finish signing in in the new tab");
+      } else {
+        expect(opened).toHaveBeenCalledExactlyOnceWith(
+          `${window.location.origin}/nested/`,
+          "_blank",
+          "noopener,noreferrer",
+        );
+        button("Check again").click();
+        await expect.poll(() => document.body.textContent).toContain("Sign-in is still required");
+      }
+      expect(restored).not.toHaveBeenCalled();
 
-    authenticated = true;
-    window.dispatchEvent(new Event("focus"));
-    await expect.poll(() => restored.mock.calls.length).toBe(1);
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(window.location.href).toBe(initialLocation);
-  });
+      authenticated = true;
+      window.dispatchEvent(new Event("focus"));
+      await expect.poll(() => restored.mock.calls.length).toBe(1);
+      expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+      expect(window.location.href).toBe(initialLocation);
+    },
+  );
 
   it.each(["offline", "missing", "server-error", "gateway-auth", "html"])(
     "does not turn %s into a sign-in dialog",

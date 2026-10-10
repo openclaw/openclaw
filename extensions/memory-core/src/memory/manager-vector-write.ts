@@ -1,16 +1,10 @@
-// Memory Core plugin module implements manager vector write behavior.
-import type { SQLInputValue } from "node:sqlite";
+import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { vectorToBlob } from "./vector-blob.js";
 
-type VectorWriteDb = {
-  prepare: (sql: string) => {
-    run: (...params: SQLInputValue[]) => unknown;
-  };
-};
-
-export function createMemoryVectorWriter(db: VectorWriteDb, tableName = "memory_index_chunks_vec") {
-  let deleteStatement: ReturnType<VectorWriteDb["prepare"]> | undefined;
-  let insertStatement: ReturnType<VectorWriteDb["prepare"]> | undefined;
+export function createMemoryVectorWriter(db: DatabaseSync) {
+  const tableName = "memory_index_chunks_vec";
+  let deleteStatement: StatementSync | undefined;
+  let insertStatement: StatementSync | undefined;
 
   // One replacement owns the statements. A failed DELETE must not prevent INSERT.
   return (id: string, embedding: number[]): void => {

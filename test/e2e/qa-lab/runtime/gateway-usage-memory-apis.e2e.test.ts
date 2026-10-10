@@ -18,11 +18,14 @@ import { loadGatewaySessionEntryReadOnly } from "../../../../src/gateway/session
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../../src/gateway/test-helpers.listener.js";
 import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 import { refreshCostUsageCacheForAgent } from "../../../../src/infra/session-cost-usage-aggregation.js";
-import { readSessionCostUsageRollupRows } from "../../../../src/infra/session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "../../../../src/infra/session-cost-usage-cache.test-support.js";
 import type { CostUsageSummary } from "../../../../src/infra/session-cost-usage.js";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
@@ -96,7 +99,6 @@ async function seedCompletedUsageSession(state: OpenClawTestState): Promise<{
     sessionFile,
     startedAt: FIXTURE_STARTED_AT,
     updatedAt: FIXTURE_STARTED_AT,
-    status: "running",
   });
   const turn = await persistSessionTranscriptTurn(scope, {
     expectedSessionId: FIXTURE_SESSION_ID,
@@ -150,7 +152,10 @@ describe("gateway usage and memory APIs", () => {
     "projects deterministic usage and explicit memory readiness over authenticated WebSocket RPCs",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const port = await getGatewayE2ePortBlock();
+      const portClaim = await acquireGatewayE2ePortBlock();
+      const { port } = portClaim;
+      // Released here until the started Gateway owns the claim.
+      let unstartedPortClaim: typeof portClaim | undefined = portClaim;
       const token = `gateway-usage-memory-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}`;
       const state = await createOpenClawTestState({
         label: "gateway-usage-memory-apis",
@@ -168,7 +173,7 @@ describe("gateway usage and memory APIs", () => {
       const config = {
         agents: {
           defaults: { workspace: state.workspaceDir },
-          list: [{ id: "main", default: true, workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         gateway: {
           mode: "local",
@@ -210,12 +215,15 @@ describe("gateway usage and memory APIs", () => {
         });
         expect(storedSession.entry).not.toHaveProperty("sessionFile");
 
-        server = await startGatewayServer(port, {
-          bind: "loopback",
-          auth: { mode: "token", token },
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        unstartedPortClaim = undefined;
+        server = await startClaimedGateway(portClaim, () =>
+          startGatewayServer(port, {
+            bind: "loopback",
+            auth: { mode: "token", token },
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+          }),
+        );
         client = await connectGatewayClient({
           url: `ws://127.0.0.1:${port}`,
           token,
@@ -332,6 +340,7 @@ describe("gateway usage and memory APIs", () => {
           await disconnectGatewayClient(client);
         }
         await server?.close({ reason: "gateway usage and memory QA complete" });
+        await unstartedPortClaim?.release();
         clearModelAuthStatusUsageCache();
         await state.cleanup();
       }

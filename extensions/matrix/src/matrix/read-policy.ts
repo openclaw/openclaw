@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import type { CoreConfig } from "../types.js";
 import { resolveMatrixBaseConfig } from "./account-config.js";
-import { resolveMatrixAccount } from "./accounts.js";
+import { resolveDefaultMatrixAccountId, resolveMatrixAccountConfig } from "./accounts.js";
 import { withResolvedActionClient } from "./actions/client.js";
 import type { MatrixActionClientOpts } from "./actions/types.js";
 import {
@@ -77,7 +77,7 @@ type MatrixRoomClassification =
   | { kind: "unknown" };
 
 function resolveMatrixReadRoomPolicy(params: {
-  account: ReturnType<typeof resolveMatrixAccount>;
+  account: { accountId: string; config: ReturnType<typeof resolveMatrixAccountConfig> };
   baseConfig: ReturnType<typeof resolveMatrixBaseConfig>;
   roomId: string;
   aliases: string[];
@@ -154,7 +154,13 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
 }): Promise<T> {
   const assertCurrent = captureChannelReadAuthority();
   assertCurrent?.();
-  const account = resolveMatrixAccount({ cfg: params.cfg, accountId: params.accountId });
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  );
+  const account = {
+    accountId,
+    config: resolveMatrixAccountConfig({ cfg: params.cfg, accountId }),
+  };
   const baseConfig = resolveMatrixBaseConfig(params.cfg);
   const preliminaryRoomId = normalizeMatrixResolvableTarget(params.roomId);
   const preliminaryPolicy = resolveMatrixReadRoomPolicy({
@@ -168,7 +174,9 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
   }
   return await withResolvedActionClient(params.opts, async (client) => {
     assertCurrent?.();
-    const roomId = await resolveMatrixRoomId(client, params.roomId);
+    const roomId = await resolveMatrixRoomId(client, params.roomId, {
+      persistDirectMapping: false,
+    });
     assertCurrent?.();
     const inputAlias = params.roomId.trim().startsWith("#") ? params.roomId.trim() : undefined;
     const { getRoomInfo } = createMatrixRoomInfoResolver(client);
@@ -225,31 +233,23 @@ export async function withAuthorizedMatrixReadTarget<T>(params: {
         : "allowlist"
       : (account.config.dm?.policy ?? "pairing");
     const directOperator = params.context?.conversationReadOrigin === "direct-operator";
-    const allowed = finalPolicy.blocked
-      ? false
-      : directOperator
-        ? classification.kind === "direct"
-          ? account.config.dm?.enabled !== false && dmPolicy !== "disabled"
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled"
-            : groupPolicy !== "disabled" &&
-              dmPolicy !== "disabled" &&
-              account.config.dm?.enabled !== false
-        : classification.kind === "direct"
-          ? account.config.dm?.enabled !== false &&
-            dmPolicy !== "disabled" &&
-            (current || includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
-          : classification.kind === "group"
-            ? groupPolicy !== "disabled" &&
-              (current || groupPolicy === "open" || room.config !== undefined)
-            : current
-              ? groupPolicy !== "disabled" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false
-              : groupPolicy === "open" &&
-                dmPolicy !== "disabled" &&
-                account.config.dm?.enabled !== false &&
-                hasWildcardEntry(account.config.dm?.allowFrom);
+    const dmEnabled = account.config.dm?.enabled !== false && dmPolicy !== "disabled";
+    const groupEnabled = groupPolicy !== "disabled";
+    const allowed =
+      !finalPolicy.blocked &&
+      (classification.kind === "direct"
+        ? dmEnabled &&
+          (directOperator ||
+            current ||
+            includesEntry(account.config.dm?.allowFrom, classification.remoteUserId))
+        : classification.kind === "group"
+          ? groupEnabled &&
+            (directOperator || current || groupPolicy === "open" || room.config !== undefined)
+          : groupEnabled &&
+            dmEnabled &&
+            (directOperator ||
+              current ||
+              (groupPolicy === "open" && hasWildcardEntry(account.config.dm?.allowFrom))));
     if (!allowed) {
       throw new ToolAuthorizationError("Matrix read target is not allowed.");
     }

@@ -9,6 +9,23 @@ read_when:
 
 Keep workspace conventions here. Personality and tone belong in `SOUL.md`.
 
+## Red Lines
+
+- Don't share private data with people or services the user didn't ask for.
+- Confirm destructive or irreversible actions the user didn't ask for.
+- Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
+- Prefer `trash` over `rm` - recoverable beats gone forever.
+
+## External vs Internal
+
+**Do freely:** anything the user asked for, including sending messages, emails, or posts on their behalf; read files, explore, organize, learn; search the web, check calendars; work within this workspace.
+
+**Ask first:** public or outbound actions the user did not request.
+
+## Existing Solutions Preflight
+
+Before proposing or building a custom solution, briefly check existing open-source projects, maintained libraries, OpenClaw plugins, or free platforms. Prefer an adequate existing option. Build custom only when those options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom work. Recommend paid services only with explicit spend approval.
+
 ## First Run
 
 If `BOOTSTRAP.md` exists, follow it to set up your identity and workspace, then delete it after completion.
@@ -57,27 +74,9 @@ Before writing memory files, read them first. Write concrete updates, never empt
 
 Every few days, use a scheduled automation to review recent daily notes. Fold stable directives into `USER.md` and durable non-profile facts into `MEMORY.md`; keep `MEMORY.md` maintenance confined to main sessions. Remove outdated entries so the curated files do not become raw logs.
 
-## Red Lines
-
-- Don't exfiltrate private data. Ever.
-- Don't run destructive commands without asking.
-- Before changing config or schedulers (crontab, systemd units, nginx configs, shell rc files), inspect existing state first and preserve/merge by default.
-- Prefer `trash` over `rm` - recoverable beats gone forever.
-- When in doubt, ask.
-
-## Existing Solutions Preflight
-
-Before proposing or building a custom solution, briefly check existing open-source projects, maintained libraries, OpenClaw plugins, or free platforms. Prefer an adequate existing option. Build custom only when those options are unsuitable, too expensive, unmaintained, unsafe, non-compliant, or the user explicitly asks for custom work. Recommend paid services only with explicit spend approval.
-
-## External vs Internal
-
-**Safe to do freely:** read files, explore, organize, learn; search the web, check calendars; work within this workspace.
-
-**Ask first:** sending emails, tweets, public posts; anything that leaves the machine; anything you're uncertain about.
-
 ## Group Chats
 
-Keep private information private. Participate as yourself, not as your human's voice or proxy.
+Participate as yourself by default. When the user asks you to send or post on their behalf, follow that request and share only the information intended for that audience.
 
 ### Know When to Speak
 

@@ -1,22 +1,20 @@
 // Budget deletion retains the logical owner while reusing the captured physical store.
 import { randomUUID } from "node:crypto";
-import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
 import type { SQLInputValue } from "node:sqlite";
-import type { Worker } from "node:worker_threads";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   insertRepositoryGitHubPublication,
   readRepositoryGitHubPublication,
   repositoryGitHubPublicationDigest,
-  type RepositoryGitHubPublicationRow,
 } from "../../gateway/github-repository-publication-store.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
 } from "../../sessions/session-lifecycle-events.js";
+import type { RepositoryGitHubPublicationRow } from "../../state/github-publication-read.types.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -25,8 +23,8 @@ import {
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -38,10 +36,9 @@ import {
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  appendTranscriptEventsInTransaction,
-  ensureTranscriptHeader,
-} from "./session-accessor.sqlite-transcript-store.js";
+import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
+import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { withSessionHistoryBudgetSweepsForTest } from "./session-history-budget.test-support.js";
 import { enforceSqliteSessionHistoryDiskBudget } from "./session-history-eviction.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -49,10 +46,6 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 const states: OpenClawTestState[] = [];
 const pending: Promise<unknown>[] = [];
 const listeners: Array<() => void> = [];
-const workers: Worker[] = [];
-const workerChannel = channel("worker_threads");
-const recordWorker = (message: unknown) => workers.push((message as { worker: Worker }).worker);
-beforeEach(() => workerChannel.subscribe(recordWorker));
 afterEach(async () => {
   for (const unsubscribe of listeners.splice(0)) {
     unsubscribe();
@@ -66,11 +59,7 @@ afterEach(async () => {
       closeOpenClawAgentDatabasesForTest(state.root);
     }
   } finally {
-    closeOpenClawStateDatabaseForTest();
-    workerChannel.unsubscribe(recordWorker);
-    // Real archive/reclamation calls settle their workers. Only this test's idle
-    // measurement pool remains; join termination before removing the fixture.
-    await Promise.all(workers.splice(0).map((worker) => worker.terminate()));
+    await closeStateDatabaseForTest();
     for (const state of states.splice(0).toReversed()) {
       await state.cleanup();
     }
@@ -102,6 +91,7 @@ function seedReceipt(agentId: string, sessionKey: string, sessionId: string): st
     request_digest: "",
     session_id: sessionId,
     session_lifecycle_revision: null,
+    requester_authority_json: null,
     session_key: sessionKey,
     agent_id: agentId,
     workspace_id: `workspace-${requestId}`,
@@ -386,7 +376,8 @@ describe("budget cap-entry logical ownership", () => {
   ] as const)(
     "deletes the matching receipt for $name in a shared physical main store",
     async (scenario) => {
-      const f = await fixture("shared", scenario.bare);
+      const f = await withSessionHistoryBudgetSweepsForTest(() => fixture("shared", scenario.bare));
+      const file = fs.statSync(f.databasePath, { bigint: true });
       const facts = observeVictim(f);
       await expect(enforce(f, scenario.explicit ? "secondary" : undefined)).resolves.toMatchObject({
         removedEntries: 1,
@@ -414,6 +405,7 @@ describe("budget cap-entry logical ownership", () => {
         {
           mutation: {
             agentId: scenario.expectedAgent,
+            databaseIdentity: `${file.dev}:${file.ino}`,
             kind: "delete",
             previous: { sessionId: f.victimId, sessionKeys: [f.victimKey] },
           },
@@ -428,7 +420,7 @@ describe("budget cap-entry logical ownership", () => {
   it.each(["canonical-nonshared", "custom-nonshared"] as const)(
     "rejects a foreign candidate in a %s store without retargeting cleanup",
     async (kind) => {
-      const f = await fixture(kind);
+      const f = await withSessionHistoryBudgetSweepsForTest(() => fixture(kind));
       const facts = observeVictim(f);
       const suffixPath =
         kind === "custom-nonshared"

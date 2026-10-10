@@ -8,8 +8,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
@@ -31,6 +31,7 @@ describe("retained transcript sharing", () => {
         await upsertSessionEntryCore(scope, {
           sessionId: scope.sessionId,
           updatedAt: 1,
+          displayName: "Private retained conversation",
           visibility: "draft",
           createdActor: { type: "human", source: "profile", id: "owner" },
         });
@@ -39,7 +40,7 @@ describe("retained transcript sharing", () => {
         });
         const client = identifiedClient("viewer");
         const readChatStartupProjection = vi.fn(async () => undefined);
-        const context = createDirectChatContext({
+        const context = await createHistoryReadContext({
           getRuntimeConfig: () => cfg,
           readChatStartupProjection,
         });

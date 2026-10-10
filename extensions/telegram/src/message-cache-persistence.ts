@@ -1,4 +1,3 @@
-// Lightweight Telegram message-cache persistence contract shared with doctor migrations.
 import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,16 +10,13 @@ import type {
 
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
-// Versioned writes preserve projection provenance. Shipped unversioned rows
-// hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 
 export type TelegramMessageThreadBinding = {
   kind: "provider-observed-v1";
   threadSpec:
-    | { scope: "direct-messages"; id: number }
-    | { scope: "dm"; id: number }
-    | { scope: "forum"; id: number };
+    | { scope: "direct-messages" | "dm" | "forum"; id: number }
+    | { scope: "none"; id?: never };
 };
 
 export type TelegramResolvedMedia = {
@@ -40,6 +36,7 @@ export type PersistedTelegramMessageCacheValue = {
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
   resolvedMedia?: TelegramResolvedMedia;
   threadBinding?: TelegramMessageThreadBinding;
+  historyEligible?: true;
   threadId?: string;
 };
 
@@ -53,15 +50,14 @@ function parseStickerMetadata(value: unknown): StickerMetadata | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
-  return {
-    ...(typeof value.emoji === "string" ? { emoji: value.emoji } : {}),
-    ...(typeof value.setName === "string" ? { setName: value.setName } : {}),
-    ...(typeof value.fileId === "string" ? { fileId: value.fileId } : {}),
-    ...(typeof value.fileUniqueId === "string" ? { fileUniqueId: value.fileUniqueId } : {}),
-    ...(typeof value.cachedDescription === "string"
-      ? { cachedDescription: value.cachedDescription }
-      : {}),
-  };
+  const metadata: StickerMetadata = {};
+  for (const key of ["emoji", "setName", "fileId", "fileUniqueId", "cachedDescription"] as const) {
+    const field = value[key];
+    if (typeof field === "string") {
+      metadata[key] = field;
+    }
+  }
+  return metadata;
 }
 
 export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedia | undefined {
@@ -95,12 +91,8 @@ export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedi
   };
 }
 
-export function resolveTelegramMessageCachePath(storePath: string): string {
-  return `${storePath}.telegram-messages.json`;
-}
-
 export function resolveTelegramMessageCacheScope(storePath: string): string {
-  return resolveTelegramMessageCachePath(storePath);
+  return `${storePath}.telegram-messages.json`;
 }
 
 export function resolveTelegramMessageCachePersistentScopeKey(scope: string): string {

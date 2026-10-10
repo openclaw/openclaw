@@ -1,4 +1,3 @@
-// Memory Core plugin module owns bounded deep-phase MEMORY.md consolidation.
 import {
   DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   formatMemoryDreamingDay,
@@ -16,6 +15,7 @@ import {
   memoryEntryMatchesPromotionProjectGroup,
 } from "./short-term-promotion-metadata.js";
 import type { PromotionCandidate } from "./short-term-promotion-types.js";
+import { formatPromotedSnippetForMemory } from "./short-term-promotion-utils.js";
 
 const CONSOLIDATION_TIMEOUT_MS = 60_000;
 const PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE = 4;
@@ -55,14 +55,7 @@ function buildCandidateResultEntry(
   candidate: PromotionCandidate,
   maxPromotedSnippetTokens: number,
 ): string {
-  const maxSnippetChars = maxPromotedSnippetTokens * PROMOTED_SNIPPET_CHARS_PER_TOKEN_ESTIMATE;
-  const snippet = truncateUtf16Safe(
-    candidate.snippet
-      .replace(/^[-*+]\s+/u, "")
-      .replace(/\s+/gu, " ")
-      .trim(),
-    maxSnippetChars,
-  ).trimEnd();
+  const snippet = formatPromotedSnippetForMemory(candidate.snippet, maxPromotedSnippetTokens);
   return `- ${snippet} Source: ${candidateSourceRef(candidate)} ${buildPromotionRecallAnnotations(candidate)}`;
 }
 
@@ -131,11 +124,8 @@ function parseConsolidationPlan(
   }
 }
 
-function extractMemoryEntries(content: string): string[] {
-  return content
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(isMemoryEntryLine);
+function extractMemoryEntries(lines: string[]): string[] {
+  return lines.map((line) => line.trim()).filter(isMemoryEntryLine);
 }
 
 function isMemoryEntryLine(trimmed: string): boolean {
@@ -192,8 +182,7 @@ function readAttachedLineageKey(lines: string[], entryIndex: number): string | n
   );
 }
 
-function findLineageEntries(content: string, lineageKey: string): string[] {
-  const lines = content.replace(/\r\n/gu, "\n").split("\n");
+function findLineageEntries(lines: string[], lineageKey: string): string[] {
   return lines.flatMap((line, index) => {
     const entry = line.trim();
     return isMemoryEntryLine(entry) && readAttachedLineageKey(lines, index) === lineageKey
@@ -202,8 +191,7 @@ function findLineageEntries(content: string, lineageKey: string): string[] {
   });
 }
 
-function priorEntryHasContinuation(content: string, priorEntry: string): boolean {
-  const lines = content.replace(/\r\n/gu, "\n").split("\n");
+function priorEntryHasContinuation(lines: string[], priorEntry: string): boolean {
   const index = lines.findIndex((line) => line.trim() === priorEntry);
   return index >= 0 && /^\s+\S/u.test(lines[index + 1] ?? "");
 }
@@ -214,11 +202,11 @@ function validateConsolidationPlan(params: {
   candidates: PromotionCandidate[];
   projectKey?: string;
 }): string | null {
-  const priorEntries = extractMemoryEntries(params.previous);
+  const lines = params.previous.split(/\r?\n/);
+  const priorEntries = extractMemoryEntries(lines);
   if (params.plan.operations.length !== params.candidates.length) {
     return "output operation count does not match the candidate count";
   }
-  const priorEntrySet = new Set(priorEntries);
   const priorEntryCounts = countStrings(priorEntries);
   const operationsByCandidate = new Map(
     params.plan.operations.map((operation) => [operation.candidateKey, operation]),
@@ -245,11 +233,11 @@ function validateConsolidationPlan(params: {
       (operation.action !== "added" && operation.priorEntries.length === 0) ||
       operation.priorEntries.some(
         (entry) =>
-          !priorEntrySet.has(entry) ||
+          !priorEntryCounts.has(entry) ||
           (priorEntryCounts.get(entry) ?? 0) > 1 ||
-          priorEntryHasContinuation(params.previous, entry),
+          priorEntryHasContinuation(lines, entry),
       ) ||
-      (operation.action === "added" && priorEntrySet.has(operation.resultEntry))
+      (operation.action === "added" && priorEntryCounts.has(operation.resultEntry))
     ) {
       return `output has invalid prior-entry evidence for candidate ${candidate.key}`;
     }
@@ -269,14 +257,11 @@ function validateConsolidationPlan(params: {
     ) {
       return `output merges candidate ${candidate.key} with an unrelated prior entry`;
     }
-    if (operation.action === "superseded") {
-      const lineageKey = candidate.provenance?.supersedesKey;
-      if (!lineageKey) {
-        return `output supersedes candidate ${candidate.key} without matching lineage`;
-      }
-    }
     const lineageKey = candidate.provenance?.supersedesKey;
-    const lineageEntries = lineageKey ? findLineageEntries(params.previous, lineageKey) : [];
+    if (operation.action === "superseded" && !lineageKey) {
+      return `output supersedes candidate ${candidate.key} without matching lineage`;
+    }
+    const lineageEntries = lineageKey ? findLineageEntries(lines, lineageKey) : [];
     if (
       lineageEntries.length > 0 &&
       (operation.action !== "superseded" ||
@@ -296,7 +281,8 @@ export function applyMemoryConsolidationPlan(params: {
   memoryFileMaxChars?: number;
   maxPriorEntryLossFraction: number;
 }): MemoryConsolidationResult | null {
-  const currentEntries = extractMemoryEntries(params.existingMemory);
+  const lines = params.existingMemory.split(/\r?\n/);
+  const currentEntries = extractMemoryEntries(lines);
   const removedEntryCount = params.plan.operations.reduce(
     (count, operation) => count + operation.priorEntries.length,
     0,
@@ -305,12 +291,11 @@ export function applyMemoryConsolidationPlan(params: {
   if (lossFraction > params.maxPriorEntryLossFraction) {
     return null;
   }
-  const lines = params.existingMemory.replace(/\r\n/gu, "\n").split("\n");
   for (const operation of params.plan.operations) {
     if (lines.some((line) => line.includes(buildPromotionMarker(operation.candidateKey)))) {
       return null;
     }
-    const latestEntries = extractMemoryEntries(lines.join("\n"));
+    const latestEntries = extractMemoryEntries(lines);
     const existingResultCount = latestEntries.filter(
       (entry) => entry === operation.resultEntry,
     ).length;
@@ -321,7 +306,7 @@ export function applyMemoryConsolidationPlan(params: {
       return null;
     }
     if (operation.lineageKey) {
-      const currentLineageEntries = findLineageEntries(lines.join("\n"), operation.lineageKey);
+      const currentLineageEntries = findLineageEntries(lines, operation.lineageKey);
       if (!sameStringCounts(operation.priorEntries, currentLineageEntries)) {
         return null;
       }

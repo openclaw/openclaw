@@ -4,30 +4,15 @@ import type { AssistantMessage, Model, StreamFn } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
 import type { SessionTreeEntry } from "../types.js";
 import { generateBranchSummary, prepareBranchEntries } from "./branch-summarization.js";
+import { createCompactionModel, createMessageEntry } from "./compaction.test-support.js";
 
 function createModel(contextWindow: number, maxTokens = 8000): Model & { contextWindow: number } {
-  return {
+  return createCompactionModel({
     id: "branch-summary-model",
     name: "Branch Summary Model",
-    api: "test-api",
-    provider: "test-provider",
-    baseUrl: "https://example.test",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow,
     maxTokens,
-  };
-}
-
-function createMessageEntry(message: AgentMessage, index: number): SessionTreeEntry {
-  return {
-    type: "message",
-    id: `entry-${index}`,
-    parentId: index === 0 ? null : `entry-${index - 1}`,
-    timestamp: new Date(message.timestamp).toISOString(),
-    message,
-  };
+  });
 }
 
 function createResponse(
@@ -172,7 +157,7 @@ describe("branch summarization", () => {
         customType: "openclaw.runtime-context",
         content: "PRIVATE_RUNTIME_CONTEXT",
         display: false,
-        details: { runtimeContextCarrier: true },
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       },
       createMessageEntry(
         createResponse(model, [
@@ -223,6 +208,88 @@ src/write.ts
     );
     expect(capture.readCapture().prompt).not.toContain("PRIVATE_BRANCH_REASONING");
     expect(capture.readCapture().prompt).not.toContain("PRIVATE_RUNTIME_CONTEXT");
+  });
+
+  it("preserves sender provenance and attribution instructions in a branch summary prompt", async () => {
+    const model = createModel(128_000);
+    const capture = createCapturingStream(model);
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry(
+        {
+          role: "user",
+          content: "Alice requires the launch on Friday.",
+          timestamp: 1,
+          __openclaw: { senderId: "alice-id", senderName: "Alice" },
+        } as AgentMessage,
+        0,
+      ),
+      createMessageEntry({ role: "user", content: "An old anonymous note.", timestamp: 2 }, 1),
+    ];
+
+    const result = await generateBranchSummary(entries, {
+      model,
+      apiKey: "test-key",
+      signal: new AbortController().signal,
+      streamFn: capture.streamFn,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(capture.readCapture().prompt).toContain(
+      '[User sender={"id":"alice-id","name":"Alice"}]: Alice requires the launch on Friday.',
+    );
+    expect(capture.readCapture().prompt).toContain("[User]: An old anonymous note.");
+    expect(capture.readCapture().systemPrompt).toContain("Preserve attribution for material facts");
+    expect(capture.readCapture().systemPrompt).toContain("is unattributed");
+  });
+
+  it("applies attribution instructions when custom branch instructions replace the default", async () => {
+    const model = createModel(128_000);
+    const capture = createCapturingStream(model);
+    const result = await generateBranchSummary(
+      [
+        createMessageEntry(
+          {
+            role: "user",
+            content: "Alice owns this branch decision.",
+            timestamp: 1,
+            __openclaw: { senderId: "alice-id" },
+          } as AgentMessage,
+          0,
+        ),
+      ],
+      {
+        model,
+        apiKey: "test-key",
+        signal: new AbortController().signal,
+        customInstructions: "Use this caller-owned branch format.",
+        replaceInstructions: true,
+        streamFn: capture.streamFn,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(capture.readCapture().prompt).toContain("Use this caller-owned branch format.");
+    expect(capture.readCapture().systemPrompt).toContain("Preserve attribution for material facts");
+    expect(capture.readCapture().systemPrompt).toContain("is unattributed");
+  });
+
+  it("charges sender-heavy entries before selecting a branch history budget", () => {
+    const attributed = {
+      role: "user",
+      content: "old",
+      timestamp: 1,
+      __openclaw: { senderId: "alice-id", senderName: "A".repeat(256) },
+    } as AgentMessage;
+    const recent = { role: "user", content: "new", timestamp: 2 } as AgentMessage;
+    const entries = [createMessageEntry(attributed, 0), createMessageEntry(recent, 1)];
+
+    // The newer shared serializer charges the visible user-role wrapper too;
+    // leave room for the newest short turn while the large sender suffix must
+    // still exclude the older attributed turn.
+    const preparation = prepareBranchEntries(entries, 4);
+
+    expect(preparation.messages).toMatchObject([{ role: "user", content: "new" }]);
+    expect(preparation.totalTokens).toBeLessThanOrEqual(4);
   });
 
   it("retains failed tool results when preparing a branch", () => {

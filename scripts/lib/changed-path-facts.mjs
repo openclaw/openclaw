@@ -15,14 +15,13 @@ const SURFACE_PATTERNS = [
   ["source", /^src\//u],
   ["package", /^packages\//u],
   ["ui", /^(?:ui\/|tsconfig\.ui\.json$)/u],
-  ["app", /^(?:apps\/|Swabble\/|appcast\.xml$)/u],
+  ["app", /^(?:apps\/|Swabble\/|appcast(?:-(?:arm64|x86_64))?\.xml$)/u],
   ["rootTest", /^test\//u],
   ["testFixture", /^test-fixtures\//u],
-  // These hidden helpers own maintainer reports and release artifact validation.
-  // Match the reviewed leaf exactly so unreviewed skill executables still fail safe.
+  // Match reviewed skill owners so other hidden executables still fail safe.
   [
     "rootTooling",
-    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs)$/u,
+    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs|update-team-server\/controller\/[^/]+)$/u,
   ],
   [
     "rootTooling",
@@ -35,7 +34,7 @@ const CHANGED_LANE_TEST_PATH_RE =
 const TEST_ONLY_PATH_RE =
   /(^test\/|\/test\/|\/tests\/|(?:^|\/)[^/]+\.(?:test|spec|suite|test-utils|test-(?:helpers|support|harness)|e2e-harness)\.[cm]?[jt]sx?$)/u;
 const NATIVE_ONLY_PATH_RE =
-  /^(?:apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/u;
+  /^(?:apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast(?:-(?:arm64|x86_64))?\.xml$)/u;
 const ROOT_TEST_SOURCE_PATH_RE = /^test\/(?!fixtures\/).*\.[cm]?tsx?$/u;
 
 /**

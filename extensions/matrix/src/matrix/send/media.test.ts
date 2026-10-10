@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMediaDurationMs } from "./media.js";
+import { buildMediaContent, resolveMediaDurationMs } from "./media.js";
 
 const AIFC_SAMPLE_RATE = 44_100;
 const AIFC_PACKET_COUNT = 441;
@@ -98,5 +98,41 @@ describe("resolveMediaDurationMs", () => {
         kind: "audio",
       }),
     ).resolves.toBe(10);
+  });
+});
+
+describe("buildMediaContent", () => {
+  it.each([
+    { name: "absent metadata", metadata: { size: Number.NaN }, info: undefined },
+    {
+      name: "explicit empty image metadata",
+      metadata: { size: Number.NaN, imageInfo: {} },
+      info: {},
+    },
+    {
+      name: "zero duration",
+      metadata: { size: 0, mimetype: "video/webm", durationMs: 0 },
+      info: { size: 0, mimetype: "video/webm", duration: 0 },
+    },
+    {
+      name: "image field precedence before the duration override",
+      metadata: {
+        size: 10,
+        mimetype: "video/webm",
+        imageInfo: { size: undefined, mimetype: "image/webp", w: 2, h: 1 },
+        durationMs: 0,
+      },
+      info: { size: undefined, mimetype: "image/webp", w: 2, h: 1, duration: 0 },
+    },
+  ])("preserves $name", ({ metadata, info }) => {
+    const before = structuredClone(metadata);
+
+    expect(buildMediaContent({ msgtype: "m.video", body: "clip", ...metadata })).toStrictEqual({
+      msgtype: "m.video",
+      body: "clip",
+      filename: undefined,
+      info,
+    });
+    expect(metadata).toStrictEqual(before);
   });
 });

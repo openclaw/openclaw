@@ -75,6 +75,10 @@ Three records serve different purposes:
 | Entry origins         | Tracked entry | Session ingestion, backfill, and consolidation | Finding entries derived from a selected session |
 | Curated-write records | Memory file   | The memory write observer                      | Identifying files to review during a purge      |
 
+Curated-write lookups read only the requested physical workspace. Corrupt JSON
+in another workspace's records does not block that lookup; corrupt JSON in a
+live record in the selected workspace still reports a storage error.
+
 [Chunk provenance](/concepts/memory-architecture#provenance-every-memory-knows-where-it-came-from)
 describes the origin class and session kind. Entry origins instead associate
 an entry key with an agent and source session in SQLite. Promotion markers in
@@ -216,6 +220,10 @@ agent's SQLite database before removing its artifacts. Automatic ingestion,
 historical session backfill, and transcript indexing, including
 `memory index --force`, check these records. Automatic ingestion records the
 reason `forgotten`.
+
+Transcript updates check forgotten-session membership only for the selected
+sessions. Startup catch-up, dreaming, and backfill check their candidates in
+bounded batches, preserving exclusions across the complete selection.
 
 The memory plugin coordinates purges with its staging and file mutations.
 A pending dream narrative is skipped if its tracked source entries or prior

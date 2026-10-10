@@ -66,7 +66,13 @@ async function expectReports(page: Page, pathname = "/reports") {
       id: element.tabId,
     })),
   ).toEqual({ pluginId, id: tabId });
-  const sidebarEntry = page.locator(`[data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`);
+  await page
+    .locator("openclaw-app-sidebar")
+    .getByRole("button", { name: "Pages", exact: true })
+    .click();
+  const sidebarEntry = page.locator(
+    `.sidebar-pages [data-sidebar-entry="plugin:${pluginId}/${tabId}"] a`,
+  );
   expect(await sidebarEntry.getAttribute("href")).toBe("/reports");
   expect(await sidebarEntry.getAttribute("aria-current")).toBe("page");
   expect(await sidebarEntry.isVisible()).toBe(true);
@@ -77,7 +83,13 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installReports(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const entry = page.getByRole("link", { name: "Reports", exact: true });
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "Pages", exact: true })
+        .click();
+      const entry = page
+        .locator(".sidebar-pages")
+        .getByRole("link", { name: "Reports", exact: true });
       await entry.waitFor();
       expect(await entry.getAttribute("href")).toBe("/reports");
       await entry.click();
@@ -157,7 +169,14 @@ suite.define(() => {
           );
           return app?.runtime?.context.config.current.embedSandboxMode === "scripts";
         });
-        await page.getByRole("link", { name: "Reports", exact: true }).click();
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Pages", exact: true })
+          .click();
+        await page
+          .locator(".sidebar-pages")
+          .getByRole("link", { name: "Reports", exact: true })
+          .click();
         const frame = page.frameLocator("openclaw-plugin-page iframe");
         const receivedTheme = frame.getByLabel("Received OpenClaw theme");
         expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(
@@ -165,14 +184,18 @@ suite.define(() => {
         );
         const sidebar = page.locator("openclaw-app-sidebar");
         const identityMenu = sidebar.getByRole("button", { name: /^Identity and app menu for / });
-        if (!(await sidebar.locator(".theme-mode-toggle").isVisible())) {
-          await identityMenu.click();
-        }
+        await identityMenu.click();
+        // The menu loads lazily, and each mode click renders its next label asynchronously.
         for (const currentMode of ["System", "Light"] as const) {
-          const toggle = sidebar.getByRole("button", { name: `Color mode: ${currentMode}` });
-          if (await toggle.isVisible()) {
-            await toggle.click();
-          }
+          await sidebar
+            .getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true })
+            .click();
+          await sidebar
+            .getByRole("menuitem", {
+              name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
+              exact: true,
+            })
+            .waitFor();
         }
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
         await expect
@@ -187,11 +210,7 @@ suite.define(() => {
           JSON.parse((await receivedTheme.textContent()) ?? "{}").messages,
         );
 
-        const toggle = sidebar.getByRole("button", { name: "Color mode: Dark" });
-        if (!(await toggle.isVisible())) {
-          await identityMenu.click();
-        }
-        await toggle.click();
+        await sidebar.getByRole("menuitem", { name: "Color mode: Dark", exact: true }).click();
 
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
         await expect

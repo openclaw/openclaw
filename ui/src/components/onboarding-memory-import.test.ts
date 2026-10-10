@@ -2,19 +2,27 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import "./onboarding-memory-import.ts";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
-  context: ApplicationContext<RouteId>;
+  context: ApplicationContext;
   requestUpdate: () => void;
   updateComplete: Promise<boolean>;
 };
 
 function waitForOnboardingMemoryImport(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
+}
+
+async function waitForAction(
+  element: OnboardingMemoryImportElement,
+  action: "import" | "skip" | "continue" = "import",
+) {
+  const selector = `[data-test-id='onboarding-memory-import-${action}']`;
+  await waitForOnboardingMemoryImport(() => expect(element.querySelector(selector)).not.toBeNull());
+  return element.querySelector<HTMLButtonElement>(selector)!;
 }
 
 const guardKey = "openclaw.onboarding.memory-import";
@@ -127,11 +135,11 @@ function createContext(
       subscribe,
     },
     navigate: vi.fn(),
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 async function mount(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   active = true,
 ): Promise<OnboardingMemoryImportElement> {
   const element = document.createElement(
@@ -263,17 +271,7 @@ describe("OnboardingMemoryImport", () => {
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000001")
       .mockReturnValueOnce("00000000-0000-4000-8000-000000000002");
     const element = await mount(createContext(request));
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(
-          "[data-test-id='onboarding-memory-import-import']",
-        ),
-      ).not.toBeNull(),
-    );
-
-    element
-      .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
-      ?.click();
+    (await waitForAction(element)).click();
 
     await waitForOnboardingMemoryImport(() => expect(request).toHaveBeenCalledTimes(3));
     const applyCalls = request.mock.calls.filter(
@@ -314,13 +312,7 @@ describe("OnboardingMemoryImport", () => {
       return createApplyResult("codex");
     });
     const element = await mount(createContext(originalRequest));
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(
-          "[data-test-id='onboarding-memory-import-import']",
-        ),
-      ).not.toBeNull(),
-    );
+    await waitForAction(element);
 
     // A new gateway client invalidates the frozen offer: the stale plan must
     // never be applied through the old binding. The offer replans instead.
@@ -330,16 +322,7 @@ describe("OnboardingMemoryImport", () => {
     expect(replacementRequest.mock.calls[0]?.[0]).toBe("migrations.memory.plan");
     expect(originalRequest).toHaveBeenCalledTimes(1);
 
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(
-          "[data-test-id='onboarding-memory-import-import']",
-        ),
-      ).not.toBeNull(),
-    );
-    element
-      .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
-      ?.click();
+    (await waitForAction(element)).click();
     await waitForOnboardingMemoryImport(() =>
       expect(
         replacementRequest.mock.calls.filter((call) => call[0] === "migrations.memory.apply"),
@@ -361,17 +344,7 @@ describe("OnboardingMemoryImport", () => {
       return result;
     });
     const element = await mount(createContext(request));
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(
-          "[data-test-id='onboarding-memory-import-import']",
-        ),
-      ).not.toBeNull(),
-    );
-
-    element
-      .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
-      ?.click();
+    (await waitForAction(element)).click();
 
     await waitForOnboardingMemoryImport(() => expect(element.textContent).toContain("1 failed"));
     expect(element.textContent).toContain("Migrated 1");
@@ -380,15 +353,7 @@ describe("OnboardingMemoryImport", () => {
   it("sets the guard when skipped", async () => {
     const request = vi.fn(async () => createPlan());
     const element = await mount(createContext(request));
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-skip']"),
-      ).not.toBeNull(),
-    );
-
-    element
-      .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-skip']")
-      ?.click();
+    (await waitForAction(element, "skip")).click();
 
     await element.updateComplete;
     expect(sessionStorage.getItem(guardKey)).toBe("done");
@@ -406,25 +371,9 @@ describe("OnboardingMemoryImport", () => {
       return createApplyResult("claude", 1, 0);
     });
     const element = await mount(createContext(request));
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(
-          "[data-test-id='onboarding-memory-import-import']",
-        ),
-      ).not.toBeNull(),
-    );
+    (await waitForAction(element)).click();
 
-    element
-      .querySelector<HTMLButtonElement>("[data-test-id='onboarding-memory-import-import']")
-      ?.click();
-
-    await waitForOnboardingMemoryImport(() =>
-      expect(
-        element.querySelector<HTMLButtonElement>(
-          "[data-test-id='onboarding-memory-import-continue']",
-        ),
-      ).not.toBeNull(),
-    );
+    await waitForAction(element, "continue");
     const applyProviders = request.mock.calls
       .filter(([method]) => method === "migrations.memory.apply")
       .map(([, params]) => (params as { providerId: string }).providerId);

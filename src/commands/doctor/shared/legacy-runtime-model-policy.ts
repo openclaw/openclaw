@@ -1,5 +1,4 @@
 // Shared legacy runtime policy projection for selected canonical model refs.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getRecord } from "../../../config/legacy.shared.js";
 import {
@@ -41,44 +40,6 @@ export function migrateExplicitDefaultModelAllowPolicy(
       ? "Copied the legacy default model map to agents.defaults.modelPolicy.allow."
       : "Recorded the legacy default model map as unrestricted without creating modelPolicy.allow.",
   );
-}
-
-/** Select canonical refs owned by a provider, preserving config order and duplicates. */
-export function selectedCanonicalModelRefsForRuntimePolicy(
-  rawModel: unknown,
-  provider: string,
-): string[] {
-  const refs: string[] = [];
-  const addRef = (rawRef: unknown) => {
-    if (typeof rawRef !== "string") {
-      return;
-    }
-    const ref = rawRef.trim();
-    const slash = ref.indexOf("/");
-    if (
-      slash <= 0 ||
-      slash >= ref.length - 1 ||
-      normalizeProviderId(ref.slice(0, slash)) !== normalizeProviderId(provider)
-    ) {
-      return;
-    }
-    refs.push(ref);
-  };
-
-  if (typeof rawModel === "string") {
-    addRef(rawModel);
-    return refs;
-  }
-  if (!isRecord(rawModel)) {
-    return refs;
-  }
-  addRef(rawModel.primary);
-  if (Array.isArray(rawModel.fallbacks)) {
-    for (const fallback of rawModel.fallbacks) {
-      addRef(fallback);
-    }
-  }
-  return refs;
 }
 
 /** Add runtime policy unless the model entry already selects an explicit non-auto runtime. */

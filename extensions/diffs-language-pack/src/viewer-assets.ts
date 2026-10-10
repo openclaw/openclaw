@@ -1,4 +1,3 @@
-// Diffs Language Pack plugin module implements viewer assets behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -59,15 +58,8 @@ export async function getServedViewerAsset(pathname: string): Promise<ServedView
   }
 
   const assets = await loadViewerAssets();
-  if (pathname === VIEWER_LOADER_PATH) {
-    return {
-      body: assets.loaderBody,
-      contentType: "text/javascript; charset=utf-8",
-    };
-  }
-
   return {
-    body: assets.runtimeBody,
+    body: pathname === VIEWER_LOADER_PATH ? assets.loaderBody : assets.runtimeBody,
     contentType: "text/javascript; charset=utf-8",
   };
 }

@@ -6,6 +6,8 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { resolveProjectRegistry } from "../../projects/project-registry.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { patchSessionEntryCore } from "./session-accessor.js";
 import { parseReadableSqliteSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -21,21 +23,23 @@ function isInside(root: string, target: string): boolean {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-function resolveLegacyCanonicalWorkspace(params: {
+async function resolveLegacyCanonicalWorkspace(params: {
   agentId: string;
   cfg: OpenClawConfig;
   entry: SessionEntry;
   env: NodeJS.ProcessEnv;
   sessionKey: string;
   worktrees: ReturnType<typeof listRegistryWorktreesForMigration>;
-}): string | undefined {
+}): Promise<string | undefined> {
   const worktree = params.entry.worktree;
   if (!worktree || worktree.canonicalWorkspaceDir) {
     return undefined;
   }
   const recordedRepoRoot = path.resolve(worktree.repoRoot);
   if (params.entry.projectId) {
-    const project = resolveProjectRegistry(params.cfg, params.entry.projectId, { env: params.env });
+    const project = await resolveProjectRegistry(params.cfg, params.entry.projectId, {
+      env: params.env,
+    });
     const projectRoot = project ? path.resolve(project.repoRoot) : undefined;
     return projectRoot && isInside(recordedRepoRoot, projectRoot) ? projectRoot : undefined;
   }
@@ -99,7 +103,8 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
   storePath: string;
   mode: "detect" | "doctor-fix";
 }): Promise<{ found: number; repaired: number }> {
-  const env = params.env ?? process.env;
+  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
+  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const entries = listLegacyWorktreeSessionEntries({
     agentId: params.agentId,
     env,
@@ -114,7 +119,7 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
     // Select the workspace by logical owner, but keep writes in the source database:
     // resolving a custom store selector for another agent can choose a sibling partition.
     const agentId = resolveAgentIdFromSessionKey(sessionKey, params.agentId);
-    const canonicalWorkspaceDir = resolveLegacyCanonicalWorkspace({
+    const canonicalWorkspaceDir = await resolveLegacyCanonicalWorkspace({
       agentId,
       cfg: params.cfg,
       entry,
@@ -131,6 +136,9 @@ export async function migrateManagedWorktreeCanonicalWorkspaces(params: {
         if (
           !current.worktree ||
           current.worktree.id !== entry.worktree?.id ||
+          current.worktree.repoRoot !== entry.worktree.repoRoot ||
+          current.projectId !== entry.projectId ||
+          current.spawnedCwd !== entry.spawnedCwd ||
           current.worktree.canonicalWorkspaceDir
         ) {
           return null;

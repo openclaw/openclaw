@@ -41,14 +41,12 @@ describe("TUI auth child owner", () => {
 
     await expect(owner.spawnAndWait(spawnChild)).rejects.toThrow("owner is closed");
     expect(spawnChild).not.toHaveBeenCalled();
-    expect(owner.running).toBe(false);
   });
 
   it("waits for normal completion and releases the exact child", async () => {
     const owner = createTuiAuthChildOwner();
     const child = createChild(102);
     const result = owner.spawnAndWait(() => child);
-    expect(owner.running).toBe(true);
     const secondSpawn = vi.fn(() => createChild(202));
     await expect(owner.spawnAndWait(secondSpawn)).rejects.toThrow("already running");
     expect(secondSpawn).not.toHaveBeenCalled();
@@ -56,8 +54,12 @@ describe("TUI auth child owner", () => {
     emitExit(child, 0, null);
 
     await expect(result).resolves.toEqual({ exitCode: 0, signal: null });
-    expect(owner.running).toBe(false);
     expect(killTreeMocks.signalProcessTree).not.toHaveBeenCalled();
+
+    const nextChild = createChild(203);
+    const nextResult = owner.spawnAndWait(() => nextChild);
+    emitExit(nextChild, 0, null);
+    await expect(nextResult).resolves.toEqual({ exitCode: 0, signal: null });
   });
 
   it("cancels gracefully, then force-kills only the still-active child", async () => {

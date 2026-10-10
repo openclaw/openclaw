@@ -1,5 +1,9 @@
-// Control UI type declarations define css contracts.
 declare module "*.css";
+
+declare module "*.html?raw" {
+  const html: string;
+  export default html;
+}
 
 declare module "*.css?inline" {
   const css: string;

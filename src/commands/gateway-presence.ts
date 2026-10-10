@@ -1,4 +1,3 @@
-/** Extracts the gateway's self presence entry from status/presence payloads. */
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
 type GatewaySelfPresence = {
@@ -21,7 +20,6 @@ function parseLegacyGatewaySelfText(text: string): Pick<GatewaySelfPresence, "ho
   };
 }
 
-/** Picks host, ip, version, and platform from the gateway self presence record. */
 export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence | null {
   if (!Array.isArray(presence)) {
     return null;
@@ -42,13 +40,11 @@ export function pickGatewaySelfPresence(presence: unknown): GatewaySelfPresence 
     version: readStringValue(self.version),
     platform: readStringValue(self.platform),
   };
-  const deviceId = readStringValue(self.deviceId);
-  if (deviceId) {
-    result.deviceId = deviceId;
-  }
-  const instanceId = readStringValue(self.instanceId);
-  if (instanceId) {
-    result.instanceId = instanceId;
+  for (const field of ["deviceId", "instanceId"] as const) {
+    const value = readStringValue(self[field]);
+    if (value) {
+      result[field] = value;
+    }
   }
   return result;
 }

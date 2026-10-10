@@ -1,7 +1,10 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
@@ -22,6 +25,7 @@ import {
   createUpdateStatusRefresher,
   projectUpdateSentinel,
   projectUpdateStatusResponse,
+  projectUpdateCheckoutResponse,
   projectUpdateRunFailure,
   resolveUnknownUpdateOutcomeBanner,
   resolveUpdateStatusBanner,
@@ -67,6 +71,7 @@ export function createApplicationUpdateOverlays(
     updateStatusBanner: null,
     updateStatusCheckBanner: null,
     recordedUpdateAttempt: null,
+    diagnosableUpdateFailureId: null,
     reportableUpdateFailureId: null,
     updateFailureReportBusy: false,
     updateFailureReportNotice: null,
@@ -92,7 +97,7 @@ export function createApplicationUpdateOverlays(
   let updateHistory: UpdateHistory = { kind: "unknown" };
   let updateAttempt: UpdateAdmissionAttempt | null = null;
   let currentFailure: UpdateFailureTriage | null = null;
-  let presentedFailure: UpdateFailureTriage | null = null;
+  let diagnosticGeneration = 0;
 
   const updateFailureReporter = createUpdateFailureReportController({
     getClient: () => gateway.snapshot.client,
@@ -135,43 +140,49 @@ export function createApplicationUpdateOverlays(
     gateway.snapshot.phase === "connected" &&
     readGatewayOperatorAccess(gateway.snapshot).canAdmin;
 
-  function presentFailureTriage() {
+  function diagnoseUpdateFailure(attemptId: string) {
     const owned = currentFailure;
     const scope = updateGatewayScope;
     const profile = profileId;
+    const client = activeClient;
+    const epoch = connectedEpoch;
     if (
       !owned ||
-      owned === presentedFailure ||
+      owned.id !== attemptId ||
+      !client ||
+      !isCurrentClient(client) ||
       snapshot.updateRunning ||
       snapshot.updateFailureReportBusy ||
-      snapshot.updateFailureReportNotice !== null ||
       snapshot.updateReconciliationPending
     ) {
       return;
     }
+    const generation = ++diagnosticGeneration;
     const isCurrent = () =>
-      !disposed &&
+      generation === diagnosticGeneration &&
+      epoch === connectedEpoch &&
+      isCurrentClient(client) &&
       currentFailure === owned &&
       gatewayCredentialScope(gateway.connection.gatewayUrl) === scope &&
       (gateway.snapshot.selfUser?.id ?? null) === profile &&
-      readGatewayOperatorAccess(gateway.snapshot).canAdmin;
-    if (!isCurrent() || receipts.triaged(scope, profile, owned.id)) {
-      return;
-    }
-    presentedFailure = owned;
+      !snapshot.updateRunning &&
+      !snapshot.updateReconciliationPending;
+    // Consent belongs to this click. Loading, refreshing, or reconnecting never
+    // creates an admission, and a delayed panel cannot reuse an earlier click.
+    let admitted = false;
     hooks.onUpdateFailure?.(owned, {
       isCurrent,
-      admit: () =>
-        isCurrent() &&
-        gateway.snapshot.phase === "connected" &&
-        !snapshot.updateRunning &&
-        !snapshot.updateReconciliationPending &&
-        !receipts.triaged(scope, profile, owned.id) &&
-        receipts.recordTriage(scope, profile, owned.id),
+      admit: () => {
+        if (admitted || !isCurrent()) {
+          return false;
+        }
+        admitted = true;
+        return true;
+      },
     });
   }
 
-  function publish() {
+  function publish(syncCampaign = false) {
     const campaign = snapshot.updateSchedule?.campaign;
     const applying =
       campaign?.state === "applying" && snapshot.updateRun?.origin.campaignId !== campaign.id;
@@ -186,11 +197,23 @@ export function createApplicationUpdateOverlays(
     }
     snapshot = {
       ...snapshot,
+      diagnosableUpdateFailureId:
+        currentFailure &&
+        snapshot.updateRun?.target.installationMethod !== "ocm" &&
+        activeClient &&
+        isCurrentClient(activeClient) &&
+        !snapshot.updateRunning &&
+        !snapshot.updateReconciliationPending
+          ? currentFailure.id
+          : null,
       reportableUpdateFailureId:
-        snapshot.updateRunning || snapshot.updateReconciliationPending
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        snapshot.updateRun?.target.installationMethod === "ocm"
           ? null
           : snapshot.updateRun
-            ? isReportableUpdateRun(snapshot.updateRun)
+            ? !isAcknowledgedAbandonedUpdateRun(snapshot.updateRun) &&
+              isReportableUpdateRun(snapshot.updateRun)
               ? snapshot.updateRun.runId
               : null
             : currentFailure?.outcome === "failed" && currentFailure.attempt
@@ -198,7 +221,9 @@ export function createApplicationUpdateOverlays(
               : null,
     };
     onChange();
-    presentFailureTriage();
+    if (syncCampaign) {
+      updateCampaignPoller.sync();
+    }
   }
 
   const publishError = (error: unknown, source?: "read") => {
@@ -216,6 +241,8 @@ export function createApplicationUpdateOverlays(
   const applyRun = (run: UpdateRunRecord) => {
     const current = snapshot.updateRun;
     if (current?.runId === run.runId && current.updatedAtMs > run.updatedAtMs) {
+      // A status read can still carry independently newer schedule fields.
+      publish();
       return;
     }
     // Ledger writes monotonically advance this revision. Keep identical
@@ -230,11 +257,13 @@ export function createApplicationUpdateOverlays(
     snapshot = {
       ...snapshot,
       updateRun: run,
-      updateRunAcknowledged: receipts.acknowledged(updateGatewayScope, profileId, run.runId),
+      updateRunAcknowledged:
+        isAcknowledgedAbandonedUpdateRun(run) ||
+        receipts.acknowledged(updateGatewayScope, profileId, run.runId),
       recordedUpdateAttempt: failure?.attempt ?? null,
       updateStatusBanner: failure?.banner ?? null,
     };
-    publish();
+    publish(true);
   };
 
   const refreshRun = async () => {
@@ -282,9 +311,12 @@ export function createApplicationUpdateOverlays(
     }
   };
 
-  const applyUpdateStatusResponse = (response: UpdateRestartStatusResponse) => {
+  const applyUpdateStatusResponse = (
+    response: UpdateRestartStatusResponse,
+    preserveInstall = false,
+  ) => {
     const { failure, updateStatusBanner, recordedUpdateAttempt, ...status } =
-      projectUpdateStatusResponse(response, snapshot);
+      projectUpdateStatusResponse(response, snapshot, preserveInstall);
     const run = response.activeRun ?? response.lastRun;
     const history = updateAttempt?.history;
     // A failed history read is not an empty baseline. Until a current identity
@@ -301,7 +333,6 @@ export function createApplicationUpdateOverlays(
       ...snapshot,
       ...status,
       updateCampaignStatusHydrated: true,
-      updateStatusCheckBanner: null,
     };
     if (
       run &&
@@ -318,6 +349,7 @@ export function createApplicationUpdateOverlays(
       }
       publish();
     }
+    updateCampaignPoller.sync();
   };
   const refreshUpdateStatus = createUpdateStatusRefresher({
     getClient: () => activeClient,
@@ -330,16 +362,47 @@ export function createApplicationUpdateOverlays(
       publish();
     },
     onStatus: applyUpdateStatusResponse,
-    onError: (error) => {
-      snapshot = { ...snapshot, updateStatusCheckBanner: resolveUpdateStatusCheckBanner(error) };
+    onCheckout: (response, preserveSchedule) => {
+      snapshot = {
+        ...snapshot,
+        ...projectUpdateCheckoutResponse(
+          response,
+          snapshot,
+          preserveSchedule ? "schedule" : undefined,
+        ),
+        updateStatusCheckBanner: null,
+      };
+      publish(true);
+    },
+    onError: (error, mode) => {
+      if (mode === "completion" && snapshot.updateStatusCheckBanner?.mode === "manual") {
+        return;
+      }
+      if (error === null && snapshot.updateStatusCheckBanner === null) {
+        return;
+      }
+      snapshot = {
+        ...snapshot,
+        updateStatusCheckBanner:
+          error === null ? null : { ...resolveUpdateStatusCheckBanner(error), mode },
+      };
       publish();
     },
   });
+  const hasPendingOcmRun = () => runId?.startsWith("ocm:") && snapshot.updateReconciliationPending;
   const updateCampaignPoller = createUpdateCampaignStatusPoller({
     canPoll: () =>
-      Boolean(activeClient && isCurrentClient(activeClient) && snapshot.updateSchedule?.campaign),
+      Boolean(
+        activeClient &&
+        isCurrentClient(activeClient) &&
+        (snapshot.updateSchedule?.campaign || hasPendingOcmRun()),
+      ),
     refresh: async () => {
-      await refreshUpdateStatus("background");
+      if (hasPendingOcmRun()) {
+        await refreshRun();
+      } else {
+        await refreshUpdateStatus("background");
+      }
     },
   });
   const runConnectionBootstrap = (key: string, task: () => Promise<unknown>) =>
@@ -443,8 +506,7 @@ export function createApplicationUpdateOverlays(
           controlUiBuildDiffersFrom(serverBuildIdentity)
         : snapshot.controlUiRefreshRequired,
     };
-    publish();
-    updateCampaignPoller.sync();
+    publish(true);
     if ((connectedSourceChanged || scopeChanged || accessGranted) && operatorAccess.canAdmin) {
       void runConnectionBootstrap("update-run", () =>
         runId ? refreshRun() : refreshUpdateStatus("background"),
@@ -476,8 +538,10 @@ export function createApplicationUpdateOverlays(
       }
       // The event is an invalidation, not the run itself. Privileged facts are
       // fetched under the current authenticated connection and ordered by row revision.
+      setCurrentFailure(null);
       updateFailureReporter.invalidate();
       snapshot = { ...snapshot, updateFailureReportBusy: false };
+      publish();
       updateStatusRevision++;
       if (runId && runId !== payload.runId) {
         void refreshUpdateStatus("completion");
@@ -493,8 +557,7 @@ export function createApplicationUpdateOverlays(
       const previousCampaign = snapshot.updateSchedule?.campaign;
       updateStatusRevision++;
       snapshot = { ...snapshot, ...projectUpdateAvailableEvent(snapshot, payload) };
-      publish();
-      updateCampaignPoller.sync();
+      publish(true);
       if (
         previousCampaign?.state === "applying" &&
         snapshot.updateSchedule?.campaign?.state !== "applying"
@@ -503,6 +566,7 @@ export function createApplicationUpdateOverlays(
       }
     },
     refreshUpdateStatus,
+    diagnoseUpdateFailure,
     acknowledgeUpdateRun(this: void) {
       const run = snapshot.updateRun;
       if (run && run.status !== "running") {
@@ -511,7 +575,7 @@ export function createApplicationUpdateOverlays(
         publish();
       }
     },
-    async runUpdate(this: void, options?: { sessionKey?: string }) {
+    async runUpdate(this: void) {
       const client = activeClient;
       if (
         !client ||
@@ -522,7 +586,7 @@ export function createApplicationUpdateOverlays(
         return;
       }
       const generation = ++updateRunGeneration;
-      const sessionKey = options?.sessionKey ?? hooks.getActiveSessionKey?.();
+      const sessionKey = hooks.getActiveSessionKey?.();
       updateStatusRevision++;
       updateReadGeneration++;
       const attempt: UpdateAdmissionAttempt = {
@@ -592,7 +656,7 @@ export function createApplicationUpdateOverlays(
       } finally {
         if (isCurrent()) {
           updateRequestRunning = false;
-          publish();
+          publish(true);
         }
       }
     },
@@ -649,9 +713,7 @@ export function createApplicationUpdateOverlays(
         updateHoldInFlight = false;
       }
     },
-    async reportUpdateFailure(this: void, attemptId: string) {
-      await updateFailureReporter.report(attemptId);
-    },
+    reportUpdateFailure: updateFailureReporter.report,
     dispose() {
       disposed = true;
       updateFailureReporter.invalidate();

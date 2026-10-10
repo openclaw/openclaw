@@ -1,9 +1,15 @@
 import { html, noChange, nothing, type AttributePart } from "lit";
+import { AsyncDirective } from "lit/async-directive.js";
 import { Directive, directive } from "lit/directive.js";
 import { guard } from "lit/directives/guard.js";
 import { until, UntilDirective } from "lit/directives/until.js";
+import {
+  isThemeAvatarHatId,
+  type ThemeBranding,
+} from "../../../packages/gateway-protocol/src/theme.ts";
 import { isReservedSystemAgentId } from "../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../app/public-assets.ts";
+import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { readAvatarGatewayContext } from "../lib/identity-avatar-context.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../lib/identity-avatar-loader.ts";
 import {
@@ -14,6 +20,11 @@ import {
   type ResolvedIdentityAvatar,
 } from "../lib/identity-avatar.ts";
 import "../styles/identity-avatar.css";
+import { resolveAvatarHat } from "./agent-avatar-hat.ts";
+import { icons } from "./icons.ts";
+import { renderPluginThemeArtwork } from "./plugin-theme-artwork.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
+import { AVATAR_HAT_SPRITES } from "./theme-flair-sprites.ts";
 
 type IdentityAvatarFallback = Extract<ResolvedIdentityAvatar, { kind: "initials" }>;
 
@@ -217,6 +228,54 @@ export function renderIdentityAvatarImage({
   />`;
 }
 
+function renderSystemAgentAvatar(name: string | undefined, className: string) {
+  const branding = currentThemeBranding();
+  if (branding.brandIcon !== "claw") {
+    return html`<span
+      class=${`identity-avatar--agent identity-avatar--neutral ${className}`}
+      role=${name ? "img" : nothing}
+      aria-label=${name ?? nothing}
+      aria-hidden=${name ? nothing : "true"}
+      >${renderThemeBrandIcon(icons.mark, branding)}</span
+    >`;
+  }
+  return html`<img
+    class=${`identity-avatar--agent ${className}`}
+    src=${inferControlUiPublicAssetPath("favicon.svg")}
+    alt=${name ?? ""}
+    aria-hidden=${name ? nothing : "true"}
+  />`;
+}
+
+/** Reserved avatars update even when their identity-owning host has no new data. */
+class SystemAgentAvatarDirective extends AsyncDirective {
+  private name?: string;
+  private className = "";
+  private stop?: () => void;
+
+  override render(name: string | undefined, className: string) {
+    this.name = name;
+    this.className = className;
+    if (this.isConnected) {
+      this.stop ??= subscribeThemeBranding(() =>
+        this.setValue(renderSystemAgentAvatar(this.name, this.className)),
+      );
+    }
+    return renderSystemAgentAvatar(name, className);
+  }
+
+  protected override disconnected(): void {
+    this.stop?.();
+    this.stop = undefined;
+  }
+
+  protected override reconnected(): void {
+    this.setValue(this.render(this.name, this.className));
+  }
+}
+
+const systemAgentAvatar = directive(SystemAgentAvatarDirective);
+
 /** Agent images and emoji share one fallback across every surface. */
 export function renderAgentIdentityAvatar(
   agent: {
@@ -229,13 +288,9 @@ export function renderAgentIdentityAvatar(
   className = "",
   onImageError?: () => void,
 ) {
+  const branding = currentThemeBranding();
   if (isReservedSystemAgentId(agent.id)) {
-    return html`<img
-      class=${`identity-avatar--agent ${className}`}
-      src=${inferControlUiPublicAssetPath("favicon.svg")}
-      alt=${agent.name ?? ""}
-      aria-hidden=${agent.name ? nothing : "true"}
-    />`;
+    return html`${systemAgentAvatar(agent.name, className)}`;
   }
   const imageUrl =
     agent.avatar && !agent.pending ? (resolveAvatarImageUrl(agent.avatar) ?? agent.avatar) : null;
@@ -263,5 +318,25 @@ export function renderAgentIdentityAvatar(
         ),
       )}
     </span>
+    ${agent.pending ? nothing : renderAgentAvatarHat(agent.id, branding)}
   </span>`;
+}
+
+export function renderAgentAvatarHat(
+  agentId: string,
+  branding: ThemeBranding = currentThemeBranding(),
+) {
+  const hat = resolveAvatarHat(agentId, branding);
+  if (!hat) {
+    return nothing;
+  }
+  const artwork = branding.artwork?.hats?.[hat];
+  const sprite = isThemeAvatarHatId(hat)
+    ? AVATAR_HAT_SPRITES[hat]
+    : artwork
+      ? renderPluginThemeArtwork(artwork.url, "identity-avatar__hat-img")
+      : nothing;
+  return html`<span class=${`identity-avatar__hat identity-avatar__hat--${hat}`} aria-hidden="true"
+    >${sprite}</span
+  >`;
 }

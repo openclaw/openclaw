@@ -1,17 +1,20 @@
-// Control UI component renders the login gate.
 import { html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
+import type { ThemeBranding, ThemeMascot } from "../../../packages/gateway-protocol/src/theme.ts";
 import { normalizeBasePath } from "../app-route-paths.ts";
 import { canReloadControlUiDocument } from "../app/document-reload-guard.ts";
+import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import { retryStaleChunkReloadWhenReachable } from "../app/stale-chunk-reload.ts";
+import { currentThemeBranding } from "../app/theme-branding.ts";
 import { t } from "../i18n/index.ts";
-import "../lib/toast.ts";
 import { registerLoginEnglish } from "../i18n/locales/en-login.ts";
+import "../lib/toast.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatGatewayHost } from "../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../lib/gateway-secret-shape.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { PollController } from "../lit/poll-controller.ts";
 import { renderConnectCommand } from "./connect-command.ts";
 import { icons } from "./icons.ts";
 import {
@@ -21,10 +24,13 @@ import {
   type LoginFailureTone,
   resolveLoginFailureFeedback,
 } from "./login-gate-feedback.ts";
+import { renderThemeBrandIcon } from "./theme-brand-icon.ts";
 
 registerLoginEnglish();
 
 type LoginGateProps = LoginFailureFeedbackParams & {
+  mascot?: ThemeMascot;
+  branding?: ThemeBranding;
   resourceBasePath: string;
   gatewayUrl: string;
   secret: string;
@@ -33,6 +39,7 @@ type LoginGateProps = LoginFailureFeedbackParams & {
   onSecretChange: (value: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
+  onOpenGatewaySettings?: () => void;
 };
 
 const TONE_ICONS: Record<LoginFailureTone, TemplateResult> = {
@@ -124,27 +131,6 @@ function renderRefreshAction(feedback: LoginFailureFeedback, action: RefreshActi
   `;
 }
 
-function renderSecretToggle(
-  revealed: boolean,
-  labels: [string, string, string],
-  onToggle: () => void,
-) {
-  const [show, hide, toggle] = labels;
-  return html`
-    <openclaw-tooltip .content=${revealed ? hide : show}>
-      <button
-        type="button"
-        class="settings-secret__toggle"
-        aria-label=${toggle}
-        aria-pressed=${revealed}
-        @click=${onToggle}
-      >
-        ${revealed ? icons.eye : icons.eyeOff}
-      </button>
-    </openclaw-tooltip>
-  `;
-}
-
 function renderForm(params: {
   props: LoginGateProps;
   feedback: LoginFailureFeedback | null;
@@ -198,11 +184,19 @@ function renderForm(params: {
             @keydown=${submitOnEnter}
             placeholder=${t("login.secretPlaceholder")}
           />
-          ${renderSecretToggle(
-            props.showGatewaySecret,
-            [t("login.showSecret"), t("login.hideSecret"), t("login.toggleSecretVisibility")],
-            props.onToggleGatewaySecret,
-          )}
+          <openclaw-tooltip
+            .content=${t(props.showGatewaySecret ? "login.hideSecret" : "login.showSecret")}
+          >
+            <button
+              type="button"
+              class="settings-secret__toggle"
+              aria-label=${t("login.toggleSecretVisibility")}
+              aria-pressed=${props.showGatewaySecret}
+              @click=${props.onToggleGatewaySecret}
+            >
+              ${props.showGatewaySecret ? icons.eye : icons.eyeOff}
+            </button>
+          </openclaw-tooltip>
         </span>
         ${isSetupCode ? html`<p id="login-gate-secret-hint" class="muted" role="status">${t("login.setupCodeHint")}</p>` : nothing}
       </div>
@@ -243,6 +237,7 @@ function renderStatusBody(params: {
 }) {
   const { props, feedback } = params;
   const waitingForPairing = feedback.kind === "pairing-required" && props.reconnectPending;
+  const retrySeconds = Math.max(0, Math.ceil(((props.reconnectAt ?? 0) - Date.now()) / 1_000));
   return html`
     <section
       class="login-gate__body login-gate__failure"
@@ -270,6 +265,19 @@ function renderStatusBody(params: {
       }
       ${renderSteps(feedback)}
       ${
+        feedback.kind === "busy"
+          ? html`
+              <p class="login-gate__retry" aria-live="off">
+                ${
+                  retrySeconds > 0
+                    ? t("login.failure.busy.countdown", { seconds: String(retrySeconds) })
+                    : t("login.failure.busy.retrying")
+                }
+              </p>
+            `
+          : nothing
+      }
+      ${
         waitingForPairing
           ? html`<p class="login-gate__failure-summary">
               <span class="session-run-spinner" aria-hidden="true"></span>
@@ -280,7 +288,7 @@ function renderStatusBody(params: {
       <div class="login-gate__actions">
         ${renderRefreshAction(feedback, params.refreshAction)}
         <button class="btn login-gate__connect" @click=${props.onConnect}>
-          ${waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
+          ${feedback.kind === "pairing-rejected" || feedback.kind === "pairing-expired" ? t("login.failure.pairing.requestAgain") : waitingForPairing ? t("login.failure.pairing.checkNow") : t("common.connect")}
         </button>
       </div>
       <details class="login-gate__connection">
@@ -351,14 +359,38 @@ function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
       : renderFormBody({ props, feedback });
 
   return html`
-    <div class="login-gate">
+    <div
+      class="login-gate"
+      @mousedown=${(event: MouseEvent) => {
+        if (event.target === event.currentTarget) {
+          beginNativeWindowDrag(event);
+        }
+      }}
+    >
       <openclaw-toast-host></openclaw-toast-host>
       <div class="login-gate__card" data-mode=${feedback?.placement ?? "form"}>
         <header class="login-gate__brand">
-          <img class="login-gate__logo" src=${faviconSrc} alt="" />
-          <span class="login-gate__brand-name">OpenClaw</span>
+          ${
+            (props.branding?.brandIcon ?? (props.mascot === "none" ? "mark" : "claw")) !== "claw"
+              ? html`<span class="login-gate__logo login-gate__logo--neutral" aria-hidden="true"
+                  >${renderThemeBrandIcon(icons.mark, props.branding)}</span
+                >`
+              : html`<img class="login-gate__logo" src=${faviconSrc} alt="" />`
+          }
+          <span class="login-gate__brand-name"
+            >${props.branding?.brandName ?? currentThemeBranding().brandName}</span
+          >
         </header>
         ${body}
+        ${
+          props.onOpenGatewaySettings
+            ? html`<footer class="login-gate__recovery">
+                <button type="button" class="btn btn--ghost" @click=${props.onOpenGatewaySettings}>
+                  ${t("login.gatewaySettings")}
+                </button>
+              </footer>`
+            : nothing
+        }
       </div>
     </div>
   `;
@@ -368,6 +400,13 @@ class LoginGate extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) props?: LoginGateProps;
   @state() private refreshState: RefreshAction["state"] = "idle";
   private refreshAttempt?: { props: LoginGateProps };
+  private readonly retryCountdown = new PollController(
+    this,
+    1_000,
+    () => this.requestUpdate(),
+    false,
+    "visible",
+  );
 
   private ownsRefresh(attempt: { props: LoginGateProps }): boolean {
     const current = this.props;
@@ -396,6 +435,15 @@ class LoginGate extends OpenClawLightDomContentsElement {
   }
 
   override willUpdate() {
+    if (
+      this.props?.reconnectPending &&
+      this.props.lastErrorCode === "GATEWAY_BUSY" &&
+      (this.props.reconnectAt ?? 0) > Date.now()
+    ) {
+      this.retryCountdown.start();
+    } else {
+      this.retryCountdown.stop();
+    }
     if (this.refreshAttempt && !this.ownsRefresh(this.refreshAttempt)) {
       this.cancelRefresh();
     }

@@ -1,4 +1,3 @@
-// Feishu plugin module implements doctor contract behavior.
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -6,14 +5,23 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asObjectRecord,
+  createLegacyWebhookListenerDoctorContract,
   defineChannelAliasMigration,
   defineKeyMoveMigration,
   defineStrayPluginEntryConfigMigration,
   hasLegacyAccountStreamingAliases,
   normalizeChannelConfigEntries,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { listFeishuAccountIds, mergeFeishuAccountConfig } from "./accounts.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
+
+const webhookListenerMigration = createLegacyWebhookListenerDoctorContract({
+  channelKey: "feishu",
+  defaultPort: 3000,
+  defaultHost: "127.0.0.1",
+});
+export const { historicalWebhookListener } = webhookListenerMigration;
 
 // Feishu's legacy boolean `streaming` gated streaming-card replies with an
 // enabled default, so it migrates through the mode path (true → "partial",
@@ -152,6 +160,7 @@ const feishuStrayEntryConfigMigration = defineStrayPluginEntryConfigMigration({
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
+  ...webhookListenerMigration.legacyConfigRules,
   feishuStrayEntryConfigMigration.legacyConfigRule,
   {
     path: ["channels", "feishu"],
@@ -179,16 +188,40 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   },
 ];
 
+function resolveHistoricalWebhookAccountIds(cfg: OpenClawConfig): string[] {
+  return cfg.channels?.feishu?.enabled === false
+    ? []
+    : listFeishuAccountIds(cfg).filter((accountId) => {
+        const account = mergeFeishuAccountConfig(cfg, accountId);
+        return account.enabled !== false && account.connectionMode === "webhook";
+      });
+}
+
+export function normalizeHistoricalWebhookConfig({
+  cfg,
+}: {
+  cfg: OpenClawConfig;
+}): ChannelDoctorConfigMutation {
+  const listener = webhookListenerMigration.normalizeCompatibilityConfig({ cfg });
+  return {
+    ...listener,
+    historicalWebhookAccountIds: resolveHistoricalWebhookAccountIds(listener.config),
+  };
+}
+
 export function normalizeCompatibilityConfig({
   cfg,
 }: {
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg });
-  const entries = normalizeFeishuLegacyConfigEntries(aliases.config, aliases.changes);
+  const listener = webhookListenerMigration.normalizeCompatibilityConfig({ cfg: aliases.config });
+  const changes = [...aliases.changes, ...listener.changes];
+  const entries = normalizeFeishuLegacyConfigEntries(listener.config, changes);
   const stray = feishuStrayEntryConfigMigration.normalizeConfig({ cfg: entries });
   return {
     config: stray.config,
-    changes: [...aliases.changes, ...stray.changes],
+    changes: [...changes, ...stray.changes],
+    historicalWebhookAccountIds: resolveHistoricalWebhookAccountIds(stray.config),
   };
 }

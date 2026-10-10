@@ -1,87 +1,118 @@
-// Exec auto-reviewer completion budget: the configured `maxTokens` replaces the
-// 1,024-token default and stays clamped to the reviewer model's advertised cap.
 import { describe, expect, it, vi } from "vitest";
-import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
+import type { Model } from "../llm/types.js";
+import { createModelExecAutoReviewer, type ExecReviewerConfig } from "./exec-auto-reviewer.js";
+import {
+  acquireSimpleCompletionModelForAgent,
+  completeWithPreparedSimpleCompletionModel,
+} from "./simple-completion-runtime.js";
+
+vi.mock("./simple-completion-runtime.js", () => ({
+  acquireSimpleCompletionModelForAgent: vi.fn(),
+  completeWithPreparedSimpleCompletionModel: vi.fn(),
+}));
 
 const input = {
   command: "git status",
-  argv: ["git", "status"],
-  resolvedPath: "/usr/bin/git",
-  cwd: "/repo",
-  envKeys: [],
   host: "gateway" as const,
   reason: "approval-required" as const,
-  analysis: {
-    parsed: true,
-    allowlistMatched: false,
-    inlineEval: false,
-  },
+  analysis: { parsed: true, allowlistMatched: false, inlineEval: false },
+};
+const model: Model = {
+  provider: "ollama",
+  id: "reviewer",
+  name: "Reviewer",
+  api: "ollama",
+  baseUrl: "http://localhost:11434",
+  reasoning: true,
+  input: ["text"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 32_768,
+  maxTokens: 8_192,
 };
 
-function createReviewer(params: {
-  modelMaxTokens?: number;
-  reviewer?: Parameters<typeof createModelExecAutoReviewer>[0]["reviewer"];
+async function review(params: {
+  reasoning: boolean;
+  maxTokens: number;
+  thinking?: ExecReviewerConfig["thinking"];
 }) {
-  const prepare = vi.fn(async () => ({
-    selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-    model: {
-      provider: "openrouter",
-      id: "reviewer",
-      api: "openai" as const,
-      ...(params.modelMaxTokens === undefined ? {} : { maxTokens: params.modelMaxTokens }),
-    },
-    auth: { apiKey: "redacted", mode: "env" as const },
+  vi.mocked(acquireSimpleCompletionModelForAgent).mockResolvedValue({
+    selection: { provider: model.provider, modelId: model.id, agentDir: "/agent" },
+    model: { ...model, reasoning: params.reasoning, maxTokens: params.maxTokens },
+    auth: { mode: "api-key", source: "local" },
     [Symbol.asyncDispose]: async () => {},
-  }));
-  const complete = vi.fn(async () => ({
-    stopReason: "stop" as const,
-    content: [
-      {
-        type: "text" as const,
-        text: JSON.stringify({ decision: "allow", risk: "low", rationale: "reviewer fixture" }),
+  });
+  const complete = vi.mocked(completeWithPreparedSimpleCompletionModel);
+  complete.mockReset();
+  complete.mockImplementation(async ({ options }) => {
+    // A reasoning response can consume the old limit before producing any verdict text.
+    const exhausted = params.reasoning && (options?.maxTokens ?? 0) <= 1_024;
+    return {
+      role: "assistant",
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      timestamp: 0,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
       },
-    ],
-  }));
+      stopReason: exhausted ? "length" : "stop",
+      content: exhausted
+        ? []
+        : [{ type: "text", text: '{"decision":"allow","risk":"low","rationale":"read-only"}' }],
+    };
+  });
   const reviewer = createModelExecAutoReviewer({
     cfg: {},
-    ...(params.reviewer ? { reviewer: params.reviewer } : {}),
-    deps: {
-      acquireSimpleCompletionModelForAgent:
-        prepare as unknown as typeof import("./simple-completion-runtime.js").acquireSimpleCompletionModelForAgent,
-      completeWithPreparedSimpleCompletionModel:
-        complete as unknown as typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel,
-    },
+    reviewer: { thinking: params.thinking },
   });
-  return { reviewer, complete };
+  return { decision: await reviewer(input), complete };
 }
 
-async function completionMaxTokens(params: Parameters<typeof createReviewer>[0]) {
-  const { reviewer, complete } = createReviewer(params);
-  await expect(reviewer(input)).resolves.toMatchObject({ decision: "allow-once" });
-  const call = complete.mock.calls[0]?.[0] as { options?: { maxTokens?: number } } | undefined;
-  return call?.options?.maxTokens;
-}
+describe("exec auto-reviewer automatic completion budget", () => {
+  it.each<{ thinking?: ExecReviewerConfig["thinking"]; maxTokens: number; expected: number }>([
+    { thinking: "minimal", maxTokens: 32_768, expected: 2_048 },
+    { thinking: "low", maxTokens: 8_192, expected: 3_072 },
+    { thinking: "medium", maxTokens: 32_768, expected: 9_216 },
+    { thinking: "high", maxTokens: 32_768, expected: 17_408 },
+    { thinking: "xhigh", maxTokens: 32_768, expected: 17_408 },
+    { thinking: "max", maxTokens: 65_536, expected: 33_792 },
+    { maxTokens: 8_192, expected: 8_192 },
+    { thinking: "low", maxTokens: 1_500.5, expected: 1_500 },
+    { thinking: "low", maxTokens: Number.NaN, expected: 3_072 },
+  ])("completes a verdict with $thinking thinking and model cap $maxTokens", async (params) => {
+    const { decision, complete } = await review({ ...params, reasoning: true });
+    expect(decision).toMatchObject({ decision: "allow-once", risk: "low" });
+    expect(complete.mock.calls[0]?.[0].options?.maxTokens).toBe(params.expected);
+  });
 
-describe("exec auto-reviewer configured maxTokens", () => {
-  it.each([
-    { reviewer: { maxTokens: 2_048 }, modelMaxTokens: 32_768, expected: 2_048 },
-    { reviewer: { maxTokens: 2_048 }, modelMaxTokens: 1_500, expected: 1_500 },
-    { reviewer: { maxTokens: 2_048 }, modelMaxTokens: undefined, expected: 2_048 },
-    { reviewer: { maxTokens: 512 }, modelMaxTokens: 32_768, expected: 512 },
-    { reviewer: { thinking: "low" as const }, modelMaxTokens: 32_768, expected: 1_024 },
-    { reviewer: undefined, modelMaxTokens: 800, expected: 800 },
-  ])(
-    "sends $expected for reviewer $reviewer with model cap $modelMaxTokens",
-    async ({ reviewer, modelMaxTokens, expected }) => {
-      await expect(completionMaxTokens({ reviewer, modelMaxTokens })).resolves.toBe(expected);
+  it.each([500, 8_192, Number.NaN])(
+    "preserves non-reasoning budget with model cap %s",
+    async (maxTokens) => {
+      const { decision, complete } = await review({
+        reasoning: false,
+        thinking: "high",
+        maxTokens,
+      });
+      expect(decision).toMatchObject({ decision: "allow-once" });
+      expect(complete.mock.calls[0]?.[0].options?.maxTokens).toBe(maxTokens === 500 ? 500 : 1_024);
     },
   );
 
-  it("ignores non-positive or fractional configured budgets", async () => {
-    for (const maxTokens of [0, -5, 1.5, Number.NaN]) {
-      await expect(
-        completionMaxTokens({ reviewer: { maxTokens }, modelMaxTokens: 32_768 }),
-      ).resolves.toBe(1_024);
-    }
+  it("defers to human approval when the model cap cannot fit thinking and a verdict", async () => {
+    const { decision, complete } = await review({
+      reasoning: true,
+      thinking: "low",
+      maxTokens: 500,
+    });
+    expect(decision).toMatchObject({
+      decision: "ask",
+      rationale: expect.stringContaining("length"),
+    });
+    expect(complete.mock.calls[0]?.[0].options?.maxTokens).toBe(500);
   });
 });

@@ -110,7 +110,10 @@ describe("session mutation reconnect truth", () => {
         );
         await reading;
         failReadback = true;
-        await expect(sessions.refreshReplacement("main")).resolves.toBeNull();
+        await expect(sessions.reconcileMutation("main")).resolves.toEqual({
+          status: "failed",
+          error: "Archive list refresh unavailable",
+        });
         expect(sessions.state.error).toContain("Archive list refresh unavailable");
         expect(sessions.state.result?.sessions.map((row) => row.archived)).toEqual([true, false]);
         expect(sessions.state.result?.sessions[0]?.archivedAt).toBeUndefined();
@@ -233,7 +236,7 @@ describe("session mutation reconnect truth", () => {
       const olderResponse = createDeferred<typeof result>();
       let rows = [row];
       let calls = 0;
-      const { sessions } = createMutationHarness({
+      const { sessions, emitEvent } = createMutationHarness({
         "sessions.list": () => sessionsResult(rows, 1),
         "sessions.patchMany": () => (++calls === 1 ? olderResponse.promise : result),
       });
@@ -244,8 +247,10 @@ describe("session mutation reconnect truth", () => {
         if (latest === "acknowledgement") {
           await sessions.patchMany([target], { archived: !olderArchived });
         } else {
-          sessions.reconcileChanged(
-            {
+          emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: {
               ...row,
               sessionKey: row.key,
               archived: !olderArchived,
@@ -253,8 +258,7 @@ describe("session mutation reconnect truth", () => {
               updatedAt: 30,
               reason: "patch",
             },
-            { archivedFilter: "all" },
-          );
+          });
         }
         rows = [];
         await sessions.refresh({ force: true, archivedFilter: "all" });
@@ -345,7 +349,7 @@ describe("session mutation reconnect truth", () => {
       let offered: typeof row & { pinned: boolean; pinnedAt?: number } = { ...row, pinned: false };
       const result = { outcomes: [{ ok: true, key: row.key, agentId: "main" }] };
       const response = createDeferred<typeof result>();
-      const { sessions } = createMutationHarness({
+      const { sessions, emitEvent } = createMutationHarness({
         "sessions.list": () => sessionsResult([{ ...offered }], offered.updatedAt),
         "sessions.patchMany": () => response.promise,
         "sessions.patch": () => ({
@@ -369,14 +373,18 @@ describe("session mutation reconnect truth", () => {
             { agentId: "main", expectedSessionId: row.sessionId, deferListRefresh: true },
           );
         } else {
-          sessions.reconcileChanged({
-            ...row,
-            sessionKey: row.key,
-            reason: "patch",
-            updatedAt: 20,
-            archived: false,
-            pinned: true,
-            pinnedAt: 20,
+          emitEvent({
+            type: "event",
+            event: "sessions.changed",
+            payload: {
+              ...row,
+              sessionKey: row.key,
+              reason: "patch",
+              updatedAt: 20,
+              archived: false,
+              pinned: true,
+              pinnedAt: 20,
+            },
           });
         }
         offered = { ...offered, updatedAt: 20, pinned: true, pinnedAt: 20 };
@@ -408,21 +416,29 @@ describe("session mutation reconnect truth", () => {
     let offered = row;
     const result = { outcomes: [{ ok: true, key: row.key, agentId: "main" }] };
     const response = createDeferred<typeof result>();
-    const { sessions } = createMutationHarness({
+    const { sessions, emitEvent } = createMutationHarness({
       "sessions.list": () => sessionsResult([{ ...offered }], offered.updatedAt),
       "sessions.patchMany": () => response.promise,
     });
     let archive: ReturnType<typeof sessions.patchMany> | undefined;
     try {
       await sessions.refresh({ force: true });
-      sessions.reconcileChanged({ ...row, sessionKey: row.key, reason: "patch", updatedAt: 30 });
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...row, sessionKey: row.key, reason: "patch", updatedAt: 30 },
+      });
       archive = sessions.patchMany(
         [{ key: row.key, agentId: "main", expectedSessionId: row.sessionId }],
         { archived: true },
       );
       offered = { ...row, updatedAt: 30 };
       await sessions.refresh({ force: true });
-      sessions.reconcileChanged({ ...row, sessionKey: row.key, reason: "patch", updatedAt: 20 });
+      emitEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: { ...row, sessionKey: row.key, reason: "patch", updatedAt: 20 },
+      });
       response.resolve(result);
       await archive;
       expect(sessions.state.result?.sessions[0]?.archived).toBe(true);
@@ -638,7 +654,7 @@ describe("session mutation reconnect truth", () => {
   it("retires archive progress on disconnect without letting an old completion clear a retry", async () => {
     const key = "agent:main:archive-retry";
     const sessionId = "archive-retry";
-    const { publish, sessions } = createMutationHarness({
+    const { publish, sessions, emitEvent } = createMutationHarness({
       "sessions.list": () => sessionsResult([{ key, sessionId, kind: "direct" }], 1),
     });
     await sessions.refresh();
@@ -647,7 +663,11 @@ describe("session mutation reconnect truth", () => {
     expect(sessions.archiveVisibility(key)).toBe("pending");
     expect(sessions.beginArchive(key, sessionId)).toBeNull();
 
-    sessions.reconcileChanged({ key, sessionKey: key, archived: false, reason: "update" });
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { key, sessionKey: key, archived: false, reason: "update" },
+    });
     expect(sessions.archiveVisibility(key)).toBe("pending");
     publish(false);
     expect(sessions.archiveVisibility(key)).toBeUndefined();
@@ -657,13 +677,17 @@ describe("session mutation reconnect truth", () => {
     expect(finishRetry).not.toBeNull();
     finishPrevious?.();
     expect(sessions.archiveVisibility(key)).toBe("pending");
-    sessions.reconcileChanged({
-      key,
-      sessionKey: key,
-      sessionId,
-      archived: true,
-      archivedAt: 2,
-      reason: "patch",
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        key,
+        sessionKey: key,
+        sessionId,
+        archived: true,
+        archivedAt: 2,
+        reason: "patch",
+      },
     });
     expect(sessions.archiveVisibility(key)).toBe("archived");
     finishRetry?.();

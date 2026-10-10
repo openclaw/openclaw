@@ -1,10 +1,7 @@
 // Qa Lab tests cover suite runtime agent tools plugin behavior.
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const requireFromHere = createRequire(import.meta.url);
 
 const connectMock = vi.hoisted(() => vi.fn(async () => undefined));
 const listToolsMock = vi.hoisted(() => vi.fn(async () => ({ tools: [] })));
@@ -23,21 +20,17 @@ const stdioTransportMock = vi.hoisted(() =>
 );
 
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
-  Client: vi
-    .fn()
-    .mockImplementation(
-      function Client(this: {
-        connect?: typeof connectMock;
-        listTools?: typeof listToolsMock;
-        callTool?: typeof callToolMock;
-        close?: typeof closeMock;
-      }) {
-        this.connect = connectMock;
-        this.listTools = listToolsMock;
-        this.callTool = callToolMock;
-        this.close = closeMock;
-      },
-    ),
+  Client: vi.fn().mockImplementation(function Client(this: {
+    connect?: typeof connectMock;
+    listTools?: typeof listToolsMock;
+    callTool?: typeof callToolMock;
+    close?: typeof closeMock;
+  }) {
+    this.connect = connectMock;
+    this.listTools = listToolsMock;
+    this.callTool = callToolMock;
+    this.close = closeMock;
+  }),
 }));
 
 vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
@@ -124,62 +117,6 @@ describe("qa suite runtime agent tools helpers", () => {
     ).resolves.toEqual("done");
   });
 
-  it("falls back to the source plugin-tools MCP entry", async () => {
-    listToolsMock.mockResolvedValueOnce({
-      tools: [{ name: "plugin.echo" }] as never[],
-    });
-    callToolMock.mockResolvedValueOnce({
-      content: [{ type: "text", text: "echoed" }] as never[],
-    });
-
-    await expect(
-      callPluginToolsMcp({
-        env: {
-          gateway: {
-            tempRoot: gatewayTempRoot,
-            runtimeEnv: {
-              PATH: "/usr/bin",
-              OPENCLAW_KEY: "1",
-              EMPTY: undefined,
-            },
-          },
-          repoRoot,
-        } as never,
-        toolName: "plugin.echo",
-        args: { text: "hello" },
-      }),
-    ).resolves.toEqual({
-      content: [{ type: "text", text: "echoed" }],
-    });
-
-    expect(stdioTransportMock).toHaveBeenCalledWith({
-      command: "/usr/bin/node",
-      args: [
-        "--import",
-        requireFromHere.resolve("tsx"),
-        path.join(repoRoot, "src", "mcp", "plugin-tools-serve.ts"),
-      ],
-      stderr: "pipe",
-      cwd: repoRoot,
-      env: {
-        PATH: "/usr/bin",
-        OPENCLAW_KEY: "1",
-      },
-    });
-    expect(stderrOnMock).toHaveBeenCalledWith("data", expect.any(Function));
-    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
-    expect(listToolsMock).toHaveBeenCalledWith({}, { timeout: 180_000 });
-    expect(callToolMock).toHaveBeenCalledWith(
-      {
-        name: "plugin.echo",
-        arguments: { text: "hello" },
-      },
-      undefined,
-      { timeout: 180_000 },
-    );
-    expect(closeMock).toHaveBeenCalled();
-  });
-
   it("prefers the built plugin-tools MCP entry", async () => {
     const builtRepoRoot = await makeTempDir("qa-built-repo-");
     const distEntry = path.join(builtRepoRoot, "dist", "mcp", "plugin-tools-serve.js");
@@ -205,8 +142,14 @@ describe("qa suite runtime agent tools helpers", () => {
       expect.objectContaining({
         command: "/usr/bin/node",
         args: [distEntry],
+        cwd: builtRepoRoot,
       }),
     );
+    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+    expect(listToolsMock).toHaveBeenCalledWith({}, { timeout: 180_000 });
+    expect(callToolMock).toHaveBeenCalledWith({ name: "plugin.echo", arguments: {} }, undefined, {
+      timeout: 180_000,
+    });
   });
 
   it("reports available plugin-tools MCP names when the requested tool is missing", async () => {

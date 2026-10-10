@@ -18,10 +18,9 @@ import {
 } from "../../plugins/lifecycle.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import {
-  withPluginLifecycleLease,
-  type PluginLifecycleLeaseContext,
-} from "../../plugins/plugin-lifecycle-lease.js";
-import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+  OpenClawStateLeaseAcquisitionError,
+  OpenClawStateLeaseError,
+} from "../../state/openclaw-state-lease-error.js";
 
 export function captureGatewayPluginRuntimeApplications(
   applyRuntime: PluginLifecycleRuntimeApply,
@@ -40,53 +39,36 @@ export function captureGatewayPluginRuntimeApplications(
   });
 }
 
-class GatewayPluginLifecycleBusyError extends Error {
-  constructor(cause: OpenClawStateLeaseError) {
-    super("Another plugin or config operation is already running; retry when it completes.", {
-      cause,
-    });
-    this.name = "GatewayPluginLifecycleBusyError";
+export function pluginLifecycleError(
+  caught: unknown,
+  {
+    application,
+    entered,
+    signal,
+  }: {
+    application?: PluginRuntimeApplication;
+    entered: boolean;
+    signal?: AbortSignal;
+  },
+) {
+  if (
+    !entered &&
+    caught instanceof OpenClawStateLeaseAcquisitionError &&
+    caught.outcome.kind === "held"
+  ) {
+    return errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "Another plugin or config operation is already running; retry when it completes.",
+      { retryable: true, retryAfterMs: 1_000 },
+    );
   }
-}
-
-export async function withGatewayPluginLifecycleLease<T>(
-  signal: AbortSignal | undefined,
-  run: (lease: PluginLifecycleLeaseContext) => Promise<T>,
-): Promise<T> {
-  let entered = false;
-  try {
-    // An admitted RPC cannot wait on a config reload that is draining that RPC.
-    return await withPluginLifecycleLease({ signal, waitMs: 0 }, (lease) => {
-      entered = true;
-      return run(lease);
-    });
-  } catch (error) {
-    if (
-      !entered &&
-      error instanceof OpenClawStateLeaseError &&
-      error.code === "OPENCLAW_STATE_LEASE_TIMEOUT"
-    ) {
-      throw new GatewayPluginLifecycleBusyError(error);
-    }
-    if (
-      error instanceof OpenClawStateLeaseError &&
-      error.code === "OPENCLAW_STATE_LEASE_ABORTED" &&
-      signal?.aborted &&
-      error.cause === signal.reason
-    ) {
-      throw signal.reason;
-    }
-    throw error;
-  }
-}
-
-export function pluginLifecycleError(error: unknown, application?: PluginRuntimeApplication) {
-  if (error instanceof GatewayPluginLifecycleBusyError) {
-    return errorShape(ErrorCodes.UNAVAILABLE, error.message, {
-      retryable: true,
-      retryAfterMs: 1_000,
-    });
-  }
+  const error =
+    caught instanceof OpenClawStateLeaseError &&
+    caught.code === "OPENCLAW_STATE_LEASE_ABORTED" &&
+    signal?.aborted &&
+    caught.cause === signal.reason
+      ? signal.reason
+      : caught;
   const failure = projectPluginRuntimeFailure(error, application);
   const cause = error instanceof PluginInstallPersistedError ? error.cause : error;
   const lifecycleError = cause instanceof ManagedPluginLifecycleError ? cause : undefined;

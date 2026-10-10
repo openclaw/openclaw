@@ -1,6 +1,5 @@
 // Duration formatting helpers produce compact, precise, and human display
 // strings from millisecond values.
-import prettyMilliseconds from "pretty-ms";
 import {
   formatDurationParts,
   formatSingleUnitDuration,
@@ -44,7 +43,7 @@ export function formatDurationPrecise(
   }
   const roundedMs = Math.max(0, Math.round(ms));
   if (roundedMs < 1000) {
-    return prettyMilliseconds(roundedMs);
+    return `${roundedMs}ms`;
   }
   return formatDurationSeconds(ms, {
     decimals: options.decimals ?? 2,

@@ -126,6 +126,7 @@ describe("prepared catalog parent metadata ownership", () => {
             pluginMetadataSnapshot: metadata,
             pluginRegistry: registry,
             inlineProviderModels: [],
+            remoteCatalog: null,
             configuredCatalogEntries: [],
           },
           "live",
@@ -155,7 +156,7 @@ describe("prepared catalog parent metadata ownership", () => {
   });
 
   it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog and native auth requests", async () => {
-    const fixture = createCatalogFixture(makeTempDir, 0);
+    const fixture = await createCatalogFixture(makeTempDir, 0);
     const { agentDir, config, env, workspaceDir } = fixture;
     const cache = createPluginCache();
     const metadata = withPluginCache(cache, () =>
@@ -170,8 +171,10 @@ describe("prepared catalog parent metadata ownership", () => {
       workspaceDir,
     };
     let current = true;
+    const retirement = new AbortController();
     retireAfterTest(() => {
       current = false;
+      retirement.abort();
     });
 
     // The operation owns this frozen graph across module evaluation, as retained
@@ -201,6 +204,7 @@ describe("prepared catalog parent metadata ownership", () => {
               input,
               catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
               isGenerationCurrent: () => current,
+              retirementSignal: retirement.signal,
               isBuildCurrent: () => current,
             },
           ],
@@ -238,6 +242,7 @@ describe("prepared catalog parent metadata ownership", () => {
       });
     } finally {
       current = false;
+      retirement.abort();
       try {
         await waitForWorkers();
       } finally {

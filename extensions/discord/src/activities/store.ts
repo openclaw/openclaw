@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type {
   PluginStateCompareIntent,
   PluginStateKeyedStore,
@@ -46,13 +47,6 @@ type DiscordActivityStores = {
   launches: AtomicPluginStateKeyedStore<DiscordActivityPendingLaunch>;
 };
 
-type OpenKeyedStore = <T>(options: {
-  namespace: string;
-  maxEntries: number;
-  overflowPolicy: "evict-oldest";
-  defaultTtlMs: number;
-}) => PluginStateKeyedStore<T>;
-
 function requireAtomicComparison<T>(
   store: PluginStateKeyedStore<T>,
 ): AtomicPluginStateKeyedStore<T> {
@@ -62,35 +56,19 @@ function requireAtomicComparison<T>(
   return store as AtomicPluginStateKeyedStore<T>;
 }
 
-export function openDiscordActivityStores(openKeyedStore: OpenKeyedStore): DiscordActivityStores {
+export function openDiscordActivityStores(
+  openKeyedStore: PluginRuntime["state"]["openKeyedStore"],
+): DiscordActivityStores {
+  const openStore = <T>(namespace: string, maxEntries: number, defaultTtlMs: number) =>
+    openKeyedStore<T>({ namespace, maxEntries, overflowPolicy: "evict-oldest", defaultTtlMs });
   return {
     widgets: requireAtomicComparison(
-      openKeyedStore<DiscordActivityWidget>({
-        namespace: "activities-widgets",
-        maxEntries: 64,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: WIDGET_TTL_MS,
-      }),
+      openStore<DiscordActivityWidget>("activities-widgets", 64, WIDGET_TTL_MS),
     ),
-    sessions: openKeyedStore<DiscordActivitySession>({
-      namespace: "activities-sessions",
-      maxEntries: 256,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: SESSION_TTL_MS,
-    }),
-    docTokens: openKeyedStore<DiscordActivityDocToken>({
-      namespace: "activities-doc-tokens",
-      maxEntries: 256,
-      overflowPolicy: "evict-oldest",
-      defaultTtlMs: DOC_TOKEN_TTL_MS,
-    }),
+    sessions: openStore<DiscordActivitySession>("activities-sessions", 256, SESSION_TTL_MS),
+    docTokens: openStore<DiscordActivityDocToken>("activities-doc-tokens", 256, DOC_TOKEN_TTL_MS),
     launches: requireAtomicComparison(
-      openKeyedStore<DiscordActivityPendingLaunch>({
-        namespace: "activities-launches",
-        maxEntries: 256,
-        overflowPolicy: "evict-oldest",
-        defaultTtlMs: PENDING_LAUNCH_TTL_MS,
-      }),
+      openStore<DiscordActivityPendingLaunch>("activities-launches", 256, PENDING_LAUNCH_TTL_MS),
     ),
   };
 }
@@ -99,33 +77,19 @@ function pendingLaunchKey(accountId: string, channelId: string, discordUserId: s
   return `${accountId}:${channelId}:${discordUserId}`;
 }
 
-function deliveredWidgetIntent(
-  widget: DiscordActivityWidget | undefined,
-  messageId: string,
-): PluginStateCompareIntent<DiscordActivityWidget> {
-  return widget
-    ? { operation: "update", action: "set", value: { ...widget, deliveredMessageId: messageId } }
-    : { operation: "update", action: "keep" };
-}
-
-function pendingLaunchForWidget(
-  existing: DiscordActivityPendingLaunch | undefined,
-  widgetId: string,
-  createdAt: number,
-): DiscordActivityPendingLaunch {
-  return existing && (existing.state === "ambiguous" || existing.widgetId !== widgetId)
-    ? { state: "ambiguous", createdAt }
-    : { state: "single", widgetId, createdAt };
-}
-
-function retirePendingLaunchIntent(
-  existing: DiscordActivityPendingLaunch | undefined,
-  widgetId: string,
-): PluginStateCompareIntent<DiscordActivityPendingLaunch> {
-  return {
-    operation: "delete",
-    action: existing?.state === "single" && existing.widgetId === widgetId ? "delete" : "keep",
-  };
+async function applyActivityStoreIntent<T>(
+  store: AtomicPluginStateKeyedStore<T>,
+  key: string,
+  intent: (current: T | undefined) => PluginStateCompareIntent<T>,
+): Promise<"applied" | "unchanged"> {
+  let observed = await store.observe(key);
+  while (true) {
+    const result = await store.compareAndApply(key, observed.comparison, intent(observed.value));
+    if (result.status !== "conflict") {
+      return result.status;
+    }
+    observed = result.current;
+  }
 }
 
 export class DiscordActivityStore {
@@ -145,22 +109,17 @@ export class DiscordActivityStore {
     if (!/^\d+$/u.test(messageId)) {
       throw new Error("Discord Activity delivery returned an invalid message ID");
     }
-    const widgets = this.stores.widgets;
-    let observed = await widgets.observe(id);
-    while (true) {
-      const result = await widgets.compareAndApply(
-        id,
-        observed.comparison,
-        deliveredWidgetIntent(observed.value, messageId),
-      );
-      if (result.status === "conflict") {
-        observed = result.current;
-        continue;
-      }
-      if (result.status === "unchanged") {
-        throw new Error("Discord Activity widget disappeared before delivery was recorded");
-      }
-      return;
+    const outcome = await applyActivityStoreIntent(this.stores.widgets, id, (widget) =>
+      widget
+        ? {
+            operation: "update",
+            action: "set",
+            value: { ...widget, deliveredMessageId: messageId },
+          }
+        : { operation: "update", action: "keep" },
+    );
+    if (outcome === "unchanged") {
+      throw new Error("Discord Activity widget disappeared before delivery was recorded");
     }
   }
 
@@ -232,19 +191,13 @@ export class DiscordActivityStore {
     // Overlapping clicks on different widgets are ambiguous: which Activity queries first is
     // unordered, so a single slot could hand widget B's record to widget A's shell. Poison the
     // slot instead; consume then returns nothing and resolution falls through to the newest post.
-    const launches = this.stores.launches;
-    let observed = await launches.observe(key);
-    while (true) {
-      const result = await launches.compareAndApply(key, observed.comparison, {
-        operation: "update",
-        action: "set",
-        value: pendingLaunchForWidget(observed.value, widgetId, createdAt),
-      });
-      if (result.status !== "conflict") {
-        return;
-      }
-      observed = result.current;
-    }
+    await applyActivityStoreIntent(this.stores.launches, key, (existing) => ({
+      operation: "update",
+      action: "set",
+      value: (existing && (existing.state === "ambiguous" || existing.widgetId !== widgetId)
+        ? { state: "ambiguous", createdAt }
+        : { state: "single", widgetId, createdAt }) satisfies DiscordActivityPendingLaunch,
+    }));
   }
 
   async retirePendingLaunch(
@@ -257,19 +210,10 @@ export class DiscordActivityStore {
     // launch cannot poison the next click on a different widget for the whole TTL.
     // Different-widget and ambiguous records stay: their Activities may still query.
     const key = pendingLaunchKey(accountId, channelId, discordUserId);
-    const launches = this.stores.launches;
-    let observed = await launches.observe(key);
-    while (true) {
-      const result = await launches.compareAndApply(
-        key,
-        observed.comparison,
-        retirePendingLaunchIntent(observed.value, widgetId),
-      );
-      if (result.status !== "conflict") {
-        return;
-      }
-      observed = result.current;
-    }
+    await applyActivityStoreIntent(this.stores.launches, key, (existing) => ({
+      operation: "delete",
+      action: existing?.state === "single" && existing.widgetId === widgetId ? "delete" : "keep",
+    }));
   }
 
   async consumePendingLaunch(

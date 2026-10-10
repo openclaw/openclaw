@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   approve: vi.fn(),
+  approveCode: vi.fn(),
+  captureOwnerGuard: vi.fn(),
   bootstrapOwner: vi.fn(),
   dismiss: vi.fn(),
   hasOwners: vi.fn(),
@@ -24,12 +26,16 @@ vi.mock("../../pairing/command-owner.js", () => ({
   bootstrapCommandOwnerFromPairing: mocks.bootstrapOwner,
 }));
 vi.mock("../../pairing/pairing-store.js", () => ({
+  approveChannelPairingCode: mocks.approveCode,
   approveChannelPairingRequest: mocks.approve,
   CHANNEL_PAIRING_PENDING_MAX: 3,
   CHANNEL_PAIRING_PENDING_TTL_MS: 3_600_000,
   dismissChannelPairingRequest: mocks.dismiss,
   listChannelPairingRequests: mocks.listRequests,
   resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
+}));
+vi.mock("./local-state-owner.js", () => ({
+  captureLocalStateMutationGuard: mocks.captureOwnerGuard,
 }));
 
 import { channelPairingHandlers } from "./channel-pairing.js";
@@ -71,6 +77,7 @@ function createContext() {
 async function invoke(
   method: keyof typeof channelPairingHandlers,
   params: Record<string, unknown>,
+  scopes: string[] = [],
 ) {
   const respond = vi.fn();
   const handler = expectDefined(channelPairingHandlers[method], `${method} test invariant`);
@@ -78,6 +85,7 @@ async function invoke(
     params,
     respond,
     context: createContext(),
+    client: { connect: { scopes } },
   } as unknown as Parameters<typeof handler>[0]);
   return respond;
 }
@@ -88,59 +96,150 @@ beforeEach(() => {
   mocks.hasOwners.mockReturnValue(false);
   mocks.listRequests.mockResolvedValue([]);
   mocks.bootstrapOwner.mockResolvedValue({ ownerEntry: "whatsapp:+1555", status: "configured" });
+  mocks.captureOwnerGuard.mockReturnValue(() => {});
 });
 
 describe("channel DM pairing gateway handlers", () => {
-  it("lists only pairing-policy accounts without exposing the human code", async () => {
-    mocks.listRequests.mockResolvedValue([
+  it.each([
+    ["channels.pairing.list", { channel: "whatsapp", format: "cli" }],
+    ["channels.pairing.approve", { channel: "whatsapp", code: "SECRET12" }],
+    [
+      "channels.pairing.list",
+      { channel: "whatsapp", format: "cli", accountId: " ", expectedOwnerId: "owner" },
+    ],
+    [
+      "channels.pairing.approve",
+      { channel: "whatsapp", code: "SECRET12", accountId: " ", expectedOwnerId: "owner" },
+    ],
+    [
+      "channels.pairing.approve",
       {
-        id: "workspace:personal:user:+15551234567",
+        channel: "whatsapp",
         code: "SECRET12",
-        createdAt: "2026-07-20T10:00:00.000Z",
-        lastSeenAt: "2026-07-20T10:05:00.000Z",
-        meta: { accountId: "personal", name: "Alice", senderId: "+15551234567" },
+        requestId: "opaque",
+        accountId: "personal",
+        expectedOwnerId: "owner",
       },
-    ]);
-
-    const respond = await invoke("channels.pairing.list", {});
-
-    expect(mocks.listRequests).toHaveBeenCalledTimes(1);
-    expect(mocks.listRequests).toHaveBeenCalledWith("whatsapp", process.env, "personal");
+    ],
+  ] as const)("rejects an invalid CLI selector for %s", async (method, params) => {
+    const respond = await invoke(method, params, ["operator.admin"]);
     expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        accounts: [
-          {
-            channel: "whatsapp",
-            channelLabel: "WhatsApp",
-            accountId: "personal",
-            accountLabel: "Personal",
-            notifySupported: true,
-          },
-        ],
-        requests: [
-          {
-            requestId: "opaque-request-id",
-            channel: "whatsapp",
-            channelLabel: "WhatsApp",
-            accountId: "personal",
-            accountLabel: "Personal",
-            senderId: "+15551234567",
-            senderLabel: "Phone number",
-            metadata: { name: "Alice" },
-            createdAt: "2026-07-20T10:00:00.000Z",
-            lastSeenAt: "2026-07-20T10:05:00.000Z",
-            expiresAt: "2026-07-20T11:00:00.000Z",
-            notifySupported: true,
-          },
-        ],
-        commandOwnerConfigured: false,
-        limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
-      },
+      false,
       undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
+    expect(mocks.listRequests).not.toHaveBeenCalled();
+    expect(mocks.approveCode).not.toHaveBeenCalled();
+    expect(mocks.approve).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["channels.pairing.list", { channel: "whatsapp", format: "cli", expectedOwnerId: "owner" }],
+    [
+      "channels.pairing.approve",
+      { channel: "whatsapp", code: "SECRET12", expectedOwnerId: "owner" },
+    ],
+  ] as const)("requires current admin owner authority for %s", async (method, params) => {
+    const denied = await invoke(method, params, ["operator.pairing"]);
+    expect(denied).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN", details: { mutationAccepted: false } }),
+    );
+    expect(mocks.captureOwnerGuard).not.toHaveBeenCalled();
+
+    mocks.captureOwnerGuard.mockImplementationOnce(() => {
+      throw new Error("owner replaced");
+    });
+    const replaced = await invoke(method, params, ["operator.admin"]);
+    expect(replaced).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        details: { mutationAccepted: false, reason: "STATE_OWNER_CHANGED" },
+      }),
+    );
+    expect(mocks.listRequests).not.toHaveBeenCalled();
+    expect(mocks.approveCode).not.toHaveBeenCalled();
+  });
+
+  it.each(["sync", "async"] as const)(
+    "lists only pairing-policy accounts with %s hooks without exposing the human code",
+    async (hooks) => {
+      if (hooks === "async") {
+        const refuseSync = () => {
+          throw new Error("legacy operational hook used");
+        };
+        mocks.listPlugins.mockReturnValue([
+          {
+            ...pairingPlugin,
+            config: {
+              ...pairingPlugin.config,
+              resolveAccount: refuseSync,
+              resolveAccountAsync: async (cfg: unknown, accountId: string) =>
+                pairingPlugin.config.resolveAccount(cfg, accountId),
+              describeAccount: refuseSync,
+              describeAccountAsync: async (account: { name: string }) =>
+                pairingPlugin.config.describeAccount(account),
+            },
+            security: {
+              resolveDmPolicy: refuseSync,
+              resolveDmPolicyAsync: async (context: { account: { dmPolicy: string } }) =>
+                pairingPlugin.security.resolveDmPolicy(context),
+            },
+          },
+        ]);
+      }
+      mocks.listRequests.mockResolvedValue([
+        {
+          id: "workspace:personal:user:+15551234567",
+          code: "SECRET12",
+          createdAt: "2026-07-20T10:00:00.000Z",
+          lastSeenAt: "2026-07-20T10:05:00.000Z",
+          meta: { accountId: "personal", name: "Alice", senderId: "+15551234567" },
+        },
+      ]);
+
+      const respond = await invoke("channels.pairing.list", {});
+
+      expect(mocks.listRequests).toHaveBeenCalledTimes(1);
+      expect(mocks.listRequests).toHaveBeenCalledWith("whatsapp", process.env, "personal");
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          accounts: [
+            {
+              channel: "whatsapp",
+              channelLabel: "WhatsApp",
+              accountId: "personal",
+              accountLabel: "Personal",
+              notifySupported: true,
+            },
+          ],
+          requests: [
+            {
+              requestId: "opaque-request-id",
+              channel: "whatsapp",
+              channelLabel: "WhatsApp",
+              accountId: "personal",
+              accountLabel: "Personal",
+              senderId: "+15551234567",
+              senderLabel: "Phone number",
+              metadata: { name: "Alice" },
+              createdAt: "2026-07-20T10:00:00.000Z",
+              lastSeenAt: "2026-07-20T10:05:00.000Z",
+              expiresAt: "2026-07-20T11:00:00.000Z",
+              notifySupported: true,
+            },
+          ],
+          commandOwnerConfigured: false,
+          limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+        },
+        undefined,
+      );
+      expect(JSON.stringify(respond.mock.calls)).not.toContain("SECRET12");
+    },
+  );
 
   it("approves access even when the optional notification fails", async () => {
     mocks.approve.mockResolvedValue({

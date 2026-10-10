@@ -36,6 +36,7 @@ function splitLayout(sessionKey: string): ChatSplitLayout {
 function configure(page: ChatPage) {
   const context = {
     sessions: { ...createChatPageSessions(), patch: vi.fn() },
+    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },

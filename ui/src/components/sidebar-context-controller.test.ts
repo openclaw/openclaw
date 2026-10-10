@@ -4,12 +4,8 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
-import {
-  createGateway,
-  createSessions,
-  mountSidebar,
-  setupSidebarTest,
-} from "../test-helpers/app-sidebar.ts";
+import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import "./app-sidebar.ts";
 
 setupSidebarTest();
@@ -32,7 +28,7 @@ it("updates contextual navigation from its router and retires the subscription o
         }),
         loader: () => loaded.promise,
       }),
-      definePage({ id: "tasks", path: "/tasks", component: () => ({ render: () => "tasks" }) }),
+      definePage({ id: "cron", path: "/cron", component: () => ({ render: () => "cron" }) }),
     ],
   });
   onTestFinished(() => router.stop());
@@ -55,7 +51,7 @@ it("updates contextual navigation from its router and retires the subscription o
   expect(sidebar.querySelector(".sidebar-shell__body")?.textContent).toContain("machine inventory");
   sidebar.remove();
   expect(sidebar.contextualSidebar).toBeUndefined();
-  await router.navigate("tasks", {});
+  await router.navigate("cron", {});
   await router.navigate("systems", {});
   expect(sidebar.contextualSidebar).toBeUndefined();
 });

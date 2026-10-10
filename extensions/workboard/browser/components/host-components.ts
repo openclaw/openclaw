@@ -76,16 +76,23 @@ const mountDialog = createHostComponent(
     }
   },
 );
-const mountAgentPicker = createHostComponent((container, props: PickerProps) =>
+function createPicker<Props extends object>(
+  mount: (container: HTMLElement, props: Props) => ControlUiComponentHandle<Props>,
+) {
+  const component = createHostComponent(mount);
+  return (props: Props, className = "") => html`<div class=${className} ${component(props)}></div>`;
+}
+
+export const renderAgentPicker = createPicker((container, props: PickerProps) =>
   workboardHost().components.mountAgentPicker(container, props),
 );
 const mountAgentAvatar = createHostComponent((container, props: AvatarProps) =>
   workboardHost().components.mountAgentAvatar(container, props),
 );
-const mountSelectPicker = createHostComponent((container, props: SelectPickerProps) =>
+export const renderSelectPicker = createPicker((container, props: SelectPickerProps) =>
   workboardHost().components.mountSelectPicker(container, props),
 );
-const mountAppearancePicker = createHostComponent((container, props: AppearancePickerProps) =>
+export const renderAppearancePicker = createPicker((container, props: AppearancePickerProps) =>
   workboardHost().components.mountAppearancePicker(container, props),
 );
 const mountAppearanceGlyph = createHostComponent((container, props: AppearanceGlyphProps) =>
@@ -99,20 +106,8 @@ export function renderDialog(props: Omit<DialogProps, "content">, content: unkno
   return html`<div style="display: contents" ${mountDialog({ ...props, content })}></div>`;
 }
 
-export function renderAgentPicker(props: PickerProps, className = "") {
-  return html`<div class=${className} ${mountAgentPicker(props)}></div>`;
-}
-
 export function renderAgentAvatar(props: AvatarProps) {
   return html`<span aria-hidden="true" ${mountAgentAvatar(props)}></span>`;
-}
-
-export function renderSelectPicker(props: SelectPickerProps, className = "") {
-  return html`<div class=${className} ${mountSelectPicker(props)}></div>`;
-}
-
-export function renderAppearancePicker(props: AppearancePickerProps, className = "") {
-  return html`<div class=${className} ${mountAppearancePicker(props)}></div>`;
 }
 
 export function renderAppearanceGlyph(props: AppearanceGlyphProps, className = "") {

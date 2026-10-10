@@ -1,103 +1,39 @@
-import { spawnSync } from "node:child_process";
+import childProcess, { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Duplex } from "node:stream";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createDeferredCore } from "../shared/deferred.js";
-import { inspectAgentDatabaseSchemaInWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
+import { createAgentSchemaInspectionWorker } from "../state/openclaw-agent-schema-inspection-worker.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { inspectSqliteSchemaHeader } from "./sqlite-snapshot-source.js";
+import { inspectSqliteSchemaHeaderInProcess } from "./sqlite-readonly-location.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
-import { acquireStateDatabaseHandleExclusion } from "./state-database-coordinator.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(() => {
     vi.restoreAllMocks();
+    syncBuiltinESMExports();
     vi.unstubAllEnvs();
     cleanup();
   }),
 );
 
-function expectSourceExcluded(pathname: string) {
-  let exclusion: ReturnType<typeof acquireStateDatabaseHandleExclusion> | undefined;
-  try {
-    expect(() => {
-      exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 });
-    }).toThrow(/state-handles/);
-  } finally {
-    exclusion?.release();
-  }
-}
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 
 describe("schema-header native reader lifetime", () => {
-  it.each([
-    { route: "child", cancel: false },
-    { route: "child", cancel: true },
-    { route: "source-exclusion", cancel: false },
-    { route: "source-exclusion", cancel: true },
-  ] as const)(
-    "joins asynchronous staging removal for the $route header path (cancel=$cancel)",
-    async ({ route, cancel }) => {
-      const root = dirs.make("sqlite-header-async-cleanup-");
-      const pathname = path.join(root, "source.sqlite");
-      const cacheRoot = path.join(root, "cache");
-      fs.mkdirSync(cacheRoot);
-      vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
-      const database = new (requireNodeSqlite().DatabaseSync)(pathname);
-      database.exec("PRAGMA user_version=7;");
-      database.close();
-      const exclusion =
-        route === "source-exclusion"
-          ? acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 })
-          : undefined;
-      const release = createDeferredCore();
-      const removalEntered = createDeferredCore();
-      const remove = fs.promises.rm;
-      const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (...args) => {
-        removalEntered.resolve();
-        await release.promise;
-        return remove(...args);
-      });
-      const synchronousRemoval = vi.spyOn(fs, "rmSync");
-      const controller = new AbortController();
-      const cancelled = new Error("header owner retired during cleanup");
-      let settled = false;
-      const inspect = () => inspectSqliteSchemaHeader(pathname, { signal: controller.signal });
-      const operation = (exclusion ? exclusion.runWithSourceReads(inspect) : inspect()).finally(
-        () => {
-          settled = true;
-        },
-      );
-      try {
-        await Promise.race([
-          removalEntered.promise,
-          operation.then(() => {
-            throw new Error("Header inspection completed before staged removal started");
-          }),
-        ]);
-        expect(removal).toHaveBeenCalled();
-        expect(settled).toBe(false);
-        expect(synchronousRemoval.mock.calls.filter(([, options]) => options?.recursive)).toEqual(
-          [],
-        );
-        if (cancel) {
-          controller.abort(cancelled);
-        }
-        release.resolve();
-        if (cancel) {
-          await expect(operation).rejects.toBe(cancelled);
-        } else {
-          await expect(operation).resolves.toEqual({ userVersion: 7 });
-        }
-        expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([operation]);
-        exclusion?.release();
-      }
-    },
-  );
-
   it("preserves the parent's rollback writer lock and excludes its uncommitted metadata", async () => {
     const root = dirs.make("sqlite-header-parent-lock-");
     const pathname = path.join(root, "source.sqlite");
@@ -109,8 +45,9 @@ describe("schema-header native reader lifetime", () => {
       "BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='uncommitted';",
     );
     try {
-      expect(await inspectSqliteSchemaHeader(pathname)).toEqual({
-        userVersion: 7,
+      await using schemaReader = createAgentSchemaInspectionWorker();
+      expect(await schemaReader.inspect({ pathname, supportedVersion: 7 })).toEqual({
+        version: 7,
         writerAppVersion: "committed",
       });
       const competitor = spawnSync(
@@ -176,14 +113,15 @@ describe("schema-header native reader lifetime", () => {
       const before = [pathname, pathname + "-journal"].map((file) => fs.readFileSync(file));
       const cacheRoot = dirs.make("sqlite-header-journal-cache-");
       vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
+      await using schemaReader = createAgentSchemaInspectionWorker();
       await expect(
-        inspectAgentDatabaseSchemaInWorker({
+        schemaReader.inspect({
           pathname,
           supportedVersion: 7,
           requireStartupMigrationReadiness: true,
         }),
       ).resolves.toBeNull();
-      expect(await inspectSqliteSchemaHeader(pathname)).toEqual({
+      expect(await inspectSqliteSchemaHeaderInProcess(pathname)).toEqual({
         userVersion: 7,
         writerAppVersion: "committed",
       });
@@ -214,15 +152,16 @@ describe("schema-header native reader lifetime", () => {
       }
       const before = [pathname, pathname + "-wal"].map((file) => fs.readFileSync(file));
       if (!includeShm) {
+        await using schemaReader = createAgentSchemaInspectionWorker();
         await expect(
-          inspectAgentDatabaseSchemaInWorker({
+          schemaReader.inspect({
             pathname,
             supportedVersion: 9,
             requireStartupMigrationReadiness: true,
           }),
         ).resolves.toBeNull();
       }
-      expect(await inspectSqliteSchemaHeader(pathname)).toEqual({
+      expect(await inspectSqliteSchemaHeaderInProcess(pathname)).toEqual({
         userVersion: 9,
         writerAppVersion: "from-wal",
       });
@@ -239,20 +178,19 @@ describe("schema-header native reader lifetime", () => {
     },
   );
 
-  it.each(
-    (["header", "agent-shape"] as const).flatMap((reader) =>
-      (["success", "read-failure", "close-failure", "cancel"] as const).map((outcome) => ({
-        reader,
-        outcome,
-      })),
-    ),
-  )(
-    "keeps a consistent $reader read and its child lease through native close: $outcome",
-    async ({ reader, outcome }) => {
+  it.for([
+    { reader: "pooled-header", outcome: "success" },
+    { reader: "pooled-header", outcome: "read-failure" },
+    { reader: "agent-shape", outcome: "success" },
+    { reader: "agent-shape", outcome: "read-failure" },
+    { reader: "agent-shape", outcome: "close-failure" },
+    { reader: "agent-shape", outcome: "cancel" },
+  ] as const)(
+    "keeps a consistent $reader read and joins failed native cleanup: $outcome",
+    { timeout: 30_000 },
+    async ({ reader, outcome }, { signal }) => {
       const root = dirs.make("sqlite-header-lifetime-");
       const pathname = path.join(root, "source.sqlite");
-      const cacheRoot = path.join(root, "cache");
-      fs.mkdirSync(cacheRoot);
       const marker = (name: string) => path.join(root, name);
       const preload = marker("lifetime.cjs");
       const writer = new (requireNodeSqlite().DatabaseSync)(pathname);
@@ -262,6 +200,10 @@ describe("schema-header native reader lifetime", () => {
         INSERT INTO schema_meta VALUES('primary','writer-7','agent','owner-7',7);
         PRAGMA user_version=7;
       `);
+      const receiptRelay = `${fixtureReceiptClientSource(receipts.endpoint)}
+        import { parentPort } from "node:worker_threads";
+        parentPort.on("message", (phase) => sendReceipt(${JSON.stringify(root)}, phase));
+      `;
       // Faults and native pauses are installed in the actual child, not a
       // production injection seam. The parent never opens a diagnostic source FD.
       fs.writeFileSync(
@@ -269,20 +211,25 @@ describe("schema-header native reader lifetime", () => {
         `
         const fs = require('node:fs'), path = require('node:path');
         const { DatabaseSync } = require('node:sqlite');
+        const { Worker, isMainThread } = require('node:worker_threads');
+        if (isMainThread) {
+        // Native hooks block the process thread; its relay flushes receipts independently.
+        const receipts = new Worker(new URL(${JSON.stringify(`data:text/javascript,${encodeURIComponent(receiptRelay)}`)}), { execArgv: [] });
+        receipts.unref();
         const root = ${JSON.stringify(root)}, source = ${JSON.stringify(pathname)};
         const outcome = ${JSON.stringify(outcome)};
         const isSource = db => {
           const location = db.location();
           return location && path.toNamespacedPath(path.resolve(location)) === path.toNamespacedPath(path.resolve(source));
         };
-        const mark = name => fs.writeFileSync(path.join(root, name), 'ready');
-        const exists = name => fs.existsSync(path.join(root, name));
+        const mark = name => {
+          fs.writeFileSync(path.join(root, name), 'ready');
+          receipts.postMessage(name);
+        };
         function pause(name) {
           mark(name);
-          const deadline = Date.now() + 15000;
-          while (!exists(name + '-release')) {
-            if (Date.now() > deadline) throw new Error('test native pause expired: ' + name);
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+          if (fs.readSync(4, Buffer.alloc(1), 0, 1, null) !== 1) {
+            throw new Error('test native pause released without a receipt: ' + name);
           }
         }
         const prepare = DatabaseSync.prototype.prepare;
@@ -292,6 +239,7 @@ describe("schema-header native reader lifetime", () => {
             const get = statement.get;
             statement.get = function(...args) {
               const row = get.apply(this, args);
+              fs.writeFileSync(path.join(root, 'reader-pid'), String(process.pid));
               pause('read');
               if (outcome === 'read-failure') throw new Error('native read failure');
               return row;
@@ -301,37 +249,61 @@ describe("schema-header native reader lifetime", () => {
         };
         const close = DatabaseSync.prototype.close;
         DatabaseSync.prototype.close = function() {
-          if (isSource(this)) {
+          const sourceDatabase = isSource(this);
+          if (sourceDatabase) {
             pause('close');
             if (outcome === 'close-failure') {
-              const keepAlive = setInterval(() => {
-                if (exists('exit-release')) clearInterval(keepAlive);
-              }, 10);
+              const keepAlive = fs.createReadStream(null, { fd: 4, autoClose: false });
+              keepAlive.once('data', () => keepAlive.destroy());
               mark('failed-close');
               throw new Error('native close failure');
             }
           }
-          return close.call(this);
+          const result = close.call(this);
+          if (sourceDatabase) mark('closed');
+          return result;
         };
+        }
       `,
       );
       for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(preload))) {
         vi.stubEnv(key, value);
       }
-      vi.stubEnv("XDG_CACHE_HOME", cacheRoot);
+      let nativePipe: Duplex | undefined;
+      const fork = childProcess.fork;
+      vi.spyOn(childProcess, "fork").mockImplementation((modulePath, args, options) => {
+        const child = fork(modulePath, args, {
+          ...options,
+          stdio: ["ignore", "ignore", "ignore", "ipc", "pipe"],
+        });
+        const pipe = child.stdio[4];
+        if (!(pipe instanceof Duplex)) {
+          child.kill("SIGKILL");
+          throw new Error("Native inspection fixture pipe was not opened");
+        }
+        nativePipe = pipe;
+        return child;
+      });
+      syncBuiltinESMExports();
+      const release = () => {
+        if (!nativePipe) {
+          throw new Error("Native inspection fixture pipe was not observed");
+        }
+        nativePipe.write("r");
+      };
       const controller = new AbortController();
       const cancellation = new Error("header inspection cancelled");
       let settled = false;
-      const operation =
-        reader === "header"
-          ? inspectSqliteSchemaHeader(pathname, {
-              signal: controller.signal,
-              agentSchemaVersionForOwnership: 8,
-            })
-          : inspectAgentDatabaseSchemaInWorker(
-              { pathname, supportedVersion: 8, inspectOwnership: true },
-              controller.signal,
-            );
+      await using schemaReader = createAgentSchemaInspectionWorker();
+      const operation = schemaReader.inspect(
+        {
+          pathname,
+          supportedVersion: 8,
+          inspectOwnership: true,
+          verifyCurrentSchemaShape: reader === "agent-shape",
+        },
+        controller.signal,
+      );
       void operation.then(
         () => {
           settled = true;
@@ -340,54 +312,68 @@ describe("schema-header native reader lifetime", () => {
           settled = true;
         },
       );
+      const waitForPhase = (phase: string) => {
+        const settledBeforeReceipt = operation.then(
+          () => {
+            if (!fs.existsSync(marker(phase))) {
+              throw new Error(`Native inspection settled before ${phase}`);
+            }
+          },
+          (error: unknown) => {
+            if (!fs.existsSync(marker(phase))) {
+              throw error;
+            }
+          },
+        );
+        return withinTest(
+          Promise.race([receipts.waitFor(root, phase), settledBeforeReceipt]),
+          signal,
+        );
+      };
       try {
-        await vi.waitFor(() => expect(fs.existsSync(marker("read"))).toBe(true), {
-          timeout: 10_000,
-        });
-        expectSourceExcluded(pathname);
+        await waitForPhase("read");
+        const readerPid = Number(fs.readFileSync(marker("reader-pid"), "utf8"));
         // New version and ownership facts commit between the child's metadata queries.
         writer.exec(
           "BEGIN IMMEDIATE; PRAGMA user_version=8; UPDATE schema_meta SET app_version='writer-8', agent_id='owner-8', schema_version=8; COMMIT;",
         );
-        fs.writeFileSync(marker("read-release"), "resume");
-        await vi.waitFor(() => expect(fs.existsSync(marker("close"))).toBe(true), {
-          timeout: 10_000,
-        });
+        release();
+        await waitForPhase("close");
         expect(settled).toBe(false);
-        expectSourceExcluded(pathname);
         if (outcome === "cancel") {
           controller.abort(cancellation);
           await expect(operation).rejects.toBe(cancellation);
         } else {
-          fs.writeFileSync(marker("close-release"), "resume");
+          release();
           if (outcome === "close-failure") {
-            await vi.waitFor(() => expect(fs.existsSync(marker("failed-close"))).toBe(true));
+            await waitForPhase("failed-close");
             expect(settled).toBe(false);
-            expectSourceExcluded(pathname);
-            fs.writeFileSync(marker("exit-release"), "resume");
+            release();
             await expect(operation).rejects.toThrow("native close failure");
           } else if (outcome === "read-failure") {
             await expect(operation).rejects.toThrow("native read failure");
           } else {
             await expect(operation).resolves.toEqual({
-              ...(reader === "header"
-                ? { userVersion: 7, writerAppVersion: "writer-7" }
-                : { version: 7 }),
+              version: 7,
+              ...(reader !== "agent-shape" ? { writerAppVersion: "writer-7" } : {}),
               agentSchemaMeta: { role: "agent", agentId: "owner-7", schemaVersion: 7 },
             });
           }
         }
-        acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }).release();
-        if (reader === "header") {
-          expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
+        if (outcome === "success") {
+          expect(fs.existsSync(marker("closed"))).toBe(true);
+        } else {
+          expect(() => process.kill(readerPid, 0)).toThrow(
+            expect.objectContaining({ code: "ESRCH" }),
+          );
         }
         expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 8 });
       } finally {
         controller.abort(cancellation);
         await Promise.allSettled([operation]);
+        nativePipe?.destroy();
         writer.close();
       }
     },
-    30_000,
   );
 });

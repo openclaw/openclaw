@@ -1,6 +1,7 @@
 /** Test helpers for loading doctor command with terminal note output mocked. */
 import type { Mock } from "vitest";
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 export const terminalNoteMock: Mock<(...args: unknown[]) => unknown> = vi.fn();
 

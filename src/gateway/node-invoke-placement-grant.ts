@@ -39,7 +39,23 @@ function isBindingCurrentForOwner(
   }
 }
 
-export function resolveNodeInvokePlacementGrant(params: {
+async function resolveRuntimePlacementGrant(
+  runtime: PlacementStandingGrantRuntime,
+  input: Parameters<PlacementStandingGrantRuntime["resolveBinding"]>[0],
+): Promise<{ binding: PlacementStandingGrantMintSpec | null; approvalId?: string }> {
+  if (runtime.resolveAsync) {
+    return runtime.resolveAsync(input);
+  }
+  // Released SDK callers may supply the original synchronous runtime contract.
+  const binding = runtime.resolveBinding(input);
+  const result = binding ? runtime.validate(binding) : undefined;
+  return {
+    binding,
+    ...(result?.outcome === "consumed" ? { approvalId: result.grant.mintedByApprovalId } : {}),
+  };
+}
+
+export async function resolveNodeInvokePlacementGrant(params: {
   runtime?: PlacementStandingGrantRuntime;
   requestedDecisions: readonly ExecApprovalDecision[] | undefined;
   owner?: NodeInvokePlacementGrantOwner;
@@ -48,61 +64,61 @@ export function resolveNodeInvokePlacementGrant(params: {
   approvalScope?: string;
   risk?: { level: "ordinary" | "high"; family: string };
   nodeSession: NodeSession;
-}): PlacementGrantResolution {
-  const binding =
-    params.requestedDecisions?.includes("allow-always") === true &&
-    params.owner &&
+}): Promise<PlacementGrantResolution> {
+  const { owner, runtime, requestedDecisions } = params;
+  const resolution =
+    requestedDecisions?.includes("allow-always") === true &&
+    owner &&
     params.approvalScope !== undefined &&
     params.risk?.level === "high" &&
     params.nodeSession.pairingGeneration &&
-    params.runtime
-      ? params.runtime.resolveBinding({
+    runtime
+      ? await resolveRuntimePlacementGrant(runtime, {
           pluginId: params.pluginId,
           command: params.command,
           approvalScope: params.approvalScope,
-          agentId: params.owner.agentId,
-          sessionKey: params.owner.sessionKey,
+          agentId: owner.agentId,
+          sessionKey: owner.sessionKey,
           nodeId: params.nodeSession.nodeId,
           pairingGeneration: params.nodeSession.pairingGeneration,
         })
-      : null;
+      : { binding: null };
+  const { binding } = resolution;
   const currentBinding =
-    binding && params.owner && isBindingCurrentForOwner(params.owner, binding) ? binding : null;
-  if (currentBinding && params.runtime) {
-    const existing = params.runtime.validate(currentBinding);
-    if (existing.outcome === "consumed") {
-      return {
-        kind: "granted",
-        binding: currentBinding,
-        approvalId: existing.grant.mintedByApprovalId,
-      };
-    }
+    binding && owner && isBindingCurrentForOwner(owner, binding) ? binding : null;
+  if (currentBinding && resolution.approvalId) {
+    return {
+      kind: "granted",
+      binding: currentBinding,
+      approvalId: resolution.approvalId,
+    };
   }
   const allowedDecisions =
-    params.requestedDecisions?.includes("allow-always") === true && !currentBinding
-      ? params.requestedDecisions.filter((decision) => decision !== "allow-always")
-      : params.requestedDecisions;
+    requestedDecisions?.includes("allow-always") === true && !currentBinding
+      ? requestedDecisions.filter((decision) => decision !== "allow-always")
+      : requestedDecisions;
   return { kind: "prompt", binding: currentBinding, allowedDecisions };
 }
 
-export function retainResolvedNodeInvokePlacementGrant(params: {
+export async function retainResolvedNodeInvokePlacementGrant(params: {
   runtime?: PlacementStandingGrantRuntime;
   decision: ExecApprovalDecision | null;
   binding: PlacementStandingGrantMintSpec | null;
   owner?: NodeInvokePlacementGrantOwner;
   authorization: NodeInvokePlacementGrantAuthorization;
-}): boolean {
-  if (params.decision !== "allow-always" || !params.binding) {
+}): Promise<boolean> {
+  const { runtime, decision, owner, authorization } = params;
+  const binding = params.binding ? { ...params.binding } : null;
+  if (decision !== "allow-always" || !binding) {
     return true;
   }
-  if (
-    !params.owner ||
-    !isBindingCurrentForOwner(params.owner, params.binding) ||
-    params.runtime?.validate(params.binding).outcome !== "consumed"
-  ) {
+  const result = runtime?.validateAsync
+    ? await runtime.validateAsync(binding)
+    : runtime?.validate(binding);
+  if (!owner || !isBindingCurrentForOwner(owner, binding) || result?.outcome !== "consumed") {
     return false;
   }
-  params.authorization.binding = params.binding;
+  authorization.binding = binding;
   return true;
 }
 

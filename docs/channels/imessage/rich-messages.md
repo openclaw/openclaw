@@ -8,7 +8,7 @@ title: "iMessage private API actions"
 sidebarTitle: "Private API actions"
 ---
 
-The action surface a probed private API bridge adds on top of plain text sends.
+The action surface a checked private API bridge adds on top of plain text sends.
 
 ## Private API actions
 
@@ -61,7 +61,7 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
   </Accordion>
 
   <Accordion title="Capability detection">
-    OpenClaw hides private API actions only when the cached probe status says the bridge is unavailable. If the status is unknown, actions remain visible and dispatch probes lazily so the first action can succeed after `imsg launch` without a separate manual status refresh.
+    OpenClaw hides private API actions only when the cached check status says the bridge is unavailable. If the status is unknown, actions remain visible and dispatch checks lazily so the first action can succeed after `imsg launch` without a separate manual status refresh.
 
   </Accordion>
 
@@ -98,7 +98,7 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
   <Accordion title="Approval polls and reactions">
     When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes natively to iMessage, the gateway delivers an approval prompt with native controls:
 
-    - On a probed private API bridge with poll and caption-suppression support, the prompt includes a Messages poll with each allowed decision. Older `imsg` releases without `poll send --no-comment` stay on text controls.
+    - On a checked private API bridge with poll and caption-suppression support, the prompt includes a Messages poll with each allowed decision. Older `imsg` releases without `poll send --no-comment` stay on text controls.
     - If polls are disabled with `channels.imessage.actions.polls: false`, the bridge lacks poll support, the poll send fails, or fewer than two decisions are available, the prompt keeps the text and tapback controls.
     - The text fallback maps `👍` (Like) to `allow-once` and `👎` (Dislike) to `deny`. It also includes `/approve <id> <decision>` commands, including `allow-always` when the request permits it.
 

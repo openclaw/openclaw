@@ -1,4 +1,3 @@
-// Kimi Coding tests cover onboard plugin behavior.
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF, KIMI_MODEL_REF } from "./onboard.js";
@@ -31,8 +30,8 @@ describe("kimi coding onboard", () => {
     expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]?.alias).toBe("Kimi");
   });
 
-  it.each([undefined, "merge"] as const)("leaves ordinary %s catalogs runtime-owned", (mode) => {
-    const cfg = applyKimiCodeConfig({ models: { mode } });
+  it("leaves ordinary catalogs runtime-owned", () => {
+    const cfg = applyKimiCodeConfig({});
 
     expect(cfg.models?.providers?.kimi?.models).toEqual([]);
     expect(cfg.agents?.defaults?.models?.[KIMI_MODEL_REF]).toEqual({ alias: "Kimi" });

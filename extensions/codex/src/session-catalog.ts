@@ -11,16 +11,16 @@ import type {
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { resolveCodexCatalogCreateSession } from "./session-catalog-create.js";
 import {
-  currentCodexCatalogListDiagnostics,
   createCodexCatalogListScope,
+  startCodexCatalogListTiming,
 } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   createCodexSessionCatalogListOperation,
-  listCodexSessionCatalog,
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
+import { CodexCatalogNodeSnapshots } from "./session-catalog-node-snapshot.js";
 import {
   CatalogParamsError,
   CODEX_APP_SERVER_THREADS_LIST_COMMAND,
@@ -51,11 +51,6 @@ import {
 
 export { createCodexSessionCatalogControl } from "./session-catalog-control.js";
 export { createCodexSessionCatalogNodeHostCommands } from "./session-catalog-listing.js";
-export {
-  CODEX_LOCAL_SESSION_HOST_ID,
-  CODEX_SESSION_CATALOG_MAX_PAGE_LIMIT,
-} from "./session-catalog-parsing.js";
-
 /** Allows read-only catalog and transcript commands on supported paired-node platforms. */
 export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
   return [
@@ -88,54 +83,6 @@ export function createCodexSessionCatalogNodeInvokePolicies(): OpenClawPluginNod
   ];
 }
 
-function toGenericCatalogHost(
-  host: CodexSessionCatalogHost,
-  localTerminalAvailable: boolean,
-): SessionCatalogHost {
-  const local = isLocalCodexCatalogHost(host.hostId);
-  return {
-    hostId: host.hostId,
-    label: host.label,
-    kind: host.kind,
-    connected: host.connected,
-    ...(host.nodeId ? { nodeId: host.nodeId } : {}),
-    sessions: host.sessions.map((session) => {
-      const continuableStatus =
-        !session.archived && (session.status === "idle" || session.status === "notLoaded");
-      const canContinue =
-        (local || host.canContinueCodex === true) &&
-        continuableStatus &&
-        isInteractiveThreadSource(session.source);
-      const canArchive = local && continuableStatus && isInteractiveThreadSource(session.source);
-      const canOpenTerminal =
-        isInteractiveThreadSource(session.source) &&
-        (local ? localTerminalAvailable : host.canOpenTerminalCodex === true);
-      const name = session.name ?? session.fallbackName;
-      return {
-        threadId: session.threadId,
-        ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
-        ...(name ? { name } : {}),
-        ...(session.cwd ? { cwd: session.cwd } : {}),
-        status: session.status,
-        ...(session.createdAt != null ? { createdAt: session.createdAt } : {}),
-        ...(session.updatedAt != null ? { updatedAt: session.updatedAt } : {}),
-        ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
-        ...(session.source ? { source: session.source } : {}),
-        ...(session.modelProvider ? { modelProvider: session.modelProvider } : {}),
-        ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
-        ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
-        archived: session.archived,
-        ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
-        canContinue,
-        canArchive,
-        canOpenTerminal,
-      };
-    }),
-    ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
-    ...(host.error ? { error: host.error } : {}),
-  };
-}
-
 function isLocalCodexCatalogHost(hostId: string): boolean {
   return (
     hostId === CODEX_LOCAL_SESSION_HOST_ID || hostId.startsWith(`${CODEX_LOCAL_SESSION_HOST_ID}:`)
@@ -151,12 +98,12 @@ function resolveLocalCatalogHomeForThread(params: {
     throw new CatalogParamsError("local Codex sessions are unavailable in isolated state");
   }
   const exact = params.sourceHomeId
-    ? params.homes.filter((home) => home.sourceHomeId === params.sourceHomeId)
-    : params.homes.filter((home) => home.hostId === params.hostId);
-  if (exact.length === 0 || (params.sourceHomeId && exact[0]?.hostId !== params.hostId)) {
+    ? params.homes.find((home) => home.sourceHomeId === params.sourceHomeId)
+    : params.homes.find((home) => home.hostId === params.hostId);
+  if (!exact || (params.sourceHomeId && exact.hostId !== params.hostId)) {
     throw new CatalogParamsError("Codex session source home is unavailable");
   }
-  return exact[0]!;
+  return exact;
 }
 
 type CatalogListOperation = ReturnType<NonNullable<SessionCatalogProvider["createListOperation"]>>;
@@ -224,50 +171,63 @@ function catalogHostMapper(
   localHomes: readonly CodexCatalogHome[],
 ) {
   return (host: CodexSessionCatalogHost): SessionCatalogHost => {
-    const diagnostics = currentCodexCatalogListDiagnostics();
-    const started = diagnostics ? performance.now() : 0;
+    const finishTiming = startCodexCatalogListTiming("mappingMs");
     try {
+      const localSourceAvailable =
+        localTerminalAvailable &&
+        localHomes.some(
+          (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
+        );
+      const local = isLocalCodexCatalogHost(host.hostId);
       return {
-        ...toGenericCatalogHost(host, localTerminalAvailable),
+        hostId: host.hostId,
+        label: host.label,
+        kind: host.kind,
+        connected: host.connected,
+        ...(host.pending ? { pending: true } : {}),
+        ...(host.nodeId ? { nodeId: host.nodeId } : {}),
+        sessions: host.sessions.map((session) => {
+          const interactive = isInteractiveThreadSource(session.source);
+          const continuable =
+            interactive &&
+            !session.archived &&
+            (session.status === "idle" || session.status === "notLoaded");
+          const name = session.name ?? session.fallbackName;
+          return {
+            threadId: session.threadId,
+            ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
+            ...(name ? { name } : {}),
+            ...(session.cwd ? { cwd: session.cwd } : {}),
+            status: session.status,
+            ...(session.createdAt != null ? { createdAt: session.createdAt } : {}),
+            ...(session.updatedAt != null ? { updatedAt: session.updatedAt } : {}),
+            ...(session.recencyAt != null ? { recencyAt: session.recencyAt } : {}),
+            ...(session.source ? { source: session.source } : {}),
+            ...(session.modelProvider ? { modelProvider: session.modelProvider } : {}),
+            ...(session.cliVersion ? { cliVersion: session.cliVersion } : {}),
+            ...(session.gitBranch ? { gitBranch: session.gitBranch } : {}),
+            archived: session.archived,
+            ...(session.sessionKey ? { sessionKey: session.sessionKey } : {}),
+            canContinue: (local || host.canContinueCodex === true) && continuable,
+            canArchive: local && continuable,
+            canOpenTerminal:
+              interactive && (local ? localSourceAvailable : host.canOpenTerminalCodex === true),
+          };
+        }),
+        ...(host.nextCursor ? { nextCursor: host.nextCursor } : {}),
+        ...(host.error ? { error: host.error } : {}),
         canStartTerminal:
           host.kind === "gateway"
-            ? localTerminalAvailable &&
-              host.hostId === CODEX_LOCAL_SESSION_HOST_ID &&
-              localHomes.some(
-                (home) => home.hostId === host.hostId && home.appServer.start.transport === "stdio",
-              )
+            ? localSourceAvailable && host.hostId === CODEX_LOCAL_SESSION_HOST_ID
             : host.canStartTerminal === true,
       };
     } finally {
-      if (diagnostics && !diagnostics.closed) {
-        diagnostics.fields.mappingMs =
-          (diagnostics.fields.mappingMs ?? 0) + performance.now() - started;
-      }
+      finishTiming();
     }
   };
 }
 
-function mappedHostPublisher(
-  onHost: (host: SessionCatalogHost) => void,
-  mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
-) {
-  return (host: CodexSessionCatalogHost) => onHost(mapHost(host));
-}
-
-function mapCatalogListOperation(
-  operation: ReturnType<typeof createCodexSessionCatalogListOperation>,
-  mapHost: (host: CodexSessionCatalogHost) => SessionCatalogHost,
-): CatalogListOperation {
-  return {
-    async next() {
-      const step = await operation.next();
-      return step.done ? { done: true, hosts: step.hosts.map(mapHost) } : step;
-    },
-    close: () => operation.close(),
-  };
-}
-
-function registerCodexSessionCatalog(params: {
+export function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControlFactory;
@@ -310,11 +270,13 @@ function registerCodexSessionCatalog(params: {
     return { ...bound, source: bound.source };
   };
   const checkUpstreamActivity = upstream.createChecker(params);
+  const nodeSnapshots = new CodexCatalogNodeSnapshots();
   const createListOperation: NonNullable<SessionCatalogProvider["createListOperation"]> = (query) =>
     withCatalogListScope(async () => {
       const {
         agentId: requestedAgentId,
         allowProcessHomeFallback,
+        allowPartialResults,
         listNodes,
         onHost,
         waitUntil,
@@ -332,23 +294,29 @@ function registerCodexSessionCatalog(params: {
         resolveLocalCodexTerminalExecutable() !== undefined,
         localHomes,
       );
-      return mapCatalogListOperation(
-        createCodexSessionCatalogListOperation({
-          agentId,
-          bindingStore: params.bindingStore,
-          config: params.getRuntimeConfig(),
-          runtime: params.api.runtime,
-          control: params.control,
-          query: selectedQuery,
-          listNodes,
-          waitUntil,
-          signal,
-          sessionEntries,
-          localHomes,
-          ...(onHost ? { onHost: mappedHostPublisher(onHost, mapHost) } : {}),
-        }),
-        mapHost,
-      );
+      const operation = createCodexSessionCatalogListOperation({
+        agentId,
+        bindingStore: params.bindingStore,
+        config: params.getRuntimeConfig(),
+        runtime: params.api.runtime,
+        control: params.control,
+        query: selectedQuery,
+        listNodes,
+        waitUntil,
+        signal,
+        sessionEntries,
+        localHomes,
+        allowPartialResults,
+        nodeSnapshots,
+        ...(onHost ? { onHost: (host: CodexSessionCatalogHost) => onHost(mapHost(host)) } : {}),
+      });
+      return {
+        async next() {
+          const step = await operation.next();
+          return step.done ? { done: true, hosts: step.hosts.map(mapHost) } : step;
+        },
+        close: () => operation.close(),
+      };
     });
   const provider: SessionCatalogProvider = {
     id: "codex",
@@ -370,6 +338,7 @@ function registerCodexSessionCatalog(params: {
         control,
         hostId: request.hostId,
         threadId: request.threadId,
+        sourceHomeId: request.sourceHomeId,
         cursor: request.cursor,
         limit: request.limit ?? DEFAULT_TRANSCRIPT_PAGE_LIMIT,
         ...(source ? { source } : {}),
@@ -382,12 +351,14 @@ function registerCodexSessionCatalog(params: {
       }
       if (request.hostId.startsWith("node:")) {
         const agentId = resolveRequestAgentId(request.agentId);
+        const { continueNodeCodexSession } = await import("./session-catalog-node-continue.js");
         return await continueNodeCodexSession({
           agentId,
           api: params.api,
           config,
           hostId: request.hostId,
           threadId: request.threadId,
+          sourceHomeId: request.sourceHomeId,
           clientScopes: request.clientScopes,
         });
       }
@@ -397,6 +368,7 @@ function registerCodexSessionCatalog(params: {
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
       let upstreamBaseline: (CodexUpstreamBaseline & { connectionFingerprint: string }) | undefined;
+      const { continueLocalCodexSession } = await import("./session-catalog-adoption.js");
       const continued = await continueLocalCodexSession({
         agentId,
         api: params.api,
@@ -442,6 +414,7 @@ function registerCodexSessionCatalog(params: {
       }
       const { agentId, source, control } = await bindLocalRequest(request);
       source.assertCurrent();
+      const { archiveLocalCodexSession } = await import("./session-catalog-archive.js");
       await archiveLocalCodexSession({
         agentId,
         bindingStore: params.bindingStore,
@@ -493,34 +466,4 @@ function registerCodexSessionCatalog(params: {
     },
   };
   params.api.registerSessionCatalog(provider);
-}
-
-export const codexSessionCatalogRuntime = {
-  register: registerCodexSessionCatalog,
-  list: listCodexSessionCatalog,
-  readTranscript: readCodexSessionTranscript,
-  continueLocal: continueLocalCodexSession,
-  continueNode: continueNodeCodexSession,
-  archiveLocal: archiveLocalCodexSession,
-};
-
-async function continueLocalCodexSession(
-  ...args: Parameters<typeof import("./session-catalog-adoption.js").continueLocalCodexSession>
-) {
-  const { continueLocalCodexSession: run } = await import("./session-catalog-adoption.js");
-  return run(...args);
-}
-
-async function archiveLocalCodexSession(
-  ...args: Parameters<typeof import("./session-catalog-archive.js").archiveLocalCodexSession>
-) {
-  const { archiveLocalCodexSession: run } = await import("./session-catalog-archive.js");
-  return run(...args);
-}
-
-async function continueNodeCodexSession(
-  ...args: Parameters<typeof import("./session-catalog-node-continue.js").continueNodeCodexSession>
-) {
-  const { continueNodeCodexSession: run } = await import("./session-catalog-node-continue.js");
-  return run(...args);
 }

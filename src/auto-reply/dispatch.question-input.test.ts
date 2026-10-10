@@ -15,6 +15,7 @@ import {
   setEmbeddedQuestionBroker,
 } from "../infra/embedded-question-broker.js";
 import { resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { dispatchInboundMessageWithRoutedChannelDispatcher } from "./dispatch.js";
 import { runReplyQuestionInput } from "./reply/agent-runner-question-input.js";
 import type { DispatchReplyFromConfig } from "./reply/dispatch-from-config.types.js";
@@ -48,7 +49,7 @@ async function withQuestion(
   }) => Promise<void>,
   uncertain = false,
 ) {
-  const broker = new EmbeddedQuestionBroker();
+  const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
   const previousEmbeddedMode = isEmbeddedMode();
   setEmbeddedMode(true);
   setEmbeddedQuestionBroker(broker);
