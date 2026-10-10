@@ -24,16 +24,59 @@ export type ComparableHistoryMessage = {
 
 type CliAssistantSegment = ComparableHistoryMessage & { text: string };
 
+export type LocalTurn = {
+  order: number;
+  timestamp?: number;
+  // A stored external identity is ineligible for text fallback when the import has one.
+  externalIdentity?: boolean;
+};
+
 export type LocalTurnBucket = {
-  turns: Array<{ order: number; timestamp: number | undefined }>;
+  turns: LocalTurn[];
   cursor: number;
-  // Indexes into `turns` that carry a timestamp. Untimestamped prompts are not
-  // revisited when a timestamped import fails to name one of them.
-  timestamped: number[];
-  timestampedCursor: number;
-  // Candidate examinations. Stays flat for repeated misses against untimestamped prompts.
+  // Timestamp-sorted indexes into `turns`. Range lookup stays logarithmic when
+  // repeated prompts miss the dedupe window.
+  timestampedByTime: Array<{ index: number; timestamp: number }>;
+  // Remaining turns at or after each index, including externally identified rows.
+  allFrom: number[];
+  // Remaining turns that text fallback can still accept.
+  openFrom: number[];
+  // Timestamp-index probes plus in-window candidates. Untimestamped buckets stay at 0.
   visits: number;
 };
+
+function suffixCounts(
+  turns: readonly LocalTurn[],
+  include: (turn: LocalTurn) => boolean,
+): number[] {
+  const counts = Array.from({ length: turns.length + 1 }, () => 0);
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index];
+    counts[index] = (counts[index + 1] ?? 0) + (turn && include(turn) ? 1 : 0);
+  }
+  return counts;
+}
+
+export function createLocalTurnBucket(turns: readonly LocalTurn[]): LocalTurnBucket {
+  const timestampedByTime = turns
+    .map((turn, index) =>
+      turn.timestamp === undefined ? undefined : { index, timestamp: turn.timestamp },
+    )
+    .filter((entry): entry is { index: number; timestamp: number } => entry !== undefined)
+    .toSorted((left, right) =>
+      left.timestamp === right.timestamp
+        ? left.index - right.index
+        : left.timestamp - right.timestamp,
+    );
+  return {
+    turns: turns.map((turn) => ({ ...turn })),
+    cursor: 0,
+    timestampedByTime,
+    allFrom: suffixCounts(turns, () => true),
+    openFrom: suffixCounts(turns, (turn) => turn.externalIdentity !== true),
+    visits: 0,
+  };
+}
 
 export function compareHistoryMessages(
   a: ComparableHistoryMessage,
@@ -122,57 +165,128 @@ export function dropCoveredCliAssistantAggregates(
   return dropped.size === 0 ? entries : entries.filter((entry) => !dropped.has(entry));
 }
 
-function advanceBucketCursor(bucket: LocalTurnBucket, next: number): void {
-  bucket.cursor = next;
-  while (
-    bucket.timestampedCursor < bucket.timestamped.length &&
-    (bucket.timestamped[bucket.timestampedCursor] ?? -1) < next
-  ) {
-    bucket.timestampedCursor += 1;
+type AlignLocalTurnOptions = {
+  // Coverage may name only the local row the history matcher already accepted.
+  acceptedOrder?: number;
+  // Text fallback skips rows that already carry a different external identity.
+  excludeExternalIdentity?: boolean;
+};
+
+function isEligibleTurn(
+  bucket: LocalTurnBucket,
+  index: number,
+  excludeExternalIdentity: boolean,
+): boolean {
+  if (index < bucket.cursor) {
+    return false;
   }
+  const turn = bucket.turns[index];
+  if (!turn) {
+    return false;
+  }
+  return !(excludeExternalIdentity && turn.externalIdentity === true);
+}
+
+function firstTimestampIndex(
+  entries: ReadonlyArray<{ timestamp: number }>,
+  target: number,
+  bucket: LocalTurnBucket,
+  after: boolean,
+): number {
+  let lo = 0;
+  let hi = entries.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    const timestamp = entries[mid]?.timestamp;
+    bucket.visits += 1;
+    if (timestamp === undefined || (after ? timestamp <= target : timestamp < target)) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
+function acceptAlignedTurn(
+  bucket: LocalTurnBucket,
+  index: number,
+  acceptedOrder: number | undefined,
+): number | undefined {
+  const order = bucket.turns[index]?.order;
+  if (order === undefined || (acceptedOrder !== undefined && order !== acceptedOrder)) {
+    return undefined;
+  }
+  bucket.cursor = index + 1;
+  return order;
+}
+
+function onlyRemainingTurn(
+  bucket: LocalTurnBucket,
+  excludeExternalIdentity: boolean,
+  acceptedOrder: number | undefined,
+): number | undefined {
+  const counts = excludeExternalIdentity ? bucket.openFrom : bucket.allFrom;
+  if ((counts[bucket.cursor] ?? 0) !== 1) {
+    return undefined;
+  }
+  for (let index = bucket.cursor; index < bucket.turns.length; index += 1) {
+    if (isEligibleTurn(bucket, index, excludeExternalIdentity)) {
+      return acceptAlignedTurn(bucket, index, acceptedOrder);
+    }
+  }
+  return undefined;
 }
 
 // Picks the local turn an imported user row duplicates. A timestamp names a
-// turn only when exactly one candidate sits inside the dedupe window. The
-// first of several prompts a minute apart is not that turn: equal-text replies
+// turn only when exactly one eligible candidate sits inside the dedupe window.
+// The first of several prompts a minute apart is not that turn: equal-text replies
 // would then hide an earlier answer the import never covered. Without a unique
-// timestamp, the only safe alignment is a single remaining candidate.
+// timestamp, the only safe alignment is a single remaining eligible candidate.
 // Ambiguity yields undefined, which leaves every aggregate in that turn alone.
-// Untimestamped prompts are not scanned again on later timestamped misses.
+// The result must be the matcher-accepted row when one was supplied. Rows the
+// text fallback excludes are not candidates, and a miss does not walk every
+// timestamped prompt outside the window.
 export function takeAlignedLocalTurn(
   bucket: LocalTurnBucket,
   timestamp: number | undefined,
+  options?: AlignLocalTurnOptions,
 ): number | undefined {
-  if (timestamp !== undefined && bucket.timestampedCursor < bucket.timestamped.length) {
+  const excludeExternalIdentity = options?.excludeExternalIdentity === true;
+  const acceptedOrder = options?.acceptedOrder;
+  if (timestamp !== undefined && bucket.timestampedByTime.length > 0) {
+    const start = firstTimestampIndex(
+      bucket.timestampedByTime,
+      timestamp - DEDUPE_TIMESTAMP_WINDOW_MS,
+      bucket,
+      false,
+    );
+    const end = firstTimestampIndex(
+      bucket.timestampedByTime,
+      timestamp + DEDUPE_TIMESTAMP_WINDOW_MS,
+      bucket,
+      true,
+    );
     let matched: number | undefined;
-    for (let i = bucket.timestampedCursor; i < bucket.timestamped.length; i += 1) {
-      const turnIndex = bucket.timestamped[i];
-      if (turnIndex === undefined || turnIndex < bucket.cursor) {
+    for (let index = start; index < end; index += 1) {
+      const turnIndex = bucket.timestampedByTime[index]?.index;
+      if (turnIndex === undefined) {
         continue;
       }
-      const candidate = bucket.turns[turnIndex];
       bucket.visits += 1;
-      if (
-        candidate?.timestamp !== undefined &&
-        Math.abs(candidate.timestamp - timestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS
-      ) {
-        if (matched !== undefined) {
-          return undefined;
-        }
-        matched = turnIndex;
+      if (!isEligibleTurn(bucket, turnIndex, excludeExternalIdentity)) {
+        continue;
       }
+      if (matched !== undefined) {
+        return undefined;
+      }
+      matched = turnIndex;
     }
     if (matched !== undefined) {
-      advanceBucketCursor(bucket, matched + 1);
-      return bucket.turns[matched]?.order;
+      return acceptAlignedTurn(bucket, matched, acceptedOrder);
     }
   }
-  if (bucket.turns.length - bucket.cursor !== 1) {
-    return undefined;
-  }
-  const only = bucket.turns[bucket.cursor];
-  advanceBucketCursor(bucket, bucket.cursor + 1);
-  return only?.order;
+  return onlyRemainingTurn(bucket, excludeExternalIdentity, acceptedOrder);
 }
 
 // A native tool result keeps role "user" when the previous assistant message
@@ -189,17 +303,15 @@ export function isNativeToolResultMessage(message: unknown): boolean {
   });
 }
 
-type LocalCoverageNote = {
+export type LocalCoverageUser = {
   id: number;
-  role: string | null;
-  text: string | null;
+  text: string;
   timestamp: number | null;
-  aggregate: boolean;
+  externalIdentity: boolean;
 };
 
 type ImportedCoverageNote = {
   role: string | null;
-  text: string | null;
   timestamp: number | null;
   duplicate: boolean;
   claudeAssistant: boolean;
@@ -210,117 +322,130 @@ type ImportedCoverageNote = {
   matchedLocalText?: string | null;
   // External identity and image correlation pin one local row. Text matches do not.
   matchedByIdentity?: boolean;
+  // Imported external identity makes stored external keys ineligible for text fallback.
+  excludeExternalIdentity?: boolean;
   toolResult?: boolean;
+  hasText?: boolean;
 };
 
-// The in-memory merge walked source order while deduping. The history index
-// does that walk in SQLite, so coverage is recorded alongside it and applied
-// before ordinals are assigned.
+// Compares one turn's aggregate and segment texts. Callers load those strings in
+// bounded batches and drop them; this does not retain the inputs.
+export function droppedCoveredAggregateIds(params: {
+  aggregates: ReadonlyArray<{ id: number; text: string }>;
+  segments: ReadonlyArray<{ text: string }>;
+}): number[] {
+  if (params.aggregates.length === 0 || params.segments.length === 0) {
+    return [];
+  }
+  const aggregates: ComparableHistoryMessage[] = params.aggregates.map((aggregate) => ({
+    message: { idempotencyKey: `${CLI_ASSISTANT_IDEMPOTENCY_PREFIX}indexed` },
+    order: aggregate.id,
+    hasCliImageMentions: false,
+    turn: 0,
+    role: "assistant",
+    text: aggregate.text,
+  }));
+  const segments: ComparableHistoryMessage[] = params.segments.map((segment, index) => ({
+    message: {},
+    order: index,
+    hasCliImageMentions: false,
+    turn: 0,
+    importedCliAssistantSegment: true,
+    role: "assistant",
+    text: segment.text,
+  }));
+  const kept = new Set(
+    dropCoveredCliAssistantAggregates([...aggregates, ...segments]).filter(
+      (entry) => !entry.importedCliAssistantSegment,
+    ),
+  );
+  const dropped: number[] = [];
+  for (const aggregate of aggregates) {
+    if (!kept.has(aggregate)) {
+      dropped.push(aggregate.order);
+    }
+  }
+  return dropped;
+}
+
+// Alignment state for the history index. Comparable assistant text stays in the
+// temporary SQLite index; this object keeps user-turn buckets only until release.
 export function createCliAssistantCoverage(): {
-  noteLocal(entry: LocalCoverageNote): void;
-  noteImported(entry: ImportedCoverageNote): void;
-  coveredAggregateIds(): ReadonlySet<number>;
+  setLocalUsers(users: readonly LocalCoverageUser[]): void;
+  noteImported(entry: ImportedCoverageNote): { segmentTurn?: number };
+  alignmentExaminations(): number;
+  release(): void;
 } {
-  const locals: LocalCoverageNote[] = [];
-  const aggregates: ComparableHistoryMessage[] = [];
-  const segments: ComparableHistoryMessage[] = [];
   let buckets: Map<string, LocalTurnBucket> | undefined;
   let importedTurn: number | undefined;
 
-  const ensureBuckets = () => {
-    if (buckets) {
-      return buckets;
-    }
-    buckets = new Map();
-    let turn: number | undefined;
-    // The history reader loads local pages newest first and appends each deferred
-    // boundary row later. Insertion order is not conversation order; the local
-    // id is the canonical source sequence.
-    const ordered = locals.toSorted((left, right) => left.id - right.id);
-    for (const local of ordered) {
-      if (local.role === "user") {
-        turn = local.id;
-        if (local.text) {
-          const item = { order: local.id, timestamp: local.timestamp ?? undefined };
-          const bucket = buckets.get(local.text);
-          if (bucket) {
-            if (item.timestamp !== undefined) {
-              bucket.timestamped.push(bucket.turns.length);
-            }
-            bucket.turns.push(item);
-          } else {
-            buckets.set(local.text, {
-              turns: [item],
-              cursor: 0,
-              timestamped: item.timestamp === undefined ? [] : [0],
-              timestampedCursor: 0,
-              visits: 0,
-            });
-          }
+  return {
+    setLocalUsers(users) {
+      const grouped = new Map<string, LocalTurn[]>();
+      for (const user of users) {
+        const turn: LocalTurn = {
+          order: user.id,
+          ...(user.timestamp === null ? {} : { timestamp: user.timestamp }),
+          ...(user.externalIdentity ? { externalIdentity: true } : {}),
+        };
+        const existing = grouped.get(user.text);
+        if (existing) {
+          existing.push(turn);
+        } else {
+          grouped.set(user.text, [turn]);
         }
       }
-      if (local.aggregate && local.text && turn !== undefined) {
-        aggregates.push({
-          message: { idempotencyKey: `${CLI_ASSISTANT_IDEMPOTENCY_PREFIX}indexed` },
-          order: local.id,
-          hasCliImageMentions: false,
-          turn,
-          role: "assistant",
-          text: local.text,
-        });
+      buckets = new Map();
+      for (const [text, turns] of grouped) {
+        buckets.set(text, createLocalTurnBucket(turns));
       }
-    }
-    return buckets;
-  };
-
-  return {
-    noteLocal(entry) {
-      locals.push(entry);
+      importedTurn = undefined;
     },
     noteImported(entry) {
-      const localTurns = ensureBuckets();
       if (entry.role === "user") {
         if (entry.toolResult) {
-          return;
+          return {};
         }
         if (entry.matchedByIdentity) {
           importedTurn = entry.matchedLocalTurn;
-          return;
+          return {};
         }
-        const bucket = entry.matchedLocalText ? localTurns.get(entry.matchedLocalText) : undefined;
+        if (entry.matchedLocalTurn === undefined) {
+          importedTurn = undefined;
+          return {};
+        }
+        const bucket = entry.matchedLocalText ? buckets?.get(entry.matchedLocalText) : undefined;
         importedTurn = bucket
-          ? takeAlignedLocalTurn(bucket, entry.timestamp ?? undefined)
+          ? takeAlignedLocalTurn(bucket, entry.timestamp ?? undefined, {
+              acceptedOrder: entry.matchedLocalTurn,
+              excludeExternalIdentity: entry.excludeExternalIdentity === true,
+            })
           : undefined;
-        return;
+        return {};
       }
-      if (entry.claudeAssistant && !entry.duplicate && entry.text && importedTurn !== undefined) {
-        segments.push({
-          message: {},
-          order: segments.length,
-          hasCliImageMentions: false,
-          turn: importedTurn,
-          importedCliAssistantSegment: true,
-          role: "assistant",
-          text: entry.text,
-        });
+      if (
+        entry.claudeAssistant &&
+        !entry.duplicate &&
+        entry.hasText &&
+        importedTurn !== undefined
+      ) {
+        return { segmentTurn: importedTurn };
       }
+      return {};
     },
-    coveredAggregateIds() {
-      if (aggregates.length === 0 || segments.length === 0) {
-        return new Set();
+    alignmentExaminations() {
+      if (!buckets) {
+        return 0;
       }
-      const kept = new Set(
-        dropCoveredCliAssistantAggregates([...aggregates, ...segments]).filter(
-          (entry) => !entry.importedCliAssistantSegment,
-        ),
-      );
-      const dropped = new Set<number>();
-      for (const aggregate of aggregates) {
-        if (!kept.has(aggregate)) {
-          dropped.add(aggregate.order);
-        }
+      let total = 0;
+      for (const bucket of buckets.values()) {
+        total += bucket.visits;
       }
-      return dropped;
+      return total;
+    },
+    release() {
+      buckets = undefined;
+      importedTurn = undefined;
     },
   };
 }

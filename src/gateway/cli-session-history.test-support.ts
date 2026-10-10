@@ -73,6 +73,7 @@ export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];
   localOrder?: "production-pages";
+  inspect?: (index: CliSessionHistoryIndex) => void;
 }): unknown[] {
   const index = new CliSessionHistoryIndex();
   try {
@@ -87,6 +88,7 @@ export function mergeImportedChatHistoryMessages(params: {
       index.appendImported(message);
     }
     index.finish();
+    params.inspect?.(index);
     const messages: unknown[] = [];
     for (const row of index.rows(0, index.count)) {
       const message =

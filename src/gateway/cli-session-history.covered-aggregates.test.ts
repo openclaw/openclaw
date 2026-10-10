@@ -4,8 +4,8 @@ import {
   hashCliImageTurnEntryId,
 } from "../agents/cli-image-turn-correlation.js";
 import {
+  createLocalTurnBucket,
   takeAlignedLocalTurn,
-  type LocalTurnBucket,
 } from "./cli-session-history.merge-aggregates.js";
 import { mergeImportedChatHistoryMessages } from "./cli-session-history.test-support.js";
 
@@ -619,17 +619,8 @@ describe("cli session history covered aggregates", () => {
   });
 
   it("does not rescan untimestamped prompts for every timestamped import", () => {
-    const turns = Array.from({ length: 400 }, (_, order) => ({
-      order,
-      timestamp: undefined,
-    }));
-    const bucket: LocalTurnBucket = {
-      turns,
-      cursor: 0,
-      timestamped: [],
-      timestampedCursor: 0,
-      visits: 0,
-    };
+    const turns = Array.from({ length: 400 }, (_, order) => ({ order }));
+    const bucket = createLocalTurnBucket(turns);
     for (let index = 0; index < turns.length; index += 1) {
       expect(takeAlignedLocalTurn(bucket, 1_000 + index)).toBeUndefined();
     }
@@ -638,16 +629,87 @@ describe("cli session history covered aggregates", () => {
     expect(takeAlignedLocalTurn(bucket, 5_000)).toBeUndefined();
   });
 
-  it("aligns the only untimestamped prompt without scanning a timestamp index", () => {
-    const bucket: LocalTurnBucket = {
-      turns: [{ order: 7, timestamp: undefined }],
-      cursor: 0,
-      timestamped: [],
-      timestampedCursor: 0,
-      visits: 0,
-    };
-    expect(takeAlignedLocalTurn(bucket, 5_000)).toBe(7);
-    expect(bucket.visits).toBe(0);
+  it("keeps the identified aggregate when text fallback accepts a later undated prompt", () => {
+    const timestamp = Date.parse("2026-03-26T16:00:00.000Z");
+    const reply = "Checking.\nDone.";
+    const aggregate = (runId: string, at?: number) => ({
+      role: "assistant",
+      content: [{ type: "text", text: reply }],
+      ...(at === undefined ? {} : { timestamp: at }),
+      idempotencyKey: `cli-assistant:${runId}`,
+    });
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [
+        { role: "user", content: "ping", timestamp, ...claudeMeta("old-user") },
+        aggregate("old", timestamp + 3),
+        { role: "user", content: "ping" },
+        aggregate("undated"),
+      ],
+      importedMessages: [
+        { role: "user", content: "ping", timestamp, ...claudeMeta("new-user") },
+        segment("Checking.", "interim", timestamp + 1),
+        segment("Done.", "final", timestamp + 2),
+      ],
+    });
+
+    const keys = idempotencyKeys(merged);
+    expect(keys).toContain("cli-assistant:old");
+    expect(keys).not.toContain("cli-assistant:undated");
+  });
+
+  it("keeps mixed repeated prompts ambiguous without scanning every dated row", () => {
+    const datedCount = 48;
+    const datedStart = Date.parse("2020-01-01T00:00:00.000Z");
+    const importStart = Date.parse("2026-03-26T16:00:00.000Z");
+    const reply = "Checking.\nDone.";
+    const localMessages: unknown[] = [];
+    for (let index = 0; index < datedCount; index += 1) {
+      const at = datedStart + index * 60_000;
+      localMessages.push(
+        { role: "user", content: "ping", timestamp: at },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: reply }],
+          timestamp: at + 3,
+          idempotencyKey: `cli-assistant:dated-${index}`,
+        },
+      );
+    }
+    for (let index = 0; index < datedCount; index += 1) {
+      localMessages.push(
+        { role: "user", content: "ping" },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: reply }],
+          idempotencyKey: `cli-assistant:undated-${index}`,
+        },
+      );
+    }
+    const importedMessages: unknown[] = [];
+    for (let index = 0; index < datedCount; index += 1) {
+      const at = importStart + index * 60_000;
+      importedMessages.push(
+        { role: "user", content: "ping", timestamp: at, ...claudeMeta(`new-${index}`) },
+        segment("Checking.", `interim-${index}`, at + 1),
+        segment("Done.", `final-${index}`, at + 2),
+      );
+    }
+    let examinations = 0;
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages,
+      importedMessages,
+      inspect: (index) => {
+        examinations = index.repeatedPromptExaminations;
+      },
+    });
+
+    const keys = idempotencyKeys(merged);
+    expect(keys.filter((key) => key?.startsWith("cli-assistant:dated-"))).toHaveLength(datedCount);
+    expect(keys.filter((key) => key?.startsWith("cli-assistant:undated-"))).toHaveLength(
+      datedCount,
+    );
+    expect(examinations).toBeGreaterThan(0);
+    expect(examinations).toBeLessThan((datedCount * datedCount) / 2);
   });
 
   it("drops a covered aggregate for a resumed prompt the matcher already aligned", () => {
