@@ -40,20 +40,36 @@ not edit source. Capture always uses the shared settled-layout, visible-image,
 font, and static-animation preparation. Dates, locale, timezone, device scale,
 and fixture randomness are fixed. No real Gateway or credentials are used.
 
-## Catalog and remaining qualification
+## Catalog and qualification
 
-`scenarios.ts` owns route entries and interaction recipes. The current catalog
-includes every static route ID, Chat empty/error/long-content states, session
-menus, the appearance submenu, a rename dialog, and Settings controls. Twelve
-profiles cover desktop/mobile, light/dark, RTL, enlarged text, forced colors,
-and reduced motion. This is a coverage matrix, not a full Cartesian product of
-all accessibility settings.
+`scenarios.ts` owns 77 route/state entries. The catalog includes every static
+route ID and its redirects, loading/error fixtures, Workboard, Chat content,
+menus and submenus, a New Group modal, a long model list, selected/disabled
+controls, rich hovercards, and overflowing reader tabs. Twelve profiles cover
+desktop/mobile, light/dark, RTL, enlarged text, forced colors, and reduced motion.
+This is a coverage matrix, not a full Cartesian product of accessibility settings.
 
-This initial implementation is **not yet browser-qualified**. The first Testbox
-attempt expired during source preparation, before its capture command ran.
-Remaining work includes completing meaningful per-route loading/error/populated
-fixtures, plugin/Workboard state, long lists, rich hovercards, overflowing tabs,
-and inspecting the complete stress gallery. A successful generic route-host
-capture alone does not establish these state contracts. Do not use the current
-catalog as the completed migration parity gate until those fixtures and the
-same-ref zero-diff/CSS-change browser proofs pass.
+Static preparation fixes dates and decorative randomness, samples JavaScript
+animation time, and strips SMIL animation instructions from SVG image responses.
+The shared screenshot helper owns layout, image/font readiness, and temporary
+transition suppression. Chromium uses its fresh-surface screenshot path.
+
+**The exact-repeatability gate is not yet qualified.** Two complete 924-shot
+captures passed at an earlier harness revision, but their comparison found 40
+changed shots. After fixing fixture randomness, animation clocks, SVG image
+motion, and transcript scroll ownership, the latest focused pair matched 42 of
+44 shots. The remaining Updates screenshots differ by 14 pixels each in desktop
+and mobile light mode, by at most one color-channel level, around the selected
+release-channel control. No tolerance, masks, or baseline exceptions are applied.
+
+The deliberate CSS sensitivity check detects a change in all 1,382,400 pixels
+of the selected desktop Chat shot. The nine report-contract tests and scripts
+typecheck pass. Before using this as the migration gate, resolve the remaining
+rendering variation, rerun the complete same-ref pair to zero, and inspect the
+complete resulting gallery.
+
+Run the opt-in report tests through the repository Vitest wrapper:
+
+```sh
+node scripts/run-vitest.mjs run --config scripts/control-ui-parity/report.vitest.config.ts --configLoader runner scripts/control-ui-parity/report.test.ts --maxWorkers=1
+```
