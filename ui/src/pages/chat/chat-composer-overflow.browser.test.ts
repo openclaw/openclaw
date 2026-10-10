@@ -607,12 +607,13 @@ describe("composer overflow presentation", () => {
       clear.focus();
       expect(document.hasFocus()).toBe(true);
       expect(document.activeElement).toBe(clear);
-      if (server.browser === "webkit" && server.platform === "darwin") {
-        // Option-Tab includes buttons under Safari's default keyboard settings.
-        await userEvent.keyboard("{Alt>}{Shift>}{Tab}{/Shift}{/Alt}");
-      } else {
-        await userEvent.tab({ shift: true });
-      }
+      // keyboard resolves the test frame before dispatch. Option-Tab includes
+      // buttons under Safari's default macOS keyboard settings.
+      await userEvent.keyboard(
+        server.browser === "webkit" && server.platform === "darwin"
+          ? "{Alt>}{Shift>}{Tab}{/Shift}{/Alt}"
+          : "{Shift>}{Tab}{/Shift}",
+      );
       expect(document.activeElement).toBe(
         commands.querySelector(
           status === "active" ? ".agent-chat__goal-pause" : ".agent-chat__goal-resume",
