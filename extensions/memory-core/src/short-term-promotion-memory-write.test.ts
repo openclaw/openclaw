@@ -259,7 +259,10 @@ it("refuses before any write attempt even when the parent directory is read-only
 });
 
 it("merges valid non-ASCII memory including a literal replacement character", async () => {
-  const original = "# Long-Term Memory\n\n- note: 中文 🦀  tail\n";
+  // A validator that rejects every decoded U+FFFD must fail this test: the
+  // original bytes contain an intentional replacement character that has to
+  // survive the merge byte-for-byte.
+  const original = "# Long-Term Memory\n\n- note: 中文 🦀 \uFFFD tail\n";
   const memoryPath = await setupMemoryFile(original);
 
   await commitMemoryContent({
