@@ -47,19 +47,56 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
   return normalizeOptionalString(metadata?.steerTargetRunId) ?? null;
 }
 
+/** Live activity keeps the input boundary seen on arrival, independent of clocks. */
+export function observedRunInputSendId(
+  messages: unknown[] | undefined,
+  runId: string,
+): string | undefined {
+  const input = messages?.findLast(
+    (message) =>
+      readSessionMessageIdentity(message)?.role === "user" &&
+      (userTurnRunId(message) === runId || persistedSteerTargetRunId(message) === runId),
+  );
+  return readSessionMessageIdentity(input)?.sendId ?? undefined;
+}
+
 export function streamCausalInterval(
   messages: unknown[],
   part: { runId?: string },
+  afterUserSendId?: string,
 ): { start: number; end: number } {
-  const startIndex = part.runId
-    ? messages.findIndex((message) => userTurnRunId(message) === part.runId)
+  const inputIndex = afterUserSendId
+    ? messages.findIndex(
+        (message) => readSessionMessageIdentity(message)?.sendId === afterUserSendId,
+      )
     : -1;
+  const startIndex =
+    inputIndex >= 0
+      ? inputIndex
+      : part.runId
+        ? messages.findIndex(
+            (message) =>
+              userTurnRunId(message) === part.runId ||
+              (readSessionMessageIdentity(message)?.role === "user" &&
+                persistedSteerTargetRunId(message) === part.runId),
+          )
+        : -1;
+  if (
+    afterUserSendId &&
+    inputIndex < 0 &&
+    startIndex >= 0 &&
+    persistedSteerTargetRunId(messages[startIndex]) === part.runId
+  ) {
+    // The observed input fell off the loaded page. Its live activity predates
+    // the first retained steer; an unanchored replay or tail does not.
+    return { start: 0, end: startIndex };
+  }
   if (startIndex >= 0) {
     const end = messages.findIndex(
       (message, index) =>
         index > startIndex &&
         readSessionMessageIdentity(message)?.role === "user" &&
-        persistedSteerTargetRunId(message) !== part.runId,
+        (inputIndex >= 0 || persistedSteerTargetRunId(message) !== part.runId),
     );
     return { start: startIndex + 1, end: end >= 0 ? end : messages.length };
   }

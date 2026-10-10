@@ -117,6 +117,15 @@ Follow-up messages use the same Agents API session. Ask the agent to revise its
 answer, work with another attachment, or take the next step. A message sent while
 the agent is working can redirect it; stopping the task cancels its remote turn.
 
+Saved sessions from `v2026.9.9` are upgraded on their first continuation without
+changing the remote session ID. Keep the original API key and configuration
+until that continuation succeeds. If they no longer match, the plugin retains
+the binding and explains how to restore them or explicitly reset with a key
+that can settle the original native session. A failed upgrade never silently
+creates a replacement conversation. See the [saved-session upgrade
+notes](https://github.com/openclaw/openclaw/blob/main/extensions/agentsapi/README.md#upgrading-saved-sessions)
+for key rotation and rollback.
+
 New sessions receive your OpenClaw instructions and persona, including
 `AGENTS.md`, `SOUL.md`, and your user context. After editing those instructions,
 send `/new` or `/reset` to start a conversation with the updated context. Your
@@ -137,8 +146,11 @@ Download outputs you want to keep: the hosted workspace is separate from your
 Gateway's files, and a saved conversation does not guarantee permanent file
 storage.
 
-Built-in web search is available in new sessions. Your enabled OpenClaw and
-plugin tools remain available under your configured tool policies, including
+Built-in web search is available in new sessions unless disabled globally with
+`tools.web.search.enabled: false` or through the session’s **Web search** control.
+Changing the effective search setting requires `/new` or `/reset`; an existing
+session refuses to continue with a different native search policy.
+Your enabled OpenClaw and plugin tools remain available under your configured tool policies, including
 memory search and recall. You can also connect remote tools through MCP; see
 [MCP connections](/plugins/agentsapi#mcp-connections) below.
 
@@ -346,6 +358,12 @@ Use `/new` or `/reset` to adopt changes to session instructions, MCP connections
 or reasoning-summary display. These commands start a fresh session on the next
 message. Remote history and workspace resources remain managed through the
 Agents API.
+
+Reset and deletion confirm that native work has stopped before removing a session
+binding, including after a Gateway restart. If that confirmation fails, the binding
+is retained for recovery. This does not delete the remote conversation or its retained
+files. Rewinding or switching a local transcript branch also invalidates its old
+native binding and retires its controlled executor after the local change commits.
 
 OpenClaw shows progress and records conversation and tool history in its normal
 transcript. Channel settings control progress and reasoning visibility. Token

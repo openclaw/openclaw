@@ -63,9 +63,18 @@ it("keeps the camera idle across unchanged input renders while retaining reactiv
   expect(updates).toHaveBeenCalledTimes(2);
 });
 
-it.each(["agent-chat__composer-shell", "new-session-page__composer"])(
-  "keeps explicit native capture scoped to %s with a single-image input",
-  async (composerClass) => {
+it.each(
+  ["agent-chat__composer-shell", "new-session-page__composer"].flatMap((composerClass) =>
+    [false, true].map((android) => ({ composerClass, android })),
+  ),
+)(
+  "keeps native capture scoped to $composerClass with a single-image input (Android: $android)",
+  async ({ composerClass, android }) => {
+    if (android) {
+      vi.spyOn(navigator, "userAgent", "get").mockReturnValue(
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Mobile Safari/537.36",
+      );
+    }
     const initialProps = { onAttachmentsChange: vi.fn(), disabled: false };
     const draw = (props: ChatAttachmentControlsProps) =>
       render(
@@ -96,16 +105,32 @@ it.each(["agent-chat__composer-shell", "new-session-page__composer"])(
     const clickNative = vi.spyOn(nativeInput, "click").mockImplementation(() => undefined);
     menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "camera" } } }));
     await camera.updateComplete;
-    expect(clickNative).not.toHaveBeenCalled();
-    const nativeButton = [...camera.renderRoot.querySelectorAll("button")].find(
-      (button) => button.textContent?.trim() === "Use device camera",
-    );
-    if (!nativeButton) {
-      throw new Error("Missing explicit native-camera action");
+    if (android) {
+      expect(clickNative).toHaveBeenCalledOnce();
+      expect(camera.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    } else {
+      expect(clickNative).not.toHaveBeenCalled();
+      const nativeButton = [...camera.renderRoot.querySelectorAll("button")].find(
+        (button) => button.textContent?.trim() === "Use device camera",
+      );
+      if (!nativeButton) {
+        throw new Error("Missing explicit native-camera action");
+      }
+      nativeButton.click();
+      expect(clickNative).toHaveBeenCalledOnce();
+      await camera.updateComplete;
     }
-    nativeButton.click();
-    expect(clickNative).toHaveBeenCalledOnce();
-    await camera.updateComplete;
+    for (const unavailable of [
+      { disabled: true },
+      { cameraActive: false },
+      { readSignal: AbortSignal.abort() },
+    ]) {
+      draw({ ...initialProps, disabled: false, ...unavailable });
+      await camera.updateComplete;
+      menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "camera" } } }));
+      expect(clickNative).toHaveBeenCalledOnce();
+      expect(camera.renderRoot.querySelector("openclaw-modal-dialog")).toBeNull();
+    }
   },
 );
 

@@ -29,6 +29,7 @@ import {
   assertUpdateRecoverySealComplete,
   hasPendingUpdateRecoverySeal,
 } from "./update-recovery-capture-seal.js";
+import { canonicalEntryPath } from "./update-recovery-path.js";
 import { recordedUpdateRunDrivers } from "./update-run-activity.js";
 import { inspectUpdateRunDriver, sameUpdateRunDriver } from "./update-run-driver.js";
 import { getUpdateRunAsync } from "./update-run-reader.js";
@@ -78,14 +79,6 @@ async function fileDigest(pathname: string): Promise<{ size: number; sha256: str
   } finally {
     await source.handle.close();
   }
-}
-
-function canonicalEntryPath(pathname: string): string {
-  const absolute = path.resolve(pathname);
-  return path.join(
-    resolvePathViaExistingAncestorSync(path.dirname(absolute)),
-    path.basename(absolute),
-  );
 }
 
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
