@@ -46,16 +46,16 @@ export type RuntimeConversationBindingRouteResult = {
   pluginId?: string;
 };
 
-type RuntimeConversationBindingRouteResolver = (selection: {
+type RuntimeConversationBindingRouteResolver<Result = ResolvedAgentRoute> = (selection: {
   inspection: ReturnType<typeof inspectSessionBindingByConversation>;
   bindingOwnerAvailable: boolean;
   bindingRecord: SessionBindingRecord | null;
   boundAgentId?: string;
-}) => ResolvedAgentRoute;
+}) => Result;
 
-type RuntimeConversationBindingRouteInput =
+type RuntimeConversationBindingRouteInput<Result = ResolvedAgentRoute> =
   | { route: ResolvedAgentRoute; resolveRoute?: never }
-  | { route?: never; resolveRoute: RuntimeConversationBindingRouteResolver };
+  | { route?: never; resolveRoute: RuntimeConversationBindingRouteResolver<Result> };
 
 type ConfiguredBindingRouteConversationInput =
   | {
@@ -122,13 +122,9 @@ export function resolveConfiguredBindingRoute(
   };
 }
 
-/** Projects prepared ownership facts without reading or changing binding storage. */
-export function inspectRuntimeConversationBindingRoute(
-  params: RuntimeConversationBindingRouteInput & {
-    inspection: ReturnType<typeof inspectSessionBindingByConversation>;
-  },
-): RuntimeConversationBindingRouteResult {
-  const { inspection } = params;
+function selectRuntimeConversationBindingRoute(
+  inspection: ReturnType<typeof inspectSessionBindingByConversation>,
+) {
   const selection = resolveConversationBindingSelection(
     inspection.status === "available" ? inspection.binding : null,
   );
@@ -139,7 +135,7 @@ export function inspectRuntimeConversationBindingRoute(
         normalizeOptionalString(selection.binding.metadata?.agentId))
       : undefined;
   const boundAgentId =
-    params.resolveRoute && selection.kind === "agent" && explicitAgentId
+    selection.kind === "agent" && explicitAgentId
       ? resolveConversationBindingAgentId(selection.binding, explicitAgentId)
       : undefined;
   const routeSelection = {
@@ -148,6 +144,18 @@ export function inspectRuntimeConversationBindingRoute(
     bindingRecord,
     boundAgentId,
   };
+  return { selection, routeSelection };
+}
+
+/** Projects prepared ownership facts without reading or changing binding storage. */
+export function inspectRuntimeConversationBindingRoute(
+  params: RuntimeConversationBindingRouteInput & {
+    inspection: ReturnType<typeof inspectSessionBindingByConversation>;
+  },
+): RuntimeConversationBindingRouteResult {
+  const { inspection } = params;
+  const { selection, routeSelection } = selectRuntimeConversationBindingRoute(inspection);
+  const { bindingRecord } = routeSelection;
   const baseRoute = params.resolveRoute ? params.resolveRoute(routeSelection) : params.route;
   const inspectedConversation = readSessionBindingInspectionConversation(inspection);
   if (inspection.status === "unavailable") {
@@ -216,22 +224,29 @@ export function inspectRuntimeConversationBindingRoute(
 
 /**
  * Resolves runtime routing after the binding owner settles its activity mutation.
+ * Route callbacks may await a parent conversation before selecting a fallback.
  * Legacy adapters may still perform synchronous persistence during migration.
  */
 export async function resolveRuntimeConversationBindingRouteAsync(
-  params: RuntimeConversationBindingRouteInput & {
+  params: RuntimeConversationBindingRouteInput<ResolvedAgentRoute | Promise<ResolvedAgentRoute>> & {
     touchBinding?: boolean;
   } & ConfiguredBindingRouteConversationInput,
 ): Promise<RuntimeConversationBindingRouteResult> {
-  const routeInput: RuntimeConversationBindingRouteInput = params.resolveRoute
-    ? { resolveRoute: params.resolveRoute }
-    : { route: { ...params.route } };
+  const routeInput: RuntimeConversationBindingRouteInput<
+    ResolvedAgentRoute | Promise<ResolvedAgentRoute>
+  > = params.resolveRoute ? { resolveRoute: params.resolveRoute } : { route: { ...params.route } };
   const conversation = resolveConfiguredBindingConversationRef(params);
   const service = getSessionBindingService();
-  let result = inspectRuntimeConversationBindingRoute({
-    ...routeInput,
-    inspection: await service.inspectByConversationAsync(conversation),
-  });
+  const inspect = async () => {
+    const inspection = await service.inspectByConversationAsync(conversation);
+    const route = routeInput.resolveRoute
+      ? await routeInput.resolveRoute(
+          selectRuntimeConversationBindingRoute(inspection).routeSelection,
+        )
+      : routeInput.route;
+    return inspectRuntimeConversationBindingRoute({ route, inspection });
+  };
+  let result = await inspect();
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (!result.bindingRecord || params.touchBinding === false) {
       return result;
@@ -242,10 +257,7 @@ export async function resolveRuntimeConversationBindingRouteAsync(
       accountId: result.bindingRecord.conversation.accountId,
     };
     await service.touchAsync(bindingId, undefined, scope);
-    result = inspectRuntimeConversationBindingRoute({
-      ...routeInput,
-      inspection: await service.inspectByConversationAsync(conversation),
-    });
+    result = await inspect();
     if (
       !result.bindingRecord ||
       (result.bindingRecord.bindingId === bindingId &&

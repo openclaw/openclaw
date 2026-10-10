@@ -5,7 +5,11 @@ import {
   patchSessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  useSessionStoreTempDirs,
+  withNativeSessionMutationForTest,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
@@ -30,8 +34,12 @@ import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
 import {
+  CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+} from "./src/app-server/session-binding-meta.js";
+import { createCodexSqliteTestBindingStateStore } from "./src/app-server/session-binding.sqlite.test-helpers.js";
+import {
   createCodexTestBindingStore,
-  createCodexTestBindingStateStore,
   createCodexAppServerBindingStore,
   bindingStoreKey,
   sessionBindingIdentity,
@@ -429,81 +437,102 @@ describe("Codex agent harness reset()", () => {
   it.each(["withSessionContextReset"] as const)(
     "%s removes bindings at the session commit boundary",
     async (hook) => {
-      const state = createCodexTestBindingStateStore();
-      const bindingStore = createCodexAppServerBindingStore(state);
-      const identity = sessionBindingIdentity({
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey: "agent:worker:main",
-      });
-      await bindingStore.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-1", cwd: "/repo" },
-      });
-      const harness = createCodexAppServerAgentHarness({ bindingStore });
-
-      await harness[hook]?.(
-        {
+      await withOpenClawTestState({ label: "codex-context-reset" }, async (fixture) => {
+        const storePath = path.join(fixture.stateDir, "openclaw-agent.sqlite");
+        const state = createCodexSqliteTestBindingStateStore({
+          namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+          maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+          overflowPolicy: "reject-new",
+          env: fixture.env,
+        });
+        const bindingStore = createCodexAppServerBindingStore(state);
+        const identity = sessionBindingIdentity({
           agentId: "worker",
           sessionId: "session-1",
           sessionKey: "agent:worker:main",
-          assertCurrent() {},
-        },
-        async (mutation) => {
-          mutation.commit();
-          expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
-        },
-      );
+        });
+        await bindingStore.mutate(identity, {
+          kind: "set",
+          binding: { threadId: "thread-1", cwd: "/repo" },
+        });
+        const harness = createCodexAppServerAgentHarness({ bindingStore });
 
-      await harness.reset?.({
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey: "agent:worker:main",
-        reason: "deleted",
+        await upsertSessionEntry({
+          agentId: identity.agentId,
+          sessionKey: "agent:worker:main",
+          storePath,
+          entry: { sessionId: identity.sessionId, updatedAt: 1 },
+        });
+        await withNativeSessionMutationForTest({
+          pluginId: "codex",
+          harness,
+          hook,
+          target: { ...identity, sessionKey: "agent:worker:main", storePath, assertCurrent() {} },
+          run: async (settle) => {
+            await settle();
+            expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+          },
+        });
+
+        await harness.reset?.({
+          agentId: "worker",
+          sessionId: "session-1",
+          sessionKey: "agent:worker:main",
+          reason: "deleted",
+        });
+
+        expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
       });
-
-      expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
     },
   );
 
   it.each(["withSessionDeletion"] as const)(
     "%s rejects supervision before invoking the session transaction",
     async (hook) => {
-      const bindingStore = createCodexTestBindingStore();
-      const identity = sessionBindingIdentity({
-        agentId: "worker",
-        sessionId: "supervised",
-        sessionKey: "agent:worker:main",
-      });
-      await bindingStore.mutate(identity, {
-        kind: "set",
-        binding: {
-          threadId: "thread-supervised",
-          cwd: "/repo",
-          connectionScope: "supervision",
-          supervisionSourceThreadId: "thread-source",
-          model: "gpt-5.5",
-          modelProvider: "openai",
-          preserveNativeModel: true,
-          conversationSourceTransferComplete: true,
-        },
-      });
-      const harness = createCodexAppServerAgentHarness({ bindingStore });
-      const run = vi.fn();
-      await expect(
-        harness[hook]?.(
-          {
-            agentId: "worker",
-            sessionId: "supervised",
-            sessionKey: "agent:worker:main",
-            assertCurrent() {},
+      await withOpenClawTestState({ label: "codex-supervision-deletion" }, async (fixture) => {
+        const bindingStore = createCodexAppServerBindingStore(
+          createCodexSqliteTestBindingStateStore({
+            namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+            maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+            overflowPolicy: "reject-new",
+            env: fixture.env,
+          }),
+        );
+        const identity = sessionBindingIdentity({
+          agentId: "worker",
+          sessionId: "supervised",
+          sessionKey: "agent:worker:main",
+        });
+        await bindingStore.mutate(identity, {
+          kind: "set",
+          binding: {
+            threadId: "thread-supervised",
+            cwd: "/repo",
+            connectionScope: "supervision",
+            supervisionSourceThreadId: "thread-source",
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            preserveNativeModel: true,
+            conversationSourceTransferComplete: true,
           },
-          run,
-        ),
-      ).rejects.toThrow("owned by supervision");
-      expect(run).not.toHaveBeenCalled();
-      expect(bindingStore.read(identity)).toMatchObject({
-        threadId: "thread-supervised",
+        });
+        const harness = createCodexAppServerAgentHarness({ bindingStore });
+        const run = vi.fn();
+        await expect(
+          harness[hook]?.(
+            {
+              agentId: "worker",
+              sessionId: "supervised",
+              sessionKey: "agent:worker:main",
+              assertCurrent() {},
+            },
+            run,
+          ),
+        ).rejects.toThrow("owned by supervision");
+        expect(run).not.toHaveBeenCalled();
+        expect(bindingStore.read(identity)).toMatchObject({
+          threadId: "thread-supervised",
+        });
       });
     },
   );
