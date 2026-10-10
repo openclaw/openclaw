@@ -26,6 +26,7 @@ import type {
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { isOperatorScope } from "../gateway/operator-scopes.js";
+import { isGatewayTransportError } from "../gateway/transport-error.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
@@ -46,6 +47,7 @@ import {
 import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { callGatewayFromCliWithTransport } from "./gateway-rpc.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { formatConnectionFlagReminder } from "./nodes-cli/cli-utils.js";
 import { formatPairingApproveCommand } from "./pairing-command-format.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
@@ -176,7 +178,14 @@ function resolveLocalPairingFallback(
   // Local fallback is only safe for implicit loopback gateway URLs.
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   const details = readConnectPairingRequiredMessage(message);
-  if (!details) {
+  // Socket-connect failures have no close code: the transport never dispatched
+  // a request. Unknown outcomes and protocol/auth failures cannot replay locally.
+  const unreachable =
+    isGatewayTransportError(error) &&
+    error.kind === "closed" &&
+    error.code === undefined &&
+    error.requestDispatched !== true;
+  if (!details && !unreachable) {
     return null;
   }
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
@@ -189,7 +198,7 @@ function resolveLocalPairingFallback(
     return null;
   }
   try {
-    return isLoopbackHost(new URL(connection.url).hostname) ? { details } : null;
+    return isLoopbackHost(new URL(connection.url).hostname) ? { details: details ?? {} } : null;
   } catch {
     return null;
   }
@@ -302,73 +311,91 @@ async function approvePairingWithFallback(
       }
       throw error;
     }
-    const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
-    let replacement: PendingDevice | null = null;
-    if (gatewayRequestId && gatewayRequestId !== requestId) {
-      const local = await listDevicePairing();
-      const localList = {
-        pending: local.pending as PendingDevice[],
-        paired: local.paired.map((device) => redactLocalPairedDevice(device)),
-      };
-      context.pairingList = localList;
-      replacement = findSameDeviceReplacementRequest({
-        originalRequest,
-        originalRequestId: requestId,
-        gatewayRequestId,
-        pending: localList.pending,
-        paired: localList.paired,
-      });
-      if (!replacement) {
-        const hasOriginalPending = Boolean(findPendingRequestById(localList.pending, requestId));
-        const hasGatewayPending = Boolean(
-          findPendingRequestById(localList.pending, gatewayRequestId),
+    return await runWithLocalStateOwner({
+      method: "device.pair.approve",
+      params: { requestId },
+      target: requestId,
+      onForeignOwner: "refuse",
+      runLocal: async ({ env, assertCurrent }) => {
+        const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
+        let replacement: PendingDevice | null = null;
+        if (gatewayRequestId && gatewayRequestId !== requestId) {
+          const local = await listDevicePairing(env.OPENCLAW_STATE_DIR);
+          const localList = {
+            pending: local.pending as PendingDevice[],
+            paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+          };
+          context.pairingList = localList;
+          replacement = findSameDeviceReplacementRequest({
+            originalRequest,
+            originalRequestId: requestId,
+            gatewayRequestId,
+            pending: localList.pending,
+            paired: localList.paired,
+          });
+          if (!replacement) {
+            const hasOriginalPending = Boolean(
+              findPendingRequestById(localList.pending, requestId),
+            );
+            const hasGatewayPending = Boolean(
+              findPendingRequestById(localList.pending, gatewayRequestId),
+            );
+            if (!hasOriginalPending && !hasGatewayPending) {
+              return null;
+            }
+            // Fail-closed replacement validation refused to substitute; do not point
+            // at the incompatible pending id as a recovery step.
+            throw buildFallbackStateMismatchError(fallback.details, []);
+          }
+        }
+        const approvedRequestId = replacement?.requestId ?? requestId;
+        const approved = await approveDevicePairing(
+          approvedRequestId,
+          {
+            // Local CLI fallback already assumes direct machine access; treat it as an
+            // explicit admin approval path instead of relying on missing caller scopes.
+            callerScopes: ["operator.admin"],
+            isApprovalCurrent: () => {
+              assertCurrent();
+              return true;
+            },
+          },
+          env.OPENCLAW_STATE_DIR,
         );
-        if (!hasOriginalPending && !hasGatewayPending) {
+        if (!approved) {
+          if (!replacement && gatewayRequestId && gatewayRequestId === requestId) {
+            throw buildFallbackStateMismatchError(fallback.details, []);
+          }
           return null;
         }
-        // Fail-closed replacement validation refused to substitute; do not point
-        // at the incompatible pending id as a recovery step.
-        throw buildFallbackStateMismatchError(fallback.details, []);
-      }
-    }
-    const approvedRequestId = replacement?.requestId ?? requestId;
-    const approved = await approveDevicePairing(approvedRequestId, {
-      // Local CLI fallback already assumes direct machine access; treat it as an
-      // explicit admin approval path instead of relying on missing caller scopes.
-      callerScopes: ["operator.admin"],
-    });
-    if (!approved) {
-      if (!replacement && gatewayRequestId && gatewayRequestId === requestId) {
-        throw buildFallbackStateMismatchError(fallback.details, []);
-      }
-      return null;
-    }
-    if (approved.status === "forbidden") {
-      throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
-    }
-    if (opts.json !== true) {
-      if (replacement) {
-        defaultRuntime.log(
-          theme.warn(
-            `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
-          ),
-        );
-      }
-      defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
-    }
-    return {
-      requestId: approvedRequestId,
-      ...(replacement
-        ? {
-            resolved: {
-              kind: "same-device-replacement",
-              requestedRequestId: requestId,
-              approvedRequestId,
-            },
+        if (approved.status === "forbidden") {
+          throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
+        }
+        if (opts.json !== true) {
+          if (replacement) {
+            defaultRuntime.log(
+              theme.warn(
+                `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
+              ),
+            );
           }
-        : {}),
-      device: redactLocalPairedDevice(approved.device),
-    };
+          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+        }
+        return {
+          requestId: approvedRequestId,
+          ...(replacement
+            ? {
+                resolved: {
+                  kind: "same-device-replacement",
+                  requestedRequestId: requestId,
+                  approvedRequestId,
+                },
+              }
+            : {}),
+          device: redactLocalPairedDevice(approved.device),
+        };
+      },
+    });
   }
 }
 

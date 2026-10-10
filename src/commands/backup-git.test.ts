@@ -28,8 +28,8 @@ vi.mock("../snapshot/git-backup.js", () => ({
   verifyGitBackupRef: mocks.verifyGitBackupRef,
 }));
 
-vi.mock("../state/backup-run-records.js", () => ({
-  recordBackupRunOutcome: mocks.recordBackupRunOutcome,
+vi.mock("./backup-outcome.js", () => ({
+  recordBackupRunOutcomeWithOwner: mocks.recordBackupRunOutcome,
 }));
 
 import {

@@ -25,8 +25,8 @@ vi.mock("../runtime.js", async () => {
   };
 });
 
-vi.mock("../state/backup-run-records.js", () => ({
-  recordBackupRunOutcome: recordBackupRunOutcomeMock,
+vi.mock("./backup-outcome.js", () => ({
+  recordBackupRunOutcomeWithOwner: recordBackupRunOutcomeMock,
 }));
 
 describe("backupCreateCommand verification", () => {
