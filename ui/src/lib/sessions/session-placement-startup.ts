@@ -447,9 +447,11 @@ export async function startSessionPlacementInitialTurn(
   }
   if (resolution.status === "rejected") {
     const state = typeof resolution.placement?.state === "string" ? resolution.placement.state : "";
+    const placementError =
+      resolution.placement?.state === "failed" ? resolution.placement.recoveryError : undefined;
     return {
       status: "dispatch-rejected",
-      error: dispatchError || (state ? `session placement became ${state}` : ""),
+      error: placementError || dispatchError || (state ? `session placement became ${state}` : ""),
     };
   }
   if (!isCurrent()) {
