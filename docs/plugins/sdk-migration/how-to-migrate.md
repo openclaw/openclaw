@@ -62,6 +62,11 @@ replacement, and compatibility promise, without paths or stored values.
 
 This migration changes no schema, stored format, retention, or update behavior.
 
+When state-backed reads feed a channel, migrate its config and security adapters
+to the [async channel hooks](/plugins/sdk-channel-plugins). Forward these hooks
+through wrapper and setup adapters while keeping existing synchronous signatures
+for older hosts.
+
 ## Workspace mutation guards
 
 Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.

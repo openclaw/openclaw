@@ -74,7 +74,8 @@ vi.mock("../../channels/plugins/index.js", () => ({
 }));
 
 vi.mock("../../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
+  listReadOnlyChannelPluginsForConfigAsync: async (...args: unknown[]) =>
+    mocks.listReadOnlyChannelPluginsForConfig(...args),
 }));
 
 vi.mock("../../channels/plugins/catalog.js", () => ({

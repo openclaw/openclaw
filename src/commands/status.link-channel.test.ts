@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 
 vi.mock("../channels/plugins/read-only.js", () => ({
-  listReadOnlyChannelPluginsForConfig: () => pluginRegistry.list,
+  listReadOnlyChannelPluginsForConfigAsync: async () => pluginRegistry.list,
 }));
 
 vi.mock("../channels/read-only-account-inspect.js", () => ({

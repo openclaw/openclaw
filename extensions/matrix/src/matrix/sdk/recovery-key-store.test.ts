@@ -161,9 +161,9 @@ async function runSecretStorageBootstrapScenario(params: {
 function holdRecoveryWrites() {
   const entered = createDeferred<void>();
   const release = createDeferred<void>();
-  const original = getMatrixRuntime().state.openKeyedStore;
+  const original = getMatrixRuntime().state.openKeyedStoreV2;
   const runtime: MatrixSnapshotStateRuntime = {
-    openKeyedStore: <T>(options: Parameters<typeof original>[0]) => {
+    openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
       const store = original<T>(options);
       const compareAndApply = store.compareAndApply;
       if (!compareAndApply) {
@@ -383,12 +383,12 @@ describe("MatrixRecoveryKeyStore", () => {
     "keeps failed writes best-effort and drains later writes on the %s store",
     async (mode) => {
       const recoveryKeyPath = createTempRecoveryKeyPath();
-      const original = getMatrixRuntime().state.openKeyedStore;
+      const original = getMatrixRuntime().state.openKeyedStoreV2;
       const failure = new Error("synthetic persistence failure");
       let failNext = true;
       const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
       const stateRuntime: MatrixSnapshotStateRuntime = {
-        openKeyedStore: <T>(options: Parameters<typeof original>[0]) => {
+        openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
           const backing = original<T>(options);
           const compare = backing.compareAndApply;
           const update = backing.update;
@@ -465,8 +465,8 @@ describe("MatrixRecoveryKeyStore", () => {
       const releaseRead = createDeferred<void>();
       let delayRead = false;
       const stateRuntime: MatrixSnapshotStateRuntime = {
-        openKeyedStore: <T>(options: Parameters<typeof runtime.openKeyedStore>[0]) => {
-          const backing = runtime.openKeyedStore<T>(options);
+        openKeyedStoreV2: <T>(options: Parameters<typeof runtime.openKeyedStoreV2>[0]) => {
+          const backing = runtime.openKeyedStoreV2<T>(options);
           return {
             ...backing,
             async lookup(key: string) {

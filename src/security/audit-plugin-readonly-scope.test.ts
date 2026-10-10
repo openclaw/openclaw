@@ -13,7 +13,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (...args: unknown[]) =>
+  resolveConfiguredChannelPluginIdsAsync: async (...args: unknown[]) =>
     resolveConfiguredChannelPluginIdsMock(...args),
 }));
 

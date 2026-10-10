@@ -101,7 +101,7 @@ vi.mock("../plugins/loader.js", () => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  resolveConfiguredChannelPluginIds: (
+  resolveConfiguredChannelPluginIdsAsync: async (
     ...args: Parameters<typeof mocks.resolveConfiguredChannelPluginIds>
   ) => mocks.resolveConfiguredChannelPluginIds(...args),
   resolveChannelPluginIds: (...args: Parameters<typeof mocks.resolveChannelPluginIds>) =>
@@ -109,8 +109,9 @@ vi.mock("../plugins/channel-plugin-ids.js", () => ({
 }));
 
 vi.mock("../plugins/effective-plugin-ids.js", () => ({
-  resolveEffectivePluginIds: (...args: Parameters<typeof mocks.resolveEffectivePluginIds>) =>
-    mocks.resolveEffectivePluginIds(...args),
+  resolveEffectivePluginIdsAsync: async (
+    ...args: Parameters<typeof mocks.resolveEffectivePluginIds>
+  ) => mocks.resolveEffectivePluginIds(...args),
 }));
 
 vi.mock("../plugins/runtime/load-context.resolve.js", () => ({

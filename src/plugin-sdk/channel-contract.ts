@@ -35,6 +35,7 @@ export type {
   ChannelDoctorEmptyAllowlistAccountContext,
   ChannelDoctorLegacyConfigRule,
   ChannelDoctorSequenceResult,
+  ChannelApprovalNativeAdapterAsync,
   ChannelGatewayContext,
   ChannelGatewayContextV2,
   ChannelGatewayAdapterV2,

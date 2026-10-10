@@ -28,7 +28,8 @@ const statusSummaryMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
-  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
+  hasConfiguredChannelsForReadOnlyScopeAsync: async () =>
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope(),
 }));
 
 vi.mock("../status/summary.runtime.js", () => ({

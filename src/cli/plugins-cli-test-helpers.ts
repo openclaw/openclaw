@@ -532,6 +532,9 @@ vi.mock("../plugins/manifest-registry.js", async (importOriginal) => {
 });
 
 vi.mock("../plugins/status.js", () => ({
+  buildPluginSnapshotReportAsync: async (
+    ...args: Parameters<(typeof import("../plugins/status.js"))["buildPluginSnapshotReport"]>
+  ) => buildPluginSnapshotReportMock(...args),
   withPluginDiagnosticsReportForInspection: async (
     ...args: Parameters<typeof withPluginDiagnosticsReportForInspectionMock>
   ) => {
