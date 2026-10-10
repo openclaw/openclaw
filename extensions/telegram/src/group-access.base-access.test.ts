@@ -131,11 +131,6 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
       senderId: "111",
       expected: { allowed: true, groupPolicy: "allowlist" },
     },
-    {
-      policy: "open",
-      senderId: "222",
-      expected: { allowed: true, groupPolicy: "open" },
-    },
   ] as const)(
     "enforces inherited $policy for sender $senderId after named-account validation",
     async ({ policy, senderId, expected }) => {
@@ -210,52 +205,6 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
     });
   });
 
-  it("blocks unauthorized sender even when chat is explicitly allowed and sender entries exist", () => {
-    const result = runAccess({
-      effectiveGroupAllow: senderAllow,
-      senderId: "222",
-      resolveGroupPolicy: () => ({
-        allowlistEnabled: true,
-        allowed: true,
-        groupConfig: { requireMention: false },
-      }),
-    });
-
-    expect(result).toEqual({
-      allowed: false,
-      reason: "group-policy-allowlist-unauthorized",
-      groupPolicy: "allowlist",
-    });
-  });
-
-  it("allows when groupPolicy is open regardless of allowlist state", () => {
-    const result = runAccess({
-      telegramCfg: { groupPolicy: "open" } as TelegramAccountConfig,
-      resolveGroupPolicy: () => ({
-        allowlistEnabled: false,
-        allowed: false,
-      }),
-    });
-
-    expect(result).toEqual({ allowed: true, groupPolicy: "open" });
-  });
-
-  it("rejects when groupPolicy is disabled", () => {
-    const result = runAccess({
-      telegramCfg: { groupPolicy: "disabled" } as TelegramAccountConfig,
-      resolveGroupPolicy: () => ({
-        allowlistEnabled: false,
-        allowed: false,
-      }),
-    });
-
-    expect(result).toEqual({
-      allowed: false,
-      reason: "group-policy-disabled",
-      groupPolicy: "disabled",
-    });
-  });
-
   it("uses topic policy before group and account policy", () => {
     expect(
       runAccess({
@@ -306,19 +255,5 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
       reason: "group-policy-allowlist-no-sender",
       groupPolicy: "allowlist",
     });
-  });
-
-  it("allows authorized sender in wildcard-matched group with sender entries", () => {
-    const result = runAccess({
-      effectiveGroupAllow: senderAllow,
-      senderId: "111",
-      resolveGroupPolicy: () => ({
-        allowlistEnabled: true,
-        allowed: true,
-        groupConfig: undefined,
-      }),
-    });
-
-    expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
   });
 });

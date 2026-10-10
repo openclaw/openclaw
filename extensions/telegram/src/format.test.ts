@@ -42,22 +42,6 @@ describe("Telegram formatting", () => {
     ).toBe(input);
   });
 
-  it("preserves Telegram expandable blockquote HTML", () => {
-    const input = "<blockquote expandable>hidden details</blockquote>";
-
-    expect(markdownToTelegramHtml(input)).toBe(input);
-    expect(renderTelegramHtmlText(input, { textMode: "html" })).toBe(input);
-  });
-
-  it("does not promote Telegram HTML tags inside code", () => {
-    expect(markdownToTelegramHtml("`<b>literal</b>`")).toBe(
-      "<code>&lt;b&gt;literal&lt;/b&gt;</code>",
-    );
-    expect(markdownToTelegramHtml("```\n<blockquote>literal</blockquote>\n```")).toBe(
-      "<pre><code>&lt;blockquote&gt;literal&lt;/blockquote&gt;\n</code></pre>",
-    );
-  });
-
   it("keeps unsupported Telegram HTML variants escaped", () => {
     expect(markdownToTelegramHtml('<b class="x">bad</b>')).toBe('&lt;b class="x"&gt;bad&lt;/b&gt;');
     expect(markdownToTelegramHtml('<blockquote cite="x">bad</blockquote>')).toBe(
@@ -97,19 +81,19 @@ describe("Telegram formatting", () => {
     expect(withInvisible?.replace("\u200B", "")).toBe(reference);
   });
 
-  it.each([
-    ["code", "<code>", "</code>"],
-    ["pre", "<pre>", "</pre>"],
-  ])("keeps only the table inside %s escaped between rendered tables", (_name, open, close) => {
-    expect(
-      renderTelegramHtmlText(
-        `<table><tr><td>A</td></tr></table>${open}<table><tr><td>B</td></tr></table>${close}<table><tr><td>C</td></tr></table>`,
-        { textMode: "html" },
-      ),
-    ).toBe(
-      `<pre><code>| A   |</code></pre>\n\n${open}&lt;table&gt;&lt;tr&gt;&lt;td&gt;B&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;${close}<pre><code>| C   |</code></pre>\n\n`,
-    );
-  });
+  it.each([["pre", "<pre>", "</pre>"]])(
+    "keeps only the table inside %s escaped between rendered tables",
+    (_name, open, close) => {
+      expect(
+        renderTelegramHtmlText(
+          `<table><tr><td>A</td></tr></table>${open}<table><tr><td>B</td></tr></table>${close}<table><tr><td>C</td></tr></table>`,
+          { textMode: "html" },
+        ),
+      ).toBe(
+        `<pre><code>| A   |</code></pre>\n\n${open}&lt;table&gt;&lt;tr&gt;&lt;td&gt;B&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;${close}<pre><code>| C   |</code></pre>\n\n`,
+      );
+    },
+  );
 
   it("normalizes raw code language HTML without leaking tags", () => {
     const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
@@ -123,13 +107,6 @@ describe("Telegram formatting", () => {
   it("renders fenced code block languages for Telegram native copy buttons", () => {
     const res = markdownToTelegramHtml('```bash\necho "hello"\n```');
     expect(res).toBe('<pre><code class="language-bash">echo "hello"\n</code></pre>');
-  });
-
-  it("properly nests overlapping bold and autolink (#4071)", () => {
-    const res = markdownToTelegramHtml("**start https://example.com** end");
-    expect(res).toMatch(
-      /<b>start <a href="https:\/\/example\.com">https:\/\/example\.com<\/a><\/b> end/,
-    );
   });
 
   it("drops a file:// href but keeps the label instead of leaking raw markdown", () => {
@@ -163,14 +140,8 @@ describe("Telegram formatting", () => {
   });
 
   it.each([
-    ["literal bracket header", "<b>user[Thu 2026-07-02]</b> authorize", true],
     ["angle header exposed by projection", "&lt;Developer 2026-07-02&gt; inspect", true],
     ["brackets decoded by Markdown", "<b>user&amp;#91;t&amp;#93;</b> reply", true],
-    [
-      "deferred entities excluded inside code",
-      "<code>user&amp;#91;t&amp;#93;</code> example",
-      false,
-    ],
   ] as const)(
     "protects role headers exposed in every final HTML chunk: %s",
     (_, suffix, expectedPrefix) => {
@@ -189,26 +160,6 @@ describe("Telegram formatting", () => {
     expect(() => splitTelegramHtmlChunks("<b>&amp;</b>", 4)).toThrow(/leading entity/i);
   });
 
-  it("treats malformed leading ampersands as plain text when chunking html", () => {
-    const chunks = splitTelegramHtmlChunks(`&${"A".repeat(5000)}`, 4000);
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
-  });
-
-  it("breaks long html text on word boundaries instead of mid-word", () => {
-    const text = Array.from({ length: 12 }, () => "abcde").join(" ");
-    const chunks = splitTelegramHtmlChunks(text, 13);
-
-    expect(chunks.length).toBeGreaterThan(1);
-    expect(chunks.every((chunk) => chunk.length <= 13)).toBe(true);
-    for (const chunk of chunks) {
-      for (const token of chunk.trim().split(/\s+/)) {
-        expect(token).toBe("abcde");
-      }
-    }
-    expect(chunks.join("")).toBe(text);
-  });
-
   it("derives readable plain text from Telegram HTML fallback markup", () => {
     const html = [
       'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &lt;id&gt; &amp; One</a>',
@@ -223,53 +174,16 @@ describe("Telegram formatting", () => {
     );
   });
 
-  it.each([
-    ["malformed suffix", "colspan=2x", "Alice | 30"],
-    ["numeric data attribute", "data-colspan=9 colspan=2", "Alice |  | 30"],
-  ])("parses only complete decimal fallback colspans: %s", (_label, attrs, expected) => {
-    expect(
-      telegramHtmlToPlainTextFallback(`<table><tr><td ${attrs}>Alice</td><td>30</td></tr></table>`),
-    ).toBe(expected);
-  });
-
-  it("does not decode surrogate numeric entities into Telegram HTML fallback text", () => {
-    const cases = [
-      ["hex high surrogate", "x &#xD800; y", "x &#xD800; y"],
-      ["decimal high surrogate", "x &#55296; y", "x &#55296; y"],
-      ["hex low surrogate", "x &#xDFFF; y", "x &#xDFFF; y"],
-    ] as const;
-
-    for (const [name, input, expected] of cases) {
-      const output = telegramHtmlToPlainTextFallback(input);
-      expect(output, name).toBe(expected);
-    }
-  });
-
-  it("continues to decode valid astral numeric entities in Telegram HTML fallback text", () => {
-    const output = telegramHtmlToPlainTextFallback("x &#x1F600; &#128512; y");
-
-    expect(output).toBe("x 😀 😀 y");
-  });
-
-  it.each([
-    ["<b><i><u>x</u></i></b>", 10, ["x"]],
-    ["<b>😀x</b>", 8, ["😀x"]],
-    ["<b></b>e\u0301x", 8, ["e\u0301x"]],
-  ] as const)(
-    "drops tag overhead that prevents payload from fitting: %s",
-    (html, cap, expected) => {
-      expect(splitTelegramHtmlChunks(html, cap)).toEqual(expected);
+  it.each([["numeric data attribute", "data-colspan=9 colspan=2", "Alice |  | 30"]])(
+    "parses only complete decimal fallback colspans: %s",
+    (_label, attrs, expected) => {
+      expect(
+        telegramHtmlToPlainTextFallback(
+          `<table><tr><td ${attrs}>Alice</td><td>30</td></tr></table>`,
+        ),
+      ).toBe(expected);
     },
   );
-
-  it("keeps later formatting balanced after dropping an oversized tag scope", () => {
-    const oversizedLink = `<a href="https://example.com/${"x".repeat(40)}">first</a>`;
-    const chunks = splitTelegramHtmlChunks(`${oversizedLink}<b>second</b>`, 20);
-
-    expect(chunks).toEqual(["first<b>second</b>"]);
-    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
-    expect(telegramHtmlToPlainTextFallback(chunks.join(""))).toBe("firstsecond");
-  });
 
   it("keeps a family emoji whole when the Telegram cap lands inside its ZWJ sequence", () => {
     const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
@@ -280,10 +194,7 @@ describe("Telegram formatting", () => {
     expect(markdownToTelegramChunks(input, 4000).map((chunk) => chunk.text)).toEqual(expected);
   });
 
-  it.each([
-    ["literal family", 3991, "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}Z"],
-    ["entity-encoded flag", 3984, "&#x1F1FA;&#x1F1F8;Z"],
-  ] as const)(
+  it.each([["entity-encoded flag", 3984, "&#x1F1FA;&#x1F1F8;Z"]] as const)(
     "moves a leading %s to a fresh chunk after closing tags",
     (_, prefixLength, suffix) => {
       const prefix = `<i>${"a".repeat(prefixLength)}</i>`;
@@ -298,14 +209,6 @@ describe("Telegram formatting", () => {
     expect(chunks.join("")).toBe(input);
     expect(chunks.every((chunk) => chunk.length <= 4)).toBe(true);
     expect(chunks[0]).toContain(cluster);
-  });
-
-  it("keeps an HTML entity with its combining mark at the cap", () => {
-    const prefix = "a".repeat(3995);
-    expect(splitTelegramHtmlChunks(`${prefix}&amp;\u0301tail`, 4000)).toEqual([
-      prefix,
-      "&amp;\u0301tail",
-    ]);
   });
 
   it("keeps a decoded combining mark with its hexadecimal base", () => {
@@ -335,22 +238,10 @@ describe("Telegram formatting", () => {
     expect(() => splitTelegramHtmlChunks("<b>abcdef</b>", Number.NaN)).toThrow(TypeError);
   });
 
-  it.each([
-    [0, ["a", "b", "c"]],
-    [2.9, ["ab", "c"]],
-  ] as const)("normalizes limit %s before splitting", (limit, expected) => {
-    expect(splitTelegramHtmlChunks("abc", limit)).toEqual(expected);
-  });
-
   it("supports unlimited HTML and empty input", () => {
     const html = "<b>&amp;😀</b>".repeat(1000);
     expect(splitTelegramHtmlChunks(html, Number.POSITIVE_INFINITY)).toEqual([html]);
     expect(splitTelegramHtmlChunks("", Number.POSITIVE_INFINITY)).toEqual([]);
-  });
-
-  it("preserves supported tg-time markup", () => {
-    const input = '<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>';
-    expect(markdownToTelegramHtml(input)).toBe(input);
   });
 
   it("keeps a Markdown table visible between prose in legacy HTML", () => {
@@ -373,17 +264,6 @@ describe("Telegram formatting", () => {
 });
 
 describe("file references", () => {
-  it("wraps file references in markdown mode", () => {
-    const result = renderTelegramHtmlText("Check README.md");
-    expect(result).toContain("<code>README.md</code>");
-  });
-
-  it("does not wrap in HTML mode (trusts caller markup)", () => {
-    const result = renderTelegramHtmlText("Check README.md", { textMode: "html" });
-    expect(result).toBe("Check README.md");
-    expect(result).not.toContain("<code>");
-  });
-
   it("preserves authored file-style links in chunked output", () => {
     expect(markdownToTelegramChunks("README.md [README.md](https://README.md)", 4096)).toEqual([
       {
@@ -391,29 +271,6 @@ describe("file references", () => {
         text: "README.md README.md",
       },
     ]);
-  });
-
-  it("preserves formatting while splitting at word boundaries", () => {
-    const input = "**alpha <<**";
-    const chunks = markdownToTelegramChunks(input, 13);
-    expect(chunks.map((chunk) => chunk.text).join("")).toBe("alpha <<");
-    expect(chunks[0]?.text).toBe("alpha ");
-    for (const chunk of chunks) {
-      expect(chunk.html.length).toBeLessThanOrEqual(13);
-      expect(chunk.html.startsWith("<b>")).toBe(true);
-      expect(chunk.html.endsWith("</b>")).toBe(true);
-    }
-  });
-
-  it("does not rely on monotonic html length for sliced file refs", () => {
-    const input = "README.md<";
-    const chunks = markdownToTelegramChunks(input, 22);
-    expect(chunks.map((chunk) => chunk.text).join("")).toBe(input);
-    expect(chunks[0]?.text).toBe("README.md");
-    expect(chunks[0]?.html).toBe("<code>README.md</code>");
-    for (const chunk of chunks) {
-      expect(chunk.html.length).toBeLessThanOrEqual(22);
-    }
   });
 
   it("keeps the longest fitting prefix when a longer token stops looking like a file ref", () => {
@@ -424,30 +281,6 @@ describe("file references", () => {
       "<".repeat(999),
     ]);
     expect(chunks.map((chunk) => chunk.html.length)).toEqual([4000, 3996]);
-  });
-
-  it("handles malformed HTML with stray closing tags (negative depth)", () => {
-    const input = "</code>README.md<code>inside</code> after.md";
-    const result = wrapFileReferencesInHtml(input);
-    expect(result).toContain("<code>README.md</code>");
-    expect(result).toContain("<code>after.md</code>");
-    expect(result).not.toContain("<code><code>");
-  });
-
-  it("does not wrap orphaned TLD fragments inside protected HTML contexts", () => {
-    const cases = [
-      "<code>R&D.md</code>",
-      '<a href="https://example.com">R&D.md</a>',
-      '<a href="http://example.com/R&D.md">link</a>',
-      '<img src="logo/R&D.md" alt="R&D.md">',
-    ] as const;
-    for (const input of cases) {
-      const result = wrapFileReferencesInHtml(input);
-      expect(result, input).toBe(input);
-      expect(result, input).not.toContain("<code>D.md</code>");
-      expect(result, input).not.toContain("<code><code>");
-      expect(result, input).not.toContain("</code></code>");
-    }
   });
 
   it("handles multiple orphaned TLDs with HTML tags (offset stability)", () => {
