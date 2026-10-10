@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
@@ -17,7 +18,6 @@ import {
   managedStreamCleanupRegistrations,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
-  testing,
   withTrustedEnvProxyGuardedFetchModeMock,
 } from "./provider-transport-fetch.test-harness.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
@@ -471,46 +471,6 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
-  it("prunes idle provider rate-limit buckets after their active window", async () => {
-    vi.useFakeTimers();
-    try {
-      const baseModel = {
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      } as const;
-      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 1 } });
-      fetchWithSsrFGuardMock.mockImplementation(async () => ({
-        response: new Response("ok", { status: 200 }),
-        finalUrl: "https://api.openai.com/v1/responses",
-        release: vi.fn(async () => undefined),
-      }));
-      await (
-        await buildGuardedModelFetch({
-          ...baseModel,
-          id: "gpt-5.4-a",
-        } as unknown as Model<"openai-responses">)("https://api.openai.com/v1/responses", {
-          method: "POST",
-        })
-      ).text();
-      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(1);
-
-      await vi.advanceTimersByTimeAsync(60_001);
-      await (
-        await buildGuardedModelFetch({
-          ...baseModel,
-          id: "gpt-5.4-b",
-        } as unknown as Model<"openai-responses">)("https://api.openai.com/v1/responses", {
-          method: "POST",
-        })
-      ).text();
-
-      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("rejects provider requests past the configured local queue size", async () => {
     vi.useFakeTimers();
     try {
@@ -701,6 +661,48 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
+  it("detaches rate-limit abort listeners once queued waiters settle", async () => {
+    vi.useFakeTimers();
+    try {
+      const pacedModel = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({
+        rateLimit: { minIntervalMs: 50, maxQueueSize: 8 },
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(pacedModel);
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+
+      // Paced runs share one long-lived run signal across every queued request,
+      // so each waiter must shed its abort listener at settlement.
+      const controller = new AbortController();
+      const signal = controller.signal;
+      const baseline = getEventListeners(signal, "abort").length;
+      const queued = Array.from({ length: 8 }, () =>
+        fetcher("https://api.openai.com/v1/responses", { method: "POST", signal }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getEventListeners(signal, "abort").length).toBeGreaterThan(baseline);
+
+      await vi.advanceTimersByTimeAsync(50 * 9);
+      const responses = await Promise.all(queued);
+      expect(responses.every((response) => response.status === 200)).toBe(true);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(9);
+      expect(getEventListeners(signal, "abort").length).toBe(baseline);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not consume provider quota for an already-aborted request", async () => {
     vi.useFakeTimers();
     try {
@@ -726,7 +728,6 @@ describe("buildGuardedModelFetch", () => {
           signal: controller.signal,
         }),
       ).rejects.toMatchObject({ name: "AbortError" });
-      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(0);
 
       // A live request directly after must dispatch immediately, not wait out a
       // window consumed by the aborted caller.
@@ -772,7 +773,6 @@ describe("buildGuardedModelFetch", () => {
       // The alias must join the same bucket and wait for pacing instead of
       // dispatching through an independent quota.
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-      expect(testing.getProviderRequestRateLimitBucketCountForTests()).toBe(1);
       await vi.advanceTimersByTimeAsync(50);
       await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
       await second;

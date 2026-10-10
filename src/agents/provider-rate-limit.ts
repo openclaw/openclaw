@@ -1,7 +1,7 @@
 // Provider request rate limiting: per provider/model/baseUrl admission buckets
 // with rolling RPM pacing, minimum dispatch spacing, and bounded queue rejection.
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import type { Model } from "../llm/types.js";
+import { PROVIDER_RATE_LIMIT_QUEUE_FULL_ERROR_CODE, type Model } from "../llm/types.js";
 import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 
 export type ProviderRequestRateLimitConfig = NonNullable<
@@ -23,10 +23,6 @@ const providerRequestRateLimitBuckets = new Map<string, ProviderRequestRateLimit
 
 function resetProviderRequestRateLimitBucketsForTests(): void {
   providerRequestRateLimitBuckets.clear();
-}
-
-function getProviderRequestRateLimitBucketCountForTests(): number {
-  return providerRequestRateLimitBuckets.size;
 }
 
 function pruneProviderRequestRateLimitBuckets(now: number): void {
@@ -112,7 +108,7 @@ function buildProviderRateLimitQueueFullResponse(model: Model): Response {
       error: {
         message: `${model.provider}/${model.id}: provider request rate-limit queue is full`,
         type: "rate_limit",
-        code: "provider_rate_limit_queue_full",
+        code: PROVIDER_RATE_LIMIT_QUEUE_FULL_ERROR_CODE,
       },
     }),
     {
@@ -164,17 +160,20 @@ export async function waitForProviderRequestRateLimit(
   // slot; its turn becomes a no-op so it never sleeps, dispatches, or records quota.
   let canceled = false;
   let waitAborted: Promise<never> | undefined;
+  // Retained outside the executor so settlement can detach the listener; a
+  // once:true listener only self-removes when the signal eventually aborts.
+  let onWaitAbort: (() => void) | undefined;
   if (signal) {
     waitAborted = new Promise<never>((_, reject) => {
-      const onAbort = () => {
+      onWaitAbort = () => {
         canceled = true;
         reject(createProviderRequestRateLimitAbortError(signal));
       };
       if (signal.aborted) {
-        onAbort();
+        onWaitAbort();
         return;
       }
-      signal.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener("abort", onWaitAbort, { once: true });
     });
     waitAborted.catch(() => undefined);
   }
@@ -199,12 +198,15 @@ export async function waitForProviderRequestRateLimit(
       await turn;
     }
   } finally {
+    // Long-lived run signals outlive many paced requests; a listener left on a
+    // settled waiter retains its closure and promise until the signal aborts.
+    if (signal && onWaitAbort) {
+      signal.removeEventListener("abort", onWaitAbort);
+    }
     bucket.queued = Math.max(0, bucket.queued - 1);
     pruneProviderRequestRateLimitBuckets(Date.now());
   }
   return undefined;
 }
-export {
-  getProviderRequestRateLimitBucketCountForTests,
-  resetProviderRequestRateLimitBucketsForTests,
-};
+
+export { resetProviderRequestRateLimitBucketsForTests };

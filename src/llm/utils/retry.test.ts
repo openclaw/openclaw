@@ -5,6 +5,7 @@ import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures
 import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  PROVIDER_RATE_LIMIT_QUEUE_FULL_ERROR_CODE,
   type AssistantMessage,
 } from "../types.js";
 import { isRetryableAssistantError, isTerminalAssistantError } from "./retry.js";
@@ -101,11 +102,34 @@ describe("isRetryableAssistantError", () => {
   it.each([
     PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
     PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+    PROVIDER_RATE_LIMIT_QUEUE_FULL_ERROR_CODE,
     "openclaw_repeated_tool_error",
   ])("does not retry terminal outcome %s", (errorCode) => {
     const message = {
       ...errorMessage("The WebSocket closed after dispatch"),
       errorCode,
+    };
+    expect(isTerminalAssistantError(message)).toBe(true);
+    expect(isRetryableAssistantError(message)).toBe(false);
+  });
+
+  it("treats local rate-limit queue saturation as terminal through projection", () => {
+    const projected = projectProviderError({
+      status: 429,
+      error: {
+        message: "openai/gpt-5.4: provider request rate-limit queue is full",
+        type: "rate_limit",
+        code: "provider_rate_limit_queue_full",
+      },
+    });
+    expect(projected.errorCode).toBe("provider_rate_limit_queue_full");
+    expect(projected.errorMessage).toBe(
+      "429: openai/gpt-5.4: provider request rate-limit queue is full",
+    );
+    const message = {
+      ...errorMessage(projected.errorMessage),
+      errorCode: projected.errorCode,
+      errorType: projected.errorType,
     };
     expect(isTerminalAssistantError(message)).toBe(true);
     expect(isRetryableAssistantError(message)).toBe(false);

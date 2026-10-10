@@ -40,7 +40,6 @@ import {
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import { ensureModelProviderLocalService } from "./provider-local-service.js";
 import {
-  getProviderRequestRateLimitBucketCountForTests,
   resetProviderRequestRateLimitBucketsForTests,
   waitForProviderRequestRateLimit,
 } from "./provider-rate-limit.js";
@@ -359,7 +358,6 @@ export function resolveProviderTransportSsrFPolicy(params: {
 }
 
 export const testing = {
-  getProviderRequestRateLimitBucketCountForTests,
   resetProviderRequestRateLimitBucketsForTests,
 };
 
