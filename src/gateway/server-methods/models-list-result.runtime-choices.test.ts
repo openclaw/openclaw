@@ -300,6 +300,12 @@ describe("models.list configured runtime choices", () => {
     },
     {
       provider: "openai",
+      runtime: "agentsapi",
+      runtimeOverride: undefined,
+      initialReadiness: "ready",
+    },
+    {
+      provider: "openai",
       runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "missing",
@@ -377,6 +383,14 @@ describe("models.list configured runtime choices", () => {
           const harness: AgentHarnessV2 = {
             id: runtime,
             label: "Native fixture",
+            ...(runtime === "agentsapi"
+              ? {
+                  workspaceEnvironment: {
+                    kind: "provider-hosted" as const,
+                    label: "Hosted fixture",
+                  },
+                }
+              : {}),
             authBootstrap: "harness",
             supports: () => ({ supported: true }),
             runAttempt: vi.fn(),
@@ -428,6 +442,13 @@ describe("models.list configured runtime choices", () => {
             "missing-runtime",
           ]);
           const nativeChoice = rows[0]?.runtimeChoices?.[0];
+          if (runtime === "agentsapi") {
+            expect(nativeChoice?.agentRuntime).toMatchObject({
+              workspaceEnvironment: { kind: "provider-hosted", label: "Hosted fixture" },
+              cloudPlacementSupported: false,
+              devicePlacementSupported: false,
+            });
+          }
           if (selectable && initialReadiness === "ready") {
             expect(nativeChoice).toMatchObject({
               agentRuntime: { id: runtime },

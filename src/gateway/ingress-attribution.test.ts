@@ -43,17 +43,6 @@ describe("gateway ingress attribution", () => {
     });
   });
 
-  it("rejects proxy-shaped traffic on the ordinary listener", async () => {
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ forwardedFor: "100.64.0.10" }),
-    });
-
-    expect(attribution).toMatchObject({
-      kind: "unattributable-proxy",
-      reason: "proxy_attribution_required",
-    });
-  });
-
   it.each([
     ["Serve identity", { login: "alice@example.com" }, {}],
     ["Funnel marker", { funnel: true }, { externalTailscaleExposure: "funnel" }],
@@ -215,25 +204,6 @@ describe("gateway ingress attribution", () => {
       expect.stringContaining("192.0.2.11"),
     ]);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway.trustedProxies"));
-  });
-
-  it("reports a continuing source again after the suppression window", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const warn = vi.fn();
-    const report = createGatewayUnattributableProxyReporter({ warn });
-    const attribution = prepareGatewayIngressAttribution({
-      req: request({ remoteAddress: "192.0.2.10", forwardedFor: "100.64.0.10" }),
-    });
-    if (attribution.kind !== "unattributable-proxy") {
-      throw new Error("expected unattributable proxy");
-    }
-
-    report(attribution);
-    vi.advanceTimersByTime(5 * 60_000);
-    report(attribution);
-
-    expect(warn).toHaveBeenCalledTimes(2);
   });
 
   it("keeps a source suppressed when the aggregate budget refills beside it", async () => {

@@ -785,6 +785,20 @@ export const en: TranslationMap & {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
+    sessionSettings: "Session settings",
+    communication: {
+      send: "Send messages",
+      receive: "Receive messages",
+      always: "Always",
+      ask: "Ask",
+      never: "Never",
+      default: "default",
+      sendDescription:
+        "Allow this session to initiate messages to other sessions. Ask requires human approval; Never blocks them.",
+      receiveDescription:
+        "Allow other sessions to initiate messages to this session. Ask requires human approval; Never blocks them.",
+      resetDescription: "Use the configured defaults for sending and receiving messages.",
+    },
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
@@ -857,6 +871,7 @@ export const en: TranslationMap & {
     archivedOnlyTooltip: "Show only archived sessions.",
     minutesPlaceholder: "min",
     searchPlaceholder: "Filter by key, agent, label, kind…",
+    clearSearch: "Clear search",
     user: "User",
     assistant: "Assistant",
     selected: "{count} selected",
@@ -1690,6 +1705,8 @@ export const en: TranslationMap & {
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: "New tab",
+    tweetPost: "Post on X",
+    openPost: "Open post",
     back: "Back",
     forward: "Forward",
     reload: "Reload",
@@ -2286,7 +2303,19 @@ export const en: TranslationMap & {
     personalWorkspace:
       "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
     unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
+    sharedUnavailable: {
+      unavailable:
+        "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings \u2192 Profile \u2192 GitHub connections. My GitHub is separate and optional.",
+      changed: "The Gateway GitHub account changed. Reload and retry publication.",
+      rate_limited:
+        "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
+      unverified:
+        "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
+      unsupported_workspace:
+        "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
+      unknown:
+        "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.",
+    },
   },
   githubConnections: {
     title: "GitHub connections",
@@ -2760,6 +2789,34 @@ export const en: TranslationMap & {
   // Login copy lives in the lazy en-login catalog; the anchor keeps its merge target.
   login: {},
   chat: {
+    sessionDetails: {
+      title: "Details",
+      close: "Close details",
+      session: "Session details",
+      createdBy: "Created by",
+      owner: "Owner",
+      participants: "{count} participants",
+      moreParticipants: "{count} more participants",
+      workspaceUnavailable: "Workspace unavailable",
+      allChanges: "All changes",
+      pullRequests: "Pull requests",
+      noPullRequests: "No pull requests",
+      automations: "Automations",
+      progressOptions: "Task progress options",
+      hideProgress: "Don't show task progress again",
+      collapseDefault: "Collapse task progress by default",
+      settings: "Task progress settings",
+      progressHidden: "Task progress hidden in this browser.",
+      automationError: "Couldn't load automations.",
+      automationUnavailable: "Automations unavailable for this session.",
+      automationOffline: "Offline · last-known automations",
+      automationLoading: "Loading automations…",
+      automationEmpty: "No automations for this session",
+      automationMore: "Load more automations",
+      automationAttention: "Needs attention",
+      automationPaused: "Paused",
+      automationEnabled: "Enabled",
+    },
     agentDatabaseWarming: "This agent is still starting. Retry in a moment.",
     historyRequestTimedOut: "Chat history request timed out. Retry to load the conversation.",
     clawhub: {

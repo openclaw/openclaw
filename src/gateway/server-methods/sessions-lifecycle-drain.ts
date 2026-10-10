@@ -226,12 +226,13 @@ export async function prepareSessionLifecycleDrain(
           abortOrigin: "rpc",
           stopReason: params.action,
           requester: { isAdmin: true },
+          stopEmbeddedRun: params.embeddedRun === undefined ? true : undefined,
           includeProtectedRuns: true,
           assertCurrent: params.authorize,
           onControllerTargets: (targets) => {
             controllerTargets = targets;
           },
-          onAuthorizedAfterQueuedAbort: () => {
+          onAuthorizedBeforeEmbeddedAbort: () => {
             const cleared = clearSessionLifecycleQueues({
               ...queueTarget,
               assertCurrent: () => params.authorize?.(),
@@ -243,10 +244,18 @@ export async function prepareSessionLifecycleDrain(
                 aborted = operation.abortByUser() || aborted;
               }
             }
-            params.authorize?.();
-            embeddedAborted = embeddedRun?.abort() === true;
-            aborted = embeddedAborted || aborted;
+            // Agent deletion captured its exact owner before asynchronous inventory.
+            // Ordinary session Stop owns embedded cancellation and its persistence.
+            if (params.embeddedRun !== undefined || params.sessionKey === "global") {
+              params.authorize?.();
+              embeddedAborted = embeddedRun?.abort() === true;
+              aborted = embeddedAborted || aborted;
+            }
             return aborted;
+          },
+          onAuthorizedAfterQueuedAbort: ({ aborted }) => {
+            embeddedAborted ||= aborted;
+            return false;
           },
         });
         // Observe failures immediately while the short mutation releases its queues.

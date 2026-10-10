@@ -22,7 +22,7 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 
 <AccordionGroup>
   <Accordion title="Important behavior">
-    - these commands only read or write OpenClaw config
+    - these commands manage OpenClaw config and OAuth credential state
     - `status`, `list`, `show`, `doctor` without `--probe`, `set`, `configure`, `tools`, `logout`, `reload`, and `unset` do not connect to the target MCP server
     - `login` performs the MCP OAuth network flow for the configured HTTP server and saves the resulting local credentials
     - `status --verbose` prints resolved transport, auth, timeout, filter, and parallel-tool-call hints without connecting
@@ -53,6 +53,15 @@ Those saved definitions are for runtimes that OpenClaw launches or configures la
 </AccordionGroup>
 
 Runtime adapters may normalize this shared registry into the shape their downstream client expects. For example, embedded OpenClaw consumes OpenClaw `transport` values directly, while Claude Code and Gemini receive CLI-native `type` values such as `http`, `sse`, or `stdio`.
+
+CLI `login`, `logout`, `probe`, `doctor --probe`, and saved-server mutations
+(`add`, `set`, `configure`, `tools`, `unset`) require the local Gateway to be
+stopped. They acquire exclusive state ownership before loading writable state
+and retain it through OAuth callbacks, credential refresh, and cleanup. If a
+Gateway owns the selected state directory, the command refuses with stop-and-retry
+guidance before attempting a local write. Use the Control UI for supported live
+MCP settings and sign-in operations. `list`, `show`, `status`, and `doctor`
+without `--probe` remain available while the Gateway runs.
 
 ### Saved MCP server definitions
 

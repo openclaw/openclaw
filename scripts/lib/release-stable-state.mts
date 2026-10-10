@@ -384,6 +384,12 @@ export type ReleaseContext = {
   log: (phase: ReleasePhase, message: string) => void;
   resume: (phase?: ReleasePhase, extra?: string[]) => string;
 };
+export function requireReleaseValue(value: string | undefined, name: string): string {
+  if (!value) {
+    throw new Error(`Missing ${name}; complete the preceding release phase.`);
+  }
+  return value;
+}
 function durationFromEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (value === undefined) {

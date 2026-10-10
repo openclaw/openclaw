@@ -95,6 +95,12 @@ jobs use the current operator read policy. Agent-created jobs retain their recor
 creator origin and account, and the channel's delegated read restrictions still
 apply. Delivery settings do not grant read access.
 
+Manual runs use the same scheduled execution context as timer-fired runs after
+the request passes admission. Ending the chat turn or tool call that started a
+run does not expire the job's tool access. The job still uses its stored authority
+and current tool restrictions; starting it manually does not grant the caller's
+extra permissions to the job.
+
 Current global, agent, profile, and provider tool policy is checked when each new
 scheduled message invocation starts. Configuration changes apply to later invocations;
 an invocation already admitted retains its configuration. Disabling or removing a job,
