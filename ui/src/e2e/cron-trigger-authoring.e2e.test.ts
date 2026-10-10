@@ -108,8 +108,7 @@ suite.define(() => {
         await page.locator("details.cron-advanced > summary").click();
 
         const scriptTriggerControlCount = await page
-          .locator("wa-switch.settings-toggle")
-          .filter({ hasText: "Condition trigger" })
+          .getByRole("switch", { name: "Condition trigger", exact: true })
           .count();
         await page
           .getByText("Condition trigger", { exact: true })

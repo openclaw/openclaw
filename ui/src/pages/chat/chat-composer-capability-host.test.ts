@@ -138,9 +138,9 @@ function createAddServerHarness(
         target: "docs-mcp",
       },
     ) {
-      const group = container.querySelector<HTMLElement & { value: string }>("wa-radio-group")!;
-      group.value = scope;
-      group.dispatchEvent(new Event("change", { bubbles: true }));
+      container
+        .querySelector<HTMLInputElement>(`input.settings-segmented__input[value="${scope}"]`)!
+        .click();
       container.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "docs";
       container.querySelector<HTMLSelectElement>('[name="mcp-transport"]')!.value =
         server.transport;
@@ -286,7 +286,9 @@ describe("ChatComposerCapabilityHost", () => {
     render(host.renderAddServerDialog(context, state, undefined), container);
     await Promise.resolve();
 
-    const scope = container.querySelector<HTMLElement & { disabled: boolean }>("wa-radio-group");
+    const scope = container.querySelector<HTMLInputElement>(
+      'input.settings-segmented__input[value="everywhere"]',
+    );
     const submit = container.querySelector<HTMLButtonElement>('button[type="submit"]');
     expect(scope?.disabled).toBe(false);
     expect(submit?.disabled).toBe(true);

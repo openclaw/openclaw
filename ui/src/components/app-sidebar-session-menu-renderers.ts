@@ -433,7 +433,7 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
                       (event.currentTarget as HTMLElement)
                         .closest(".sidebar-session-filter-panel")
                         ?.querySelector<HTMLElement>(
-                          '#sidebar-sessions-status wa-radio[value="active"]',
+                          '#sidebar-sessions-status input[type="radio"][value="active"]',
                         )
                         ?.focus();
                       host.setSessionOwnerFilter(null);

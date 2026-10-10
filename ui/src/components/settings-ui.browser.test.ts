@@ -51,7 +51,7 @@ it("animates Applying before lazy settings styles load", async () => {
   }
 });
 
-it("restores segmented controls after fieldset busy state while preserving disabled options", async () => {
+it("restores segmented controls after fieldset busy state while preserving disabled options", () => {
   const container = document.createElement("div");
   document.body.append(container);
   const onChange = vi.fn();
@@ -73,37 +73,29 @@ it("restores segmented controls after fieldset busy state while preserving disab
       container,
     );
   const disabledStates = () =>
-    [...container.querySelectorAll("wa-radio")].map((radio) => radio.getAttribute("aria-disabled"));
+    [...container.querySelectorAll("input[type=radio]")].map((radio) => radio.matches(":disabled"));
   try {
     draw(false);
-    await expect.poll(disabledStates).toEqual(["false", "false", "true"]);
+    expect(disabledStates()).toEqual([false, false, true]);
     draw(true);
-    await expect.poll(disabledStates).toEqual(["true", "true", "true"]);
+    expect(disabledStates()).toEqual([true, true, true]);
     draw(true);
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
-    expect(disabledStates()).toEqual(["true", "true", "true"]);
-    container.querySelector<HTMLElement>('wa-radio[value="second"]')?.click();
-    await new Promise<void>((resolve) => {
-      requestAnimationFrame(() => resolve());
-    });
+    expect(disabledStates()).toEqual([true, true, true]);
+    container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
     expect(onChange).not.toHaveBeenCalled();
     draw(false);
-    await expect.poll(disabledStates).toEqual(["false", "false", "true"]);
-    container.querySelector<HTMLElement>('wa-radio[value="second"]')?.click();
-    await vi.waitFor(() =>
-      expect(onChange).toHaveBeenCalledWith("second", expect.any(HTMLElement)),
-    );
+    expect(disabledStates()).toEqual([false, false, true]);
+    container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
+    expect(onChange).toHaveBeenCalledWith("second", expect.any(HTMLElement));
     onChange.mockClear();
     draw(true, true);
-    await expect.poll(disabledStates).toEqual(["true", "true", "true"]);
+    expect(disabledStates()).toEqual([true, true, true]);
     draw(false, true);
-    await expect.poll(disabledStates).toEqual(["true", "true", "true"]);
-    container.querySelector<HTMLElement>('wa-radio[value="second"]')?.click();
+    expect(disabledStates()).toEqual([true, true, true]);
+    container.querySelector<HTMLElement>('input[type=radio][value="second"]')?.click();
     expect(onChange).not.toHaveBeenCalled();
     draw(false);
-    await expect.poll(disabledStates).toEqual(["false", "false", "true"]);
+    expect(disabledStates()).toEqual([false, false, true]);
   } finally {
     render(null, container);
     container.remove();

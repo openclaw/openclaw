@@ -368,13 +368,12 @@ describe("config form array integrity", () => {
       onPatch,
     });
     const switches = Array.from(
-      container.querySelectorAll<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelectorAll<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
     );
     expect(switches).toHaveLength(2);
     const second = expectElement(switches[1], "second unique boolean item");
 
-    second.checked = false;
-    second.dispatchEvent(new Event("change", { bubbles: true }));
+    second.click();
 
     expect(onPatch).not.toHaveBeenCalled();
     expect(second.checked).toBe(true);
