@@ -23,6 +23,7 @@ const toolingClosure = [
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/record-shared.mjs",
+  "scripts/lib/update-compat-contract.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -1042,7 +1043,6 @@ async function preflightFrozenTargetContracts(input, workflow = false, verifiedT
       required(sources.tooling, `scripts/e2e/lib/${path}`);
     }
     if (consumer === "update-corrupt-plugin") {
-      required(sources.tooling, "scripts/lib/update-compat-contract.mjs");
       required(sources.tooling, "scripts/lib/openclaw-e2e-instance.sh");
       required(sources.tooling, "scripts/lib/docker-e2e-watchdog.mjs");
       required(sources.tooling, "scripts/lib/direct-run.mjs");

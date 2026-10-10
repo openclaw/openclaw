@@ -1186,6 +1186,13 @@ describe("runtime postbuild static assets", () => {
 describe("previous release update compatibility", () => {
   const integrity = `sha512-${Buffer.alloc(64).toString("base64")}`;
 
+  it("keeps the committed inventory byte-verifiable by the canonical release serializer", () => {
+    const file = path.join(MODULE_ROOT, "scripts/lib/update-compat-inventory.json");
+    expect(fsSync.readFileSync(file, "utf8")).toBe(
+      `${JSON.stringify(readUpdateCompatibilityInventory(file), null, 2)}\n`,
+    );
+  });
+
   function write(root: string, relative: string, contents: string): void {
     const file = path.join(root, relative);
     fsSync.mkdirSync(path.dirname(file), { recursive: true });

@@ -289,11 +289,11 @@ export async function setupTrackedProject(
     newPaths?: string[];
   } = {},
 ) {
+  const { [ROOT_PACKAGE]: rootPackage, ...files } = { ...BASE_PROJECT_FILES, ...options.files };
+  // The compiler fixture owns schema facts; apply caller metadata before it attaches them.
+  await writeProjectFiles(tmp, { [ROOT_PACKAGE]: rootPackage });
   await writeRuntimePostBuildScaffold(tmp);
-  await writeProjectFiles(tmp, {
-    ...BASE_PROJECT_FILES,
-    ...options.files,
-  });
+  await writeProjectFiles(tmp, files);
   await touchProjectFiles(tmp, options.oldPaths ?? [], OLD_TIME);
   await touchProjectFiles(tmp, options.buildPaths ?? [], BUILD_TIME);
   await touchProjectFiles(tmp, options.newPaths ?? [], NEW_TIME);

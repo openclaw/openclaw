@@ -222,6 +222,7 @@ const frozenAdmissionClosure = [
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/official-external-provider-catalog.json",
   "scripts/lib/record-shared.mjs",
+  "scripts/lib/update-compat-contract.mjs",
   "scripts/lib/update-compat-inventory.json",
   "scripts/lib/update-first-hop-lanes.mjs",
   "scripts/lib/upgrade-survivor-policy.mjs",
@@ -1394,48 +1395,19 @@ describe("frozen admission workflow barriers", () => {
         [RELEASE_CHECKS_WORKFLOW, "resolve_target", "Capture selected inputs", "release"],
         [PACKAGE_ACCEPTANCE_WORKFLOW, "resolve_package", "Select acceptance profile", "package"],
       ] as const
-    ).flatMap(([file, jobName, caller, workflow]) => [
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "clean",
-        path: "scripts/plan-release-workflow-matrix.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "dirty",
-        path: "scripts/plan-release-workflow-matrix.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "missing",
-        path: "scripts/plan-release-workflow-matrix.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "dirty transitive",
-        path: "scripts/lib/numeric-options.mjs",
-      },
-      {
-        file,
-        jobName,
-        caller,
-        workflow,
-        condition: "missing transitive",
-        path: "scripts/lib/numeric-options.mjs",
-      },
-    ]),
+    ).flatMap(([file, jobName, caller, workflow]) =>
+      (
+        [
+          ["clean", "scripts/plan-release-workflow-matrix.mjs"],
+          ["dirty", "scripts/plan-release-workflow-matrix.mjs"],
+          ["missing", "scripts/plan-release-workflow-matrix.mjs"],
+          ["dirty transitive", "scripts/lib/numeric-options.mjs"],
+          ["missing transitive", "scripts/lib/numeric-options.mjs"],
+          ["dirty transitive", "scripts/lib/update-compat-contract.mjs"],
+          ["missing transitive", "scripts/lib/update-compat-contract.mjs"],
+        ] as const
+      ).map(([condition, path]) => ({ file, jobName, caller, workflow, condition, path })),
+    ),
   )(
     "verifies before the earliest planner command in $workflow: $condition $path",
     ({ file, jobName, caller, workflow, condition, path }) => {
@@ -2416,7 +2388,9 @@ describe("frozen admission workflow barriers", () => {
         allow_frozen_target_scenario_omissions: true,
       },
       {
-        [inventory]: JSON.stringify({ releases: [{ version: "2026.9.6" }] }),
+        // v2026.9.9 shipped this frozen v1 artifact as an admitted-source list.
+        "package.json": '{"type":"module","version":"2026.9.9"}',
+        [inventory]: JSON.stringify({ schemaVersion: 1, releases: [{ version: "2026.9.6" }] }),
         [postbuild]: readFileSync(postbuild, "utf8"),
       },
     );
