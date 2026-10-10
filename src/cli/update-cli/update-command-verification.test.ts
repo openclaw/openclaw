@@ -92,9 +92,18 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
-  it.each(["timeout", "legacy-timeout", "transient-timeout", "negative", "mixed"])(
-    "records collection warnings without accepting definitive channel failures (%s)",
-    async (kind) => {
+  it.each([
+    { kind: "timeout" },
+    { kind: "legacy-timeout" },
+    { kind: "transient-timeout" },
+    { kind: "negative" },
+    { kind: "mixed" },
+    { kind: "timeout", accountId: "secondary" },
+    { kind: "legacy-timeout", accountId: "secondary" },
+    { kind: "mixed", accountId: "secondary" },
+  ])(
+    "records collection warnings without accepting definitive channel failures ($kind, account=$accountId)",
+    async ({ kind, accountId }) => {
       mockProcessPlatform("linux");
       const service = makeGatewayService({ status: "running", pid: 8000 });
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
@@ -105,23 +114,24 @@ describe("update readiness generation", () => {
         hints: [],
       }));
       let probes = 0;
+      const channelHealth = (probe: { ok?: boolean; timedOut?: boolean; error?: string }) =>
+        accountId ? { accounts: { [accountId]: { probe } } } : { probe };
       callGateway.mockImplementation((opts) =>
         gatewayHealthResponse({
           server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
           health: {
             channels: {
-              telegram: {
-                probe:
-                  kind === "transient-timeout" && probes++ > 0
-                    ? { ok: true }
-                    : {
-                        ...(kind === "timeout" ? {} : { ok: false }),
-                        ...(kind === "negative" ? {} : { timedOut: true }),
-                        error: "health collection timed out after 7000ms",
-                      },
-              },
+              telegram: channelHealth(
+                kind === "transient-timeout" && probes++ > 0
+                  ? { ok: true }
+                  : {
+                      ...(kind === "timeout" ? {} : { ok: false }),
+                      ...(kind === "negative" ? {} : { timedOut: true }),
+                      error: "health collection timed out after 7000ms",
+                    },
+              ),
               ...(kind === "mixed"
-                ? { discord: { probe: { ok: false, error: "invalid credentials" } } }
+                ? { discord: channelHealth({ ok: false, error: "invalid credentials" }) }
                 : {}),
             },
           },
@@ -161,11 +171,12 @@ describe("update readiness generation", () => {
         );
       }
       if (kind !== "negative") {
+        const channelId = accountId ? `telegram/${accountId}` : "telegram";
         expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-          "telegram: health collection timed out after 7000ms",
+          `${channelId}: health collection timed out after 7000ms`,
         );
         expect(result.steps[0]?.warnings?.join("\n")).toContain(
-          "telegram: health collection timed out after 7000ms",
+          `${channelId}: health collection timed out after 7000ms`,
         );
         expect(recordUpdateRunStep).toHaveBeenCalledWith(
           "collection-timeout",

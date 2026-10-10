@@ -217,7 +217,7 @@ function readChannelProbeFailures(health: unknown) {
   const errors: GatewayReachability["channelProbeErrors"] = [];
   const timeouts: GatewayReachability["channelProbeErrors"] = [];
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  errors.push(...Object.entries(channels ?? {}).flatMap(([channelId, value]) => {
+  for (const [channelId, value] of Object.entries(channels ?? {})) {
     const summary = asOptionalRecord(value);
     const accounts = asOptionalRecord(summary?.accounts);
     // Account projections are authoritative when present; the channel summary mirrors only
@@ -228,14 +228,10 @@ function readChannelProbeFailures(health: unknown) {
             ([accountId, account]) => [`${channelId}/${accountId}`, account] as const,
           )
         : [[channelId, summary] as const];
-    return entries.flatMap(([id, accountValue]) => {
+    for (const [id, accountValue] of entries) {
       const account = asOptionalRecord(accountValue);
-      if (
-        account?.enabled === false ||
-        account?.configured === false ||
-        account?.linked === false
-      ) {
-        return [];
+      if (account?.enabled === false || account?.configured === false) {
+        continue;
       }
       const lastError = typeof account?.lastError === "string" ? account.lastError.trim() : "";
       const healthState = typeof account?.healthState === "string" ? account.healthState : "";
@@ -265,6 +261,7 @@ function readChannelProbeFailures(health: unknown) {
               typeof lastDisconnect?.at === "number" ? { at: lastDisconnect.at } : undefined,
             terminalDisconnect: account?.terminalDisconnect === true,
             ingressUnavailable: account?.ingressUnavailable === true ? true : undefined,
+            linked: account?.linked === false ? false : undefined,
             lastStartAt: typeof account?.lastStartAt === "number" ? account.lastStartAt : undefined,
           },
           {
@@ -274,6 +271,9 @@ function readChannelProbeFailures(health: unknown) {
             staleEventThresholdMs: DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
           },
         ).reason;
+        if (recoveryReason === "unmanaged") {
+          continue;
+        }
         const recoveryGrace =
           recoveryReason === "startup-connect-grace" || recoveryReason === "reconnect-grace";
         const restartHandoff =
@@ -285,30 +285,27 @@ function readChannelProbeFailures(health: unknown) {
             },
             healthState,
           );
-        return [
-          {
-            id,
-            error: lastError || healthState,
-            ...(recoveryGrace || restartHandoff ? { retryable: true } : {}),
-          },
-        ];
+        errors.push({
+          id,
+          error: lastError || healthState,
+          ...(recoveryGrace || restartHandoff ? { retryable: true } : {}),
+        });
+        continue;
+      }
+      if (account?.linked === false) {
+        continue;
       }
       const probe = asOptionalRecord(account?.probe);
       if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
-        return [];
+        continue;
       }
-      const failure = {
+      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+      (probe.timedOut === true ? timeouts : errors).push({
         id,
         error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-      };
-      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-      if (probe.timedOut === true) {
-        timeouts.push(failure);
-        return [];
-      }
-      return [failure];
-    });
-  }));
+      });
+    }
+  }
   return { errors, timeouts };
 }
 

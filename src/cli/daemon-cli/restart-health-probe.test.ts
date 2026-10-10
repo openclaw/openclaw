@@ -604,6 +604,34 @@ describe("restart health", () => {
       },
     ],
     ["disconnected transport", { healthState: "disconnected", running: true, connected: false }],
+    [
+      "terminal unlink",
+      {
+        healthState: "terminal-disconnect",
+        running: false,
+        terminalDisconnect: true,
+        linked: false,
+        lastError: "session logged out",
+      },
+    ],
+    [
+      "blocked unlinked account",
+      {
+        healthState: "auth-rejected",
+        lifecycle: "blocked",
+        running: false,
+        linked: false,
+      },
+    ],
+    [
+      "unlinked ingress failure",
+      {
+        healthState: "ingress-unavailable",
+        ingressUnavailable: true,
+        running: false,
+        linked: false,
+      },
+    ],
   ])("rejects %s despite a successful account credential probe", async (_label, runtime) => {
     callGateway.mockImplementation(
       gatewayHealthResponse({
