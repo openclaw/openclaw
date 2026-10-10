@@ -1879,6 +1879,7 @@ export function selectManifestArtifact(artifacts, runId, runAttempt) {
       runId,
     });
   }
+  return undefined;
 }
 
 export function validateManifestArtifactCompatibility(artifact, manifest, runId, runAttempt) {

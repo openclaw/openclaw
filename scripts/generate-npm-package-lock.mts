@@ -72,18 +72,24 @@ function usage() {
 }
 
 function normalizeOverrideValue(value: unknown): unknown {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint" ||
+    typeof value === "symbol" ||
+    typeof value === "function"
+  ) {
+    return String(value);
+  }
   if (value === null || value === undefined) {
     return value;
   }
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeOverrideValue(item));
-  }
-  if (typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, nestedValue]) => [key, normalizeOverrideValue(nestedValue)]),
-    );
-  }
-  return String(value);
+  return Array.isArray(value)
+    ? value.map((item) => normalizeOverrideValue(item))
+    : Object.fromEntries(
+        Object.entries(value).map(([key, nested]) => [key, normalizeOverrideValue(nested)]),
+      );
 }
 
 function formatPnpmPackageSelector(selector: PackageSelector): string {
