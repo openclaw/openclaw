@@ -19,14 +19,18 @@ import type {
   WorkerEnvironmentSessionReservationHandler,
 } from "./session-attachment.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
-import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
+import type { WorkerTunnelStopReason, WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export type WorkerEnvironmentSessionAttachmentOptions = {
   prepareAttachedComputer?: (
     authority: import("./computer-transport.js").WorkerEnvironmentComputerAuthority,
   ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
-  closeEnvironmentComputers?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+  closeEnvironmentComputers?: (
+    environmentId: string,
+    ownerEpoch?: number,
+    reason?: WorkerTunnelStopReason,
+  ) => Promise<void>;
   hasAttachedEnvironmentActivity?: (environmentId: string, ownerEpoch: number) => boolean;
   runSessionEnvironmentCommand?: NodeWorkerTunnelManager["runSessionCommand"];
 };

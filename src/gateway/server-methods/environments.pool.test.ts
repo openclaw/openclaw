@@ -108,7 +108,8 @@ describe("prepared worker pool projection", () => {
         expect(summary).toMatchObject({
           id: "worker-1",
           type: "worker",
-          status: "available",
+          // The listed worker's teardown was requested; it is no longer available.
+          status: listing ? "stopping" : "available",
           trust: "disposable",
           worker: {
             providerId: "static-ssh",

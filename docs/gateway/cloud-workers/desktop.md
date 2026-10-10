@@ -67,6 +67,13 @@ in the conversation. An explicit Stop or Gateway restart starts a fresh retry
 budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
 that the lease was released.
 
+While a stop is pending, environment status reports `stopping` and no longer
+advertises the desktop. On a dedicated machine, a computer-use session whose
+driver can no longer release its execution (for example after a Windows UAC
+prompt switches to the secure desktop) is logged and does not block teardown:
+the provider's confirmed destruction ends it. Shared hosts keep the machine, so
+their stop still waits for that release.
+
 Stop attached machines before downgrading to a build without conversation
 attachments. Older builds can read the database, but they treat these machines
 as ordinary unassigned environments and do not maintain conversation activity

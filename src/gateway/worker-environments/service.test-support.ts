@@ -234,6 +234,7 @@ export function createService(
       | "executeInference"
       | "inferenceStore"
       | "closeNodeBootstrapArtifacts"
+      | "closeEnvironmentComputers"
       | "createGatewayTools"
       | "executeComputer"
       | "providerCallTimeoutMs"
