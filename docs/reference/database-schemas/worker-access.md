@@ -297,6 +297,10 @@ retain the full profile projection.
 Personal connection reads and maintenance listings use that same shared-state
 worker without creating absent databases; received credentials are registered
 with the host's secret redaction owner.
+Publication receipt reads, lists, branch projections, and recovery lookups also
+use the existing shared-state worker without creating absent databases. Branch
+head and unsettled status derive from one result set; reads add no source
+reservation or transaction.
 These changes do not alter the schema, stored representation, or update behavior.
 
 Released coordinator methods with opaque requester assertions remain explicit

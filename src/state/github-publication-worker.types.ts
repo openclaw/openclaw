@@ -96,6 +96,13 @@ export type PublicationReadOperations = {
     input: RepositoryGitHubPublicationFilter;
     output: { type: "githubPublications.repositoryList"; rows: RepositoryPublicationRow[] };
   };
+  "githubPublications.repositoryRead": {
+    input: { requestId: string };
+    output: {
+      type: "githubPublications.repositoryRead";
+      row: RepositoryPublicationRow | undefined;
+    };
+  };
   "githubPublications.branch": {
     input: { workspaceId: string; branch: string; pushRepository: string };
     output: {

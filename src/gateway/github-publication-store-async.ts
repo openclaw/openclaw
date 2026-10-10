@@ -1,12 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type {
   GitHubPublicationRow,
   RepositoryGitHubPublicationRow,
 } from "../state/github-publication-read.types.js";
-import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
+import {
+  createGitHubPublicationWorkerScope,
+  readGitHubPublicationInWorker as read,
+} from "../state/github-publication-worker.js";
 import type {
   GitHubPublicationDeferral,
   PersonalPublicationMutation,
@@ -15,7 +17,6 @@ import type {
   RepositoryPublicationMutation,
   SharedPublicationMutation,
 } from "../state/github-publication-worker.types.js";
-import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { PersonalGitHubPublicationRow } from "./github-personal-publication-store.js";
 import { readPersonalGitHubPublication } from "./github-personal-publication-store.js";
@@ -341,14 +342,6 @@ export async function markGitHubPublicationReportedAsync(
   }
 }
 
-async function read(command: SqliteWorkerCommand<PublicationReadOperations>) {
-  const result = await executeExistingOpenClawStateRead({}, command);
-  if (result && (!result.ok || result.type !== command.type)) {
-    throw new Error("GitHub publication read is unavailable.");
-  }
-  return result;
-}
-
 export async function readPersonalGitHubPublicationAsync(
   owner: string,
   request: PublicationReadOperations["githubPublications.personalRead"]["input"]["request"],
@@ -365,14 +358,8 @@ export async function listRepositoryGitHubPublicationsAsync(
 }
 
 export async function readRepositoryGitHubPublicationAsync(requestId: string) {
-  const result = await executeExistingOpenClawStateRead(
-    {},
-    { type: "githubRepository.request", requestId },
-  );
-  if (result && (!result.ok || result.type !== "githubRepository.request")) {
-    throw new Error("GitHub repository publication receipt is unavailable.");
-  }
-  return result?.type === "githubRepository.request" ? result.row : undefined;
+  const result = await read({ type: "githubPublications.repositoryRead", input: { requestId } });
+  return result?.type === "githubPublications.repositoryRead" ? result.row : undefined;
 }
 
 export async function readRepositoryGitHubPublicationBranchAsync(
