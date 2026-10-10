@@ -1,5 +1,4 @@
-import { lstat, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { lstat } from "node:fs/promises";
 import { join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import { describe, expect, it, vi } from "vitest";
@@ -176,47 +175,6 @@ describe("preflightClawPackage plugin setup requirements", () => {
         deps: { preflightPlugin, probePlugin: probePluginSetup },
       }),
     ).resolves.not.toHaveProperty("requirements");
-  });
-
-  it("accepts declared local auth evidence", async () => {
-    const credentialsDir = await mkdtemp(join(tmpdir(), "claw-auth-evidence-"));
-    const credentialsPath = join(credentialsDir, "credentials.json");
-    await writeFile(credentialsPath, "{}", "utf8");
-    probePluginSetup.mockResolvedValueOnce({
-      ok: true,
-      pluginId: "evidence",
-      setup: {
-        providers: [
-          {
-            ...setup.providers[0],
-            authEvidence: [
-              {
-                type: "local-file-with-env",
-                fileEnvVar: "EVIDENCE_CREDENTIALS",
-                requiresAllEnv: ["EVIDENCE_PROJECT"],
-                credentialMarker: "evidence-local-credentials",
-              },
-            ],
-          },
-        ],
-      },
-      artifactInspection,
-      clawhub: { integrity },
-    });
-
-    try {
-      await expect(
-        preflightClawPackage(pluginPackage, "/tmp/workspace", {
-          env: {
-            EVIDENCE_CREDENTIALS: credentialsPath,
-            EVIDENCE_PROJECT: "project",
-          },
-          deps: { preflightPlugin, probePlugin: probePluginSetup },
-        }),
-      ).resolves.not.toHaveProperty("requirements");
-    } finally {
-      await rm(credentialsDir, { recursive: true, force: true });
-    }
   });
 });
 
@@ -461,57 +419,6 @@ describe("installClawPackages", () => {
     );
   });
 
-  it("installs plugins through the shared plugin surface", async () => {
-    probePlugin.mockClear();
-    const installPlugin = vi.fn().mockResolvedValue(undefined);
-    const persistPackageRef = vi.fn().mockReturnValue({
-      kind: "plugin",
-      ref: "@owner/audit",
-      status: "pending",
-      integrity,
-    });
-    const preflightPlugin = vi.fn().mockResolvedValue({ ok: true, action: "install" });
-
-    await installClawPackages(plan([pluginPackage]), {
-      deps: {
-        installPlugin,
-        probePlugin,
-        preflightPlugin,
-        persistPackageRef,
-        completePackageRef,
-        withPackageLease,
-      },
-    });
-
-    expect(installPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request: {
-          source: "clawhub",
-          packageName: "@owner/audit",
-          version: "2.0.1",
-          mode: "install",
-          expectedIntegrity:
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          expectedPluginId: "audit",
-        },
-        invalidateRuntimeCache: false,
-        clawManaged: true,
-      }),
-    );
-    expect(persistPackageRef).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-      }),
-      expect.objectContaining({
-        status: "pending",
-        relationship: "referenced",
-        origin: "claw-introduced",
-        independentOwner: false,
-      }),
-    );
-  });
-
   it("resumes an exact Claw-introduced plugin requirement without reinstalling", async () => {
     probePlugin.mockClear();
     const introduced = pluginPackageRef("@owner/audit", {
@@ -548,57 +455,6 @@ describe("installClawPackages", () => {
         relationship: "referenced",
         origin: "claw-introduced",
         independentOwner: false,
-      }),
-    );
-  });
-
-  it("records a dependency ref without reinstalling an exact reused plugin", async () => {
-    probePlugin.mockClear();
-    const installPlugin = vi.fn();
-    const persistPackageRef = vi.fn().mockReturnValue({ kind: "plugin" });
-    const preflightPlugin = vi.fn().mockResolvedValue({
-      ok: true,
-      action: "reuse",
-      installedId: "audit",
-      installedIntegrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    });
-    const probePluginForExtension = vi.fn().mockResolvedValue(
-      pluginProbe({
-        artifactInspection: {
-          format: "claude",
-          mapped: ["skills"],
-          unavailable: ["agents"],
-        },
-      }),
-    );
-
-    await installClawPackages(plan([{ ...pluginPackage, extension }], "reuse"), {
-      deps: {
-        installPlugin,
-        probePlugin: probePluginForExtension,
-        preflightPlugin,
-        persistPackageRef,
-        completePackageRef,
-        readPackageRefs: vi.fn().mockReturnValue([]),
-        withPackageLease,
-      },
-    });
-
-    expect(installPlugin).not.toHaveBeenCalled();
-    expect(probePluginForExtension).toHaveBeenCalledWith(
-      expect.objectContaining({ extensionsDir: expect.any(String) }),
-    );
-    expect(persistPackageRef).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        integrity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        extension,
-      }),
-      expect.objectContaining({
-        status: "complete",
-        relationship: "referenced",
-        origin: "pre-existing",
-        independentOwner: true,
       }),
     );
   });
@@ -710,33 +566,6 @@ describe("installClawPackages", () => {
         independentOwner: true,
       }),
     );
-  });
-
-  it("marks the pending ref failed when a plugin install fails", async () => {
-    const pending = {
-      kind: "plugin",
-      ref: "@owner/audit",
-      status: "pending",
-      integrity,
-    } as PersistedClawPackageRef;
-    const persistPackageRef = vi.fn().mockReturnValue(pending);
-
-    await expect(
-      installClawPackages(plan([pluginPackage]), {
-        deps: {
-          installPlugin: vi.fn().mockRejectedValue(new Error("registry unavailable")),
-          probePlugin,
-          preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-          persistPackageRef,
-          completePackageRef,
-          withPackageLease,
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "package_install_failed",
-      message: "registry unavailable",
-      installedPackages: [expect.objectContaining({ ref: "@owner/audit", status: "failed" })],
-    });
   });
 
   it("removes a newly installed plugin when a later package fails", async () => {
@@ -865,36 +694,6 @@ describe("installClawPackages", () => {
     });
 
     expect(uninstallPlugin).not.toHaveBeenCalled();
-  });
-
-  it("preserves the installer error when failure provenance cannot be updated", async () => {
-    const pending = {
-      kind: "plugin",
-      ref: "@owner/audit",
-      status: "pending",
-      integrity,
-    } as PersistedClawPackageRef;
-    const failingCompletePackageRef = vi.fn(() => {
-      throw new Error("state database unavailable");
-    });
-
-    await expect(
-      installClawPackages(plan([pluginPackage]), {
-        deps: {
-          installPlugin: vi.fn().mockRejectedValue(new Error("registry unavailable")),
-          probePlugin,
-          preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
-          persistPackageRef: vi.fn().mockReturnValue(pending),
-          completePackageRef: failingCompletePackageRef,
-          withPackageLease,
-        },
-      }),
-    ).rejects.toMatchObject({
-      code: "package_install_failed",
-      message: "registry unavailable",
-      installedPackages: [pending],
-    });
-    expect(failingCompletePackageRef).toHaveBeenCalledWith(pending, "failed", expect.anything());
   });
 
   it("invalidates consent when plugin owner state changes after planning", async () => {

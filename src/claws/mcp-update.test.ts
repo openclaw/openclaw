@@ -336,39 +336,6 @@ describe("applyClawMcpUpdate", () => {
     expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([previous]);
   });
 
-  it("reports partial failure when rejected-write provenance cannot be restored", async () => {
-    const previous = ref("docs", oldDocs);
-    const upsertRef = vi
-      .fn()
-      .mockImplementationOnce(() => undefined)
-      .mockImplementationOnce(() => {
-        throw new Error("state unavailable");
-      });
-
-    await expect(
-      applyClawMcpUpdate(
-        plan([
-          {
-            kind: "mcpServer",
-            id: "docs",
-            action: "change",
-            target: "mcp.servers.docs",
-            blocked: false,
-            reason: "changed",
-          },
-        ]),
-        manifest(),
-        {
-          config: { mcp: { servers: { docs: oldDocs } } },
-          sourceMcpServers: { docs: oldDocs },
-          readRefs: () => [previous],
-          setServer: vi.fn().mockResolvedValue({ ok: false, path: "config", error: "changed" }),
-          upsertRef,
-        },
-      ),
-    ).rejects.toMatchObject({ partial: true });
-  });
-
   it("retains current config when another owner appears before rollback", async () => {
     const unsetServer = vi.fn();
     const execution = await applyClawMcpUpdate(

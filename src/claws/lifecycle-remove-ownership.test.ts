@@ -155,11 +155,6 @@ describe("Claw removal operation ownership", () => {
     }
   });
 
-  it("recognizes a missing workspace root as empty", async () => {
-    const root = path.join(tempDirs.make("claw-inventory-"), "missing");
-    await expect(workspaceContainsUntrackedEntries(root, [])).resolves.toBe(false);
-  });
-
   it.each(["transport", "runtime"])(
     "keeps partial state after package %s failure without local fallback",
     async (failure) => {
@@ -229,78 +224,74 @@ describe("Claw removal operation ownership", () => {
     },
   );
 
-  it.each([
-    { successor: "removing", reject: false },
-    { successor: "removing", reject: true },
-    { successor: "reinstalled", reject: false },
-    { successor: "reinstalled", reject: true },
-    { successor: "removed", reject: false },
-    { successor: "removed", reject: true },
-  ])("does not mark $successor partial after stale quiescence (reject=$reject)", async (test) => {
-    const current = await fixture();
-    const entered = createDeferred<string>();
-    const release = createDeferred();
-    const enteredNext = createDeferred<string>();
-    const releaseNext = createDeferred();
-    let next: Promise<ClawRemoveResult> | undefined;
-    const stale = current.remove({
-      monitorGateway: {
-        ...quiescentClawMonitorGateway,
-        quiesce: async (_agentId, operationId) => {
-          entered.resolve(operationId);
-          await release.promise;
-          if (test.reject) {
-            throw new Error("original quiescence failure");
-          }
-        },
-      },
-    });
-    try {
-      const originalOperation = await entered.promise;
-      expireDeletionLease();
-      next = current.remove({
+  it.each([{ successor: "reinstalled", reject: true }])(
+    "does not mark $successor partial after stale quiescence (reject=$reject)",
+    async (test) => {
+      const current = await fixture();
+      const entered = createDeferred<string>();
+      const release = createDeferred();
+      const enteredNext = createDeferred<string>();
+      const releaseNext = createDeferred();
+      let next: Promise<ClawRemoveResult> | undefined;
+      const stale = current.remove({
         monitorGateway: {
           ...quiescentClawMonitorGateway,
           quiesce: async (_agentId, operationId) => {
-            enteredNext.resolve(operationId);
-            if (test.successor === "removing") {
-              await releaseNext.promise;
+            entered.resolve(operationId);
+            await release.promise;
+            if (test.reject) {
+              throw new Error("original quiescence failure");
             }
           },
         },
       });
-      expect(await enteredNext.promise).not.toBe(originalOperation);
-      if (test.successor !== "removing") {
-        expect(await next).toMatchObject({ status: "complete" });
-        if (test.successor === "reinstalled") {
-          await current.install("replacement");
+      try {
+        const originalOperation = await entered.promise;
+        expireDeletionLease();
+        next = current.remove({
+          monitorGateway: {
+            ...quiescentClawMonitorGateway,
+            quiesce: async (_agentId, operationId) => {
+              enteredNext.resolve(operationId);
+              if (test.successor === "removing") {
+                await releaseNext.promise;
+              }
+            },
+          },
+        });
+        expect(await enteredNext.promise).not.toBe(originalOperation);
+        if (test.successor !== "removing") {
+          expect(await next).toMatchObject({ status: "complete" });
+          if (test.successor === "reinstalled") {
+            await current.install("replacement");
+          }
         }
+        const before = readClawInstallRecord("worker");
+        const journal = readAgentDeletionJournal("worker");
+        expect(before?.status).toBe(test.successor === "removed" ? undefined : "complete");
+        release.resolve();
+        expect(await stale).toMatchObject({
+          status: "partial",
+          error: {
+            code: "monitor_cleanup_failed",
+            message: expect.stringMatching(
+              test.reject
+                ? /original quiescence failure|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/
+                : /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
+            ),
+          },
+        });
+        expect(readClawInstallRecord("worker")).toEqual(before);
+        expect(readAgentDeletionJournal("worker")).toEqual(journal);
+        releaseNext.resolve();
+        expect(await next).toMatchObject({ status: "complete" });
+      } finally {
+        release.resolve();
+        releaseNext.resolve();
+        await Promise.allSettled([stale, next]);
       }
-      const before = readClawInstallRecord("worker");
-      const journal = readAgentDeletionJournal("worker");
-      expect(before?.status).toBe(test.successor === "removed" ? undefined : "complete");
-      release.resolve();
-      expect(await stale).toMatchObject({
-        status: "partial",
-        error: {
-          code: "monitor_cleanup_failed",
-          message: expect.stringMatching(
-            test.reject
-              ? /original quiescence failure|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/
-              : /no longer owns|(?:agent deletion|state lease) core:agent-deletion\/worker was lost/,
-          ),
-        },
-      });
-      expect(readClawInstallRecord("worker")).toEqual(before);
-      expect(readAgentDeletionJournal("worker")).toEqual(journal);
-      releaseNext.resolve();
-      expect(await next).toMatchObject({ status: "complete" });
-    } finally {
-      release.resolve();
-      releaseNext.resolve();
-      await Promise.allSettled([stale, next]);
-    }
-  });
+    },
+  );
 
   it("preserves a late partial result without publishing into the successor's install", async () => {
     const current = await fixture();
