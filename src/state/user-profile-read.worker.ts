@@ -14,7 +14,6 @@ import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js"
 import {
   readCurrentUserProfileAliasesInDatabase,
   readUserProfileAuthorityCommand,
-  readUserProfileRoleAuthorityCommand,
   readUserProfileIdForEmail,
   readUserProfileSnapshotCommand,
 } from "./user-profile-identity.read.js";
@@ -28,8 +27,6 @@ export function readUserProfileCommand(
   switch (command.type) {
     case "userProfiles.authority.resolve":
       return readUserProfileAuthorityCommand(db, command);
-    case "userProfiles.roleAuthority.resolve":
-      return readUserProfileRoleAuthorityCommand(db, command);
     case "userProfiles.aliases.resolve":
       return {
         type: command.type,

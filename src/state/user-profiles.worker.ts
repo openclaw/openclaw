@@ -21,6 +21,7 @@ import {
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
+  selectUserProfileRoleAuthority,
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
@@ -148,6 +149,8 @@ export type UserProfileWriteOperations = WorkerOperations<typeof userProfileWrit
 
 export const userProfileOperations = {
   ...userProfileWriteOperations,
+  "userProfiles.roleAuthority.resolve": ({ profileId }: { profileId: string }, { open }) =>
+    selectUserProfileRoleAuthority(open().db, profileId),
   "userProfiles.modelAccount.connect": accountWrite(
     (
       input: Omit<
