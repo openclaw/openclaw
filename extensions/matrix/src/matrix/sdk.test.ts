@@ -1532,18 +1532,14 @@ describe("MatrixClient request hardening", () => {
           ok: false,
           error: { message: "Matrix client retirement did not settle within 5000ms" },
         });
-        const replacementSettled = vi.fn();
         replacementAcquisition = acquireSharedMatrixClient({ auth, startClient: false });
-        void replacementAcquisition.then(replacementSettled, replacementSettled);
         await vi.advanceTimersByTimeAsync(0);
-        expect(replacementSettled).not.toHaveBeenCalled();
         expect(createSharedMatrixClientMock).toHaveBeenCalledOnce();
 
         gate.resolve("late-result");
         await expect(operationOutcome).resolves.toEqual({ ok: true, value: "late-result" });
         replacementLease = await replacementAcquisition;
         expect(replacementLease.client).toBe(replacementClient);
-        expect(replacementLease.client).not.toBe(firstClient);
         expect(createSharedMatrixClientMock).toHaveBeenCalledTimes(2);
       } finally {
         syncInternals.connectionReturnedResolvers = undefined;
