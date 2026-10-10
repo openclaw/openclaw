@@ -36,6 +36,7 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
   const disposers: Array<() => void | Promise<void>> = [];
   const handlers: GatewayRequestHandlers = {};
   let owner: GatewayLockHandle | null = null;
+  let output = "";
   let config: { gateway: { mode: "local"; port: number } };
   async function invoke(
     method: string,
@@ -122,7 +123,11 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
           return result;
         },
       );
-    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    output = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output += String(chunk);
+      return true;
+    });
   });
   afterEach(async () => {
     for (const dispose of disposers.splice(0)) {
@@ -142,10 +147,13 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
     handlers,
     disposers,
     invoke,
+    get output() {
+      return output;
+    },
     get config() {
       return config;
     },
-    async startOwner() {
+    async startOwner(this: void) {
       ownerTransport.gatewayContext = true;
       try {
         owner = await acquireGatewayLock({
