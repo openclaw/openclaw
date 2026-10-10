@@ -138,6 +138,66 @@ describe("root memory repair", () => {
     await expect(fs.readFile(archivedLegacyPath, "utf8")).resolves.toBe("# Legacy\n");
   });
 
+  it("refuses to merge root memory when canonical MEMORY.md is not valid UTF-8", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    const canonicalBytes = Buffer.concat([Buffer.from("# Canonical\n"), Buffer.from([0xff, 0x0a])]);
+    await fs.writeFile(canonicalPath, canonicalBytes);
+    await fs.writeFile(legacyPath, "# Legacy\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Workspace memory root repair skipped (a root memory file is not valid UTF-8):",
+      ),
+      "Doctor changes",
+    );
+    // The merge rewrites the canonical file in place and keeps no backup of it,
+    // so an undecodable byte must leave both files and the archive untouched.
+    await expect(fs.readFile(canonicalPath)).resolves.toEqual(canonicalBytes);
+    await expect(fs.readFile(legacyPath, "utf8")).resolves.toBe("# Legacy\n");
+    await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+  });
+
+  it("refuses to merge root memory when the legacy file is not valid UTF-8", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    const legacyBytes = Buffer.concat([Buffer.from("# Legacy\n"), Buffer.from([0xff, 0x0a])]);
+    await fs.writeFile(canonicalPath, "# Canonical\n", "utf8");
+    await fs.writeFile(legacyPath, legacyBytes);
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+    await expect(fs.readFile(canonicalPath, "utf8")).resolves.toBe("# Canonical\n");
+    await expect(fs.readFile(legacyPath)).resolves.toEqual(legacyBytes);
+    await expectPathMissing(path.join(tmpDir, ".openclaw-repair"));
+  });
+
+  it("merges valid non-ASCII root memory including a literal replacement character", async () => {
+    const canonicalPath = path.join(tmpDir, "MEMORY.md");
+    const legacyPath = path.join(tmpDir, "memory.md");
+    await fs.writeFile(canonicalPath, "# 合法 😀 �\n", "utf8");
+    await fs.writeFile(legacyPath, "# 旧版 �\n", "utf8");
+    if (!(await hasDistinctRootMemoryFiles(tmpDir))) {
+      return;
+    }
+
+    await maybeRepairWorkspaceMemoryHealth({ scope, prompter });
+
+    const canonical = await fs.readFile(canonicalPath, "utf8");
+    expect(canonical).toContain("# 合法 😀 �");
+    expect(canonical).toContain("# 旧版 �");
+    await expectPathMissing(legacyPath);
+    await expectArchivedLegacyMemory();
+  });
+
   it("reads legacy content after moving it into the archive", async () => {
     const canonicalPath = path.join(tmpDir, "MEMORY.md");
     const legacyPath = path.join(tmpDir, "memory.md");

@@ -1,4 +1,5 @@
 /** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
@@ -140,6 +141,8 @@ type RootMemoryMigrationResult = {
   readLimitExceeded?: boolean;
   /** True when the repair was skipped because a file could not be read. */
   readError?: boolean;
+  /** True when the repair was skipped because a file is not valid UTF-8. */
+  invalidUtf8?: boolean;
   /** True when the legacy file could not be archived atomically. */
   archiveError?: boolean;
 };
@@ -208,12 +211,17 @@ async function migrateLegacyRootMemoryFile(
   const readMemoryFile = (filePath: string) =>
     readRegularFile({ filePath, maxBytes: ROOT_MEMORY_FILE_MAX_BYTES });
   try {
-    // Reject oversized, unreadable, symlinked, or non-regular inputs before the
-    // archive rename. The archived snapshot is read again after the atomic move.
-    await Promise.all([
+    // Reject oversized, unreadable, symlinked, non-regular, or non-UTF-8 inputs
+    // before the archive rename. The merge rewrites the canonical file from
+    // decoded text and keeps no backup of it, so replacement-decoded bytes would
+    // be persisted as U+FFFD over content the merge never intended to touch.
+    const [canonical, legacy] = await Promise.all([
       readMemoryFile(detection.canonicalPath),
       readMemoryFile(detection.legacyPath),
     ]);
+    if (!isUtf8(canonical.buffer) || !isUtf8(legacy.buffer)) {
+      return { ...unchanged, invalidUtf8: true };
+    }
   } catch (err) {
     return skippedForReadFailure(err);
   }
@@ -311,13 +319,15 @@ export async function maybeRepairWorkspaceMemoryHealth(params: {
       return;
     }
     const migration = await migrateLegacyRootMemoryFile(params.scope.workspaceDir);
-    const reason = migration.readLimitExceeded
-      ? "a file exceeded the safe read limit"
-      : migration.readError
-        ? "a file could not be read"
-        : migration.archiveError
-          ? "legacy memory could not be archived atomically"
-          : null;
+    const reason = migration.invalidUtf8
+      ? "a root memory file is not valid UTF-8"
+      : migration.readLimitExceeded
+        ? "a file exceeded the safe read limit"
+        : migration.readError
+          ? "a file could not be read"
+          : migration.archiveError
+            ? "legacy memory could not be archived atomically"
+            : null;
     if (reason) {
       note(
         [
