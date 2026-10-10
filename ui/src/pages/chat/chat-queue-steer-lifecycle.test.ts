@@ -29,7 +29,7 @@ afterEach(() => {
 });
 
 it.each(["custody", "receipt", "retry", "remount"] as const)(
-  "keeps a queued steer once at the live edge through %s and history",
+  "keeps a queued steer once through %s and adopts its canonical transcript position",
   async (ackMode) => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -188,10 +188,11 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       });
       container.querySelector<HTMLButtonElement>(".chat-queue__steer")!.click();
       await requested.promise;
-      const delivered = [original.content, "Already visible output.", queued.text];
+      const delivered = [original.content, queued.text, "Already visible output."];
       expect.soft(snapshot(), "request dispatch").toEqual({ thread: delivered, queue: [] });
       let continued = false;
       let prefixPersisted = false;
+      let steerProjected = true;
       const continueOutput = () => {
         continued = true;
         history.inFlightRun!.text = prefixPersisted
@@ -207,16 +208,21 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       const expected = () => ({
         thread: [
           original.content,
+          ...(prefixPersisted ? ["Already visible output."] : []),
+          ...(steerProjected ? [queued.text] : []),
           ...(prefixPersisted
-            ? ["Already visible output.", ...(continued ? ["Later output."] : [])]
+            ? continued
+              ? ["Later output."]
+              : []
             : [continued ? "Already visible output. Later output." : "Already visible output."]),
-          queued.text,
+          ...(steerProjected ? [] : [queued.text]),
         ],
         queue: [],
       });
       if (ackMode === "retry") {
         ack.reject(new Error("Steer rejected"));
         await transport.promise;
+        steerProjected = false;
         expect.soft(snapshot(), "rejected delivery").toEqual(expected());
         expect
           .soft(host.chatQueue, "rejected source")
@@ -228,6 +234,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
         transport = createDeferred();
         retry!.click();
         await retryRequested.promise;
+        steerProjected = true;
         expect.soft(snapshot(), "retry retains original run ownership").toEqual(expected());
       }
       (ackMode === "retry" ? retryAck : ack).resolve({
@@ -352,7 +359,7 @@ it.each(["custody", "receipt", "retry", "remount"] as const)(
       };
       await loadChatHistory(host);
       expect.soft(snapshot(), "finished history").toEqual({
-        thread: [original.content, "Already visible output.", "Later output.", queued.text],
+        thread: [original.content, "Already visible output.", queued.text, "Later output."],
         queue: [],
       });
     } finally {

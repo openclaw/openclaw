@@ -45,6 +45,7 @@ export type ToolStreamReconciliationState = StreamReconciliationState & {
 };
 
 type VisibleAssistantStreamPart = {
+  afterUserSendId?: string;
   text: string;
   replacementText: string;
   source: "segment" | "current";
@@ -197,6 +198,7 @@ export function visibleAssistantStreamParts(
         ...(itemId ? { itemId } : {}),
         ...(segmentRunId ? { runId: segmentRunId } : {}),
         toolCallId: explicitToolCallId ?? indexedToolRef?.id,
+        afterUserSendId: segment.afterUserSendId,
       });
     }
     if (usesAccumulatedText) {
@@ -416,9 +418,9 @@ export function materializeVisibleStreamState(
       continue;
     }
     const interval =
-      replacementCandidates === nextMessages
+      replacementCandidates === nextMessages && !part.afterUserSendId
         ? replacementInterval
-        : streamCausalInterval(nextMessages, part);
+        : streamCausalInterval(nextMessages, part, part.afterUserSendId);
     const toolIndex =
       part.source === "segment" && part.toolCallId
         ? currentToolStreamMessageIndex(

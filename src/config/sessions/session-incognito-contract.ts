@@ -64,6 +64,10 @@ export type IncognitoSessionOperations = {
     input: Pick<SessionEntryListScope, "projection">;
     output: { entries: SessionEntrySummary[]; facts: IncognitoSessionFacts[] };
   };
+  "session.entry.readById": {
+    input: { sessionId: string; orderBy?: "updatedAt" };
+    output: { selected: SessionEntrySummary | undefined; facts: IncognitoSessionFacts[] };
+  };
   "session.entry.read": { input: IncognitoSessionRead; output: IncognitoSessionSnapshot };
   "session.entry.create": { input: IncognitoSessionCreate; output: IncognitoSessionSnapshot };
 };

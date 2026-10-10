@@ -14,6 +14,7 @@ describe("embedding availability probes", () => {
   });
 
   async function createProbe(providerId = "openai", inlineQueryTimeoutMs?: number) {
+    const model = providerId === "local" ? "embeddinggemma" : "mock-embed";
     const entered = createDeferred<Parameters<EmbeddingProvider["embed"]>[1]>();
     const completion = createDeferred<number[]>();
     const embed = vi.fn<EmbeddingProvider["embed"]>(async (_input, options) => {
@@ -25,7 +26,7 @@ describe("embedding availability probes", () => {
       requestedProvider: providerId,
       provider: {
         id: providerId,
-        model: "mock-embed",
+        model,
         embed,
         embedBatch: (inputs, options) => Promise.all(inputs.map((input) => embed(input, options))),
         close,
@@ -33,7 +34,7 @@ describe("embedding availability probes", () => {
       runtime: { id: providerId, inlineQueryTimeoutMs },
     });
     const manager = await fixture.getFreshManager(
-      fixture.createConfig({ provider: providerId }),
+      fixture.createConfig({ provider: providerId, model }),
       "status",
     );
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -68,6 +69,9 @@ describe("embedding availability probes", () => {
           cached: true,
         });
         expect(embed).toHaveBeenCalledTimes(1);
+        expect(embed.mock.calls[0]?.[0]).toBe(
+          providerId === "local" ? "task: search result | query: ping" : "ping",
+        );
       } finally {
         completion.resolve([1, 0]);
         await probe;

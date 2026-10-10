@@ -148,7 +148,8 @@
   font: 400 var(--control-ui-text-sm) / 1.5 var(--mono);
 }
 
-.settings-section {
+.settings-section,
+.config-tier-groups {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -298,13 +299,6 @@
 
 /* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
-
-.config-tier-groups {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
 
 .config-advanced-disclosure {
   margin-top: var(--space-5);

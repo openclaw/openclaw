@@ -113,19 +113,19 @@ describe("group runtime loading", () => {
 
   it("builds direct chat context without silent-token guidance", () => {
     expect(
-      groups.buildDirectChatContext({
+      groups.buildSourceConversationContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).toBe(
       "You are in a Telegram direct conversation. Your replies are automatically sent to this conversation unless the current-turn context says final replies stay private.",
     );
     expect(
-      groups.buildDirectChatContext({
+      groups.buildSourceConversationContext({
         sessionCtx: { ChatType: "direct", Provider: "telegram" },
       }),
     ).not.toContain("NO_REPLY");
 
-    const toolOnlyContext = groups.buildDirectChatContext({
+    const toolOnlyContext = groups.buildSourceConversationContext({
       sessionCtx: { ChatType: "direct", Provider: "telegram" },
       sourceReplyDeliveryMode: "message_tool_only",
     });

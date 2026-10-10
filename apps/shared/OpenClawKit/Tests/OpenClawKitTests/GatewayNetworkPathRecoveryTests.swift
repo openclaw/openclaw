@@ -128,6 +128,10 @@ extension GatewayChannelActor {
         self.testConnectRunFinishedHandler = { connectFinished.record(()) }
     }
 
+    fileprivate func seedPathRecoveryReconnectBackoff(milliseconds: Double) {
+        self.backoffMs = milliseconds
+    }
+
     fileprivate func seedPathRecoveryConnectBackoff(_ sleep: PathRecoverySleep?) {
         for _ in 0..<7 {
             self.connectFailureBackoff.record(
@@ -289,7 +293,7 @@ struct GatewayNetworkPathRecoveryTests {
                 try await fixture.channel.connect()
                 await fixture.emit(PathRecoveryFixture.offline)
                 let oldSocket = try #require(fixture.session.latestTask())
-                await fixture.channel._test_setReconnectBackoffMs(30000)
+                await fixture.channel.seedPathRecoveryReconnectBackoff(milliseconds: 30000)
                 await fixture.channel.seedPathRecoveryConnectBackoff(nil)
                 oldSocket.emitReceiveFailure()
                 await reconnect.started.wait(forCount: 1)
@@ -298,7 +302,7 @@ struct GatewayNetworkPathRecoveryTests {
                 await fixture.settleNext(PathRecoveryFixture.wifi)
                 await upgrade.started.wait(forCount: 1)
                 #expect(reconnect.cancelled.values.count == 1)
-                #expect(await fixture.channel._test_reconnectBackoffMs() == 500)
+                #expect(await fixture.channel.backoffMs == 500)
                 #expect(await fixture.channel.hasPathRecoveryConnectBackoff() == false)
 
                 upgrade.release()

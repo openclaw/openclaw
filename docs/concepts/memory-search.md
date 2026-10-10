@@ -41,6 +41,14 @@ Choose llama.cpp once in interactive setup. OpenClaw installs a verified
 `llama-server`, downloads the embedding GGUF, and writes its managed service
 configuration.
 
+EmbeddingGemma uses its trained task prefixes automatically for queries and
+indexed documents, including through Ollama, LM Studio, and OpenAI-compatible
+providers. After upgrading, an existing unprefixed EmbeddingGemma index rebuilds
+once on the next search or sync. OpenClaw generates fresh embeddings rather than
+reusing unprefixed cache entries. Keyword search remains available if the rebuild
+cannot finish immediately; no manual `memory index --force` is needed. Remove any
+proxy workaround that adds these prefixes so they are not applied twice.
+
 Some OpenAI-compatible embedding endpoints require asymmetric `input_type`
 labels, such as `"query"` for searches and `"document"`/`"passage"` for indexed
 chunks. Set these with `queryInputType` and `documentInputType`; see
@@ -82,12 +90,15 @@ flowchart LR
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
 - **BM25 keyword search** matches exact terms (IDs, error strings, config
-  keys).
+  keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
+  rebuilding existing indexes, including notes that mix those forms across words.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,
   while snippets and body keyword scores still come from note content.
 
-If only one path is available, the other runs alone.
+If only one path is available, the other runs alone. Keyword boosts stay bounded
+without clipping distinct lexical scores to the same maximum, so relevance
+continues to influence ranking when dated notes decay.
 
 The builtin engine then applies deterministic ranking:
 
