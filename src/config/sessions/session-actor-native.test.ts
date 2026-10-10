@@ -366,7 +366,7 @@ it("retains recorder custody when the native actor's committed publication fails
       ).rejects.toThrow(failure.message);
       expect(publish).toHaveBeenCalledOnce();
       expect(recorder.isPendingInputConsumed?.()).toBe(true);
-      expect(recorder.getPersistedMessage()).toMatchObject({ content: "accepted input" });
+      expect(recorder.getPersistedMessage?.()).toMatchObject({ content: "accepted input" });
       const admission = expectDefined(recorder.getAdmissionReceipt(), "committed admission");
       const { persistFallback } = recorder;
       await expect(persistFallback()).resolves.toMatchObject({

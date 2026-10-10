@@ -55,7 +55,7 @@ it("retains actor-bound recorder custody through a durable worker publication fa
       bindUserTurnInputActor(recorder, { phase: "adoptRun", acquire: async () => input });
       const published = vi.fn<Parameters<typeof withSessionTranscriptSourcePublication>[1]>(() => {
         expect(recorder.hasPersisted()).toBe(true);
-        expect(recorder.getPersistedMessage()).toEqual(message);
+        expect(recorder.getPersistedMessage?.()).toEqual(message);
         expect(recorder.getAdmissionReceipt()).toMatchObject({ sessionId: f.scope.sessionId });
         throw failure;
       });
