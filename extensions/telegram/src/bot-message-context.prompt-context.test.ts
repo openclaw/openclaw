@@ -201,6 +201,65 @@ describe("Telegram prompt composition", () => {
     expect(JSON.stringify(context)).not.toContain("older unrelated DM");
   });
 
+  it("tags projected window messages with their transcript id", async () => {
+    const telegramCfg: TelegramAccountConfig = { dmPolicy: "open", dmHistoryLimit: 0 };
+    const { runtime, cfg } = createRuntime(telegramCfg);
+    const chat = { id: 1234, type: "private", first_name: "Pat" } as const;
+    const current = message(12, "continue");
+    const context = await runtime.buildPromptContextForMessage(
+      {
+        me: { id: 7, username: "bot", first_name: "Bot" },
+        message: current,
+        getFile: async () => ({ file_id: "unused", file_unique_id: "unused" }),
+      },
+      current,
+      [
+        {
+          messageId: "11",
+          sender: "Bot",
+          senderId: "7",
+          timestamp: 1_700_000_011_000,
+          body: "projected reply",
+          promptContextProjectionMarker: {
+            kind: "valid",
+            projection: { transcriptMessageId: "assistant-1", partIndex: 0, finalPart: true },
+          },
+          sourceMessage: {
+            chat,
+            message_id: 11,
+            date: 1_700_000_011,
+            text: "projected reply",
+            from: { id: 7, is_bot: true, first_name: "Bot" },
+          },
+        },
+        {
+          messageId: "10",
+          sender: "Pat",
+          senderId: "1234",
+          timestamp: 1_700_000_010_000,
+          body: "plain cached user message",
+          sourceMessage: {
+            chat,
+            message_id: 10,
+            date: 1_700_000_010,
+            text: "plain cached user message",
+            from: sender,
+          },
+        },
+      ] as never,
+      cfg,
+      telegramCfg,
+    );
+    const messages = (
+      context[0]?.payload as { messages?: Array<Record<string, unknown>> } | undefined
+    )?.messages;
+    expect(messages).toEqual([
+      expect.objectContaining({ message_id: "10" }),
+      expect.objectContaining({ message_id: "11", session_transcript_id: "assistant-1" }),
+    ]);
+    expect(messages?.[0]).not.toHaveProperty("session_transcript_id");
+  });
+
   it("bounds cached DM context with a positive per-sender override", async () => {
     const telegramCfg: TelegramAccountConfig = {
       dmPolicy: "open",

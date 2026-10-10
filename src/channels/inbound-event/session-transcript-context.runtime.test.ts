@@ -3,8 +3,26 @@ import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
+import { buildChannelSourceTurnId } from "../../auto-reply/reply/source-turn-id.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
+import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  rewindSessionToMessage,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
+import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { runPreparedChannelTurn } from "../turn/execution.js";
 import { mergeSessionTranscriptContext } from "./session-transcript-context.runtime.js";
 
@@ -36,6 +54,14 @@ describe("session transcript inbound context", () => {
 
   beforeEach(() => {
     readRecent.mockReset();
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
   });
 
   it("restores Slack assistant context when the live window is empty after restart", async () => {
@@ -289,6 +315,127 @@ describe("session transcript inbound context", () => {
     expect(prompt).toContain("Graph reply");
     expect(prompt).toContain("canonical reply");
     expect(prompt).toContain("pending backlog");
+  });
+
+  it("drops cached window rows whose transcript identities a rewind cut", async () => {
+    const stateDir = tempDirs.make("openclaw-inactive-window-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionKey = "agent:main:telegram:dm:chat-1";
+    const storePath = resolveDefaultSessionStorePath("main");
+    const scope = { agentId: "main", env, sessionId: "window-source", sessionKey, storePath };
+    const ctx = context({
+      From: "telegram:chat-1",
+      To: "chat-1",
+      OriginatingTo: "chat-1",
+      OriginatingChannel: "telegram",
+      Provider: "telegram",
+      AccountId: "acct-1",
+      ChatType: "direct",
+      SessionKey: sessionKey,
+      SessionTranscriptContext: { chatWindow: true, historyLimit: 5 },
+    });
+    const identity = conversationIdentityFromMsgContext({ ctx });
+    expect(identity).toEqual(expect.objectContaining({ channel: "telegram", accountId: "acct-1" }));
+    const cutTransportId = buildChannelSourceTurnId({
+      provider: identity?.channel,
+      accountId: identity?.accountId,
+      conversationId: identity?.deliveryTarget,
+      messageId: "102",
+    });
+    expect(cutTransportId).toBeTruthy();
+    await upsertSessionEntryCore(scope, { sessionId: "window-source", updatedAt: 1_000 });
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      id: "window-source",
+      version: 3,
+      timestamp: "2026-07-18T00:00:00.000Z",
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "user-1",
+      parentId: null,
+      now: Date.parse("2026-07-18T00:00:01.000Z"),
+      message: { role: "user", content: "retained question" },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "assistant-1",
+      parentId: "user-1",
+      now: Date.parse("2026-07-18T00:00:02.000Z"),
+      message: { role: "assistant", content: "retained answer" },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "user-2",
+      parentId: "assistant-1",
+      now: Date.parse("2026-07-18T00:00:03.000Z"),
+      message: {
+        role: "user",
+        content: "discarded question",
+        idempotencyKey: cutTransportId,
+      },
+    });
+    await appendTranscriptMessage(scope, {
+      eventId: "assistant-2",
+      parentId: "user-2",
+      now: Date.parse("2026-07-18T00:00:04.000Z"),
+      message: { role: "assistant", content: "discarded answer" },
+    });
+    await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
+    const rewound = await rewindSessionToMessage({
+      agentId: "main",
+      env,
+      entryId: "user-2",
+      sessionKey,
+      storePath,
+    });
+    expect(rewound.status).toBe("created");
+    readRecent.mockResolvedValue([
+      { id: "user-1", role: "user", text: "retained question", timestamp: 1_000 },
+      { id: "assistant-1", role: "assistant", text: "retained answer", timestamp: 2_000 },
+    ]);
+    ctx.ChannelStructuredContext = [
+      {
+        label: "Conversation context",
+        source: "telegram",
+        type: "chat_window",
+        payload: {
+          messages: [
+            { message_id: "101", sender: "Pat", body: "retained question", timestamp_ms: 1_000 },
+            {
+              message_id: "102",
+              sender: "Pat",
+              body: "discarded question",
+              timestamp_ms: 3_000,
+              is_reply_target: true,
+            },
+            {
+              message_id: "103",
+              sender: "OpenClaw (you)",
+              body: "discarded answer",
+              timestamp_ms: 4_000,
+              session_transcript_id: "assistant-2",
+            },
+            { message_id: "104", sender: "Sam", body: "ambient noise", timestamp_ms: 3_500 },
+          ],
+        },
+      },
+    ];
+
+    await mergeSessionTranscriptContext({
+      agentId: "main",
+      ctx,
+      sessionKey,
+      storePath,
+    });
+
+    const messages = asRecord(ctx.ChannelStructuredContext?.[0]?.payload).messages as Array<
+      Record<string, unknown>
+    >;
+    expect(messages.map((message) => message.body)).toEqual([
+      "retained question",
+      "retained answer",
+      "ambient noise",
+    ]);
+    expect(JSON.stringify(messages)).not.toContain("discarded");
   });
 
   it("fails closed for an unscoped session key without a routed agent owner", async () => {
