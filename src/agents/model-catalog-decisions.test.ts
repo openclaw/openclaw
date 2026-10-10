@@ -840,10 +840,16 @@ it("projects exact native IDs and effort levels without expanding a restricted m
     contextWindow: 456_000,
     thinkingLevelMap: { high: "high" },
   };
+  const hostedOnly = { provider: "anthropic", id: "claude-hosted-only", name: "Hosted only" };
   const snapshot = {
-    entries: [native, donor, { provider: "claude-cli", id: "claude-stale", name: "Stale" }],
+    entries: [
+      native,
+      donor,
+      hostedOnly,
+      { provider: "claude-cli", id: "claude-stale", name: "Stale" },
+    ],
     routeVariants: [],
-    staticEntries: [donor],
+    staticEntries: [donor, hostedOnly],
     providerOutcomes: [
       {
         provider: "claude-cli",
@@ -858,9 +864,12 @@ it("projects exact native IDs and effort levels without expanding a restricted m
     contextWindow: 456_000,
     thinkingLevelMap: native.thinkingLevelMap,
   });
+  expect(projected.entries).toHaveLength(1);
+  expect(projected.entries.every((row) => row.provider === "anthropic")).toBe(true);
+  expect(projected.staticEntries).toEqual([]);
   expect(projected.entries.some((row) => row.id === "claude-stale")).toBe(false);
   expect(projectClaudeCliNativeCatalog(snapshot, false).entries).toContain(donor);
   expect(
     projectClaudeCliNativeCatalog({ ...snapshot, providerOutcomes: [] }, true).entries,
-  ).toEqual([donor]);
+  ).toEqual([donor, hostedOnly]);
 });

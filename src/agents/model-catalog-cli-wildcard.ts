@@ -23,6 +23,7 @@ export function projectClaudeCliNativeCatalog(
   const listing = snapshot.providerOutcomes?.find(
     (outcome) => outcome.provider === CLAUDE_CLI_RUNTIME_ID && outcome.status === "ready",
   );
+  const nativeOnly = cliOnly && listing !== undefined;
   const listed = new Set(listing?.listedModelIds ?? []);
   const nativeRows = snapshot.entries.filter(
     (entry) => entry.provider === CLAUDE_CLI_RUNTIME_ID && listed.has(entry.id),
@@ -41,19 +42,20 @@ export function projectClaudeCliNativeCatalog(
     reasoning: entry.reasoning,
     thinkingLevelMap: entry.thinkingLevelMap,
   }));
-  const canonical = cliOnly
+  const canonical = nativeOnly
     ? enrichedNativeRows.map((entry) => ({ ...entry, provider: "anthropic" }))
     : [];
   const replaced = new Set(canonical.map((entry) => entry.id));
   const keep = (entry: ModelCatalogEntry) =>
     entry.provider !== CLAUDE_CLI_RUNTIME_ID &&
-    !(entry.provider === "anthropic" && replaced.has(entry.id));
+    !(entry.provider === "anthropic" && (nativeOnly || replaced.has(entry.id)));
   return {
     ...snapshot,
-    entries: [...snapshot.entries.filter(keep), ...enrichedNativeRows, ...canonical],
+    entries: [...snapshot.entries.filter(keep), ...(nativeOnly ? canonical : enrichedNativeRows)],
     routeVariants: [...snapshot.routeVariants.filter(keep), ...enrichedNativeRows, ...canonical],
     staticEntries: snapshot.staticEntries?.filter(
-      (entry) => entry.provider !== CLAUDE_CLI_RUNTIME_ID,
+      (entry) =>
+        entry.provider !== CLAUDE_CLI_RUNTIME_ID && !(nativeOnly && entry.provider === "anthropic"),
     ),
   };
 }
