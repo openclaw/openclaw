@@ -581,6 +581,7 @@ export class OpenClawCanvasWidgetView extends OpenClawLightDomContentsElement {
             : nothing
         }${this.runtimeError ? html`<div class="board-widget__notice" role="status">${t("board.widget.runtimeError", { message: this.runtimeError })}</div>` : nothing}<iframe
           class="chat-tool-card__preview-frame"
+          allow="fullscreen"
           title=${this.title}
           src=${src ?? nothing}
           srcdoc=${this.allowScripts ? nothing : this.view.html}

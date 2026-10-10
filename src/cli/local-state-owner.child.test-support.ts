@@ -68,16 +68,30 @@ try {
     let worktreeSql = 0;
     let missingCustody = 0;
     const ownerPids = new Set<number>();
-    const observe = (sql: string) => {
-      if (!/\bworktrees?\b|\bworktree_/iu.test(sql)) {
+    const ownershipWrites: Array<{ pid?: number; role?: string }> = [];
+    const observe = (sql: string, executing = true) => {
+      const worktree = /\bworktrees?\b|\bworktree_/iu.test(sql);
+      const ownershipWrite =
+        executing && /\binsert\s+into\b/iu.test(sql) && /\bconfig_machine_state\b/iu.test(sql);
+      if (!worktree && !ownershipWrite) {
         return;
       }
-      worktreeSql += 1;
+      worktreeSql += Number(worktree);
       try {
-        const owner: { pid: number } = JSON.parse(fs.readFileSync(ownerPath, "utf8"));
-        ownerPids.add(owner.pid);
+        const owner: { pid: number; role?: string } = JSON.parse(
+          fs.readFileSync(ownerPath, "utf8"),
+        );
+        if (worktree) {
+          ownerPids.add(owner.pid);
+        }
+        if (ownershipWrite) {
+          ownershipWrites.push({ pid: owner.pid, role: owner.role });
+        }
       } catch {
-        missingCustody += 1;
+        missingCustody += Number(worktree);
+        if (ownershipWrite) {
+          ownershipWrites.push({});
+        }
       }
     };
     for (const method of ["prepare", "exec"] as const) {
@@ -85,7 +99,7 @@ try {
         ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
         value: new Proxy(native.DatabaseSync.prototype[method], {
           apply(target, receiver, args: [string]) {
-            observe(args[0]);
+            observe(args[0], method === "exec");
             return Reflect.apply(target, receiver, args);
           },
         }),
@@ -110,6 +124,7 @@ try {
           worktreeSql,
           missingCustody,
           ownerPids: [...ownerPids],
+          ownershipWrites,
         }),
       );
     });
@@ -120,14 +135,30 @@ try {
         withConsoleLogsRoutedToStderrForJson(
           process.argv,
           async () => {
+            if (process.argv[2] === "ownership-claim-direct") {
+              const { claimOpenClawStateOwnership } =
+                await import("../state/openclaw-state-ownership-operations.js");
+              const ownership = claimOpenClawStateOwnership("supervisor");
+              process.stdout.write(`${JSON.stringify({ ownership })}\n`);
+              return;
+            }
             const program = new Command().name("openclaw").exitOverride();
             registerWorktreesCli(program);
             if (process.argv[2] === "sandbox") {
               const { registerSandboxCli } = await import("./sandbox-cli.js");
               registerSandboxCli(program);
+            } else if (process.argv[2] === "mcp") {
+              const { registerMcpCli } = await import("./mcp-cli.js");
+              registerMcpCli(program);
+            } else if (process.argv[2] === "models") {
+              const { registerModelsCli } = await import("./models-cli.js");
+              registerModelsCli(program);
             } else if (process.argv[2] === "exec-policy") {
               const { registerExecPolicyCli } = await import("./exec-policy-cli.js");
               registerExecPolicyCli(program);
+            } else if (process.argv[2] === "database") {
+              const { registerDatabaseCommand } = await import("./program/register.database.js");
+              registerDatabaseCommand(program);
             }
             await program.parseAsync(process.argv.slice(2), { from: "user" });
           },

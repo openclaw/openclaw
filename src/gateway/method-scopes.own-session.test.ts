@@ -44,6 +44,22 @@ afterEach(() => {
 });
 
 describe("method scope resolution and authorization", () => {
+  it("keeps private background mutations under ordinary write scope", () => {
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("users.background.get")).toEqual([
+      "operator.read",
+    ]);
+    for (const method of ["users.background.upload", "users.background.remove"]) {
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.write"]);
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: true,
+      });
+    }
+  });
+
   it("requires write scope for runtime-aware inventory", () => {
     const params = { runtimeId: "openclaw" };
     expect(

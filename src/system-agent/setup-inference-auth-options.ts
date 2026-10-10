@@ -193,20 +193,13 @@ export function listSetupInferenceEnableOptions(
         choice.assistantVisibility !== "detected-only" &&
         supportsSetupTextInference(choice.onboardingScopes),
     )
-    .map((choice) => {
-      const option: SetupInferenceAuthOption = Object.assign(
+    .map((choice): SetupInferenceAuthOption =>
+      Object.assign(
         projectChoicePresentation(choice, choice.choiceId),
-        {
-          kind: "install",
-          featured: choice.onboardingFeatured === true,
-        } as const,
-      );
-      const groupLabel = choice.groupLabel?.trim();
-      if (groupLabel) {
-        option.groupLabel = groupLabel;
-      }
-      return option;
-    })
+        { kind: "install" as const, featured: choice.onboardingFeatured === true },
+        choice.groupLabel?.trim() ? { groupLabel: choice.groupLabel.trim() } : {},
+      ),
+    )
     .toSorted(compareSetupInferenceOptions);
 }
 
@@ -225,13 +218,18 @@ export function listSetupInferencePrepareOptions(
   });
 }
 
-export function choiceMatchesCredential(
-  choice: ProviderAuthChoiceMetadata,
+export function findSetupCredentialChoice(
+  choices: readonly ProviderAuthChoiceMetadata[],
   credential: AuthProfileCredential,
-): boolean {
-  return (
-    normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
-    supportsSetupTextInference(choice.onboardingScopes) &&
-    (credential.type === "oauth" ? Boolean(choice.appGuidedAuth) : choice.appGuidedSecret === true)
+): ProviderAuthChoiceMetadata | undefined {
+  const saved = credential.setup;
+  return choices.find((choice) =>
+    saved?.authChoice
+      ? choice.choiceId === saved.authChoice && choice.pluginId === saved.pluginId
+      : normalizeProviderId(choice.providerId) === normalizeProviderId(credential.provider) &&
+        supportsSetupTextInference(choice.onboardingScopes) &&
+        (credential.type === "oauth"
+          ? Boolean(choice.appGuidedAuth)
+          : choice.appGuidedSecret === true),
   );
 }

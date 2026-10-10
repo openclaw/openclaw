@@ -1290,6 +1290,12 @@ button.chat-reply-attribution__target:disabled {
 .chat-group.user .chat-bubble {
   --chat-bubble-background: var(--accent-subtle);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
   border-color: transparent;
 }
 
@@ -1310,6 +1316,12 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
   color: var(--text-strong);
   box-shadow: none;
 }
@@ -1331,6 +1343,12 @@ button.chat-reply-attribution__target:disabled {
 .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
   --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
@@ -1608,6 +1626,12 @@ button.chat-reply-attribution__target:disabled {
   padding: 10px 14px;
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
 }
 
 :where(:root[data-theme-mode="light"])

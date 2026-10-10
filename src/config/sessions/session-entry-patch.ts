@@ -95,6 +95,7 @@ export async function patchSessionEntryInWorker(params: {
       if (candidate.entry !== null) {
         params.guard?.assertCurrent?.();
         source?.assertCurrent();
+        params.guard?.assertMutationAllowed?.();
         if (ensureIdentitySource) {
           if (!transactionFacts) {
             throw new Error("Entry ensure omitted its transaction authority facts");
@@ -104,6 +105,9 @@ export async function patchSessionEntryInWorker(params: {
       }
     },
     onTransactionFacts: (value) => {
+      if (isRecord(value) && value.kind === "session-entry-patch-validated") {
+        params.guard?.assertMutationAllowed?.();
+      }
       if (source && isRecord(value) && value.kind === "session-entry-patch-validated") {
         // SAFETY: The paired kernel supplies the source indices from this transaction.
         acceptSessionSourceValidation(source, value.sourceValidation as SessionSourceValidation);

@@ -301,3 +301,34 @@ the native operation.
 Use the plugin approval timeout independently of the agent-run timeout. Authenticated
 Control UI reviewers can inspect `detail`, while channel messages retain
 the bounded description. Oversized detail is rejected by the existing request schema.
+
+## Session persistence
+
+`agent-sessions` exposes awaited SessionManager mutations and versioned extension
+actions. `session-store-runtime` provides `prepareSessionEntryPatch` for host
+preparation followed by a conditional worker commit, and `applySessionEntryPatch`
+for already prepared data. `session-transcript-runtime` provides
+`withSessionTranscriptWrite` and duplicate-aware message preparation. Released
+synchronous and opaque transaction callback forms remain deprecated until the
+next Plugin SDK major. See [session entry migration](/plugins/sdk-migration/how-to-migrate#prepare-session-entry-changes)
+and [transcript migration](/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation).
+
+## Stateful CLI commands
+
+`openclaw/plugin-sdk/cli-state-owner` exports `runWithLocalStateOwner`. Supply the
+Gateway `method`, serializable `params`, a diagnostic `target`, and `runLocal`.
+Open databases and load mutation-capable runtime state only inside `runLocal`;
+its scope supplies the admitted config, environment, abort signal, and current
+owner assertion. Close plugin-owned stores before the callback returns.
+
+The helper routes to the local Gateway with its expected owner ID, or retains
+exclusive offline ownership through resource settlement. It never replays an
+uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
+that require an offline Gateway. Optional `scopes` preserves the command's
+existing authorization contract; the default is `operator.admin`.
+
+Gateway handlers can use `captureLocalStateMutationGuard` from
+`openclaw/plugin-sdk/gateway-runtime` to bind the expected owner and current
+request authority, then pass the returned assertion to their existing writer
+admission and privileged-effect boundaries. `isImplicitLocalGatewayTargetFromCli`
+from that same entrypoint preserves explicit and configured remote CLI targets.

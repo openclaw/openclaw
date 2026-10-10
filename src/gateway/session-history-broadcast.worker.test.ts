@@ -3,10 +3,10 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   replaceSessionEntry,
-  replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import * as projection from "../config/sessions/session-accessor.sqlite-active-projection.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";

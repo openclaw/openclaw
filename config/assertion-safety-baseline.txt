@@ -144,7 +144,7 @@ extensions/codex/src/app-server/sandbox-exec-server/http.ts	2
 extensions/codex/src/app-server/sandbox-exec-server/json-rpc.ts	3
 extensions/codex/src/app-server/scheduled-app-authority.ts	5
 extensions/codex/src/app-server/shared-client.ts	2
-extensions/codex/src/app-server/side-question.ts	2
+extensions/codex/src/app-server/side-question.ts	1
 extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
@@ -424,7 +424,6 @@ extensions/line/src/webhook-spool.ts	2
 extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
 extensions/lmstudio/src/models.ts	2
-extensions/lmstudio/src/stream.ts	2
 extensions/lobster/src/lobster-runner.ts	2
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
@@ -622,17 +621,16 @@ extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	4
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
 extensions/oc-path/src/oc-path/yaml/resolve.ts	4
-extensions/ollama/index.ts	6
+extensions/ollama/index.ts	5
 extensions/ollama/provider-discovery.ts	1
 extensions/ollama/src/config-compat.ts	1
 extensions/ollama/src/discovery-shared.ts	1
-extensions/ollama/src/embedding-provider.runtime.ts	1
 extensions/ollama/src/provider-base-url.ts	1
 extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
 extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
-extensions/ollama/src/stream.runtime.ts	6
+extensions/ollama/src/stream.runtime.ts	3
 extensions/onepassword/index.ts	2
 extensions/openai/embedding-batch.ts	2
 extensions/openai/index.ts	2
@@ -675,7 +673,7 @@ extensions/qa-lab/src/character-eval.ts	2
 extensions/qa-lab/src/ci-smoke-plan.ts	1
 extensions/qa-lab/src/cli.runtime.ts	8
 extensions/qa-lab/src/codex-plugin.fixture.ts	2
-extensions/qa-lab/src/crabline-transport.ts	5
+extensions/qa-lab/src/crabline-transport.ts	4
 extensions/qa-lab/src/cron-run-wait.ts	1
 extensions/qa-lab/src/discovery-eval.ts	1
 extensions/qa-lab/src/docker-up.runtime.ts	1
@@ -743,7 +741,7 @@ extensions/qa-lab/src/providers/mock-openai/server.ts	4
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1
-extensions/qa-lab/src/runtime-tool-fixture.ts	2
+extensions/qa-lab/src/runtime-tool-fixture.ts	1
 extensions/qa-lab/src/scenario-catalog.ts	1
 extensions/qa-lab/src/scenario-flow-runner.ts	5
 extensions/qa-lab/src/self-check-scenario.ts	2
@@ -780,7 +778,6 @@ extensions/reef/src/doctor-durable-state.ts	2
 extensions/reef/src/legacy-key-guard.ts	1
 extensions/reef/src/registration-state.ts	3
 extensions/reef/src/setup.ts	3
-extensions/reef/src/state.ts	3
 extensions/reef/src/transport.ts	3
 extensions/signal/src/accounts.ts	3
 extensions/signal/src/approval-handler.runtime.ts	2
@@ -1648,7 +1645,7 @@ src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	10
-src/cli/capability-cli/model.ts	4
+src/cli/capability-cli/model.ts	3
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	5
 src/cli/capability-cli/web.ts	5
@@ -2353,14 +2350,13 @@ src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	3
-src/plugin-sdk/provider-stream-shared.ts	9
+src/plugin-sdk/provider-stream-shared.ts	7
 src/plugin-sdk/provider-stream.ts	1
 src/plugin-sdk/provider-tools.ts	4
 src/plugin-sdk/qa-runtime.ts	5
 src/plugin-sdk/reply-payload.ts	2
 src/plugin-sdk/runtime-store.ts	2
 src/plugin-sdk/secret-ref-runtime.ts	2
-src/plugin-sdk/session-store-runtime.ts	3
 src/plugin-sdk/session-transcript-runtime.ts	6
 src/plugin-sdk/setup-credential.ts	1
 src/plugin-sdk/ssrf-policy.ts	1
@@ -2457,7 +2453,6 @@ src/plugins/registry-registrars-host.ts	1
 src/plugins/registry-registrars-operations.ts	2
 src/plugins/registry-registrars-tools-hooks.ts	1
 src/plugins/registry-runtime-binding.ts	1
-src/plugins/registry-runtime.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1
 src/plugins/runtime-state.ts	1
@@ -2570,7 +2565,6 @@ src/state/local-onboarding-state.ts	1
 src/state/openclaw-agent-db-permissions.ts	1
 src/state/openclaw-agent-db-registry-listing.ts	2
 src/state/openclaw-agent-db-session-migrations.ts	1
-src/state/openclaw-quarantine-store.ts	1
 src/state/openclaw-state-db-delivery-queue-backfill.ts	1
 src/state/openclaw-state-db-legacy-backfills.ts	4
 src/state/openclaw-state-db-schema-helpers.ts	1
@@ -2669,7 +2663,7 @@ ui/src/app/native-route-memory.ts	1
 ui/src/app/native-web-chrome.ts	2
 ui/src/app/overlays.ts	1
 ui/src/app/server-prefs-state.ts	10
-ui/src/app/server-prefs.ts	6
+ui/src/app/server-prefs.ts	5
 ui/src/app/settings.ts	2
 ui/src/app/stale-chunk-reload.ts	1
 ui/src/app/startup-settings.ts	1
@@ -2677,7 +2671,7 @@ ui/src/app/user-profile.ts	2
 ui/src/app/web-push.runtime.ts	1
 ui/src/components/agent-select.ts	2
 ui/src/components/app-sidebar-agent-menu.ts	2
-ui/src/components/app-sidebar-nav-menus.ts	2
+ui/src/components/app-sidebar-nav-menus.ts	1
 ui/src/components/app-sidebar-render.ts	4
 ui/src/components/app-sidebar-session-catalog-render.ts	4
 ui/src/components/app-sidebar-session-list-render.ts	1
@@ -2694,11 +2688,11 @@ ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
 ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
-ui/src/components/config-form-collection-draft.ts	5
+ui/src/components/config-form-collection-draft.ts	4
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form-structured-draft.ts	2
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/config-form.node.scalar.ts	4
+ui/src/components/config-form.node.scalar.ts	2
 ui/src/components/config-form.node.shared.ts	2
 ui/src/components/config-form.render.ts	1
 ui/src/components/confirm-dialog.ts	1
@@ -2853,7 +2847,7 @@ ui/src/pages/plugin/route.ts	1
 ui/src/pages/portals/portal-reachability.ts	1
 ui/src/pages/profile/identity-section.ts	2
 ui/src/pages/secrets/view.ts	3
-ui/src/pages/sessions/view.ts	7
+ui/src/pages/sessions/view.ts	6
 ui/src/pages/skills/view.ts	2
 ui/src/pages/usage/view-details.ts	4
 ui/src/pages/usage/view-overview.ts	2

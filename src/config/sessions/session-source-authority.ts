@@ -80,6 +80,11 @@ export type SessionSourceAssertion = (() => void) & {
   prepareSessionSourceScope?: () => Promise<PreparedSessionSourceAuthority | undefined>;
 };
 
+/** Sources supplied to worker mutation APIs must own asynchronous predicate preparation. */
+export type PreparedSessionSourceAssertion = SessionSourceAssertion & {
+  prepareSessionSource: () => Promise<PreparedSessionSourceAuthority>;
+};
+
 /** Public boolean callbacks stay callable; bundled owners also carry their prepared writer source. */
 export type SessionSourceCheck = (() => boolean) & { sessionSource?: SessionSourceAssertion };
 
@@ -247,7 +252,7 @@ export async function runWithSessionSourceScope<T>(
 export function createDynamicSessionSourceAssertion(
   select: () => SessionSourceAssertion | undefined,
   refuse: () => never,
-): SessionSourceAssertion {
+): PreparedSessionSourceAssertion {
   const prepareSelected = <T>(
     prepare: (assertion: SessionSourceAssertion | undefined) => Promise<T>,
   ) => {
@@ -261,7 +266,7 @@ export function createDynamicSessionSourceAssertion(
       }),
     );
   };
-  const assertion: SessionSourceAssertion = Object.assign(
+  const assertion: PreparedSessionSourceAssertion = Object.assign(
     () => {
       const scoped = sessionSourceScopes.getStore()?.get(assertion);
       return scoped ? scoped.assertCurrent() : select()?.();
@@ -285,7 +290,7 @@ export function composeSessionSourceAssertion(
     preparedCheck: (assertSources: () => void) => void;
     hasOpaqueCheck?: boolean;
   },
-): SessionSourceAssertion {
+): PreparedSessionSourceAssertion {
   function prepare(scoped: true): Promise<PreparedSessionSourceAuthority | undefined>;
   function prepare(scoped?: false): Promise<PreparedSessionSourceAuthority>;
   async function prepare(scoped = false): Promise<PreparedSessionSourceAuthority | undefined> {
@@ -360,7 +365,7 @@ export function composeSessionSourceAssertion(
       throw failure;
     }
   }
-  const assertion: SessionSourceAssertion = Object.assign(
+  const assertion: PreparedSessionSourceAssertion = Object.assign(
     () => {
       const scoped = sessionSourceScopes.getStore()?.get(assertion);
       return scoped ? scoped.assertCurrent() : check(() => sources.forEach((source) => source?.()));

@@ -176,7 +176,7 @@ export function requestSessionEntryCurrentAdmission(
     };
     requestAdmission({ ...request, facts });
     assertSessionEntryCurrentNativeSource(source, database);
-    // A foreign commit invalidates cached facts, not necessarily this session's ownership.
+    // A writer receipt invalidates cached facts, not necessarily this session's ownership.
     if (
       !isDeepStrictEqual(
         entry,

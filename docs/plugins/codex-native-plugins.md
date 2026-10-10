@@ -24,8 +24,9 @@ working.
 - `plugins.entries.codex.enabled` is `true`.
 - `plugins.entries.codex.config.codexPlugins.enabled` is `true`.
 - Codex app-server reports `0.149.0` or newer. The official plugin ships
-  `@openai/codex` `0.160.0`; newer custom, remote, and macOS desktop-owned
-  binaries continue with a compatibility warning and normal runtime validation.
+  `@openai/codex` `0.160.0` and may select a newer installed Codex; newer
+  custom, remote, and macOS desktop-owned binaries continue with a
+  compatibility warning and normal runtime validation.
 - The target Codex app-server can see the expected marketplace, plugin, and
   app inventory.
 - Migration supports only `openai-curated` plugins that it observed as
