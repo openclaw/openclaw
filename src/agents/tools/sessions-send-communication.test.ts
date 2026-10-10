@@ -3,17 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimeConfig from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { claimSessionCommunicationInput } from "../../gateway/in-process-session-communication.js";
 import {
   communicationEntryBinding,
   type CommunicationEndpoint,
 } from "../../sessions/communication-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { runAgentStep } from "./agent-step.js";
 import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
 import { prepareSessionsSendCommunication } from "./sessions-send-communication.js";
-import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 const state = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
   rows: new Map<string, CommunicationEndpoint>(),
@@ -22,19 +19,23 @@ const state = vi.hoisted(() => ({
   task: undefined as unknown,
   caller: { agentId: "main", sessionKey: "agent:main:source" },
 }));
-vi.mock("./gateway-caller-context.js", () => ({
+vi.mock("./gateway-caller-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: () => state.caller,
   captureGatewayToolCallerAssertion: () => state.assertCaller,
   resolveGatewayToolOperatorSelection: () => ({ assertCurrent: state.assertCaller }),
 }));
-vi.mock("./in-process-gateway.js", () => ({
+vi.mock("./in-process-gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./in-process-gateway.js")>()),
   callAgentToolGatewayRequest: vi.fn(),
   getInProcessGatewayToolContext: () => ({ getRuntimeConfig: () => state.config }),
 }));
-vi.mock("../../gateway/session-communication-approval.js", () => ({
+vi.mock("../../gateway/session-communication-approval.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/session-communication-approval.js")>()),
   requestSessionCommunicationApproval: (...args: unknown[]) => state.approve(...args),
 }));
-vi.mock("../../gateway/session-utils-store-worker.js", () => ({
+vi.mock("../../gateway/session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/session-utils-store-worker.js")>()),
   resolveGatewaySessionStoreTargetInWorker: async ({ key }: { key: string }) => {
     const row = state.rows.get(key);
     if (!row) {
@@ -48,15 +49,13 @@ vi.mock("../../gateway/session-utils-store-worker.js", () => ({
     };
   },
 }));
-vi.mock("../embedded-agent-runner/run-state.js", () => ({
+vi.mock("../embedded-agent-runner/run-state.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../embedded-agent-runner/run-state.js")>()),
   registerActiveEmbeddedRunHumanInputWait: vi.fn(),
 }));
-vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
+vi.mock("../subagents/registry/subagent-registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../subagents/registry/subagent-registry-read.js")>()),
   getLatestLiveSubagentRunByChildSessionKey: () => state.task,
-}));
-vi.mock("./agent-step.js", () => ({ runAgentStep: vi.fn() }));
-vi.mock("./sessions-announce-target.js", () => ({
-  resolveAnnounceTarget: vi.fn(async () => undefined),
 }));
 function endpoint(name: string, entry: Partial<SessionEntry> = {}): CommunicationEndpoint {
   const row = {
@@ -80,7 +79,6 @@ beforeEach(() => {
   state.assertCaller.mockReset();
   state.task = undefined;
   vi.spyOn(runtimeConfig, "getRuntimeConfig").mockImplementation(() => state.config);
-  vi.mocked(runAgentStep).mockReset().mockResolvedValue("next peer message");
 });
 afterEach(() => vi.restoreAllMocks());
 describe("sessions_send communication boundary", () => {
@@ -96,33 +94,23 @@ describe("sessions_send communication boundary", () => {
       expect(input.callGateway).not.toHaveBeenCalled();
     },
   );
-  it("default always and accepted input custody survive the sender receipt", async () => {
+  it("default always fences the final host admission without taking completion custody", async () => {
     const input = operation();
-    let retained: ReturnType<typeof claimSessionCommunicationInput>;
     input.callGateway.mockImplementation(async (request) => {
-      retained = claimSessionCommunicationInput(request.params!);
-      return undefined;
+      request.sessionMutationCommitGuard?.();
+      return { status: "accepted", runId: "accepted-run" };
     });
     const gate = await prepareSessionsSendCommunication(input);
-    await gate.callGateway({
-      method: "agent",
-      params: {
-        agentId: input.target.agentId,
-        sessionKey: input.target.sessionKey,
-        message: input.message,
-      },
-    });
+    await expect(
+      gate.callGateway({
+        method: "agent",
+        params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
+      }),
+    ).resolves.toEqual({ status: "accepted", runId: "accepted-run" });
     expect(state.approve).not.toHaveBeenCalled();
     gate.close();
-    expect(() => retained?.assertCurrent()).not.toThrow();
-    sessionChanges.emit({
-      sessionKey: input.target.sessionKey,
-      agentId: "main",
-      storePath: "/sessions",
-      facts: { kind: "removed" },
-    });
-    expect(() => retained?.assertCurrent()).toThrow("changed");
-    retained?.release();
+    // Completion now belongs to the Gateway. Closing this gate creates no cancellation work.
+    expect(input.callGateway).toHaveBeenCalledOnce();
   });
   it("asks sender then recipient for exact content and waits for both human decisions", async () => {
     const input = operation(
@@ -266,29 +254,40 @@ describe("sessions_send communication boundary", () => {
     gate.close();
   });
 
-  it("host-bound approval cannot be copied or changed into a different message", async () => {
+  it("rejects an adapter changing the exact request before the host commit", async () => {
     const input = operation();
     input.callGateway.mockImplementation(async (request) => {
       if (!isRecord(request.params)) {
         throw new Error("missing request");
       }
-      const params = request.params;
-      expect(claimSessionCommunicationInput({ ...params })).toBeUndefined();
-      params.message = "different message";
-      expect(() => claimSessionCommunicationInput(params)).toThrow("input changed");
+      request.params.message = "different message";
+      request.sessionMutationCommitGuard?.();
       return undefined;
     });
     const gate = await prepareSessionsSendCommunication(input);
-    await gate.callGateway({
-      method: "agent",
-      params: {
-        agentId: input.target.agentId,
-        sessionKey: input.target.sessionKey,
-        message: input.message,
-      },
-    });
+    await expect(
+      gate.callGateway({
+        method: "agent",
+        params: { agentId: "main", sessionKey: input.target.sessionKey, message: input.message },
+      }),
+    ).rejects.toThrow("input changed");
     gate.close();
   });
+  it("provenance strings cannot turn an optional peer send into task-owned work", async () => {
+    const input = operation(endpoint("source", { communication: { send: "never" } }));
+    await expect(
+      prepareSessionsSendCommunication({
+        ...input,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+          sourceRole: "subagent",
+        },
+      }),
+    ).rejects.toThrow("disabled");
+    expect(input.callGateway).not.toHaveBeenCalled();
+  });
+
   it("same-session source replies are not peer communication", async () => {
     const source = endpoint("source", { communication: { send: "never", receive: "never" } });
     const gate = await prepareSessionsSendCommunication(operation(source, source));
@@ -351,39 +350,8 @@ describe("sessions_send communication boundary", () => {
     gate.close();
   });
 
-  it("automatic peer rounds preserve owed replies but obey current visibility and retained sandbox ceilings", async () => {
-    const source = endpoint("source");
-    const target = endpoint("target");
-    const run = (requesterSandboxed?: boolean) =>
-      runSessionsSendA2AFlow({
-        targetAgentId: "main",
-        targetSessionKey: target.sessionKey,
-        displayKey: target.sessionKey,
-        requesterAgentId: "main",
-        requesterSessionKey: source.sessionKey,
-        requesterChannel: "discord",
-        requesterSandboxed,
-        message: "original",
-        roundOneReply: "owed result",
-        announceTimeoutMs: 100,
-        maxPingPongTurns: 2,
-        callGateway: callAgentToolGatewayRequest,
-      });
-    vi.mocked(runAgentStep).mockImplementationOnce(async () => {
-      state.config = { tools: { sessions: { visibility: "self" } } };
-      return "new peer proposal";
-    });
-    await run();
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    state.config = {};
-    vi.mocked(runAgentStep).mockClear();
-    await run(true);
-    expect(runAgentStep).toHaveBeenCalledOnce();
-    expect(state.approve).not.toHaveBeenCalled();
-  });
-
   it.each(["message", "agentId", "source"] as const)(
-    "rejects changed %s before minting an input capability",
+    "rejects changed %s before host admission",
     async (field) => {
       const input = operation();
       const gate = await prepareSessionsSendCommunication(input);

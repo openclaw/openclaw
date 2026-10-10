@@ -2,8 +2,8 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
+import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { onTestFinished, vi } from "vitest";
-import type { WebSocket } from "ws";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord, HangupCallInput } from "../types.js";

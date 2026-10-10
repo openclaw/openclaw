@@ -14,7 +14,7 @@ function envRef(id: string) {
 }
 
 const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
-  list: [{ id: "main", default: true }],
+  entries: { main: {} },
 };
 const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 

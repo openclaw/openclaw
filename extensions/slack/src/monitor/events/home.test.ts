@@ -1,12 +1,13 @@
 // Slack tests cover home plugin behavior.
 import { WebAPIPlatformError, WebClient } from "@slack/web-api";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "../context.js";
-import type { SlackSuggestedPromptsOutcome } from "../suggested-prompts.js";
-
-let registerSlackHomeEvents: typeof import("./home.js").registerSlackHomeEvents;
-let updateSlackSuggestedPrompts: typeof import("../suggested-prompts.js").updateSlackSuggestedPrompts;
-let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
+import {
+  updateSlackSuggestedPrompts,
+  type SlackSuggestedPromptsOutcome,
+} from "../suggested-prompts.js";
+import { registerSlackHomeEvents } from "./home.js";
+import { createSlackSystemEventTestHarness } from "./system-event-test-harness.js";
 
 type HomeHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
@@ -53,12 +54,6 @@ function createAgentHomeContext(outcome: SlackSuggestedPromptsOutcome = "accepte
 }
 
 describe("registerSlackHomeEvents", () => {
-  beforeAll(async () => {
-    ({ registerSlackHomeEvents } = await import("./home.js"));
-    ({ updateSlackSuggestedPrompts } = await import("../suggested-prompts.js"));
-    ({ createSlackSystemEventTestHarness } = await import("./system-event-test-harness.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
   });

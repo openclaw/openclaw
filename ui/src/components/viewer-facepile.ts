@@ -30,15 +30,14 @@ import {
 } from "./person-activity-link.ts";
 import "./tooltip.ts";
 
+export const EMPTY_VIEWER_IDENTITIES: readonly SessionParticipantIdentity[] = Object.freeze([]);
+
 function renderViewerAvatar(view: IdentityAvatarView) {
   const fallback = html`<span
     class=${view.imageUrl ? "viewer-avatar__fallback" : nothing}
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
     ><span class="viewer-avatar__initials">${view.fallback.initials}</span></span
   >`;
-  if (!view.imageUrl) {
-    return fallback;
-  }
   return html`${renderIdentityAvatarImage({ view, fallbackSelector: ".viewer-avatar" })}${fallback}`;
 }
 
@@ -134,7 +133,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) selfUser?: AuthenticatedUser | null;
   @property({ attribute: false }) selfInstanceId?: string;
   @property({ attribute: false }) sessionKey?: string;
-  @property({ attribute: false }) excludeIdentities: readonly SessionParticipantIdentity[] = [];
+  @property({ attribute: false }) excludeIdentities = EMPTY_VIEWER_IDENTITIES;
   @property({ attribute: false }) staticParticipants?: readonly SessionParticipant[];
   /** Prepared live presence for the collapsed Online section. */
   @property({ attribute: false }) staticUsers?: readonly PresenceViewer[];

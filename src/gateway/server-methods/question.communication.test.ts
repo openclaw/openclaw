@@ -134,6 +134,46 @@ it("retains creator/admin rights without treating assigned responsibility as aut
   });
 });
 
+it("rejects an already displayed decision after the recipient incarnation changes", async () => {
+  await fixture(async ({ endpoint, cfg, creator, admin, ask }) => {
+    const pending = ask();
+    const denied = expect(pending).rejects.toThrow("not authorized");
+    const question = manager.list()[0]!;
+    await upsertSessionEntryCore(
+      { agentId: endpoint.agentId, sessionKey: endpoint.sessionKey, storePath: endpoint.storePath },
+      {
+        ...endpoint.entry!,
+        sessionId: "replacement-recipient-session",
+        lifecycleRevision: "replacement-recipient-lifecycle",
+      },
+    );
+    expect(
+      (
+        await callQuestionRpc(
+          "question.resolve",
+          {
+            id: question.id,
+            answers: { answers: { communication: ["Allow once"] } },
+          },
+          { cfg, client: creator },
+        )
+      )[0],
+    ).toBe(false);
+    expect(manager.get(question.id)?.status).toBe("pending");
+    expect(
+      (
+        await callQuestionRpc(
+          "question.resolve",
+          { id: question.id, answers: { answers: { communication: ["Allow once"] } } },
+          { cfg, client: admin },
+        )
+      )[0],
+    ).toBe(false);
+    manager.cancel(question.id, "recipient-replaced");
+    await denied;
+  });
+});
+
 it("does not leak bound questions through broad question list/get scopes", async () => {
   await fixture(async ({ cfg, peer, admin, ask }) => {
     const pending = ask();

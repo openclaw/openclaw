@@ -60,7 +60,6 @@
   transform: rotate(-90deg);
 }
 
-/* ── Collapsed tool row ── */
 .chat-tool-msg-collapse {
   width: 100%;
   min-width: 0;
@@ -133,7 +132,8 @@
   height: 14px;
 }
 
-.chat-tool-row--file {
+.chat-tool-row--file,
+.chat-tool-row--subagent {
   position: relative;
 }
 
@@ -145,12 +145,14 @@
   cursor: var(--cursor-action);
 }
 
-.chat-tool-row--file > :not(.chat-tool-row__toggle) {
+.chat-tool-row--file > :not(.chat-tool-row__toggle),
+.chat-tool-row--subagent > :not(.chat-tool-row__toggle) {
   position: relative;
   pointer-events: none;
 }
 
-.chat-tool-row--file .chat-tool-row__file-link {
+.chat-tool-row--file .chat-tool-row__file-link,
+.chat-tool-row--subagent .chat-tool-row__subagent-link {
   pointer-events: auto;
 }
 
@@ -173,11 +175,40 @@
   text-decoration-color: currentColor;
 }
 
+/* A subagent's name reads as the row's title until it is pointed at. */
+.chat-tool-row__subagent-link {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: var(--cursor-action);
+}
+
+/* The state stays whole; a long name gives way instead. */
+.chat-tool-row__subagent-state {
+  flex: none;
+}
+
+.chat-tool-row__subagent-state--failed {
+  color: var(--danger);
+}
+
+.chat-tool-row__subagent-link:hover,
+.chat-tool-row__subagent-link:focus-visible {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .chat-inline-disclosure[aria-expanded="true"] .chat-tool-row__chevron {
   transform: rotate(90deg);
 }
 
-.chat-tool-row--file:has(.chat-tool-row__toggle[aria-expanded="true"]) .chat-tool-row__chevron {
+.chat-tool-row--file:has(.chat-tool-row__toggle[aria-expanded="true"]) .chat-tool-row__chevron,
+.chat-tool-row--subagent:has(.chat-tool-row__toggle[aria-expanded="true"]) .chat-tool-row__chevron {
   transform: rotate(90deg);
 }
 
@@ -186,7 +217,12 @@
   opacity: 1;
 }
 
-.chat-activity-group__body .chat-tool-row__chevron {
+/* A lone step is the disclosure itself, so only the rows beneath it hide their chevrons.
+   :where() keeps this below the reveal rules that follow, whatever their order. */
+.chat-activity-group:where(:not(.chat-activity-group--step))
+  > .chat-activity-group__body
+  .chat-tool-row__chevron,
+.chat-activity-group--step .chat-tool-children .chat-tool-row__chevron {
   opacity: 0;
 }
 
@@ -261,7 +297,6 @@
   color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
 }
 
-/* ── Kind-aware tool rows ── */
 .chat-tool-row__prompt {
   flex-shrink: 0;
 }
@@ -324,7 +359,6 @@
   }
 }
 
-/* ── Diffstat chips (+N -M) ── */
 .chat-diffstat {
   display: inline-flex;
   align-items: center;
@@ -349,7 +383,6 @@
   color: var(--destructive);
 }
 
-/* ── Inline diff ── */
 .chat-diff {
   margin-top: 6px;
   border-radius: var(--radius-sm);
@@ -434,7 +467,6 @@
   color: color-mix(in srgb, var(--text) 72%, var(--muted) 28%);
 }
 
-/* ── Terminal-style command block ── */
 .chat-tool-term {
   margin-top: 0;
   background: transparent;
@@ -503,7 +535,6 @@
   color: inherit;
 }
 
-/* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
   flex-direction: column;
@@ -535,7 +566,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Expanded tool row body ── */
 .chat-tool-msg-body {
   min-width: 0;
   max-width: 100%;
@@ -584,7 +614,6 @@
   overflow-wrap: anywhere;
 }
 
-/* ── Expanded tool detail ── */
 .chat-tools-inline {
   display: grid;
   gap: 2px;
@@ -833,7 +862,6 @@
   word-break: normal;
 }
 
-/* ── Canvas/document preview ── */
 .chat-tool-card__preview,
 .chat-tool-card__raw {
   margin-top: 8px;
@@ -1018,7 +1046,6 @@
   margin-inline: 12px;
 }
 
-/* ── Activity group (a turn's run of tool rows) ── */
 .chat-activity-group {
   width: 100%;
   min-width: 0;
@@ -1264,6 +1291,7 @@
     max-height: min(360px, 55vh);
   }
 }
+.chat-activity-group__outcome,
 .chat-tool-failure,
 .chat-tool-skipped {
   flex: none;

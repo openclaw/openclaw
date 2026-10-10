@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { AcpxRuntime } from "acpx/runtime";
 import { afterEach, beforeEach, vi } from "vitest";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTestPluginApi } from "../../plugin-sdk/plugin-test-api.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/plugin-test-runtime.js";
@@ -66,6 +67,7 @@ export async function registerNative(
     holdNewSession?: boolean;
     holdPromptReply?: boolean;
     allowAlwaysOnly?: boolean;
+    receiptEndpoint?: string;
   } = {},
 ) {
   const peer = fileURLToPath(
@@ -80,6 +82,13 @@ export async function registerNative(
   const peerDirectory = state.path("peer");
   await fs.mkdir(peerDirectory);
   await fs.mkdir(path.join(peerDirectory, "effects"));
+  const receiptModule = path.join(peerDirectory, "receipts.mjs");
+  if (peerOptions.receiptEndpoint) {
+    await fs.writeFile(
+      receiptModule,
+      `${fixtureReceiptClientSource(peerOptions.receiptEndpoint)}\nexport { sendReceipt };\n`,
+    );
+  }
   const module = await loadBundledPluginFacade<ServiceModule>({
     pluginId: "acpx",
     artifactBasename: "register.runtime.js",
@@ -109,6 +118,7 @@ export async function registerNative(
               ...(peerOptions.holdNewSession ? ["--hold-new-session"] : []),
               ...(peerOptions.holdPromptReply ? ["--hold-prompt-reply"] : []),
               ...(peerOptions.allowAlwaysOnly ? ["--allow-always-only"] : []),
+              ...(peerOptions.receiptEndpoint ? [`--receipt-module=${receiptModule}`] : []),
             ],
           },
         ]),

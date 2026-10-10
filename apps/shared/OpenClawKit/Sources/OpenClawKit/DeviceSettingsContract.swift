@@ -16,6 +16,7 @@ public enum DeviceSettingKey: String, CaseIterable, Sendable {
     case iconStyle = "app.iconStyle"
     case iconAnimationsEnabled = "app.iconAnimationsEnabled"
     case launchAtLogin = "app.launchAtLogin"
+    case keepGatewayRunning = "app.keepGatewayRunning"
     case quickChatEnabled = "app.quickChatEnabled"
     case debugPaneEnabled = "app.debugPaneEnabled"
     case keepAwakeEnabled = "capabilities.keepAwakeEnabled"
@@ -95,23 +96,15 @@ public enum DeviceSettingsAppearance: String, Encodable, Sendable {
     case system, light, dark
 }
 
-public enum DeviceSettingsLocationMode: String, CaseIterable, Encodable, Sendable {
-    case off, whileUsing, always
+public typealias DeviceSettingsLocationMode = OpenClawLocationMode
 
+extension OpenClawLocationMode {
     public init(_ mode: OpenClawLocationMode) {
-        switch mode {
-        case .off: self = .off
-        case .whileUsing: self = .whileUsing
-        case .always: self = .always
-        }
+        self = mode
     }
 
     public var nativeMode: OpenClawLocationMode {
-        switch self {
-        case .off: .off
-        case .whileUsing: .whileUsing
-        case .always: .always
-        }
+        self
     }
 }
 
@@ -256,6 +249,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
         public let iconAnimationsEnabled: Bool?
         public let launchAtLogin: Bool?
         public let launchAtLoginAvailable: Bool?
+        public let keepGatewayRunning: Bool?
+        public let keepGatewayRunningAvailable: Bool?
         public let quickChatEnabled: Bool?
         // The shortcut can be absent on iOS or explicitly unset on Mac.
         public let quickChatShortcut: String??
@@ -270,6 +265,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             iconAnimationsEnabled: Bool? = nil,
             launchAtLogin: Bool? = nil,
             launchAtLoginAvailable: Bool? = nil,
+            keepGatewayRunning: Bool? = nil,
+            keepGatewayRunningAvailable: Bool? = nil,
             quickChatEnabled: Bool? = nil,
             quickChatShortcut: String?? = nil,
             debugPaneEnabled: Bool? = nil,
@@ -282,6 +279,8 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
             self.iconAnimationsEnabled = iconAnimationsEnabled
             self.launchAtLogin = launchAtLogin
             self.launchAtLoginAvailable = launchAtLoginAvailable
+            self.keepGatewayRunning = keepGatewayRunning
+            self.keepGatewayRunningAvailable = keepGatewayRunningAvailable
             self.quickChatEnabled = quickChatEnabled
             self.quickChatShortcut = quickChatShortcut
             self.debugPaneEnabled = debugPaneEnabled
@@ -567,8 +566,7 @@ public struct DeviceSettingsSnapshot: Encodable, Sendable {
     }
 
     public func javaScript() throws -> String {
-        let data = try JSONEncoder().encode(self)
-        let json = String(bytes: data, encoding: .utf8)!
+        let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
         return "window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__ = \(json); " +
             "window.dispatchEvent(new CustomEvent('openclaw:native-device-settings-changed', " +
             "{detail: window.__OPENCLAW_NATIVE_DEVICE_SETTINGS__}));"

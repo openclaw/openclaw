@@ -5,7 +5,7 @@ import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
-import "./chat-sidebar.ts";
+import "./chat-detail-panel.ts";
 
 // The root jsdom ui shard also collects *.browser.test.ts files; CodeMirror
 // needs a real DOM, so this suite only runs in the checks-ui Chromium project.
@@ -92,26 +92,6 @@ afterEach(() => {
 });
 
 describe.runIf(browserMode)("chat file editor", () => {
-  it("keeps long lines inside Review and gives horizontal scroll to the editor", async () => {
-    const panel = await mountFile(
-      {
-        kind: "file",
-        path: "src/long-line.ts",
-        name: "long-line.ts",
-        content: `export const value = "${"long-content-".repeat(80)}";`,
-      },
-      320,
-    );
-
-    const fileView = panel.querySelector<HTMLElement>(".file-view")!;
-    const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
-    await expect.poll(() => fileView.clientWidth).toBeGreaterThan(0);
-    expect(fileView.clientWidth).toBeLessThanOrEqual(panel.parentElement!.clientWidth);
-    expect(fileView.scrollWidth).toBe(fileView.clientWidth);
-    expect(scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
-    expect(getComputedStyle(scroller).overflowX).toBe("auto");
-  });
-
   it("wraps long lines at the panel width when word wrap is on and remembers the choice", async () => {
     localStorage.removeItem("openclaw.control.fileView.wrap.v1");
     const panel = await mountFile(
@@ -123,8 +103,13 @@ describe.runIf(browserMode)("chat file editor", () => {
       },
       320,
     );
+    const fileView = panel.querySelector<HTMLElement>(".file-view")!;
     const scroller = panel.querySelector<HTMLElement>(".cm-scroller")!;
+    await expect.poll(() => fileView.clientWidth).toBeGreaterThan(0);
+    expect(fileView.clientWidth).toBeLessThanOrEqual(panel.parentElement!.clientWidth);
+    expect(fileView.scrollWidth).toBe(fileView.clientWidth);
     await expect.poll(() => scroller.scrollWidth).toBeGreaterThan(scroller.clientWidth);
+    expect(getComputedStyle(scroller).overflowX).toBe("auto");
 
     const wrapButton = button(panel, "Enable word wrap");
     expect(wrapButton.getAttribute("aria-pressed")).toBe("false");
@@ -471,32 +456,6 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.click(button(restored, "Discard"));
   });
 
-  it("reloads the latest content after a save conflict", async () => {
-    const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-    const fetchLatest = vi
-      .fn()
-      .mockResolvedValue({ content: "latest", hash: "hash-2", editable: true });
-    const panel = await mountFile({
-      kind: "file",
-      path: "notes.txt",
-      name: "notes.txt",
-      content: "before",
-      edit: { hash: "hash-1", save, fetchLatest },
-    });
-
-    await userEvent.click(button(panel, "Edit file"));
-    await userEvent.fill(panel.querySelector<HTMLElement>(".cm-content")!, "local");
-    await userEvent.click(button(panel, "Save"));
-    await expect
-      .poll(() => panel.querySelector('[role="alert"]')?.textContent)
-      .toContain("File changed on disk since it was loaded.");
-
-    await userEvent.click(button(panel, "Reload"));
-    await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
-    expect(fetchLatest).toHaveBeenCalledOnce();
-    expect(button(panel, "Save").disabled).toBe(true);
-  });
-
   it.each(["mixed\r\nendings\nnow", "mixed\nendings\r\nnow"])(
     "drops edit mode and its draft when a conflict reload returns %j",
     async (content) => {
@@ -566,6 +525,8 @@ describe.runIf(browserMode)("chat file editor", () => {
       .toBe("false");
     finishReload?.({ content: "latest", hash: "hash-2", editable: true });
     await expect.poll(() => panel.querySelector(".cm-content")?.textContent).toContain("latest");
+    expect(fetchLatest).toHaveBeenCalledOnce();
+    expect(button(panel, "Save").disabled).toBe(true);
     expect(panel.querySelector(".cm-content")?.getAttribute("contenteditable")).toBe("true");
   });
 });

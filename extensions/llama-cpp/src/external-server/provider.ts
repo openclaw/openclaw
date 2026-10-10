@@ -44,7 +44,6 @@ export async function discoverLlamaServerProvider(
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
-        cacheTtlMs: 0,
       });
       if (discovery.kind !== "success") {
         if (!configured && !apiKey && !headers) {
@@ -81,7 +80,6 @@ export async function prepareLlamaServerDynamicModel(
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
-    cacheTtlMs: 0,
   });
   const model =
     discovery.kind === "success"

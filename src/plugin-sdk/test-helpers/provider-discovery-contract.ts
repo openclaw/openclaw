@@ -10,8 +10,7 @@ import {
 import type { AuthProfileStore, OpenClawConfig } from "../provider-auth.js";
 
 const resolveCopilotRuntimeAuthMock = vi.hoisted(() => vi.fn());
-const buildVllmProviderMock = vi.hoisted(() => vi.fn());
-const buildSglangProviderMock = vi.hoisted(() => vi.fn());
+const discoverLocalModelsMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
 
@@ -25,8 +24,6 @@ type DiscoveryContractOptions = {
   load: ProviderDiscoveryContractPluginLoader;
   providerIds: readonly string[];
   githubCopilotRegisterRuntimeModuleId?: string;
-  vllmApiModuleId?: string;
-  sglangApiModuleId?: string;
 };
 
 function setRuntimeAuthStore(store?: AuthProfileStore) {
@@ -153,22 +150,7 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
       );
       return {
         ...actual,
-        discoverOpenAICompatibleLocalModels: async (params: {
-          apiKey?: string;
-          baseUrl: string;
-          label: string;
-        }) => {
-          const isVllm = params.label === "vLLM";
-          const defaultBaseUrl = isVllm ? "http://127.0.0.1:8000/v1" : "http://127.0.0.1:30000/v1";
-          const provider = requireRecord(
-            await (isVllm ? buildVllmProviderMock : buildSglangProviderMock)({
-              apiKey: params.apiKey,
-              ...(params.baseUrl === defaultBaseUrl ? {} : { baseUrl: params.baseUrl }),
-            }),
-            `${params.label} provider`,
-          );
-          return Array.isArray(provider.models) ? provider.models : [];
-        },
+        discoverOpenAICompatibleLocalModels: discoverLocalModelsMock,
       };
     });
     if (options.githubCopilotRegisterRuntimeModuleId) {
@@ -177,26 +159,6 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
         return {
           ...actual,
           resolveCopilotRuntimeAuth: resolveCopilotRuntimeAuthMock,
-        };
-      });
-    }
-    if (options.vllmApiModuleId) {
-      vi.doMock(options.vllmApiModuleId, async () => {
-        return {
-          VLLM_DEFAULT_API_KEY_ENV_VAR: "VLLM_API_KEY",
-          VLLM_DEFAULT_BASE_URL: "http://127.0.0.1:8000/v1",
-          VLLM_MODEL_PLACEHOLDER: "meta-llama/Meta-Llama-3-8B-Instruct",
-          VLLM_PROVIDER_LABEL: "vLLM",
-        };
-      });
-    }
-    if (options.sglangApiModuleId) {
-      vi.doMock(options.sglangApiModuleId, async () => {
-        return {
-          SGLANG_DEFAULT_API_KEY_ENV_VAR: "SGLANG_API_KEY",
-          SGLANG_DEFAULT_BASE_URL: "http://127.0.0.1:30000/v1",
-          SGLANG_MODEL_PLACEHOLDER: "Qwen/Qwen3-8B",
-          SGLANG_PROVIDER_LABEL: "SGLang",
         };
       });
     }
@@ -214,8 +176,7 @@ function installDiscoveryHooks(options: DiscoveryContractOptions) {
   afterEach(() => {
     vi.restoreAllMocks();
     resolveCopilotRuntimeAuthMock.mockReset();
-    buildVllmProviderMock.mockReset();
-    buildSglangProviderMock.mockReset();
+    discoverLocalModelsMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
     listProfilesForProviderMock.mockReset();
     setRuntimeAuthStore();
@@ -290,21 +251,17 @@ export function describeGithubCopilotProviderDiscoveryContract(params: {
 
 export function describeVllmProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
-  apiModuleId: string;
 }) {
   describe("vllm provider discovery contract", () => {
     const getProvider = installDiscoveryHooks({
       providerIds: ["vllm"],
       load: params.load,
-      vllmApiModuleId: params.apiModuleId,
     });
 
     it("keeps self-hosted discovery provider-owned", async () => {
-      buildVllmProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://127.0.0.1:8000/v1",
-        api: "openai-completions",
-        models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([
+        { id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" },
+      ]);
 
       await expect(
         runCatalog({
@@ -332,17 +289,16 @@ export function describeVllmProviderDiscoveryContract(params: {
           models: [{ id: "meta-llama/Meta-Llama-3-8B-Instruct", name: "Meta Llama 3" }],
         },
       });
-      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
       });
     });
 
     it("uses configured transport only for provider wildcard discovery", async () => {
-      buildVllmProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://vllm-router.example/v1",
-        api: "openai-completions",
-        models: [{ id: "router-model", name: "Router Model" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([{ id: "router-model", name: "Router Model" }]);
 
       await expect(
         runCatalog({
@@ -388,18 +344,18 @@ export function describeVllmProviderDiscoveryContract(params: {
           models: [{ id: "router-model", name: "Router Model" }],
         },
       });
-      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
         baseUrl: "http://vllm-router.example/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
       });
     });
 
     it("uses the provider default transport when wildcard config omits baseUrl", async () => {
-      buildVllmProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://127.0.0.1:8000/v1",
-        api: "openai-completions",
-        models: [{ id: "default-transport-model", name: "Default Transport Model" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([
+        { id: "default-transport-model", name: "Default Transport Model" },
+      ]);
 
       await expect(
         runCatalog({
@@ -444,8 +400,11 @@ export function describeVllmProviderDiscoveryContract(params: {
           models: [{ id: "default-transport-model", name: "Default Transport Model" }],
         },
       });
-      expect(buildVllmProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-vllm-key",
+        baseUrl: "http://127.0.0.1:8000/v1",
+        label: "vLLM",
+        discoverRuntimeContext: false,
       });
     });
 
@@ -487,28 +446,22 @@ export function describeVllmProviderDiscoveryContract(params: {
           }),
         }),
       ).resolves.toBeNull();
-      expect(buildVllmProviderMock).not.toHaveBeenCalled();
+      expect(discoverLocalModelsMock).not.toHaveBeenCalled();
     });
   });
 }
 
 export function describeSglangProviderDiscoveryContract(params: {
   load: ProviderDiscoveryContractPluginLoader;
-  apiModuleId: string;
 }) {
   describe("sglang provider discovery contract", () => {
     const getProvider = installDiscoveryHooks({
       providerIds: ["sglang"],
       load: params.load,
-      sglangApiModuleId: params.apiModuleId,
     });
 
     it("keeps self-hosted discovery provider-owned", async () => {
-      buildSglangProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://127.0.0.1:30000/v1",
-        api: "openai-completions",
-        models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }]);
 
       await expect(
         runCatalog({
@@ -536,17 +489,16 @@ export function describeSglangProviderDiscoveryContract(params: {
           models: [{ id: "Qwen/Qwen3-8B", name: "Qwen3-8B" }],
         },
       });
-      expect(buildSglangProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-sglang-key",
+        baseUrl: "http://127.0.0.1:30000/v1",
+        label: "SGLang",
+        discoverRuntimeContext: false,
       });
     });
 
     it("uses configured transport only for provider wildcard discovery", async () => {
-      buildSglangProviderMock.mockResolvedValueOnce({
-        baseUrl: "http://sglang-router.example/v1",
-        api: "openai-completions",
-        models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
-      });
+      discoverLocalModelsMock.mockResolvedValueOnce([{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }]);
 
       await expect(
         runCatalog({
@@ -592,9 +544,11 @@ export function describeSglangProviderDiscoveryContract(params: {
           models: [{ id: "Qwen/Qwen3-32B", name: "Qwen3-32B" }],
         },
       });
-      expect(buildSglangProviderMock).toHaveBeenCalledWith({
+      expect(discoverLocalModelsMock).toHaveBeenCalledWith({
         apiKey: "env-sglang-key",
         baseUrl: "http://sglang-router.example/v1",
+        label: "SGLang",
+        discoverRuntimeContext: false,
       });
     });
 
@@ -636,7 +590,7 @@ export function describeSglangProviderDiscoveryContract(params: {
           }),
         }),
       ).resolves.toBeNull();
-      expect(buildSglangProviderMock).not.toHaveBeenCalled();
+      expect(discoverLocalModelsMock).not.toHaveBeenCalled();
     });
   });
 }

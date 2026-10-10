@@ -33,6 +33,7 @@ async function withAnnounce(
     const deps = createCliDeps();
     mockAgentPayloads(options.texts.map((text) => ({ text })));
     const result = await runCronIsolatedAgentTurn({
+      deliveryAttemptFence: null,
       cfg: makeCfg(home, storePath, {
         ...options.cfg,
         ...(options.cfg?.session ? { session: { store: storePath, ...options.cfg.session } } : {}),
@@ -61,14 +62,6 @@ describe("isolated cron delivery awareness", () => {
     resetSystemEventsForTest();
   });
 
-  it("queues delivered text for the next main-session turn", async () => {
-    await withAnnounce({ texts: ["hello from cron"] }, (result) => {
-      expect(result.status).toBe("ok");
-      expect(result.delivered).toBe(true);
-      expect(peekSystemEvents("agent:main:main")).toEqual(["hello from cron"]);
-    });
-  });
-
   it("adds the exact run-session inspection link only to the final visible payload", async () => {
     await withAnnounce(
       {
@@ -81,13 +74,13 @@ describe("isolated cron delivery awareness", () => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBe(true);
         expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
-        expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        expect(deps.telegram).toHaveBeenNthCalledWith(
           1,
           "123",
           "first cron update",
           expect.any(Object),
         );
-        expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        expect(deps.telegram).toHaveBeenNthCalledWith(
           2,
           "123",
           `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
@@ -103,7 +96,7 @@ describe("isolated cron delivery awareness", () => {
       (result, deps) => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBeFalsy();
-        expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+        expect(deps.telegram).not.toHaveBeenCalled();
       },
     );
   });

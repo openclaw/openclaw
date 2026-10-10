@@ -1,8 +1,15 @@
-import { threadId } from "node:worker_threads";
 import type { Result } from "@openclaw/normalization-core/result";
-import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
-import { VERSION } from "../version.js";
-import { capturePluginStateErrorCause } from "./plugin-state-error-cause.js";
+import type {
+  SessionEntryCurrentCheck,
+  SessionEntriesCurrentCheck,
+} from "../config/sessions/session-entry-current.types.js";
+import type { PluginStateStoreError } from "./plugin-state-error.js";
+
+export {
+  PluginStateStoreError,
+  type PluginStateStoreErrorCode,
+  type PluginStateStoreOperation,
+} from "./plugin-state-error.js";
 
 // Public plugin-state store contracts. Stores are keyed by plugin id and
 // namespace, persist JSON-compatible values, and enforce per-namespace limits.
@@ -80,7 +87,10 @@ type PluginStateKeyedStoreBase<T> = {
     keys: readonly string[],
   ) => Promise<Array<Result<T | undefined, PluginStateStoreError>>>;
   consume(key: string): Promise<T | undefined>;
-  delete(key: string, opts?: { assertCurrent?: () => void }): Promise<boolean>;
+  delete(
+    key: string,
+    opts?: { assertCurrent?: () => void; signal?: AbortSignal },
+  ): Promise<boolean>;
   entries(): Promise<PluginStateEntry<T>[]>;
   /** Reads a lexical key range with ordering and limit applied by storage. */
   entriesInKeyRange?: (range: PluginStateKeyRange) => Promise<PluginStateEntry<T>[]>;
@@ -102,7 +112,7 @@ export type PluginStateKeyedStore<T, Version extends 1 | 2 = 1> = Version extend
       withCurrent?: (authority: {
         assertCurrent: () => void;
         /** Restricts native writes and comparisons; ordinary reads use assertCurrent. */
-        sessionEntryCurrent?: SessionEntryCurrentCheck;
+        sessionEntryCurrent?: SessionEntryCurrentCheck | SessionEntriesCurrentCheck;
       }) => PluginStateKeyedStore<T, 2>;
     };
 
@@ -157,66 +167,3 @@ export type OpenRetainedKeyedStoreOptions = {
 };
 
 export type OpenAsyncKeyedStoreOptions = OpenKeyedStoreOptions | OpenRetainedKeyedStoreOptions;
-
-export type PluginStateStoreErrorCode =
-  | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
-  | "PLUGIN_STATE_OPEN_FAILED"
-  | "PLUGIN_STATE_WRITE_FAILED"
-  | "PLUGIN_STATE_READ_FAILED"
-  | "PLUGIN_STATE_CORRUPT"
-  | "PLUGIN_STATE_LIMIT_EXCEEDED"
-  | "PLUGIN_STATE_INVALID_INPUT";
-
-export type PluginStateStoreOperation =
-  | "load-sqlite"
-  | "open"
-  | "ensure-schema"
-  | "register"
-  | "lookup"
-  | "consume"
-  | "delete"
-  | "entries"
-  | "count"
-  | "clear"
-  | "sweep"
-  | "probe"
-  | "close";
-
-type PluginStateStoreErrorOptions = {
-  code: PluginStateStoreErrorCode;
-  operation: PluginStateStoreOperation;
-  path?: string;
-  cause?: unknown;
-  owner?: { pid: number; threadId: number; version: string };
-};
-
-/** Typed error thrown for plugin-state validation and sqlite failures. */
-export class PluginStateStoreError extends Error {
-  readonly code: PluginStateStoreErrorCode;
-  readonly operation: PluginStateStoreOperation;
-  readonly path?: string;
-  readonly owner: { pid: number; threadId: number; version: string };
-
-  constructor(message: string, options: PluginStateStoreErrorOptions) {
-    super(message, { cause: options.cause });
-    this.name = "PluginStateStoreError";
-    this.code = options.code;
-    this.operation = options.operation;
-    this.owner = options.owner ?? { pid: process.pid, threadId, version: VERSION };
-    if (options.path) {
-      this.path = options.path;
-    }
-  }
-
-  toJSON(): Record<string, unknown> {
-    return {
-      name: this.name,
-      message: this.message,
-      code: this.code,
-      operation: this.operation,
-      path: this.path,
-      owner: this.owner,
-      cause: capturePluginStateErrorCause(this.cause),
-    };
-  }
-}

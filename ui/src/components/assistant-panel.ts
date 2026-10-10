@@ -43,6 +43,7 @@ import { assistantPanelLayout } from "./dock-panel-layout.ts";
 import { icons } from "./icons.ts";
 import { renderLazyElementState } from "./lazy-view-error.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import { askBrandLabel } from "./theme-brand-label.ts";
 import "../styles/rail-header.css";
 import "../styles/assistant-panel.css";
 
@@ -58,7 +59,6 @@ type AssistantDestination =
   | "home"
   | "custodian"
   | {
-      kind: "session";
       params: Parameters<AssistantDockOwner["openSession"]>[0];
       activation: object;
     };
@@ -111,6 +111,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
       .watchStore(() => this.store)
       .watchStore(() => this.context?.agentSelection)
       .watchStore(() => this.context?.agents)
+      .watchStore(() => this.context?.theme)
       .watchStore(() => this.context?.gateway);
   }
 
@@ -355,7 +356,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     if (typeof this.destination === "string") {
       this.builtInDestination = this.destination;
     }
-    this.openDestination({ kind: "session", params: structuredClone(params), activation });
+    this.openDestination({ params: structuredClone(params), activation });
   }
 
   closeSession(activation?: object): void {
@@ -503,7 +504,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
                     aria-pressed=${this.destination === destination}
                     @click=${() => this.openDestination(destination)}
                   >
-                    ${t(destination === "home" ? "assistantPanel.home" : "nav.askOpenClaw")}
+                    ${destination === "home" ? t("assistantPanel.home") : askBrandLabel()}
                   </button>`
                 : nothing,
             )}

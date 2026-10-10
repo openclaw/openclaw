@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { shouldPreserveSessionAuthProfileOverride } from "../sessions/auth-profile-preservation.js";
 import { resolveSessionPatchModelSelection } from "./server-methods/sessions-patch-model-selection.js";
 
-/** Creation may adopt an existing key, but cannot use that path to replace its policy. */
+/** Creation can adopt a key, but only an explicit settings mutation can replace its policy. */
 export function sessionCreatePolicyAdoptionError(
   existing: SessionEntry | undefined,
   projected: SessionEntry,
@@ -19,7 +19,7 @@ export function sessionCreatePolicyAdoptionError(
         requested[field] !== undefined &&
         stableStringify(existing[field]) !== stableStringify(projected[field])
       ) {
-        return `sessions.create ${field} requires a new session`;
+        return "sessions.create " + field + " requires a new session";
       }
     }
   }
@@ -84,13 +84,16 @@ export async function existingSessionSelectionWouldChange(params: {
     return true;
   }
   const catalog = await params.loadGatewayModelCatalogSnapshot();
-  const resolved = resolveSessionPatchModelSelection({
+  const selectionPolicy = {
     cfg: params.cfg,
     agentId: params.agentId,
     catalog: catalog.entries,
-    raw: requestedModel,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+  };
+  const resolved = resolveSessionPatchModelSelection({
+    ...selectionPolicy,
+    raw: requestedModel,
     subagentModelHint: params.subagentModelHint,
   });
   if (!resolved.ok) {
@@ -104,12 +107,8 @@ export async function existingSessionSelectionWouldChange(params: {
     normalizeOptionalString(params.existingEntry.modelOverride) ?? params.defaultModel;
   if (!normalizeOptionalString(params.existingEntry.modelOverride) && params.subagentModelHint) {
     const resolvedSubagentDefault = resolveSessionPatchModelSelection({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      catalog: catalog.entries,
+      ...selectionPolicy,
       raw: params.subagentModelHint,
-      defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
     });
     if (!resolvedSubagentDefault.ok) {
       return true;

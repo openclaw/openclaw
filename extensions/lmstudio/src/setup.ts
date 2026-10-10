@@ -79,8 +79,8 @@ type LmstudioSetupDiscovery = {
   defaultModelId: string | undefined;
 };
 
-function resolveLmstudioSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
+function resolveLmstudioSetupDefaultBaseUrl(): string {
+  return isTruthyEnvValue(process.env.OPENCLAW_DOCKER_SETUP)
     ? LMSTUDIO_DOCKER_HOST_BASE_URL
     : LMSTUDIO_DEFAULT_BASE_URL;
 }
@@ -298,7 +298,6 @@ async function discoverLmstudioSetupModels(params: {
   headers?: Record<string, string>;
   requestedModelId?: string;
   resetPreflight?: boolean;
-  timeoutMs?: number;
 }): Promise<
   | { value: LmstudioSetupDiscovery }
   | { failure: NonNullable<ReturnType<typeof resolveLmstudioDiscoveryFailure>> }
@@ -307,7 +306,7 @@ async function discoverLmstudioSetupModels(params: {
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
     ...(params.headers ? { headers: params.headers } : {}),
-    timeoutMs: params.timeoutMs ?? 5000,
+    timeoutMs: 5000,
   });
   const failure = resolveLmstudioDiscoveryFailure({
     baseUrl: params.baseUrl,
@@ -554,7 +553,6 @@ export async function promptAndConfigureLmstudioInteractive(params: {
       baseUrl,
       apiKey: setupDiscoveryApiKey,
       ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-      timeoutMs: 5000,
     });
     params.signal?.throwIfAborted();
     return result;
@@ -719,7 +717,6 @@ async function validateNonInteractiveLmstudioDiscovery(
     ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
     requestedModelId,
     resetPreflight,
-    timeoutMs: 5000,
   });
   if ("failure" in setupDiscovery) {
     throw new Error(setupDiscovery.failure.noteLines.join("\n"));

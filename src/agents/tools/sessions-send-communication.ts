@@ -1,12 +1,13 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { bindSessionCommunicationInput } from "../../gateway/in-process-session-communication.js";
 import {
   bindInProcessSubagentResume,
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
+import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -17,7 +18,10 @@ import {
   type CommunicationApproval,
 } from "../../sessions/communication-admission.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import {
+  sessionChanges,
+  sessionChangeScopeAffectsStoredRows,
+} from "../../sessions/session-row-changes.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../embedded-agent-runner/run-state.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "../subagents/registry/subagent-registry-read.js";
@@ -43,11 +47,12 @@ export async function prepareSessionsSendCommunication(params: {
   source: CommunicationEndpoint;
   target: CommunicationEndpoint;
   message: string;
-  /** Host annotation and source identity checked before the input capability is bound. */
+  /** Host annotation and source identity checked at the final admission boundary. */
   dispatchMessage?: string;
   inputProvenance?: InputProvenance;
   access?: {
     sandboxed?: boolean;
+    watch?: boolean;
     requesterOwned?: boolean;
     authorizationTargetSessionKey?: string;
     expectedSessionId?: string;
@@ -56,6 +61,7 @@ export async function prepareSessionsSendCommunication(params: {
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
   signal?: AbortSignal;
   assertSourceCurrent?: () => void;
+  assertAccessCurrent?: () => void;
   callGateway: AgentToolGatewayRequestCaller;
 }) {
   const message = params.message;
@@ -70,7 +76,9 @@ export async function prepareSessionsSendCommunication(params: {
   const context = getInProcessGatewayToolContext();
   // Never replace the config against which identities and source ceilings were prepared.
   const config = params.config;
-  const currentConfig = context?.getRuntimeConfig() ?? config;
+  const readConfig = createRuntimeConfigReader(config);
+  const currentPolicyConfig = () => context?.getRuntimeConfig() ?? readConfig();
+  const currentConfig = currentPolicyConfig();
   const policyConfigs = config === currentConfig ? [config] : [config, currentConfig];
   const sandboxed =
     params.access?.sandboxed === true ||
@@ -91,10 +99,9 @@ export async function prepareSessionsSendCommunication(params: {
       sandboxed,
     }),
     visibility: resolveEffectiveSessionToolsVisibility({ cfg: policyConfig, sandboxed }),
-    a2aPolicy: createAgentToAgentPolicy(policyConfig),
+    a2aPolicy: createAgentToAgentPolicy(policyConfig, { sandboxed }),
   }));
   let closed = false;
-  let owners = 1;
   let dirty = false;
   let creatingTarget = false;
   let endpoints: CommunicationEndpoint[] = [params.source, params.target];
@@ -105,33 +112,17 @@ export async function prepareSessionsSendCommunication(params: {
     params.signal?.throwIfAborted();
     assertCaller?.();
     params.assertSourceCurrent?.();
-    if (context && context.getRuntimeConfig() !== currentConfig) {
+    params.assertAccessCurrent?.();
+    if (currentPolicyConfig() !== currentConfig) {
       throw new Error("Communication policy changed; send the message again for a new decision.");
     }
   };
   const unsubscribe = sessionChanges.subscribeFacts((change) => {
-    if ("all" in change) {
-      if (
-        typeof change.scope === "string" &&
-        [
-          "profiles",
-          "catalog",
-          "acp",
-          "agent-runs",
-          "subagent-runs",
-          "worker-placements",
-          "worker-environments",
-          "config",
-          "config-presentation",
-          "config-profiles",
-        ].includes(change.scope)
-      ) {
-        return;
-      }
-      dirty = true;
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
       return;
     }
-    if (!change.storePath || change.scope === "automation") {
+    if ("all" in change) {
+      dirty = true;
       return;
     }
     const selected = endpoints.filter(
@@ -168,6 +159,7 @@ export async function prepareSessionsSendCommunication(params: {
       key: endpoint.sessionKey,
       agentId: endpoint.agentId,
       assertActive: assertSource,
+      projection: "full",
     });
     return {
       agentId: loaded.agentId,
@@ -200,7 +192,11 @@ export async function prepareSessionsSendCommunication(params: {
     }
     return chain;
   };
-  const task = getLatestLiveSubagentRunByChildSessionKey(params.target.sessionKey);
+  const task = getLatestLiveSubagentRunByChildSessionKey(
+    params.target.sessionKey,
+    undefined,
+    params.target.agentId,
+  );
   const ownedTask = Boolean(
     caller &&
     caller.agentId === params.source.agentId &&
@@ -220,10 +216,17 @@ export async function prepareSessionsSendCommunication(params: {
   );
   const taskRunId = task?.runId;
   const taskGeneration = task?.generation;
+  let resumedTask:
+    | { resume: NonNullable<ReturnType<typeof readInProcessSubagentResume>>; runId: string }
+    | undefined;
   const assertTask = () => {
     if (
       ownedTask &&
-      (getLatestLiveSubagentRunByChildSessionKey(params.target.sessionKey) !== task ||
+      (getLatestLiveSubagentRunByChildSessionKey(
+        params.target.sessionKey,
+        undefined,
+        params.target.agentId,
+      ) !== task ||
         task?.runId !== taskRunId ||
         task?.generation !== taskGeneration ||
         (task?.controllerSessionKey && task.controllerSessionKey !== params.source.sessionKey) ||
@@ -232,18 +235,17 @@ export async function prepareSessionsSendCommunication(params: {
         task?.terminalOwner ||
         task?.cleanupCompletedAt !== undefined)
     ) {
+      if (resumedTask) {
+        assertParentSubagentResumeSuccessorCurrent(resumedTask.resume, resumedTask.runId);
+        return;
+      }
       throw new Error("Owned task communication authority changed.");
-    }
-  };
-  const release = () => {
-    if (--owners === 0) {
-      unsubscribe();
     }
   };
   const close = () => {
     if (!closed) {
       closed = true;
-      release();
+      unsubscribe();
     }
   };
   try {
@@ -257,6 +259,7 @@ export async function prepareSessionsSendCommunication(params: {
       for (const { scope, visibility, a2aPolicy } of accessPolicies) {
         const decision = await resolveSessionToolAccess({
           action: "send",
+          watch: params.access?.watch,
           requesterAgentId: params.source.agentId,
           requesterSessionKey: params.source.sessionKey,
           mainSessionKey: scope.mainSessionKey,
@@ -294,7 +297,11 @@ export async function prepareSessionsSendCommunication(params: {
     const refresh = async () => {
       assertSource();
       assertTask();
-      dirty = false;
+      if (dirty) {
+        throw new Error(
+          "Session communication changed before delivery; send again for a new decision.",
+        );
+      }
       const current = await Promise.all(endpoints.map(read));
       await assertAccess();
       if (
@@ -347,7 +354,13 @@ export async function prepareSessionsSendCommunication(params: {
         source: params.source,
         target: target[0]!,
         message,
-        assertCurrent: assertSource,
+        assertCurrent: () => {
+          assertSource();
+          assertTask();
+          if (dirty) {
+            throw new Error("Session communication state changed before approval.");
+          }
+        },
         signal: params.signal,
         requesterRun: caller?.operationalRunInstance,
         registerHumanInputWait: caller?.approvalAuthority
@@ -396,37 +409,12 @@ export async function prepareSessionsSendCommunication(params: {
     for (const approval of plan().approvals.filter((item) => item.direction === "receive")) {
       await approve(approval);
     }
-    const assertInputCurrent = () => {
-      if (owners === 0 || (context && context.getRuntimeConfig() !== currentConfig)) {
-        throw new Error("Peer input policy custody is no longer current.");
-      }
-      if (dirty) {
-        throw new Error("Session communication state changed before delivery.");
-      }
-    };
     const assertCurrent = () => {
       assertSource();
       assertTask();
-      assertInputCurrent();
-    };
-    const retainInput = () => {
-      assertCurrent();
-      owners += 1;
-      let released = false;
-      return {
-        assertCurrent: () => {
-          if (released) {
-            throw new Error("Peer input policy custody was released.");
-          }
-          assertInputCurrent();
-        },
-        release: () => {
-          if (!released) {
-            released = true;
-            release();
-          }
-        },
-      };
+      if (dirty) {
+        throw new Error("Session communication state changed before admission.");
+      }
     };
     await refresh();
     const callGateway: AgentToolGatewayRequestCaller = async (request) => {
@@ -443,23 +431,61 @@ export async function prepareSessionsSendCommunication(params: {
       ) {
         throw new Error("Communication approval cannot be redirected to another session.");
       }
-      bindSessionCommunicationInput(request.params, { retain: retainInput });
+
+      const resume = readInProcessSubagentResume(request);
+      if (ownedTask && resume && typeof request.params.idempotencyKey === "string") {
+        if (
+          resume.childSessionKey !== targetSessionKey ||
+          resume.childSessionId !== target[0]!.entry?.sessionId ||
+          resume.previousRunId !== taskRunId ||
+          resume.generation !== taskGeneration
+        ) {
+          throw new Error("Task resume differs from the captured communication owner.");
+        }
+        resumedTask = { resume, runId: request.params.idempotencyKey };
+      }
+      const endpoint = target[0]!;
+      if (
+        !endpoint.entry ||
+        (request.params.expectedExistingSessionId !== undefined &&
+          request.params.expectedExistingSessionId !== endpoint.entry.sessionId)
+      ) {
+        throw new Error("Communication target incarnation changed before admission.");
+      }
+      const input = {
+        ...request.params,
+        expectedExistingSessionId: endpoint.entry.sessionId,
+        expectedExistingSessionLifecycleRevision: endpoint.entry.lifecycleRevision ?? null,
+      };
+      const expectedInput = structuredClone(input);
+      const assertAdmission = () => {
+        request.sessionMutationCommitGuard?.();
+        assertCurrent();
+        if (!isDeepStrictEqual(input, expectedInput)) {
+          throw new Error("Approved communication input changed before admission.");
+        }
+      };
       return params.callGateway(
         bindInProcessSubagentResume(
           {
             ...request,
-            sessionMutationCommitGuard: () => {
-              request.sessionMutationCommitGuard?.();
-              assertCurrent();
-            },
+            params: input,
+            // A standalone transport can fence submission, never serialize a host capability.
+            ...(context
+              ? { sessionMutationCommitGuard: assertAdmission }
+              : {
+                  assertDispatchCurrent: () => {
+                    request.assertDispatchCurrent?.();
+                    assertAdmission();
+                  },
+                }),
           },
-          readInProcessSubagentResume(request),
+          resume,
         ),
       );
     };
     return {
       assertCurrent,
-      retainInput,
       refresh,
       callGateway,
       ownedTask,

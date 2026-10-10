@@ -10,14 +10,7 @@ extension GatewayConnection {
         endpoint: EndpointSnapshot) async throws -> DashboardNativeGatewayAuth.LegacyCredentials
     {
         _ = try await self.controlUiBrowserIdentityURL(config: endpoint.config)
-        guard self.includeDeviceIdentity, endpoint.browserSession == nil,
-              let lease = await self.captureServerLease(),
-              lease.route.matches(config: endpoint.config), lease.route.browserSession == nil,
-              GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, endpoint.tls),
-              endpoint.routeAuthority == nil || endpoint.routeAuthority == lease.route.authority,
-              endpoint.revision == nil || endpoint.revision == lease.endpointRevision,
-              endpoint.deviceAuthGatewayID == nil || endpoint.deviceAuthGatewayID == lease.route.deviceAuthGatewayID
-        else { throw CancellationError() }
+        let lease = try await self.controlUiServerLease(endpoint: endpoint)
         let binding = try await self.controlUiAuthBinding(ifCurrentServerLease: lease)
         guard let snapshot = self.lastSnapshot,
               snapshot.auth["role"]?.value as? String == "operator",
@@ -52,15 +45,7 @@ extension GatewayConnection {
         nonce: String,
         signedAt: Int64) async throws -> DashboardNativeGatewayAuth
     {
-        guard self.includeDeviceIdentity, endpoint.browserSession == nil,
-              let lease = await self.captureServerLease(),
-              lease.route.matches(config: endpoint.config),
-              lease.route.browserSession == nil,
-              GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, endpoint.tls),
-              endpoint.routeAuthority == nil || endpoint.routeAuthority == lease.route.authority,
-              endpoint.revision == nil || endpoint.revision == lease.endpointRevision,
-              endpoint.deviceAuthGatewayID == nil || endpoint.deviceAuthGatewayID == lease.route.deviceAuthGatewayID
-        else { throw CancellationError() }
+        let lease = try await self.controlUiServerLease(endpoint: endpoint)
         let binding = try await self.controlUiAuthBinding(ifCurrentServerLease: lease)
         guard let snapshot = self.lastSnapshot,
               snapshot.auth["role"]?.value as? String == "operator",
@@ -111,6 +96,18 @@ extension GatewayConnection {
         }
         guard await self.isCurrentServerLease(lease), isCurrent() else { throw CancellationError() }
         return DashboardNativeGatewayAuth(json: json, isCurrent: isCurrent)
+    }
+
+    private func controlUiServerLease(endpoint: EndpointSnapshot) async throws -> ServerLease {
+        guard self.includeDeviceIdentity, endpoint.browserSession == nil,
+              let lease = await self.captureServerLease(),
+              lease.route.matches(config: endpoint.config), lease.route.browserSession == nil,
+              GatewayTLSRoute.hasSameConnectionIdentity(lease.route.tls, endpoint.tls),
+              endpoint.routeAuthority == nil || endpoint.routeAuthority == lease.route.authority,
+              endpoint.revision == nil || endpoint.revision == lease.endpointRevision,
+              endpoint.deviceAuthGatewayID == nil || endpoint.deviceAuthGatewayID == lease.route.deviceAuthGatewayID
+        else { throw CancellationError() }
+        return lease
     }
 
     private static func controlUiCredential(

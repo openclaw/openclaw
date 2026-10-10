@@ -5,6 +5,10 @@ import {
   type TalkVoiceSelection,
   type TalkVoiceSetResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { registerTalkConnectionCleanup } from "./session-registry.js";
@@ -25,7 +29,7 @@ type VoiceChange = {
   original: VoiceSession;
   voice: string;
   requesterConnId: string;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   send: (event: TalkVoiceChangeEvent) => void;
   completion: ReturnType<typeof createDeferredCore<TalkVoiceSetResult>>;
   timer: ReturnType<typeof setTimeout>;
@@ -89,12 +93,12 @@ function cancelChange(change: VoiceChange, error: Error) {
   }
 }
 
-function assertChangeCurrent(change: VoiceChange) {
+function assertChangeCurrent(change: VoiceChange, assertSource = change.assertCurrent) {
   if (changes.get(change.id) !== change) {
     throw new Error("Voice change is no longer active");
   }
   try {
-    change.assertCurrent();
+    assertSource();
   } catch (error) {
     cancelChange(change, error instanceof Error ? error : new Error(String(error)));
     throw error;
@@ -270,7 +274,7 @@ export function requestTalkVoiceChange(params: {
   session: VoiceSession;
   voice: string;
   requesterConnId: string;
-  assertCurrent: () => void;
+  assertCurrent: SessionSourceAssertion;
   send: (event: TalkVoiceChangeEvent) => void;
 }): Promise<TalkVoiceSetResult> {
   params.assertCurrent();
@@ -353,6 +357,13 @@ export function prepareTalkVoiceReplacement(params: {
         assertReplacementTarget(change, target);
       }
     },
+    source: (target: PreparedTalkSessionTarget) => ({
+      storePath: target.storePath,
+      assertCurrent: composeSessionSourceAssertion([change.assertCurrent], (assertSource) => {
+        assertChangeCurrent(change, assertSource);
+        assertReplacementTarget(change, target);
+      }),
+    }),
   };
 }
 

@@ -75,15 +75,14 @@ test("OpenClaw applies every configured tool policy as a restrictive intersectio
   const agentConfig: OpenClawConfig = {
     tools: providerConfig.tools,
     agents: {
-      list: [
-        {
-          id: "policy",
+      entries: {
+        policy: {
           tools: {
             allow: ["read", "write", "exec", "process"],
             deny: ["process"],
           },
         },
-      ],
+      },
     },
   };
   expectIncluded(toolNames(agentConfig), ["read", "write", "exec"], ["edit", "process", "message"]);

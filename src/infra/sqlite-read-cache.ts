@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { readSqliteDataVersion, resolveSqliteFilesystemPath } from "./node-sqlite.js";
-import { compareValidSemver } from "./semver.js";
+import { resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { isSqliteCorruptionError } from "./sqlite-error-diagnostics.js";
+import { readSqliteDataVersion } from "./sqlite-schema-facts.js";
+import { readSqliteWalState } from "./sqlite-wal-checkpoint.js";
 
 function readCacheToken(database: DatabaseSync, databasePath: string): string | undefined {
   if (database.isTransaction) {
@@ -14,17 +15,10 @@ function readCacheToken(database: DatabaseSync, databasePath: string): string | 
   if (!wal || wal.size === 0n) {
     return `${dataVersion}:empty`;
   }
-  const version = database /* sqlite-allow-raw -- Guard NOOP support on this SQLite connection. */
-    .prepare("SELECT sqlite_version() AS version")
-    .get()?.version;
-  // Older SQLite interprets unknown checkpoint modes as PASSIVE, which writes.
-  if (typeof version !== "string" || (compareValidSemver(version, "3.53.0") ?? -1) < 0) {
+  const checkpoint = readSqliteWalState(database);
+  if (!checkpoint) {
     return undefined;
   }
-  const checkpoint =
-    database /* sqlite-allow-raw -- Inspect committed WAL frames without checkpointing. */
-      .prepare("PRAGMA main.wal_checkpoint(NOOP)")
-      .get();
   const pageSize =
     database /* sqlite-allow-raw -- Derive the physical extent of committed WAL frames. */
       .prepare("PRAGMA main.page_size")

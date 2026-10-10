@@ -1,18 +1,9 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
+import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
-export function zoomMeetingStatusCallSource(): string {
-  return MeetingPlatformAdapter.createStatusCallSource({
-    platform: {
-      audioOutputElementIdPrefix: "openclaw-zoom-audio-output-",
-      displayName: "Zoom",
-      globals: {
-        audioOutputs: "__openclawZoomAudioOutputs",
-        captions: "__openclawZoomCaptions",
-        meeting: "__openclawZoomMeeting",
-      },
-      manualActionReasonPrefix: "zoom",
-    },
-    captionEnableSource: `if (!captionsFinalized && canMutateSession && inCall && !captionsEnabledNow) {
+export const zoomMeetingStatusCall: Parameters<
+  typeof MeetingPlatformAdapter.createPageScripts
+>[0]["statusCall"] = {
+  captionEnableSource: `if (!captionsFinalized && canMutateSession && inCall && !captionsEnabledNow) {
       let captionButton = first(selectors.captions);
       if (!captionButton) {
         (first(selectors.moreActions) || findTextButton(/^more$/i))?.click?.();
@@ -49,6 +40,5 @@ export function zoomMeetingStatusCallSource(): string {
         }
       }
     }`,
-    extraResultSource: "meetingEnded,",
-  });
-}
+  extraResultSource: "meetingEnded,",
+};

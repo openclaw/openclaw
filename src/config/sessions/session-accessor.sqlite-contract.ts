@@ -1,6 +1,12 @@
 import type { SqliteWalHealth } from "../../infra/sqlite-wal-checkpoint.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type {
+  SessionEntrySummary,
+  TranscriptEvent,
+  TranscriptMessageAppendResult,
+} from "./session-accessor.types.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
@@ -15,12 +21,42 @@ export type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
 
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
+export type TranscriptWriteSnapshot<T> = {
+  result: T;
+  lifecycleRevision?: string;
+  before: SessionTranscriptContextVersion;
+  after: SessionTranscriptContextVersion;
+};
 
-export type SessionTranscriptContextVersion = {
-  generation: string | null;
-  rawSeq: number | null;
-  updatedAt: number | null;
+export type TranscriptMessageWriteSnapshot<TMessage> = TranscriptWriteSnapshot<
+  TranscriptMessageAppendResult<TMessage> | undefined
+> & {
+  visibleTail: { entryId: string | null; generation: string | null };
+};
+
+export type TranscriptEventAppendResult =
+  | { appended: false }
+  | { appended: true; effectiveParentId?: string | null };
+
+export type CacheTtlProjectionPrefix = {
+  anchorIds: string[];
+  entries: Record<string, unknown>[];
+};
+
+export type SessionTranscriptBoundedActiveContext = {
+  activeLeafEntryId: string | null;
+  version: SessionTranscriptContextVersion;
+  opaqueParents: Map<string, string | null>;
+  parents: Map<string, string | null>;
+  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
+  persistedSuffixStartSeq: number;
+  boundaryCount: number;
+  events: TranscriptEvent[];
+  cacheTtlProjectionPrefixes?: CacheTtlProjectionPrefix[];
+  serializedBytes: number;
+  totalEvents: number;
+  transcriptMutationAt: number | null;
+  truncated: boolean;
 };
 
 export type CanonicalSessionValidationResult = {
@@ -40,12 +76,12 @@ export type SqliteSessionReclamationDiagnostics = {
     | "lifecycle-artifacts"
     | "lifecycle-projection-plan"
     | "lifecycle-projection-commit"
-    | "lifecycle-projection-count"
     | "history-eviction"
     | "historical-generation"
     | "maintenance-plan"
     | "maintenance-finalize"
     | "maintenance-statistics"
+    | "maintenance-age"
     | "maintenance-pages"
     | "cold-batch"
     | "cold-maintain"
@@ -137,6 +173,7 @@ export type SessionTranscriptInstanceListOptions = {
   /** Include empty and internal windows when inspecting recorded source metadata. */
   includeAllWindows?: boolean;
   sessionId?: string;
+  sessionIds?: readonly string[];
 };
 
 export type TranscriptEventAppendOptions = {
@@ -147,20 +184,7 @@ export type TranscriptEventAppendOptions = {
   expectedMutationAt?: number | null;
 };
 
-export type TranscriptAppendRefusal =
-  | {
-      actualSessionIdHash: string;
-      agentIdHash: string;
-      code: "session-rebound";
-      expectedSessionIdHash: string;
-      sessionKeyHash: string;
-    }
-  | {
-      agentIdHash: string;
-      code: "session-entry-missing";
-      expectedSessionIdHash: string;
-      sessionKeyHash: string;
-    };
+export type { TranscriptAppendRefusal } from "./session-transcript-writer-claim-error.js";
 
 export type {
   ForkSessionEntryFromParentTargetParams,
@@ -180,22 +204,10 @@ export type LatestTranscriptAssistantMessage = {
   message: unknown;
 };
 
-type SessionEntryBatchProjectionMutation = {
-  entry: SessionEntry;
-  previousSessionKeys?: readonly string[];
-  sessionKey: string;
-};
-
-export type SessionEntryBatchProjectionUpdate<T> = {
-  mutations?: Iterable<SessionEntryBatchProjectionMutation>;
-  result: T;
-};
-
 export type {
   ExactSessionEntry,
   LatestTranscriptAssistantText,
   SessionAccessScope,
-  SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryReplacementSnapshot,
   SessionEntryReplacementUpdate,

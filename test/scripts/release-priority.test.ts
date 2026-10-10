@@ -1,17 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createClient, restoreReleasePriority } from "../../scripts/frv.mjs";
-import {
-  RELEASE_PRIORITY_VARIABLE,
-  isDeferredCiJobSet,
-  isReleaseBranch,
-  selectDeferredRunCandidates,
-  selectLatestRunsPerLane,
-} from "../../scripts/lib/release-priority.mjs";
+import { RELEASE_PRIORITY_VARIABLE } from "../../scripts/lib/release-priority.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const PARENT = {
@@ -42,130 +35,25 @@ function run(
   };
 }
 
-function client(
-  options: {
-    queued?: Record<string, unknown>[];
-    runs?: Record<string, unknown>[];
-    variable?: string;
-    jobs?: Record<string, Record<string, unknown>[]>;
-  } = {},
-) {
-  const calls: string[] = [];
-  let variable = options.variable ?? "";
-  return {
-    calls,
-    cancelRun: async (id: string) => void calls.push(`cancel:${id}`),
-    deleteVariable: async (name: string) => {
-      calls.push(`delete:${name}`);
-      variable = "";
-    },
-    getAttemptJobs: async (id: string) => options.jobs?.[id] ?? [],
-    getRun: async (id: string) =>
-      id === "77"
-        ? PARENT
-        : ([...(options.runs ?? []), ...(options.queued ?? [])].find(
-            (entry) => String(entry.id) === id,
-          ) ?? {
-            id,
-            status: "completed",
-          }),
-    getVariable: async () => variable,
-    listRuns: async (query: string) => {
-      calls.push(`list:${query}`);
-      return query.startsWith("status=queued")
-        ? (options.queued ?? [])
-        : query.startsWith("created=")
-          ? (options.runs ?? []).filter((entry) => {
-              const branch = new URLSearchParams(query).get("branch");
-              return !branch || branch === entry.head_branch;
-            })
-          : [];
-    },
-    repository: "openclaw/openclaw",
-    rerunRun: async (id: string) => void calls.push(`rerun:${id}`),
-  };
-}
-
-describe("release priority selection", () => {
-  it("recognizes release branches", () => {
-    expect(["release/x", "release-ci/x", "release-publish/x"].every(isReleaseBranch)).toBe(true);
-    expect(isReleaseBranch("feat/release/x")).toBe(false);
-  });
-
-  it("restores skipped gated runs and CI runs that only failed their deferral gate", () => {
-    const record = { parentRunId: "77", recordedAt: "2026-09-22T12:00:00Z" };
-    const candidates = selectDeferredRunCandidates(
-      [
-        run(1, "Labeler", { status: "completed", conclusion: "skipped" }),
-        run(2, "CI", { status: "completed", conclusion: "failure" }),
-        run(3, "CI", { status: "completed", conclusion: "success" }),
-        run(4, "Labeler", {
-          status: "completed",
-          conclusion: "skipped",
-          created_at: "2026-09-22T11:59:59Z",
-        }),
-        run(5, "CI", { status: "completed", conclusion: "skipped", event: "workflow_dispatch" }),
-        // Draft CI skips its gate too; unlike release deferral, there is no failed gate to restore.
-        run(6, "CI", { status: "completed", conclusion: "skipped" }),
-      ],
-      record,
-    );
-    expect(candidates.map((entry) => entry.id)).toEqual([1, 2]);
-    const gate = { name: "openclaw/ci-gate", conclusion: "failure" };
-    const preflight = { name: "preflight", conclusion: "skipped" };
-    expect(isDeferredCiJobSet([preflight, gate])).toBe(true);
-    expect(
-      isDeferredCiJobSet([preflight, gate, { name: "security-fast", conclusion: "success" }]),
-    ).toBe(true);
-    expect(
-      isDeferredCiJobSet([preflight, gate, { name: "macos-node", conclusion: "failure" }]),
-    ).toBe(false);
-    expect(isDeferredCiJobSet([{ name: "preflight", conclusion: "success" }, gate])).toBe(false);
-    expect(isDeferredCiJobSet([])).toBe(false);
-    expect(
-      selectLatestRunsPerLane([
-        { id: "1", name: "CI", lane: "pr:1", headBranch: "a", event: "pull_request", url: "" },
-        { id: "9", name: "CI", lane: "pr:1", headBranch: "a", event: "pull_request", url: "" },
-        { id: "2", name: "CI", lane: "pr:2", headBranch: "b", event: "pull_request", url: "" },
-      ]).map((entry) => entry.id),
-    ).toEqual(["9", "2"]);
-  });
-});
-
-function writeRecord(cancelled: Record<string, unknown>[]) {
-  const outPath = join(mkdtempSync(join(tmpdir(), "frv-priority-")), "record.json");
-  writeFileSync(
-    outPath,
-    JSON.stringify({
-      kind: "openclaw.frv-release-priority",
-      parentRunId: "77",
-      recordedAt: "2026-09-22T12:00:00.000Z",
-      cancelled,
-    }),
-  );
-  return outPath;
-}
-
 describe("pnpm frv prioritize --restore", () => {
   it("restores newest-per-lane runs from a historical record", async () => {
     // Older pause records have no run-lane identity; restore resolves it from current run facts.
-    const outPath = writeRecord(
-      [
-        run(1, "CI"),
-        run(15, "CI", { head_branch: "already-restored" }),
-        run(8, "CI", { head_branch: "later" }),
-      ].map((entry) => ({
-        event: entry.event,
-        headBranch: entry.head_branch,
-        id: entry.id,
-        name: entry.name,
-        url: entry.html_url,
-      })),
-    );
-    const after = { created_at: "2999-01-01T00:00:00Z", status: "completed" };
-    const restoreClient = client({
+    const cancelled = [
+      run(1, "CI"),
+      run(15, "CI", { head_branch: "already-restored" }),
+      run(8, "CI", { head_branch: "later" }),
+    ].map((entry) => ({
+      event: entry.event,
+      headBranch: entry.head_branch,
+      id: entry.id,
+      name: entry.name,
+      url: entry.html_url,
+    }));
+    const after = { created_at: "2026-09-22T12:01:00Z", status: "completed" };
+    const { result, calls } = await restore({
+      cancelled,
       variable: "77",
-      runs: [
+      initial: [
         run(1, "CI", { ...after, conclusion: "cancelled" }),
         run(3, "CI", { ...after, conclusion: "failure" }),
         run(4, "CI", { ...after, conclusion: "failure" }),
@@ -174,7 +62,7 @@ describe("pnpm frv prioritize --restore", () => {
         run(9, "CI", { ...after, conclusion: "failure", head_branch: "later" }),
         run(10, "CI", { ...after, status: "in_progress", head_branch: "later" }),
         run(11, "Labeler", { ...after, conclusion: "success" }),
-        run(12, "Labeler", { ...after, conclusion: "skipped", head_branch: "other" }),
+        run(12, "Labeler", { ...after, conclusion: "skipped", head_branch: "feat/release/x" }),
         run(13, "CI", { ...after, conclusion: "failure", head_branch: "manual-shared" }),
         run(14, "CI", {
           ...after,
@@ -197,54 +85,50 @@ describe("pnpm frv prioritize --restore", () => {
           head_repository: { id: 202 },
           pull_requests: [{ number: 502 }],
         }),
+        run(19, "CI", { ...after, conclusion: "failure", head_branch: "failed-job" }),
+        run(20, "CI", { ...after, conclusion: "failure", head_branch: "empty-jobs" }),
+        run(21, "Labeler", {
+          status: "completed",
+          conclusion: "skipped",
+          head_branch: "before-pause",
+          created_at: "2026-09-22T11:59:59Z",
+        }),
+        ...["release/x", "release-ci/x", "release-publish/x"].map((head_branch, index) =>
+          run(22 + index, "CI", { ...after, conclusion: "failure", head_branch }),
+        ),
       ],
       jobs: {
-        "3": [
-          { name: "preflight", conclusion: "skipped" },
-          { name: "security-fast", conclusion: "success" },
-          { name: "openclaw/ci-gate", conclusion: "failure" },
-        ],
+        "3": [...deferredJobs, { name: "security-fast", conclusion: "success" }],
         "4": [
           { name: "preflight", conclusion: "success" },
           { name: "openclaw/ci-gate", conclusion: "failure" },
         ],
-        "9": [
-          { name: "preflight", conclusion: "skipped" },
-          { name: "openclaw/ci-gate", conclusion: "failure" },
-        ],
-        "13": [
-          { name: "preflight", conclusion: "skipped" },
-          { name: "openclaw/ci-gate", conclusion: "failure" },
-        ],
-        "17": [
-          { name: "preflight", conclusion: "skipped" },
-          { name: "openclaw/ci-gate", conclusion: "failure" },
-        ],
+        "9": deferredJobs,
+        "13": deferredJobs,
+        "17": deferredJobs,
+        "19": [...deferredJobs, { name: "macos-node", conclusion: "failure" }],
+        "20": [],
       },
     });
     // Executed run 4 and active run 10 supersede the deferred CI attempts.
     // Successful run 11 likewise owns its lane. Manual run 14 is independent of PR run 13.
-    await expect(restoreReleasePriority(outPath, restoreClient)).resolves.toMatchObject({
+    expect(result).toMatchObject({
       action: "restored",
       cleared: true,
       failures: [],
+      skipped: [],
       rerun: [{ id: "12" }, { id: "13" }, { id: "17" }],
     });
-    expect(restoreClient.calls.filter((call) => !call.startsWith("list:"))).toEqual([
-      `delete:${RELEASE_PRIORITY_VARIABLE}`,
-      "rerun:12",
-      "rerun:13",
-      "rerun:17",
+    expect(calls.filter((call) => !call.startsWith("GET "))).toEqual([
+      `variable delete ${RELEASE_PRIORITY_VARIABLE} --repo fixture/fixture`,
+      ...[12, 13, 17].map((id) => `api -X POST repos/fixture/fixture/actions/runs/${id}/rerun`),
     ]);
   });
 
   it("keeps a foreign variable", async () => {
-    const other = client({ variable: "99" });
-    const outPath = writeRecord([]);
-    await expect(
-      restoreReleasePriority(outPath, { ...other, getVariable: async () => "99" }),
-    ).resolves.toMatchObject({ cleared: false });
-    expect(other.calls).not.toContain(`delete:${RELEASE_PRIORITY_VARIABLE}`);
+    const { result, calls } = await restore({ variable: "99" });
+    expect(result).toMatchObject({ cleared: false });
+    expect(calls.some((call) => call.startsWith("variable delete "))).toBe(false);
   });
 });
 
@@ -253,6 +137,77 @@ const deferredJobs = [
   { name: "preflight", conclusion: "skipped" },
   { name: "openclaw/ci-gate", conclusion: "failure" },
 ];
+
+async function restore(
+  options: {
+    initial?: Record<string, unknown>[];
+    advance?: (runs: Record<string, unknown>[], request: string, jobReads: number) => void;
+    afterMutation?: (runs: Record<string, unknown>[]) => void;
+    incomplete?: boolean;
+    failMutation?: boolean;
+    cancelled?: Record<string, unknown>[];
+    variable?: string;
+    jobs?: Record<string, Record<string, unknown>[]>;
+  } = {},
+) {
+  const current = options.initial ?? [
+    run(100, "CI", {
+      status: "completed",
+      conclusion: "failure",
+      pull_requests: [{ number: 42 }],
+    }),
+  ];
+  const calls: string[] = [];
+  let jobReads = 0;
+  const restoreClient = createClient("fixture/fixture", {
+    apiJson: async (resource: string) => {
+      calls.push("GET " + resource);
+      if (resource.startsWith("actions/variables/")) {
+        return { value: options.variable ?? "" };
+      }
+      if (resource.startsWith("actions/runs?")) {
+        const query = new URL(resource, "https://example.invalid/").searchParams;
+        const branch = query.get("branch");
+        const found = current.filter((entry) => !branch || branch === entry.head_branch);
+        return {
+          total_count: found.length + (branch && options.incomplete ? 1 : 0),
+          workflow_runs: structuredClone(found),
+        };
+      }
+      options.advance?.(current, resource, jobReads);
+      return structuredClone(
+        current.find((entry) => resource === "actions/runs/" + String(entry.id)),
+      );
+    },
+    apiText: async (resource: string) => {
+      calls.push("GET " + resource);
+      jobReads++;
+      options.advance?.(current, resource, jobReads);
+      return (options.jobs?.[resource.split("/")[2]!] ?? deferredJobs)
+        .map((job) => JSON.stringify(job))
+        .join("\n");
+    },
+    mutate: async (args: string[]) => {
+      calls.push(args.join(" "));
+      options.afterMutation?.(current);
+      if (options.failMutation) {
+        throw new Error("ambiguous transport failure");
+      }
+    },
+  });
+  const path = join(tempDirs.make("frv-restore-dispatch-"), "record.json");
+  writeFileSync(
+    path,
+    JSON.stringify({
+      kind: "openclaw.frv-release-priority",
+      parentRunId: "77",
+      recordedAt: "2026-09-22T12:00:00Z",
+      cancelled: options.cancelled ?? [],
+    }),
+  );
+  const result = await restoreReleasePriority(path, restoreClient);
+  return { result, calls, writes: calls.filter((call) => call.startsWith("api -X POST")) };
+}
 
 // Exercise main(), the real client and the printer; only gh's external transport is synthetic.
 function priorityCli({
@@ -291,8 +246,8 @@ if (args[0] === "variable") {
 } else if (args[0] === "api" && args[1] === "-X") {
   if (JSON.stringify(args) !== JSON.stringify(["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"])) reject();
 } else {
-  if (args[0] !== "api" || !args.includes("Cache-Control: max-age=0")) reject();
-  const resource = args[1].replace("repos/fixture/fixture/", "");
+  if (args[0] !== "api" || !args.includes("--include") || !args.includes("Cache-Control: max-age=0")) reject();
+  const resource = args.find(arg => arg.startsWith("repos/fixture/fixture/")).replace("repos/fixture/fixture/", "");
   const query = new URL(resource, "https://example.invalid").searchParams;
   let value;
   if (resource === "actions/variables/${RELEASE_PRIORITY_VARIABLE}") value = { value: "" };
@@ -312,6 +267,7 @@ if (args[0] === "variable") {
     value = runs.find(run => resource === "actions/runs/" + run.id);
     if (!value) reject();
   }
+  process.stdout.write("HTTP/2.0 200 OK\nContent-Type: application/json\r\n\r\n");
   console.log(Array.isArray(value) ? value.map(row => JSON.stringify(row)).join("\n") : JSON.stringify(value));
 }
 `,
@@ -376,19 +332,64 @@ syncBuiltinESMExports();
 }
 
 describe("release-priority CLI output", () => {
-  it("reports a rejected rerun and recovery guidance alongside an attempted sibling", () => {
-    const result = priorityCli();
-    expect(result.mutations).toEqual([
-      ["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"],
-    ]);
-    expect(result.stdout).toContain("CI 200 branch-200 https://example.invalid/runs/200");
-    expect(result.stdout).toContain(
-      "skipped (rerun not attempted): CI 100 branch-100 https://example.invalid/runs/100",
+  it.each([
+    {
+      label: "attempted and skipped siblings",
+      skipped: [100],
+      allowed: true,
+      args: [],
+      mutations: 1,
+      contains: [
+        "CI 200 branch-200 https://example.invalid/runs/200",
+        "skipped (rerun not attempted): CI 100 branch-100 https://example.invalid/runs/100",
+        "Inspect the skipped runs and their latest PR checks",
+        "pnpm frv prioritize --restore <record> --dry-run",
+        "same --repo",
+        "action: restored",
+      ],
+    },
+    {
+      label: "only skipped candidates",
+      skipped: [100, 300],
+      allowed: false,
+      args: [],
+      mutations: 0,
+      contains: [
+        ...[100, 300].map(
+          (id) =>
+            `skipped (rerun not attempted): CI ${id} branch-${id} https://example.invalid/runs/${id}`,
+        ),
+        "--restore <record> --dry-run",
+      ],
+    },
+    {
+      label: "no skipped candidates",
+      skipped: [],
+      allowed: true,
+      args: [],
+      mutations: 1,
+      exact: "CI 200 branch-200 https://example.invalid/runs/200\naction: restored\n",
+    },
+    {
+      label: "dry-run",
+      skipped: [100],
+      allowed: true,
+      args: ["--dry-run"],
+      mutations: 0,
+      exact:
+        "CI 100 branch-100 https://example.invalid/runs/100\nCI 200 branch-200 https://example.invalid/runs/200\naction: would-restore\n",
+    },
+  ])("reports $label without misrepresenting dispatch", (row) => {
+    const result = priorityCli(row);
+    expect(result.mutations).toEqual(
+      row.mutations ? [["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"]] : [],
     );
-    expect(result.stdout).toContain("Inspect the skipped runs and their latest PR checks");
-    expect(result.stdout).toContain("pnpm frv prioritize --restore <record> --dry-run");
-    expect(result.stdout).toContain("same --repo");
-    expect(result.stdout).toContain("action: restored");
+    if (row.exact !== undefined) {
+      expect(result.stdout).toBe(row.exact);
+    }
+    for (const text of row.contains ?? []) {
+      expect(result.stdout).toContain(text);
+    }
   });
 
   it("preserves the restore JSON shape without presentation text", () => {
@@ -412,178 +413,97 @@ describe("release-priority CLI output", () => {
       ["api", "-X", "POST", "repos/fixture/fixture/actions/runs/200/rerun"],
     ]);
   });
-
-  it("reports every skipped candidate even when no rerun was attempted", () => {
-    const result = priorityCli({ skipped: [100, 300], allowed: false });
-    expect(result.mutations).toEqual([]);
-    for (const id of [100, 300]) {
-      expect(result.stdout).toContain(
-        `skipped (rerun not attempted): CI ${id} branch-${id} https://example.invalid/runs/${id}`,
-      );
-    }
-    expect(result.stdout).toContain("--restore <record> --dry-run");
-  });
-
-  it("keeps ordinary output unchanged when no candidates are skipped", () => {
-    const result = priorityCli({ skipped: [] });
-    expect(result.stdout).toBe(
-      "CI 200 branch-200 https://example.invalid/runs/200\naction: restored\n",
-    );
-    expect(result.mutations).toHaveLength(1);
-  });
-
-  it("previews current candidates without attempting mutations or claiming final skips", () => {
-    const result = priorityCli({ args: ["--dry-run"] });
-    expect(result.mutations).toEqual([]);
-    expect(result.stdout).toBe(
-      "CI 100 branch-100 https://example.invalid/runs/100\nCI 200 branch-200 https://example.invalid/runs/200\naction: would-restore\n",
-    );
-  });
 });
 
 describe("restore dispatch revalidation through createClient", () => {
-  async function restore(
-    options: {
-      initial?: Record<string, unknown>[];
-      advance?: (runs: Record<string, unknown>[], request: string, jobReads: number) => void;
-      afterMutation?: (runs: Record<string, unknown>[]) => void;
-      incomplete?: boolean;
-      failMutation?: boolean;
-      cancelled?: { id: number }[];
-    } = {},
-  ) {
-    const current = options.initial ?? [
-      run(100, "CI", {
+  it.each(["unchanged", "independent peers", "legacy cancellation"])(
+    "dispatches only the eligible original run: %s",
+    async (scenario) => {
+      const candidate = run(100, "CI", {
         status: "completed",
-        conclusion: "failure",
-        pull_requests: [{ number: 42 }],
-      }),
-    ];
-    const calls: string[] = [];
-    let jobReads = 0;
-    const restoreClient = createClient("fixture/fixture", {
-      apiJson: async (resource: string) => {
-        calls.push("GET " + resource);
-        if (resource.startsWith("actions/variables/")) {
-          return { value: "" };
-        }
-        if (resource.startsWith("actions/runs?")) {
-          const query = new URL(resource, "https://example.invalid/").searchParams;
-          const branch = query.get("branch");
-          const found = current.filter((entry) => !branch || branch === entry.head_branch);
-          return {
-            total_count: found.length + (branch && options.incomplete ? 1 : 0),
-            workflow_runs: structuredClone(found),
-          };
-        }
-        options.advance?.(current, resource, jobReads);
-        return structuredClone(
-          current.find((entry) => resource === "actions/runs/" + String(entry.id)),
-        );
-      },
-      apiText: async (resource: string) => {
-        calls.push("GET " + resource);
-        jobReads++;
-        options.advance?.(current, resource, jobReads);
-        return deferredJobs.map((job) => JSON.stringify(job)).join(String.fromCharCode(10));
-      },
-      mutate: async (args: string[]) => {
-        calls.push(args.join(" "));
-        options.afterMutation?.(current);
-        if (options.failMutation) {
-          throw new Error("ambiguous transport failure");
-        }
-      },
-    });
-    const path = join(tempDirs.make("frv-restore-dispatch-"), "record.json");
-    writeFileSync(
-      path,
-      JSON.stringify({
-        kind: "openclaw.frv-release-priority",
-        parentRunId: "77",
-        recordedAt: "2026-09-22T11:00:00Z",
-        cancelled: options.cancelled ?? [],
-      }),
-    );
-    const result = await restoreReleasePriority(path, restoreClient);
-    return { result, calls, writes: calls.filter((call) => call.startsWith("api -X POST")) };
-  }
-
-  it("dispatches an unchanged attempt once after fresh jobs and complete lane inventory", async () => {
-    const { result, calls, writes } = await restore();
-    expect(result).toMatchObject({ failures: [], rerun: [{ id: "100" }], skipped: [] });
-    expect(writes).toEqual(["api -X POST repos/fixture/fixture/actions/runs/100/rerun"]);
-    expect(calls.at(-2)).toContain("branch=feat%2Fthing");
-    expect(calls.filter((call) => call.includes("/attempts/1/jobs"))).toHaveLength(2);
-  });
-
-  it.each([1, 2])(
-    "rejects newer lane work appearing during awaited job read %s",
-    async (jobRead) => {
-      const { result, writes } = await restore({
-        advance: (runs, request, reads) => {
-          if (request.includes("/jobs") && reads === jobRead) {
-            runs.push({ ...runs[0], id: 101, status: "in_progress", conclusion: null });
-          }
-        },
+        conclusion: scenario === "legacy cancellation" ? "cancelled" : "failure",
+        ...(scenario === "legacy cancellation" ? {} : { pull_requests: [{ number: 42 }] }),
       });
-      expect(result).toMatchObject({ failures: [], rerun: [], skipped: [{ id: "100" }] });
-      expect(writes).toEqual([]);
+      const { result, calls, writes } = await restore({
+        initial:
+          scenario === "independent peers"
+            ? [
+                candidate,
+                { ...candidate, id: 101, status: "in_progress", event: "workflow_dispatch" },
+                {
+                  ...candidate,
+                  id: 102,
+                  conclusion: "success",
+                  head_repository: { id: 200 },
+                  pull_requests: [{ number: 43 }],
+                },
+                { ...candidate, id: 103, conclusion: "skipped", pull_requests: [{ number: 44 }] },
+              ]
+            : [candidate],
+        cancelled: scenario === "legacy cancellation" ? [{ id: 100 }] : [],
+      });
+      expect(result).toMatchObject({ failures: [], rerun: [{ id: "100" }], skipped: [] });
+      expect(writes).toEqual(["api -X POST repos/fixture/fixture/actions/runs/100/rerun"]);
+      expect(calls.at(-2)).toContain("branch=feat%2Fthing");
+      if (scenario === "unchanged") {
+        expect(calls.filter((call) => call.includes("/attempts/1/jobs"))).toHaveLength(2);
+      }
     },
   );
 
-  it.each([
-    { run_attempt: 2 },
-    { status: "in_progress", conclusion: null },
-    { conclusion: "success" },
-    { head_sha: "b".repeat(40) },
-    { pull_requests: [{ number: 43 }] },
-    { workflow_id: 7 },
-    { event: "workflow_dispatch" },
-    { head_repository: { id: 999 } },
-  ])("rejects changed attempt, state or identity %j after selection", async (change) => {
-    const { writes } = await restore({
-      advance: (runs, request) => {
-        if (request === "actions/runs/100") {
-          Object.assign(runs[0]!, change);
-        }
-      },
-    });
-    expect(writes).toEqual([]);
-  });
-
-  it("rejects an attempt advancing while awaited job validation completes", async () => {
-    const { writes } = await restore({
+  const staleAuthorityCases: {
+    label: string;
+    jobRead: number;
+    peer?: boolean;
+    change?: Record<string, unknown>;
+  }[] = [
+    ...[1, 2].map((jobRead) => ({
+      label: `new lane work during job read ${jobRead}`,
+      jobRead,
+      peer: true,
+    })),
+    { label: "attempt advances during validation", jobRead: 2, change: { run_attempt: 2 } },
+    {
+      label: "ambiguous peer identity",
+      jobRead: 1,
+      peer: true,
+      change: { pull_requests: [], head_repository: null },
+    },
+    ...[
+      { run_attempt: 2 },
+      { status: "in_progress", conclusion: null },
+      { conclusion: "success" },
+      { head_sha: "b".repeat(40) },
+      { pull_requests: [{ number: 43 }] },
+      { workflow_id: 7 },
+      { event: "workflow_dispatch" },
+      { head_repository: { id: 999 } },
+    ].map((change) => ({ label: JSON.stringify(change), jobRead: 0, change })),
+  ];
+  it.each(staleAuthorityCases)("rejects stale dispatch authority: $label", async (row) => {
+    const { result, writes } = await restore({
       advance: (runs, request, reads) => {
-        if (request.includes("/jobs") && reads === 2) {
-          runs[0]!.run_attempt = 2;
+        if (
+          row.jobRead
+            ? request.includes("/jobs") && reads === row.jobRead
+            : request === "actions/runs/100"
+        ) {
+          if (row.peer) {
+            runs.push({
+              ...runs[0],
+              id: 101,
+              status: "in_progress",
+              conclusion: null,
+              ...row.change,
+            });
+          } else if (row.change) {
+            Object.assign(runs[0]!, row.change);
+          }
         }
       },
     });
     expect(writes).toEqual([]);
-  });
-
-  it("does not let manual dispatches or another fork suppress the PR; never restores draft CI", async () => {
-    const deferred = run(100, "CI", {
-      status: "completed",
-      conclusion: "failure",
-      pull_requests: [{ number: 42 }],
-    });
-    const { writes } = await restore({
-      initial: [
-        deferred,
-        { ...deferred, id: 101, status: "in_progress", event: "workflow_dispatch" },
-        {
-          ...deferred,
-          id: 102,
-          conclusion: "success",
-          head_repository: { id: 200 },
-          pull_requests: [{ number: 43 }],
-        },
-        { ...deferred, id: 103, conclusion: "skipped", pull_requests: [{ number: 44 }] },
-      ],
-    });
-    expect(writes).toEqual(["api -X POST repos/fixture/fixture/actions/runs/100/rerun"]);
+    expect(result).toMatchObject({ failures: [], rerun: [], skipped: [{ id: "100" }] });
   });
 
   it("rechecks every dispatch rather than validating the whole batch before its first POST", async () => {
@@ -603,24 +523,10 @@ describe("restore dispatch revalidation through createClient", () => {
     expect(result).toMatchObject({ skipped: [{ id: "200" }] });
   });
 
-  it("rebinds a legacy cancellation without saved lane or attempt fields", async () => {
-    const cancelled = run(100, "CI", { status: "completed", conclusion: "cancelled" });
-    const { writes } = await restore({ initial: [cancelled], cancelled: [{ id: 100 }] });
-    expect(writes).toHaveLength(1);
-  });
-
-  it("fails closed on incomplete inventory and ambiguous peer identity", async () => {
-    const incomplete = await restore({ incomplete: true });
-    expect(incomplete.writes).toEqual([]);
-    expect(incomplete.result.failures).toEqual(["100: Incomplete GitHub Actions run inventory"]);
-    const ambiguous = await restore({
-      advance: (runs, request, reads) => {
-        if (request.includes("/jobs") && reads === 1) {
-          runs.push({ ...runs[0], id: 101, pull_requests: [], head_repository: null });
-        }
-      },
-    });
-    expect(ambiguous.writes).toEqual([]);
+  it("fails closed on incomplete inventory", async () => {
+    const { writes, result } = await restore({ incomplete: true });
+    expect(writes).toEqual([]);
+    expect(result.failures).toEqual(["100: Incomplete GitHub Actions run inventory"]);
   });
 
   it("never retries an ambiguous rerun POST", async () => {

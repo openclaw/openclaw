@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, nothing } from "lit";
 import type { SessionsPatchMutation } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import {
   SESSION_COMMUNICATION_MODES,
@@ -7,9 +7,6 @@ import {
   type EffectiveSessionCommunicationPolicy,
 } from "../../../packages/gateway-protocol/src/session-communication.js";
 import { t } from "../i18n/index.ts";
-import { icons } from "./icons.ts";
-
-export type SessionCommunicationDirection = keyof EffectiveSessionCommunicationPolicy;
 
 function communicationModeLabel(mode: SessionCommunicationMode): string {
   return t(
@@ -19,83 +16,6 @@ function communicationModeLabel(mode: SessionCommunicationMode): string {
         ? "sessionsView.communication.ask"
         : "sessionsView.communication.never",
   );
-}
-
-function communicationDirectionLabel(direction: SessionCommunicationDirection): string {
-  return t(
-    direction === "send" ? "sessionsView.communication.send" : "sessionsView.communication.receive",
-  );
-}
-
-function communicationDirectionTitle(direction: SessionCommunicationDirection): string {
-  return t(
-    direction === "send"
-      ? "sessionsView.communication.sendDescription"
-      : "sessionsView.communication.receiveDescription",
-  );
-}
-
-function renderCommunicationOptions(params: {
-  direction: SessionCommunicationDirection;
-  communication: SessionCommunicationPolicy | undefined;
-  effectiveCommunication: EffectiveSessionCommunicationPolicy;
-  inline: boolean;
-  disabled: boolean;
-  disabledReason?: string;
-}) {
-  const { direction, communication, effectiveCommunication, inline, disabled, disabledReason } =
-    params;
-  const selected = effectiveCommunication[direction];
-  return html`
-    ${SESSION_COMMUNICATION_MODES.map(
-      (mode) => html`
-        <wa-dropdown-item
-          slot=${inline ? nothing : "submenu"}
-          class="session-menu__item session-menu__communication-option"
-          type="checkbox"
-          ?checked=${selected === mode}
-          ?disabled=${disabled}
-          title=${disabledReason ?? nothing}
-          value=${`communication:${direction}:${mode}`}
-        >
-          <span class="session-menu__text">${communicationModeLabel(mode)}</span>
-          ${
-            selected === mode && communication?.[direction] === undefined
-              ? html`<span class="session-menu__communication-default"
-                  >${t("sessionsView.communication.default")}</span
-                >`
-              : nothing
-          }
-          ${
-            selected === mode
-              ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-                  >${icons.check}</span
-                >`
-              : nothing
-          }
-        </wa-dropdown-item>
-      `,
-    )}
-    ${
-      communication?.send !== undefined || communication?.receive !== undefined
-        ? html`
-            <div
-              slot=${inline ? nothing : "submenu"}
-              class="session-menu__separator"
-              role="separator"
-            ></div>
-            <wa-dropdown-item
-              slot=${inline ? nothing : "submenu"}
-              class="session-menu__item"
-              value="communication:reset"
-              ?disabled=${disabled}
-              title=${disabledReason ?? t("sessionsView.communication.resetDescription")}
-              ><span class="session-menu__text">${t("common.reset")}</span></wa-dropdown-item
-            >
-          `
-        : nothing
-    }
-  `;
 }
 
 export type SessionCommunicationMenuAction = {
@@ -113,18 +33,10 @@ type SessionCommunicationMenuHost = {
   };
   disabled: () => boolean;
   disabledReason: () => string | undefined;
-  renderSubmenu: (
-    view: "communication-send" | "communication-receive",
-    label: string,
-    icon: TemplateResult,
-    disabled: boolean,
-    title: string,
-    details: TemplateResult,
-  ) => TemplateResult;
   runAction: (action: SessionCommunicationMenuAction) => void;
 };
 
-/** Owns communication menu presentation and translates selections into sparse patches. */
+/** Presents Gateway policy and translates choices into independent sparse patches. */
 export class SessionMenuCommunication {
   constructor(private readonly host: SessionCommunicationMenuHost) {}
 
@@ -144,47 +56,69 @@ export class SessionMenuCommunication {
     return false;
   }
 
-  renderActions() {
+  renderActions(inline: boolean) {
     const state = this.host.readState();
-    const { communication, effectiveCommunication } = state.session;
-    if (state.selectionCount > 1 || !effectiveCommunication) {
+    if (state.selectionCount > 1) {
       return nothing;
     }
-    const disabled = this.host.disabled();
+    const { communication, effectiveCommunication } = state.session;
+    const disabled = this.host.disabled() || !effectiveCommunication;
     const reason = this.host.disabledReason();
     return html`
-      <div class="session-menu__separator" role="separator"></div>
-      <div class="session-menu__info">${t("sessionsView.communication.title")}</div>
-      ${(["send", "receive"] as const).map((direction) =>
-        this.host.renderSubmenu(
-          direction === "send" ? "communication-send" : "communication-receive",
-          communicationDirectionLabel(direction),
-          direction === "send" ? icons.arrowUpRight : icons.arrowDown,
-          disabled,
-          reason ?? communicationDirectionTitle(direction),
-          html`${communicationModeLabel(effectiveCommunication[direction])}${
-            communication?.[direction] === undefined
-              ? html`<span class="session-menu__communication-default"
-                  >${t("sessionsView.communication.default")}</span
-                >`
-              : nothing
-          }`,
-        ),
-      )}
+      <div
+        slot=${inline ? nothing : "submenu"}
+        class="session-menu__separator"
+        role="separator"
+      ></div>
+      <div slot=${inline ? nothing : "submenu"} class="session-menu__communication">
+        ${(["send", "receive"] as const).map((direction) => {
+          const label = t(
+            direction === "send"
+              ? "sessionsView.communication.send"
+              : "sessionsView.communication.receive",
+          );
+          return html`<div class="session-menu__communication-row" title=${reason ?? nothing}>
+            <span class="session-menu__text">${label}</span>
+            <div class="session-menu__communication-picker" role="group" aria-label=${label}>
+              ${SESSION_COMMUNICATION_MODES.map(
+                (mode) => html`<button
+                  type="button"
+                  class="session-menu__communication-choice"
+                  value=${`communication:${direction}:${mode}`}
+                  aria-pressed=${effectiveCommunication?.[direction] === mode}
+                  ?disabled=${disabled}
+                  title=${reason ?? (communication?.[direction] === undefined && effectiveCommunication?.[direction] === mode ? t("sessionsView.communication.default") : nothing)}
+                  @click=${(event: MouseEvent) => {
+                    event.stopPropagation();
+                    this.handleSelect(`communication:${direction}:${mode}`);
+                  }}
+                  @keydown=${(event: KeyboardEvent) => {
+                    // Embedded controls own activation; Escape and Tab retain menu behavior.
+                    if (event.key !== "Escape" && event.key !== "Tab") {
+                      event.stopPropagation();
+                    }
+                  }}
+                >
+                  ${communicationModeLabel(mode)}
+                </button>`,
+              )}
+            </div>
+          </div>`;
+        })}
+      </div>
+      ${
+        communication?.send !== undefined || communication?.receive !== undefined
+          ? html` <wa-dropdown-item
+              slot=${inline ? nothing : "submenu"}
+              class="session-menu__item"
+              value="communication:reset"
+              ?disabled=${disabled}
+              title=${reason ?? t("sessionsView.communication.resetDescription")}
+            >
+              <span class="session-menu__text">${t("common.reset")}</span>
+            </wa-dropdown-item>`
+          : nothing
+      }
     `;
-  }
-
-  renderSubmenu(direction: SessionCommunicationDirection, inline: boolean) {
-    const { session } = this.host.readState();
-    return session.effectiveCommunication
-      ? renderCommunicationOptions({
-          direction,
-          communication: session.communication,
-          effectiveCommunication: session.effectiveCommunication,
-          inline,
-          disabled: this.host.disabled(),
-          disabledReason: this.host.disabledReason(),
-        })
-      : html``;
   }
 }

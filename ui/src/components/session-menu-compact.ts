@@ -11,13 +11,12 @@ export type CompactSessionMenuView =
   | "icon"
   | "group"
   | "snooze"
-  | "communication-send"
-  | "communication-receive";
+  | "settings";
 
 const COMPACT_SESSION_MENU_VIEW_BY_VALUE: Record<string, CompactSessionMenuView> = {
   "compact:back": "root",
-  "compact:open-communication-send": "communication-send",
-  "compact:open-communication-receive": "communication-receive",
+  "compact:open-settings": "settings",
+  "compact:back-settings": "settings",
   "compact:open-copy": "copy",
   "compact:open-snooze": "snooze",
   "compact:open-assign-owner": "assign-owner",
@@ -63,9 +62,15 @@ export function renderCompactSessionMenuNavigationItem(params: {
   `;
 }
 
-export function renderCompactSessionMenuFrame(body: TemplateResult | readonly TemplateResult[]) {
+export function renderCompactSessionMenuFrame(
+  body: TemplateResult | readonly TemplateResult[],
+  parent: "root" | "settings" = "root",
+) {
   return html`
-    <wa-dropdown-item class="session-menu__item session-menu__back" value="compact:back">
+    <wa-dropdown-item
+      class="session-menu__item session-menu__back"
+      value=${parent === "settings" ? "compact:back-settings" : "compact:back"}
+    >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.arrowLeft}</span>
       <span class="session-menu__text">${t("common.back")}</span>
     </wa-dropdown-item>

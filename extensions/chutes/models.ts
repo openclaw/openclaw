@@ -107,10 +107,6 @@ export async function discoverChutesModels(
     discoveryApiKey: normalizeOptionalString(accessToken),
     timeoutMs: 10_000,
     ttlMs: CACHE_TTL,
-    buildRequestHeaders: ({ discoveryApiKey }) => ({
-      Accept: "application/json",
-      ...(discoveryApiKey ? { Authorization: `Bearer ${discoveryApiKey}` } : {}),
-    }),
     policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(CHUTES_BASE_URL),
     auditContext: "chutes-model-discovery",
     fetchGuard: (params) => fetchWithSsrFGuard(withTrustedEnvProxyGuardedFetchMode(params)),

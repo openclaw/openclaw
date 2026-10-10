@@ -16,7 +16,10 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import { upsertAuthProfileWithLockOrThrow } from "../agents/auth-profiles/upsert-with-lock.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import * as stateDb from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
@@ -49,7 +52,9 @@ describe("shared auth store relocation", () => {
     ownerFixtureRun = undefined;
     vi.restoreAllMocks();
     sqlite.closeAuthProfileReadPool();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await stateDb.closeOpenClawStateDatabaseAsync();
     stateDb.closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     for (const state of ownerStates.splice(0).toReversed()) {
@@ -698,12 +703,14 @@ describe("shared auth store relocation", () => {
     const legacyDatabase = new DatabaseSync(stateDatabasePath);
     try {
       legacyDatabase.exec(`
+        PRAGMA user_version = 8;
         CREATE TABLE agent_databases (
-          agent_id TEXT PRIMARY KEY,
+          agent_id TEXT NOT NULL,
           path TEXT NOT NULL,
           schema_version INTEGER NOT NULL,
           last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
+          size_bytes INTEGER,
+          PRIMARY KEY (agent_id, path)
         );
         INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
       `);

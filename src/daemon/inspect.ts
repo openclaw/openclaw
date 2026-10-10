@@ -1,4 +1,3 @@
-/** Inspects installed platform services for extra OpenClaw or legacy gateway jobs. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -89,9 +88,7 @@ export function renderGatewayServiceCleanupHints(
   for (const service of services) {
     switch (service.platform) {
       case "darwin": {
-        const plistPath = service.detail.startsWith("plist:")
-          ? service.detail.slice("plist:".length).trim()
-          : undefined;
+        const plistPath = service.sourcePath;
         // Global LaunchAgents still run in a GUI domain; only LaunchDaemons
         // belong to the system domain regardless of their shared file scope.
         const domain =
@@ -184,6 +181,7 @@ async function scanLaunchdDir(params: {
       platform: "darwin",
       label,
       detail: `plist: ${fullPath}`,
+      sourcePath: fullPath,
       scope: params.scope,
       marker,
       legacy: marker !== "openclaw" || isLegacyLabel(label),
@@ -380,33 +378,25 @@ async function scanGatewayServices(
   if (process.platform === "darwin") {
     try {
       const home = resolveDaemonHomeDir(env);
-      const userDir = path.join(home, "Library", "LaunchAgents");
-      for (const svc of await scanLaunchdDir({
-        dir: userDir,
-        scope: "user",
-        selectedName: resolveLaunchAgentLabel(env),
-        errors,
-      })) {
-        push(svc);
-      }
+      const scan = async (dir: string, scope: "user" | "system", managedLabel?: string) => {
+        for (const svc of await scanLaunchdDir({
+          dir,
+          scope,
+          managedLabel,
+          selectedName: resolveLaunchAgentLabel(env),
+          errors,
+        })) {
+          push(svc);
+        }
+      };
+      await scan(path.join(home, "Library", "LaunchAgents"), "user");
       if (opts.deep) {
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchAgents"),
-          scope: "system",
-          selectedName: resolveLaunchAgentLabel(env),
-          errors,
-        })) {
-          push(svc);
-        }
-        for (const svc of await scanLaunchdDir({
-          dir: path.join(path.sep, "Library", "LaunchDaemons"),
-          scope: "system",
-          managedLabel: resolveLaunchAgentLabel(env),
-          selectedName: resolveLaunchAgentLabel(env),
-          errors,
-        })) {
-          push(svc);
-        }
+        await scan(path.join(path.sep, "Library", "LaunchAgents"), "system");
+        await scan(
+          path.join(path.sep, "Library", "LaunchDaemons"),
+          "system",
+          resolveLaunchAgentLabel(env),
+        );
       }
     } catch (error) {
       if (hasCommandProcessCleanupError(error)) {
@@ -506,6 +496,7 @@ async function scanGatewayServices(
                 platform: "linux",
                 label: unit.name,
                 detail: `unit: ${unit.fragmentPath}`,
+                sourcePath: unit.fragmentPath,
                 scope,
                 marker: marker ?? "openclaw",
                 legacy: marker === "clawdbot",

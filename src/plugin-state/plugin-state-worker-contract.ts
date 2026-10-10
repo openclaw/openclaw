@@ -49,6 +49,13 @@ export type PluginStateWorkerRequests = {
     output: PluginStateCompareResult<unknown>;
   };
   "pluginState.register": { input: Register; output: void };
+  "pluginState.replaceEntry": { input: Register; output: void };
+  "pluginState.replace": {
+    input: Omit<Register, "key" | "valueJson" | "ttlMs"> & {
+      entries: readonly Pick<Register, "key" | "valueJson" | "ttlMs">[];
+    };
+    output: void;
+  };
   "pluginState.registerIfAbsent": {
     input: Register;
     output: boolean;
@@ -82,7 +89,7 @@ export type PluginStateWorkerOperations = {
     input: PluginStateWorkerRequests[Request]["input"] extends undefined
       ? undefined
       : PluginStateWorkerRequests[Request]["input"] & {
-          sessionEntryCurrentSource?: SessionEntryCurrentSource;
+          sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
         };
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };
@@ -123,6 +130,16 @@ export const pluginStateWorkerOperations = {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to register plugin state entry.",
+  },
+  "pluginState.replace": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state namespace.",
+  },
+  "pluginState.replaceEntry": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to replace plugin state entry.",
   },
   "pluginState.registerIfAbsent": {
     operation: "register",

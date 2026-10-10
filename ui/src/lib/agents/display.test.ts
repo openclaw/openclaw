@@ -513,7 +513,7 @@ describe("resolveAgentSkillsFilter", () => {
         {
           agents: {
             defaults: { skills: [" github ", "weather"] },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         "main",
@@ -572,7 +572,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,
@@ -591,7 +591,7 @@ describe("buildAgentContext", () => {
       {
         agents: {
           defaults: { skills: ["github", "weather"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,

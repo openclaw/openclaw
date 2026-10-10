@@ -4,6 +4,8 @@ import { escapeRegExp } from "../shared/regexp.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 /** Token that marks an auto-reply response as intentionally silent. */
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
+/** Exact first line of an unattended automation reply that records the run as failed. */
+export const AUTOMATION_FAILED_TOKEN = "AUTOMATION_FAILED";
 
 const HARMONY_CHANNEL_MARKER_RE = /^\s*(?:set-thought\s+)?<[\w]*\|[^>]*>\s*$/;
 const BOX_DRAWING_HR_ONLY_RE = /^\s*─{3,}\s*$/;
@@ -65,15 +67,10 @@ export function isSilentReplyText(
   );
 }
 
-function isSilentReplyJsonText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
+function isSilentReplyJsonText(text: string | undefined, token: string): boolean {
+  const trimmed = text?.trim();
   if (
+    !trimmed ||
     !trimmed.includes(token) ||
     !(
       (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
@@ -129,26 +126,25 @@ function stripFinalSilentToken(text: string, token: string): string | null {
 const silentIntentTextRe =
   /^\s*(?:i|i'll|i\s+will|i'm|i\s+am|we|we'll|we\s+will|the\s+assistant|assistant|the\s+bot|bot|openclaw)\s+(?:(?:will\s+)?(?:stay|remain|keep|be)\s+(?:quiet|silent)(?:\s+(?:here|for\s+now|on\s+this|in\s+this\s+(?:chat|thread|channel|conversation)))?|(?:do\s+not|don't|dont|will\s+not|won't|would\s+not|should\s+not)\s+(?:reply|respond)(?:\s+(?:here|for\s+now|on\s+this|in\s+this\s+(?:chat|thread|channel|conversation)))?|(?:have|has)\s+nothing\s+(?:to|for)\s+(?:say|add|reply|respond))(?:[.!?]+)?\s*$/i;
 
-function hasSilentIntentFinalSilentToken(text: string, token: string): boolean {
-  const withoutToken = stripFinalSilentToken(text, token);
-  if (withoutToken === null) {
-    return false;
-  }
-  return !withoutToken || silentIntentTextRe.test(withoutToken);
-}
-
 const substantiveAnswerCueRe =
   /\b(?:answer|here(?:'s|\s+is)|tell\s+them|you\s+(?:should|can|could|need|must)|please|try|use|send|service\s+is|resolved|retry|yes|no,|sure)\b/i;
 const bareReasoningPlaceholderRe =
   /^\s*(?:(?:internal|private)\s+)?(?:reasoning|thinking|thoughts?|analysis)(?:\s+notes?)?\s*$/i;
 
-function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean {
+function hasReasoningFinalSilentToken(
+  text: string,
+  token: string,
+  allowPlainReasoning: boolean,
+): boolean {
   const withoutToken = stripFinalSilentToken(text, token);
   if (withoutToken === null) {
     return false;
   }
   if (!withoutToken || silentIntentTextRe.test(withoutToken)) {
     return true;
+  }
+  if (!allowPlainReasoning) {
+    return false;
   }
   const lines = withoutToken
     .split(/\r?\n/)
@@ -166,14 +162,8 @@ function hasPlainReasoningFinalSilentToken(text: string, token: string): boolean
   );
 }
 
-function isReasoningPrefixedSilentReplyText(
-  text: string | undefined,
-  token: string = SILENT_REPLY_TOKEN,
-): boolean {
-  if (!text) {
-    return false;
-  }
-  const trimmed = text.trim();
+function isReasoningPrefixedSilentReplyText(text: string | undefined, token: string): boolean {
+  const trimmed = text?.trim();
   if (!trimmed) {
     return false;
   }
@@ -182,7 +172,7 @@ function isReasoningPrefixedSilentReplyText(
   if (withoutLeadingReasoningBlocks !== trimmed) {
     return (
       isSilentReplyText(withoutLeadingReasoningBlocks, token) ||
-      hasSilentIntentFinalSilentToken(withoutLeadingReasoningBlocks, token)
+      hasReasoningFinalSilentToken(withoutLeadingReasoningBlocks, token, false)
     );
   }
 
@@ -197,7 +187,7 @@ function isReasoningPrefixedSilentReplyText(
   const withoutReasoningPrefix = trimmed.replace(reasoningPrefix, "");
   return (
     isSilentReplyText(withoutReasoningPrefix, token) ||
-    hasPlainReasoningFinalSilentToken(withoutReasoningPrefix, token)
+    hasReasoningFinalSilentToken(withoutReasoningPrefix, token, true)
   );
 }
 

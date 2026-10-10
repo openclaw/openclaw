@@ -63,56 +63,13 @@ describe("renderAuthProfileFailoverCopy", () => {
     });
   });
 
-  describe("cause handling", () => {
-    it("returns the cause text verbatim when the reason has no actionable copy", () => {
-      const causeText = "upstream provider returned 502";
-      const message = formatAuthProfileFailureMessage({
-        reason: "unknown",
-        provider: PROVIDER,
-        allInCooldown: false,
-        causeText,
-      });
-      expect(message).toBe(causeText);
+  it("keeps recovery actionable for an unknown failure", () => {
+    const message = formatAuthProfileFailureMessage({
+      reason: "unknown",
+      provider: PROVIDER,
+      allInCooldown: false,
     });
-
-    it("appends a diagnostic suffix when the cause adds detail beyond the description", () => {
-      const message = formatAuthProfileFailureMessage({
-        reason: "auth",
-        provider: PROVIDER,
-        allInCooldown: false,
-        causeText: "invalid_grant",
-      });
-      expect(message).toContain("(invalid_grant)");
-    });
-
-    it("does not append a diagnostic suffix when the cause text is already in the description", () => {
-      // Derive the description sentence by formatting once without a cause, then stripping
-      // the mocked recovery hint. Using that sentence as the cause should be deduped.
-      const withoutCause = formatAuthProfileFailureMessage({
-        reason: "auth",
-        provider: PROVIDER,
-        allInCooldown: false,
-      });
-      const description = withoutCause
-        .replace(new RegExp(`\\s*${LOGIN_HINT_SENTINEL}:[^\\s]+\\s*$`), "")
-        .trim();
-      const withDuplicateCause = formatAuthProfileFailureMessage({
-        reason: "auth",
-        provider: PROVIDER,
-        allInCooldown: false,
-        causeText: description,
-      });
-      expect(withDuplicateCause).toBe(withoutCause);
-    });
-
-    it("produces non-empty copy for unknown reasons with no cause", () => {
-      const message = formatAuthProfileFailureMessage({
-        reason: "unknown",
-        provider: PROVIDER,
-        allInCooldown: false,
-      });
-      expect(message).toContain(PROVIDER);
-      expect(message.length).toBeGreaterThan(0);
-    });
+    expect(message).toContain(PROVIDER);
+    expect(message).toContain(LOGIN_HINT_SENTINEL);
   });
 });

@@ -11,13 +11,18 @@ import { authorizeCurrentOperatorRoleScopes } from "./operator-role-policy.js";
 import type { QuestionManager } from "./question-manager.js";
 import { questionShapeError } from "./question-validation.js";
 import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
-import { canManageSessionSharing, resolveSessionSharingRole } from "./session-sharing-policy.js";
+import {
+  canManageSessionSharing,
+  resolveSessionSharingRole,
+  type SessionSharingTarget,
+} from "./session-sharing-policy.js";
 
 /** An agent's inherited admin/run authority is never a human's decision. */
 function canApproveSessionCommunication(params: {
   client: GatewayClient | null;
   endpoint: CommunicationEndpoint;
   context: Pick<GatewayRequestContext, "getRuntimeConfig">;
+  target?: SessionSharingTarget | null;
 }): boolean {
   const { client, endpoint } = params;
   if (
@@ -41,21 +46,36 @@ function canApproveSessionCommunication(params: {
     if (!operatorScopeSatisfied("operator.sessions.write", scopes)) {
       return false;
     }
-    if (!endpoint.entry) {
+    // Question readers fence their physical store; logical and physical path spellings may differ.
+    if (
+      params.target &&
+      (params.target.agentId !== endpoint.agentId ||
+        params.target.canonicalKey !== endpoint.sessionKey)
+    ) {
+      return false;
+    }
+    const entry = params.target === undefined ? endpoint.entry : params.target?.entry;
+    if (
+      entry?.sessionId !== endpoint.entry?.sessionId ||
+      entry?.lifecycleRevision !== endpoint.entry?.lifecycleRevision
+    ) {
+      return false;
+    }
+    if (!entry) {
       return scopes.includes("operator.admin");
     }
     return canManageSessionSharing(
       resolveSessionSharingRole({
         cfg: params.context.getRuntimeConfig(),
         client,
-        includeMembership: false,
+        isMember: false,
         target: {
           agentId: endpoint.agentId,
           canonicalKey: endpoint.sessionKey,
           storePath: endpoint.storePath,
           storeKey: endpoint.sessionKey,
           storeKeys: [endpoint.sessionKey],
-          entry: endpoint.entry,
+          entry,
         },
       }),
     );
@@ -82,12 +102,22 @@ export async function requestSessionCommunicationApproval(params: {
   }
   params.assertCurrent();
   params.signal?.throwIfAborted();
-  const authorizeClient = (client: GatewayClient | null) =>
-    canApproveSessionCommunication({
-      client,
-      endpoint: params.approval.endpoint,
-      context: params.context,
-    });
+  let decisionPending = true;
+  const authorizeClient = (client: GatewayClient | null, target?: SessionSharingTarget | null) => {
+    try {
+      if (decisionPending) {
+        params.assertCurrent();
+      }
+      return canApproveSessionCommunication({
+        client,
+        target,
+        endpoint: params.approval.endpoint,
+        context: params.context,
+      });
+    } catch {
+      return false;
+    }
+  };
   const isRequesterActive = () => {
     try {
       params.assertCurrent();
@@ -137,6 +167,7 @@ export async function requestSessionCommunicationApproval(params: {
     isRequesterActive,
     questions,
     onResolved: (event) => {
+      decisionPending = false;
       params.context.broadcast("question.resolved", event, { questionRecipient: authorizeClient });
     },
   });

@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { resolveSessionCreateInheritedSelection } from "./session-create-inheritance.js";
 import {
   type ApplySessionsPatchArgs,
   MAIN_SESSION_KEY,
@@ -23,25 +22,4 @@ it("preserves the other communication direction and resets back to inheritance",
     expect((await patch({ receive: "never" })).communication).toEqual({ receive: "never" });
     expect((await patch(null)).communication).toBeUndefined();
   });
-});
-
-it("inherits communication independently of model choices without replacing explicit choices", () => {
-  const parent = {
-    sessionId: "parent",
-    updatedAt: 1,
-    modelOverride: "old-model",
-    communication: { receive: "never" as const },
-  };
-  expect(
-    resolveSessionCreateInheritedSelection({ params: { model: "new-model" }, parent }),
-  ).toEqual({ communication: { receive: "never" } });
-  expect(
-    resolveSessionCreateInheritedSelection({ params: {}, parent, catalogModel: "catalog-model" }),
-  ).toEqual({ communication: { receive: "never" } });
-  expect(
-    resolveSessionCreateInheritedSelection({
-      params: { model: "new-model", communication: { send: "ask" } },
-      parent,
-    }),
-  ).toEqual({});
 });

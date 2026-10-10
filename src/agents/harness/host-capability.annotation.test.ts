@@ -240,7 +240,7 @@ describe("host-owned current admission annotation", () => {
               assertCurrent: f.hostCapabilities.assertActive,
             }),
           ).toBe(true);
-          const accepted = listSessionPendingInputs(f.target);
+          const accepted = await listSessionPendingInputs(f.target);
           const before = await loadTranscriptEvents(f.target);
           const content = "prompt\nsecond prompt";
           const recorder = createUserTurnTranscriptRecorder({
@@ -261,7 +261,7 @@ describe("host-owned current admission annotation", () => {
               consumedByEventId: original.entryId,
             })),
           );
-          expect(listSessionPendingInputs(f.target)).toEqual({ items: [], total: 0 });
+          expect(await listSessionPendingInputs(f.target)).toEqual({ items: [], total: 0 });
           host = createAgentHarnessHostCapabilities({
             attempt: {
               ...f.attempt,
@@ -366,10 +366,12 @@ describe("host-owned current admission annotation", () => {
         effectiveEngine: engine,
         effectiveEngineId: "annotation",
         degraded: false,
+        disposed: false,
         selectForHost: vi.fn(),
         degradeBeforeStart: vi.fn(),
         begin: vi.fn(),
         deferDisposalUntil: vi.fn(),
+        onDispose: vi.fn(),
         dispose: async () => {},
       };
       const warn = vi.fn();
@@ -619,7 +621,7 @@ describe("host-owned current admission annotation", () => {
         ],
         ["starting", "active", { activeOwnerEpoch: 7 }],
       ] as const) {
-        placement = placements.transition({
+        placement = await placements.transition({
           sessionId: f.target.sessionId,
           from,
           to,

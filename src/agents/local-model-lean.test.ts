@@ -20,7 +20,7 @@ function tools(names: string[]): AnyAgentTool[] {
 function defaultLeanConfig(): OpenClawConfig {
   return {
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: { experimental: { localModelLean: true } },
     },
   };
@@ -30,14 +30,13 @@ describe("local model lean tool filtering", () => {
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "gemma",
+        entries: {
+          gemma: {
             experimental: {
               localModelLean: true,
             },
           },
-        ],
+        },
       },
     };
 
@@ -130,7 +129,7 @@ describe("local model lean tool filtering", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { experimental: { localModelLean: true } },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
     expect(
@@ -150,14 +149,13 @@ describe("local model lean tool filtering", () => {
             localModelLean: true,
           },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             experimental: {
               localModelLean: false,
             },
           },
-        ],
+        },
       },
     };
 
@@ -179,12 +177,7 @@ describe("local model lean tool filtering", () => {
             localModelLean: true,
           },
         },
-        list: [
-          {
-            id: "main",
-            experimental: {},
-          },
-        ],
+        entries: { main: { experimental: {} } },
       },
     };
 
@@ -222,15 +215,13 @@ describe("local model lean tool filtering", () => {
   it("uses the configured default agent when no agent id is explicit", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "gemma",
-            default: true,
+        entries: {
+          gemma: {
             experimental: {
               localModelLean: true,
             },
           },
-        ],
+        },
       },
     };
 
@@ -243,7 +234,7 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
-  it("uses the retained legacy owner when no session scope is provided", () => {
+  it("requires explicit selection despite retained Doctor ownership when no session is provided", () => {
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
@@ -253,30 +244,32 @@ describe("local model lean tool filtering", () => {
             gemma: { experimental: { localModelLean: true } },
           },
         },
-      },
+      } satisfies OpenClawConfig,
       "gemma",
     );
 
-    expect(isLocalModelLeanEnabled({ config: cfg })).toBe(true);
+    expect(() => isLocalModelLeanEnabled({ config: cfg })).toThrowError(
+      expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+    );
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
+    expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ops" })).toBe(false);
   });
 
   it("uses the agent from an agent session key", () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             experimental: {
               localModelLean: false,
             },
           },
-          {
-            id: "gemma",
+          gemma: {
             experimental: {
               localModelLean: true,
             },
           },
-        ],
+        },
       },
     };
 

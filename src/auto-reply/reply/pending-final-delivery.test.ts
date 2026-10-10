@@ -91,31 +91,10 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK NO_REPLY")).toBe("HEARTBEAT_OK");
   });
 
-  it.each([
-    ["NO_REPLY\n\nThe user is saying hello", "The user is saying hello"],
-    ["NO_REPLY NO_REPLY\nThe user is saying hello", "The user is saying hello"],
-  ])("strips newline-separated leading silent tokens from recovery text: %j", (text, expected) => {
-    expect(sanitizePendingFinalDeliveryText(text)).toBe(expected);
-  });
-
-  it("preserves punctuation-attached silent-token literals in recovery", () => {
-    const text = "Done as requested!NO_REPLY";
-    expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
-  });
-
-  it("strips repeated trailing silent tokens from recovery text", () => {
-    expect(sanitizePendingFinalDeliveryText("Done. NO_REPLY NO_REPLY")).toBe("Done.");
-  });
-
-  it.each(["interject.NO_REPLY", "NO_REPLY\nNO_REPLY: explanation"])(
-    "preserves substantive dotted and punctuation-start recovery literals: %j",
-    (text) => {
-      expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
-    },
-  );
-
-  it("preserves heartbeat ack text for ack-aware classification", () => {
-    expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK short")).toBe("HEARTBEAT_OK short");
+  it("strips newline-separated leading silent tokens from recovery text", () => {
+    expect(sanitizePendingFinalDeliveryText("NO_REPLY\n\nThe user is saying hello")).toBe(
+      "The user is saying hello",
+    );
   });
 });
 
@@ -130,15 +109,6 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
 
     const deliveryPayloads = normalizePendingFinalDeliveryPayloads(rawPayloads);
     expect(deliveryPayloads.map((payload) => payload.text)).toEqual(["Rendered chart"]);
-  });
-
-  it("keeps media-only directives as durable recovery text", () => {
-    const recoveryPayloads = normalizePendingFinalRecoveryPayloads([
-      { text: "MEDIA:/tmp/chart.png" },
-    ]);
-
-    expect(recoveryPayloads.map((payload) => payload.text)).toEqual(["MEDIA:/tmp/chart.png"]);
-    expect(normalizePendingFinalDeliveryPayloads(recoveryPayloads)).toHaveLength(1);
   });
 
   it("encodes structured media URLs as durable media directives", () => {

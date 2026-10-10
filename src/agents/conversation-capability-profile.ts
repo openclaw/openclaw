@@ -31,6 +31,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
+import { prepareSandboxSessionRename } from "./tools/sessions-operator-authority.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function resolveManifestToolProfileNames(
@@ -97,10 +98,14 @@ export type ConversationCapabilityProfileParams = {
 export function resolveConversationCapabilityProfile(params: ConversationCapabilityProfileParams) {
   const messageProvider = params.messageProvider;
   const effective = resolveEffectiveToolPolicy(params);
-  const sandboxToolPolicy = resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
-    runId: params.runId,
-    agentId: effective.agentId,
-  });
+  const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
+    prepareSandboxSessionRename({
+      policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
+        runId: params.runId,
+        agentId: effective.agentId,
+      }),
+      senderIsOwner: params.senderIsOwner,
+    });
   const trustedGroup = resolveTrustedGroupId({
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
@@ -224,8 +229,10 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
       groupPolicy,
       senderPolicy,
       sandboxPolicy: sandboxToolPolicy,
+      sandboxSessionRenameOnly,
       subagentPolicy,
       inheritedToolPolicy,
+      inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
       delegated: requesterPolicies.delegated,
       requesterPolicySource: requesterPolicies.requesterPolicySource,
       runtimeToolPolicyForInheritance,

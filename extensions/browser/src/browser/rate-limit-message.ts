@@ -17,12 +17,8 @@ function isBrowserbaseUrl(url: string): boolean {
   if (!isAbsoluteHttp(url)) {
     return false;
   }
-  try {
-    const host = new URL(url).hostname.trim().toLowerCase();
-    return host === "browserbase.com" || host.endsWith(".browserbase.com");
-  } catch {
-    return false;
-  }
+  const host = URL.parse(url)?.hostname.trim().toLowerCase() ?? "";
+  return host === "browserbase.com" || host.endsWith(".browserbase.com");
 }
 
 /** Returns the provider-specific rate-limit message for a browser service URL. */

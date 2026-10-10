@@ -11,19 +11,23 @@ import type {
   OpenClawStateWorkerOperations,
   OpenClawStateWorkerInspectionOperations,
 } from "./openclaw-state-worker-contract.js";
-import type { captureOpenClawStateWorkerOpeningGuard } from "./openclaw-state-worker-operation.js";
 
 export type StoreOperations = OpenClawStateWorkerOperations &
   OpenClawStateWorkerInspectionOperations;
 export type Store = SqliteWorkerStore<StoreOperations>;
 export type DomainScope = Pick<SqliteWorkerStore<OpenClawStateWorkerOperations>, "execute">;
 export type IdleTimer = ReturnType<typeof setTimeout> & { unref?: () => void };
+export type OpeningAdmission = {
+  assertCurrent?: () => void;
+  signal?: AbortSignal;
+  refusal?: { error: unknown };
+};
 export type Entry = {
   source: ReturnType<typeof captureRuntimeWorkerSource>;
   context: OpenClawStateWorkerContext;
   databaseAdmission: OpenClawStateDatabaseReadAdmission;
   opening: Promise<Store | undefined>;
-  openingAdmission: ReturnType<typeof captureOpenClawStateWorkerOpeningGuard>["admission"];
+  openingAdmission: OpeningAdmission;
   existingOnly: boolean;
   store?: Store;
   actor?: ReturnType<typeof getSqliteWorkerActorIdentity>;

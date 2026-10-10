@@ -9,6 +9,7 @@ import type {
 import type { QueueMode } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { StickyModelSelectionTarget } from "../agents/sticky-model-selection.js";
+import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import type { SessionEntry, SessionGoal, SessionOrigin } from "../config/sessions/types.js";
 import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type { FastModeSource } from "../shared/fast-mode.js";
@@ -113,15 +114,10 @@ void sessionRowSchemaDriftGuard;
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
-export type SessionTitleFields = {
-  firstUserMessage: string | null;
-  lastMessagePreview: string | null;
-};
-
-export type SessionPreviewItem = {
-  role: "user" | "assistant" | "tool" | "system" | "other";
-  text: string;
-};
+export type {
+  SessionTitleFields,
+  SessionPreviewItem,
+} from "../config/sessions/session-history-read.types.js";
 
 export type SessionsPreviewEntry = {
   key: string;

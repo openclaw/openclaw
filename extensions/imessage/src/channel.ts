@@ -249,8 +249,8 @@ function resolveIMessageOutboundSessionRoute(params: {
   };
 }
 
-export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe> =
-  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe>({
+export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2> =
+  createChatChannelPlugin<ResolvedIMessageAccount, IMessageProbe, unknown, 2>({
     base: {
       ...createIMessagePluginBase({
         setupWizard: imessageSetupWizard,
@@ -303,7 +303,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
       messaging: {
         normalizeTarget: normalizeIMessageMessagingTarget,
         inferTargetChatType: ({ to }) => inferIMessageTargetChatType(to),
-        resolveOutboundSessionRoute: (params) => resolveIMessageOutboundSessionRoute(params),
+        resolveOutboundSessionRoute: resolveIMessageOutboundSessionRoute,
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
           hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
@@ -364,6 +364,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveAccountState: ({ enabled }) => (enabled ? "enabled" : "disabled"),
       }),
       gateway: {
+        apiVersion: 2,
         startAccount: async (ctx) => {
           const conversationBindings = createIMessageConversationBindingManager({
             cfg: ctx.cfg,

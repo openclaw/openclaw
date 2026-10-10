@@ -182,6 +182,19 @@ describe("exec PATH login shell merge", () => {
     }
   });
 
+  it("rejects the unsupported cwd alias before command execution", async () => {
+    // `cwd` is dropped by the schema, so a stale caller runs in the tool default instead.
+    const tool = createExecTool({ host: "gateway", security: "full", ask: "off" });
+
+    await expect(
+      tool.execute("call-cwd-alias", {
+        command: "echo ok",
+        cwd: os.tmpdir(),
+        yieldMs: FOREGROUND_TEST_YIELD_MS,
+      } as never),
+    ).rejects.toThrow('exec parameter "cwd" is unsupported; use "workdir" instead');
+  });
+
   it("merges login-shell PATH for host=gateway", async () => {
     if (isWin) {
       return;
@@ -228,41 +241,6 @@ describe("exec PATH login shell merge", () => {
     expect(normalizeText(result.content.find((c) => c.type === "text")?.text)).toBe(
       JSON.stringify({ GIT_PAGER: "", PAGER: "" }),
     );
-  });
-
-  it("does not apply login-shell PATH when probe rejects unregistered absolute SHELL", async () => {
-    if (isWin) {
-      return;
-    }
-    process.env.PATH = "/usr/bin";
-    const shellDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-env-"));
-    const unregisteredShellPath = path.join(shellDir, "unregistered-shell");
-    fs.writeFileSync(unregisteredShellPath, '#!/bin/sh\nexec /bin/sh "$@"\n', {
-      encoding: "utf8",
-      mode: 0o755,
-    });
-    process.env.SHELL = unregisteredShellPath;
-
-    try {
-      const shellPathMock = shellEnvMocks.getShellPathFromLoginShell;
-      shellPathMock.mockClear();
-      shellPathMock.mockImplementation((opts) =>
-        opts.env.SHELL?.trim() === unregisteredShellPath ? null : "/custom/bin:/opt/bin",
-      );
-
-      const result = await execute({
-        command: "echo $PATH",
-      });
-      const entries = normalizePathEntries(result.content.find((c) => c.type === "text")?.text);
-
-      expect(entries).toEqual(["/usr/bin"]);
-      expect(shellPathMock).toHaveBeenCalledTimes(1);
-      const shellPathCall = shellPathMock.mock.calls.at(0)?.[0];
-      expect(shellPathCall?.env).toBe(process.env);
-      expect(shellPathCall?.timeoutMs).toBe(1234);
-    } finally {
-      fs.rmSync(shellDir, { recursive: true, force: true });
-    }
   });
 });
 

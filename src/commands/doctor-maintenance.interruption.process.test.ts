@@ -18,6 +18,7 @@ function interruptionScript(
   pendingApproval: boolean,
   restoringApproval: boolean,
   progress: boolean,
+  archiveSignal?: "SIGINT" | "SIGTERM",
 ) {
   return `
     import { registerHooks } from "node:module";
@@ -57,12 +58,13 @@ function interruptionScript(
       ["/infra/gateway-lock-legacy.js", 'export const assertLegacyGatewayStoppedForMaintenance = async () => {};'],
       ["/infra/gateway-lock.js", 'export const acquireGatewayLock = async () => { let active = true; return { assertCurrent(assertPolicy) { if (!active) throw new Error("Fixture Gateway ownership released"); assertPolicy?.(); if (!active) throw new Error("Fixture Gateway ownership released"); }, run(operation) { if (!active) throw new Error("Fixture Gateway ownership released"); return operation(); }, async release() { active = false; } }; };'],
       ["/state/openclaw-state-db-async-lifecycle.js", 'export const createOpenClawDatabaseMaintenanceScope = () => { let closed = false; return { run: run => run(), close: async () => { if (!closed) { globalThis.doctorFixture.record("stores-closed"); closed = true; } } }; };'],
+      ["/state/openclaw-state-maintenance-context.js", 'export const admitOpenClawMaintenanceLiveAuthorityReads = () => {};'],
       ["/cli/update-cli/update-command-service-maintenance.js", 'export const maybeStopManagedServiceBeforeMutableUpdate = params => globalThis.doctorFixture.stop(params); export const revalidateManagedGatewayServiceAfterUpdate = async () => globalThis.doctorFixture.verdict;'],
       ["/commands/doctor-gateway-services.js", 'export const maybeRepairGatewayServiceConfig = cfg => globalThis.doctorFixture.repair(cfg);'],
       ["/daemon/service.js", 'export const resolveGatewayService = () => globalThis.doctorFixture.service; export const readGatewayServiceState = async () => globalThis.doctorFixture.state;'],
       ["/daemon/service-operation-lock.js", 'export const withGatewayServiceOperationLock = async (_env, run) => run(() => {});'],
       ["/cli/update-cli/update-command-service-plan.js", 'export const resolveUpdatedGatewayRestartPort = async () => 19871;'],
-      ["/cli/daemon-cli/restart-health.js", 'export const waitForGatewayHealthyRestart = async () => { globalThis.doctorFixture.record("healthy"); return { healthy: true }; };'],
+      ["/cli/daemon-cli/restart-health.js", 'export const waitForGatewayHealthyRestart = async () => { globalThis.doctorFixture.record("healthy"); return { outcome: "ready", healthy: true }; };'],
     ]);
     registerHooks({ resolve(specifier, context, nextResolve) {
       const resolved = nextResolve(specifier, context);
@@ -77,12 +79,14 @@ function interruptionScript(
     const { createNonExitingRuntime } = await import(${JSON.stringify(new URL("../../runtime.js", registrar).href)});
     enableConsoleCapture();
     fixture.runDoctor = async () => {
+    let progressSpinner;
     if (${progress}) {
       const { spinner } = await import("@clack/prompts");
       const { PassThrough } = await import("node:stream");
       const output = new PassThrough();
       output.resume();
-      spinner({ output }).start("Checking state");
+      progressSpinner = spinner({ output });
+      progressSpinner.start("Checking state");
     }
     const runtime = createNonExitingRuntime();
     const maintenance = await beginDoctorMaintenance({ root, options: { repair: true, nonInteractive: true },
@@ -106,12 +110,53 @@ function interruptionScript(
       try {
         await maintenance.run(async () => {
           if (${pendingApproval}) await fixture.approve();
+          if (${Boolean(archiveSignal)}) {
+            const { DatabaseSync } = await import("node:sqlite");
+            const { createHash } = await import("node:crypto");
+            const { migrateCanonicalTranscriptArchives } = await import(${JSON.stringify(new URL("../../infra/state-migrations.transcript-directives-archives.js", registrar).href)});
+            const database = new DatabaseSync(":memory:");
+            const bytes = Buffer.from("{}\\n");
+            const digest = createHash("sha256").update(bytes).digest("hex");
+            let visited = 0;
+            try {
+              database.exec("CREATE TABLE session_transcript_archives (session_id TEXT, generation TEXT, archive_blob BLOB, archive_name TEXT, archive_sha256 TEXT, encoding TEXT, published_at INTEGER)");
+              const insert = database.prepare("INSERT INTO session_transcript_archives VALUES (?, 'retained', ?, ?, ?, 'identity', NULL)");
+              for (let index = 0; index < 202; index++) {
+                const session = "session-" + String(index).padStart(3, "0");
+                insert.run(session, bytes, session + ".jsonl", digest);
+              }
+              await migrateCanonicalTranscriptArchives({
+                agentId: "main", database, pathname: root + "/agent.sqlite",
+                start: { sessionId: "", generation: "" }, verifyOnly: true,
+                transformContent: content => ({ changed: false, content }),
+                onArchive() {
+                  visited++;
+                  if (visited === 1) {
+                    record("archive-started");
+                    process.kill(process.pid, ${JSON.stringify(archiveSignal)});
+                  }
+                },
+              });
+              throw new Error("Archive migration ignored interruption after visiting " + visited + " of 202 archives");
+            } catch (error) {
+              if (!String(error).includes("Doctor interrupted by " + ${JSON.stringify(archiveSignal)}) || visited === 0 || visited >= 202) throw error;
+              record("archives-cancelled");
+              throw error;
+            } finally { database.close(); }
+          }
           await new Promise(setImmediate);
           record("repair-complete");
         });
-      } catch (error) { failure = error; record("repair-cancelled"); }
+      } catch (error) {
+        failure = error;
+        process.stderr.write(String(error?.stack ?? error) + "\\n");
+        record("repair-cancelled");
+      }
       finally { await maintenance.finish({}, ${restoringApproval} ? async cfg => cfg : undefined, failure); }
-    } finally { await maintenance.release(); }
+    } finally {
+      progressSpinner?.stop();
+      await maintenance.release();
+    }
     };
     const { installCliSignalExitHandlers } = await import(${JSON.stringify(new URL("../signal-exit-barrier.js", registrar).href)});
     const { withCliProcessScope } = await import(${JSON.stringify(new URL("../runtime-cleanup-scope.js", registrar).href)});
@@ -151,7 +196,7 @@ it.skipIf(process.platform === "win32")(
 
 it.skipIf(process.platform === "win32").each([
   { interruption: "closed stdout", code: 0 },
-  { interruption: "SIGINT", code: 130 },
+  { interruption: "SIGINT during archives", code: 130 },
   { interruption: "SIGPIPE", code: 141 },
   { interruption: "SIGTERM with progress", code: 143 },
   { interruption: "SIGTERM while approving", code: 143 },
@@ -163,6 +208,8 @@ it.skipIf(process.platform === "win32").each([
     const eventsPath = path.join(root, "events.json");
     const pendingApproval = interruption === "SIGTERM while approving";
     const restoringApproval = interruption === "SIGTERM while restoring";
+    const archives =
+      interruption === "SIGINT during archives" || interruption === "SIGTERM with progress";
     const child = spawn(
       resolveTestNodeExecPath(),
       createNodeEvalArgs(
@@ -171,6 +218,7 @@ it.skipIf(process.platform === "win32").each([
           pendingApproval,
           restoringApproval,
           interruption === "SIGTERM with progress",
+          archives ? (interruption === "SIGINT during archives" ? "SIGINT" : "SIGTERM") : undefined,
         ),
       ),
       {
@@ -206,15 +254,26 @@ it.skipIf(process.platform === "win32").each([
         }),
       ]);
       expect(ready[0]).toBe("stopped");
+      const terminationSignal =
+        interruption === "SIGINT during archives"
+          ? "SIGINT"
+          : interruption === "SIGPIPE"
+            ? "SIGPIPE"
+            : "SIGTERM";
       if (pendingApproval || restoringApproval) {
-        const approval = once(child, "message");
+        const approval = Promise.race([
+          once(child, "message"),
+          closed.then(() => {
+            throw new Error("Doctor exited before requesting approval: " + stderr);
+          }),
+        ]);
         child.send("continue", () => {});
         expect((await approval)[0]).toBe("approval");
         child.kill("SIGTERM");
       } else if (interruption === "closed stdout") {
         child.stdout!.destroy();
-      } else {
-        child.kill(interruption === "SIGTERM with progress" ? "SIGTERM" : interruption);
+      } else if (!archives) {
+        child.kill(terminationSignal);
       }
       if (!pendingApproval && !restoringApproval) {
         child.send("continue", () => {});
@@ -224,7 +283,9 @@ it.skipIf(process.platform === "win32").each([
       expect(JSON.parse(fs.readFileSync(eventsPath, "utf8")), stderr).toEqual([
         "stopped",
         ...(pendingApproval ? ["approval-declined"] : []),
-        "repair-complete",
+        ...(archives
+          ? ["archive-started", "archives-cancelled", "repair-cancelled"]
+          : ["repair-complete"]),
         "stores-closed",
         ...(restoringApproval ? ["approval-declined"] : []),
         "restart",
@@ -232,6 +293,13 @@ it.skipIf(process.platform === "win32").each([
       ]);
       expect(signal, stderr).toBeNull();
       expect(exitCode, stderr).toBe(code);
+      if (interruption !== "closed stdout") {
+        expect(stderr).toContain(
+          interruption === "SIGPIPE"
+            ? "Doctor interrupted;"
+            : `Doctor interrupted by ${terminationSignal};`,
+        );
+      }
     } finally {
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGKILL");

@@ -2,12 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import { registerConversationAddresses } from "../../config/sessions/conversation-registry.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import * as reactionStore from "../../config/sessions/session-reaction-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { publishSystemEventStoreConfig } from "../../config/sessions/session-store-path.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { MessageActionInput } from "../../infra/outbound/message-action-contracts.js";
@@ -25,103 +23,28 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { readSessionConversationBindingAsync } from "../session-transcript-readers.js";
-import { sessionReactionHandlers } from "./sessions-reactions.js";
-import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+import {
+  appendMessage,
+  call,
+  client,
+  context,
+  roleConfig,
+  seedSession,
+  sessionId,
+  sessionKey,
+  transcriptScope,
+  withReactionState,
+} from "./sessions-reactions.test-support.js";
 
 const runMessageAction = vi.hoisted(() => vi.fn());
 vi.mock("../../infra/outbound/message-action-runner.js", () => ({ runMessageAction }));
 
-const sessionKey = "agent:main:main";
-const sessionId = "reactions-session";
-const transcriptScope = { agentId: "main", sessionKey, sessionId };
-
-function client(profileId: string, displayName = profileId, admin = false): GatewayClient {
-  return {
-    connId: `conn-${profileId}`,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: admin ? ["operator.admin"] : ["operator.read", "operator.write"],
-    },
-    authenticatedUserProfile: { profileId, displayName, hasAvatar: false, updatedAt: 1 },
-    preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
-  };
-}
-
-function context(config: OpenClawConfig = {}): GatewayRequestContext {
-  return {
-    getRuntimeConfig: () => config,
-    broadcast: vi.fn(),
-    logGateway: { warn: vi.fn() },
-  } as unknown as GatewayRequestContext;
-}
-
-async function call(
-  method: "session.reactions.set" | "session.reactions.list",
-  params: Record<string, unknown>,
-  requestClient: GatewayClient | null = client("alice", "Alice"),
-  requestContext = context(),
-) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionReactionHandlers[method]?.({
-    req: { type: "req", id: "reaction-request", method, params },
-    params,
-    client: requestClient,
-    context: requestContext,
-    isWebchatConnect: () => true,
-    respond: (...response) => responses.push(response),
-  });
-  expect(responses).toHaveLength(1);
-  return responses[0]!;
-}
-
-function roleConfig(others: "none" | "view" | "suggest" | "write"): OpenClawConfig {
-  return {
-    gateway: {
-      roles: {
-        default: "test-role",
-        definitions: {
-          "test-role": {
-            sessions: { others },
-            agents: "*",
-            scopes: ["operator.read", "operator.write"],
-          },
-        },
-      },
-    },
-  };
-}
-
-async function seedSession(overrides: Partial<SessionEntry> = {}, key = sessionKey) {
-  const entry = {
-    sessionId,
-    updatedAt: 1,
-    createdActor: { type: "human", source: "profile", id: "owner" },
-    visibility: "shared",
-    ...overrides,
-  } satisfies SessionEntry;
-  await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
-  return { agentId: "main", sessionKey: key, sessionId: entry.sessionId };
-}
-
-async function appendMessage(
-  message: Record<string, unknown> = {
-    role: "user",
-    content: [{ type: "text", text: "Riley's persisted prompt" }],
-    __openclaw: { senderName: "Riley", senderUsername: "riley", senderId: "peer-riley" },
-  },
-  scope = transcriptScope,
-) {
-  return (await appendTranscriptMessage(scope, { message })).messageId;
-}
-
-function registerReactionChannel(supportsReactions = true) {
+function registerReactionChannel(supportsReactions = true, reactionSlots?: "single" | "multiple") {
   const plugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({ id: "testchat" }),
+    ...createChannelTestPluginBase({
+      id: "testchat",
+      capabilities: { chatTypes: ["direct"], reactionSlots },
+    }),
     actions: {
       describeMessageTool: () => ({ actions: supportsReactions ? ["react"] : ["read"] }),
     },
@@ -143,7 +66,7 @@ async function seedChannelMessage() {
   if (!identity) {
     throw new Error("reaction fixture conversation identity missing");
   }
-  registerConversationAddresses({ agentId: "main" }, [identity]);
+  await registerConversationAddresses({ agentId: "main" }, [identity]);
   const messageId = await appendMessage({
     role: "user",
     content: [{ type: "text", text: "Channel prompt" }],
@@ -164,13 +87,17 @@ async function seedChannelMessage() {
 }
 
 beforeEach(() => {
-  runMessageAction.mockReset().mockResolvedValue({
-    kind: "action",
-    channel: "testchat",
-    action: "react",
-    handledBy: "plugin",
-    payload: { ok: true },
-    dryRun: false,
+  runMessageAction.mockReset().mockImplementation(async (input: MessageActionInput) => {
+    await input.onPlatformSendDispatch?.();
+    input.assertDirectAdapterHandoff?.();
+    return {
+      kind: "action",
+      channel: "testchat",
+      action: "react",
+      handledBy: "plugin",
+      payload: { ok: true },
+      dryRun: false,
+    };
   });
 });
 
@@ -182,7 +109,7 @@ afterEach(() => {
 
 describe("session reaction handlers", () => {
   it("enforces session participation and operator caps before committing reactions", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       const cases = [
         { name: "draft owner", identity: "owner", visibility: "draft", allowed: true },
         { name: "draft admin", identity: "admin", admin: true, visibility: "draft", allowed: true },
@@ -290,7 +217,7 @@ describe("session reaction handlers", () => {
   });
 
   it("lets read-only viewers list everyone's reactions while hiding none-capped and incognito sessions", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       await seedSession({ visibility: "read-only" });
       const messageId = await appendMessage();
       await call(
@@ -365,7 +292,7 @@ describe("session reaction handlers", () => {
   });
 
   it("requires an identified author and one emoji grapheme", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       await seedSession();
       const messageId = await appendMessage();
       const unidentified = await call(
@@ -409,7 +336,7 @@ describe("session reaction handlers", () => {
   });
 
   it("rejects missing, tool, and previous-session message ids", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       await seedSession();
       const toolId = await appendMessage({
         role: "toolResult",
@@ -439,7 +366,7 @@ describe("session reaction handlers", () => {
   });
 
   it("broadcasts committed summaries and queues next-turn system events without changing transcript bytes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       await seedSession();
       const messageId = await appendMessage();
       const transcript = loadTranscriptEventsSync(transcriptScope);
@@ -514,7 +441,7 @@ describe("session reaction handlers", () => {
   });
 
   it("reports own prompts and assistant replies with author label fallbacks", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       await seedSession();
       for (const [message, author] of [
         [
@@ -548,7 +475,7 @@ describe("session reaction handlers", () => {
   });
 
   it("mirrors channel reactions after commit and broadcast, preserving the channel address on add and remove", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       registerReactionChannel();
       const { messageId, config } = await seedChannelMessage();
       const requestContext = context(config);
@@ -600,8 +527,162 @@ describe("session reaction handlers", () => {
     });
   });
 
+  it.each(["single", "multiple", undefined] as const)(
+    "preserves remaining reactions for channel reaction slots: %s",
+    async (reactionSlots) => {
+      await withReactionState(async () => {
+        registerReactionChannel(true, reactionSlots);
+        const { messageId, config } = await seedChannelMessage();
+        const requestContext = context(config);
+        const set = (emoji: string, remove = false) =>
+          call(
+            "session.reactions.set",
+            { sessionKey, messageId, emoji, remove },
+            client("alice"),
+            requestContext,
+          );
+        for (const emoji of ["🎉", "👍", "🚀"]) {
+          expect((await set(emoji))[1]).toMatchObject({ mirror: { status: "delivered" } });
+          expect(runMessageAction).toHaveBeenLastCalledWith(
+            expect.objectContaining({ params: expect.objectContaining({ emoji, remove: false }) }),
+          );
+        }
+        for (const [emoji, remaining, replacement] of [
+          ["🎉", ["👍", "🚀"], "🚀"],
+          ["🚀", ["👍"], "👍"],
+          ["👍", [], undefined],
+        ] as const) {
+          expect((await set(emoji, true))[1]).toMatchObject({
+            reactions: remaining.map((value) => ({ emoji: value, count: 1 })),
+            mirror: { status: "delivered" },
+          });
+          expect(runMessageAction).toHaveBeenLastCalledWith(
+            expect.objectContaining({
+              params: expect.objectContaining({
+                emoji: reactionSlots === "single" ? (replacement ?? emoji) : emoji,
+                remove: reactionSlots !== "single" || replacement === undefined,
+              }),
+            }),
+          );
+        }
+      });
+    },
+  );
+
+  it("uses the kernel's newest surviving emoji for a single-slot replacement", async () => {
+    await withReactionState(async () => {
+      registerReactionChannel(true, "single");
+      const { messageId, config } = await seedChannelMessage();
+      runOpenClawAgentWriteTransaction(
+        (database) => {
+          executeSqliteQuerySync(
+            database.db,
+            getNodeSqliteKysely<Pick<DB, "session_reactions">>(database.db)
+              .insertInto("session_reactions")
+              .values(
+                [
+                  { emoji: "👍", identity_id: "alice", created_at: 100 },
+                  { emoji: "🎉", identity_id: "alice", created_at: 200 },
+                  { emoji: "👍", identity_id: "bob", created_at: 300 },
+                  { emoji: "🚀", identity_id: "alice", created_at: 400 },
+                ].map(({ emoji, identity_id, created_at }) => ({
+                  emoji,
+                  identity_id,
+                  created_at,
+                  session_key: sessionKey,
+                  session_id: sessionId,
+                  message_id: messageId,
+                  identity_label: null,
+                })),
+              ),
+          );
+        },
+        { agentId: "main" },
+      );
+      const write = vi.spyOn(reactionStore, "setSessionReactionAsync");
+      const response = await call(
+        "session.reactions.set",
+        { sessionKey, messageId, emoji: "🚀", remove: true },
+        client("alice"),
+        context(config),
+      );
+      expect(response).toMatchObject([
+        true,
+        {
+          reactions: [
+            { emoji: "👍", count: 2 },
+            { emoji: "🎉", count: 1 },
+          ],
+          mirror: { status: "delivered" },
+        },
+      ]);
+      expect(runMessageAction).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ emoji: "👍", remove: false }),
+        }),
+      );
+      expect(await write.mock.results[0]?.value).toMatchObject({ newestRemainingEmoji: "👍" });
+      expect(response[1]).not.toHaveProperty("newestRemainingEmoji");
+    });
+  });
+
+  it("serializes different emoji in a single channel slot without blocking other messages", async () => {
+    await withReactionState(async () => {
+      registerReactionChannel(true, "single");
+      const { messageId, config, conversationRef } = await seedChannelMessage();
+      const otherMessageId = await appendMessage({
+        role: "user",
+        content: "Other channel prompt",
+        __openclaw: {
+          transport: { channel: "testchat", conversationRef, messageId: "channel-message-10" },
+        },
+      });
+      const requestContext = context(config);
+      const firstEntered = createDeferredCore();
+      const releaseFirst = createDeferredCore();
+      const secondCommitted = createDeferredCore();
+      const delivered: unknown[] = [];
+      vi.mocked(requestContext.broadcast).mockImplementation((_event, payload) => {
+        if ((payload as { emoji: string }).emoji === "👍") {
+          secondCommitted.resolve();
+        }
+      });
+      runMessageAction.mockImplementation(async (input: MessageActionInput) => {
+        await input.onPlatformSendDispatch?.();
+        input.assertDirectAdapterHandoff?.();
+        if (input.params.emoji === "🎉") {
+          firstEntered.resolve();
+          await releaseFirst.promise;
+        }
+        delivered.push(input.params.emoji);
+        return { kind: "action", payload: { ok: true } };
+      });
+      const set = (id: string, emoji: string) =>
+        call(
+          "session.reactions.set",
+          { sessionKey, messageId: id, emoji },
+          client("alice"),
+          requestContext,
+        );
+      const first = set(messageId, "🎉");
+      await firstEntered.promise;
+      const second = set(messageId, "👍");
+      try {
+        await secondCommitted.promise;
+        expect((await set(otherMessageId, "🚀"))[1]).toMatchObject({
+          mirror: { status: "delivered" },
+        });
+        expect(delivered).toEqual(["🚀"]);
+      } finally {
+        releaseFirst.resolve();
+        await Promise.all([first, second]);
+      }
+      expect(delivered).toEqual(["🚀", "🎉", "👍"]);
+    });
+  });
+
   it("refuses a view-capped channel reactor before commit, broadcast, or dispatch", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       registerReactionChannel();
       const { messageId, config } = await seedChannelMessage();
       const requestContext = context({ ...config, ...roleConfig("view") });
@@ -625,7 +706,7 @@ describe("session reaction handlers", () => {
   it.each([false, true])(
     "rechecks reactor authority at channel I/O after commit (revoked: %s)",
     async (revoked) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await withReactionState(async () => {
         registerReactionChannel();
         const { messageId, config } = await seedChannelMessage();
         const requestContext = context(config);
@@ -675,45 +756,22 @@ describe("session reaction handlers", () => {
     },
   );
 
-  it("refuses queued mirrors when their captured source conversation changes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("rechecks the source conversation after awaited action preparation", async () => {
+    await withReactionState(async () => {
       registerReactionChannel();
-      for (const change of ["removed", "channel", "account", "target", "thread"] as const) {
+      for (const change of [
+        "removed",
+        "channel",
+        "account",
+        "target",
+        "thread",
+        "nativeChannel",
+      ] as const) {
         runMessageAction.mockClear();
         const { messageId, config, conversationRef } = await seedChannelMessage();
-        const requestContext = context(config);
-        const firstEntered = createDeferredCore();
-        const releaseFirst = createDeferredCore();
-        const removalCommitted = createDeferredCore();
-        vi.mocked(requestContext.broadcast).mockImplementation((_event, payload) => {
-          if ((payload as { action: string }).action === "removed") {
-            removalCommitted.resolve();
-          }
-        });
-        runMessageAction.mockImplementationOnce(async () => {
-          firstEntered.resolve();
-          await releaseFirst.promise;
-          return { kind: "action", payload: { ok: true } };
-        });
-        const first = call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "👍" },
-          client("alice"),
-          requestContext,
-        );
-        await firstEntered.promise;
-        const pending = call(
-          "session.reactions.set",
-          { sessionKey, messageId, emoji: "👍", remove: true },
-          client("alice"),
-          requestContext,
-        );
-        try {
-          await removalCommitted.promise;
-          // Join a read behind the queued mirror's capture on the same history worker.
-          expect(
-            await readSessionConversationBindingAsync(transcriptScope, conversationRef),
-          ).toMatchObject({ target: "channel:room-42" });
+        const channelRequest = vi.fn();
+        runMessageAction.mockImplementationOnce(async (input: MessageActionInput) => {
+          await Promise.resolve();
           runOpenClawAgentWriteTransaction(
             (database) => {
               const db = getNodeSqliteKysely<Pick<DB, "conversations">>(database.db);
@@ -728,6 +786,7 @@ describe("session reaction handlers", () => {
                   account: { account_id: "other-account" },
                   target: { delivery_target: "channel:other-room" },
                   thread: { thread_id: "other-thread" },
+                  nativeChannel: { native_channel_id: "other-native-room" },
                 }[change];
                 executeSqliteQuerySync(
                   database.db,
@@ -740,15 +799,22 @@ describe("session reaction handlers", () => {
             },
             { agentId: "main" },
           );
-          expect(runMessageAction).toHaveBeenCalledTimes(1);
-        } finally {
-          releaseFirst.resolve();
-        }
-        expect((await first)[1]).toMatchObject({ mirror: { status: "delivered" } });
-        expect(await pending).toMatchObject([
+          await input.onPlatformSendDispatch?.();
+          input.assertDirectAdapterHandoff?.();
+          channelRequest(input.params);
+          return { kind: "action", payload: { ok: true } };
+        });
+        expect(
+          await call(
+            "session.reactions.set",
+            { sessionKey, messageId, emoji: "👍" },
+            client("alice"),
+            context(config),
+          ),
+        ).toMatchObject([
           true,
           {
-            reactions: [],
+            reactions: [{ emoji: "👍", count: 1 }],
             mirror: {
               status: "failed",
               reason: "source conversation changed before delivery",
@@ -756,12 +822,13 @@ describe("session reaction handlers", () => {
           },
         ]);
         expect(runMessageAction).toHaveBeenCalledTimes(1);
+        expect(channelRequest).not.toHaveBeenCalled();
       }
     });
   });
 
   it("keeps one bot reaction per emoji while any reactor remains, in commit order", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       registerReactionChannel();
       const { messageId, config } = await seedChannelMessage();
       const requestContext = context(config);
@@ -810,7 +877,7 @@ describe("session reaction handlers", () => {
   });
 
   it("keeps local reactions successful when channel mirroring fails or cannot be supported", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withReactionState(async () => {
       registerReactionChannel();
       const { messageId, config } = await seedChannelMessage();
       const requestContext = context(config);

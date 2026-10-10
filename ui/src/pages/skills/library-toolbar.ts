@@ -24,34 +24,28 @@ export function renderSkillLibraryToolbar(
       { value: "workspace", label: t("skillLibrary.inventory") },
     );
   }
+  const action = (label: string, disabled: boolean, onClick: () => void) => html`<button
+    type="button"
+    class="btn"
+    ?disabled=${disabled}
+    @click=${onClick}
+  >
+    ${t(label)}
+  </button>`;
   return html`
     <div class="plugins-toolbar">
       ${navigationActions}
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${!library.canCreate || library.busy}
-        @click=${() => library.create()}
-      >
-        ${t("skillLibrary.create")}
-      </button>
+      ${action("skillLibrary.create", !library.canCreate || library.busy, () => library.create())}
       ${
         library.uploadsEnabled
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${!library.canCreate || library.busy}
-              @click=${() => {
-                if (!library.uploadsEnabled) {
-                  return;
-                }
-                library.importOpen = true;
-                library.importSource = null;
-                library.changed();
-              }}
-            >
-              ${t("skillLibrary.import")}
-            </button>`
+          ? action("skillLibrary.import", !library.canCreate || library.busy, () => {
+              if (!library.uploadsEnabled) {
+                return;
+              }
+              library.importOpen = true;
+              library.importSource = null;
+              library.changed();
+            })
           : nothing
       }
     </div>
@@ -73,14 +67,11 @@ export function renderSkillLibraryToolbar(
             }
             ${
               !library.showWorkspace
-                ? html`<button
-                    type="button"
-                    class="btn"
-                    ?disabled=${library.loading || library.busy}
-                    @click=${() => void library.load()}
-                  >
-                    ${t("common.refresh")}
-                  </button>`
+                ? action(
+                    "common.refresh",
+                    library.loading || library.busy,
+                    () => void library.load(),
+                  )
                 : nothing
             }
           </div>`

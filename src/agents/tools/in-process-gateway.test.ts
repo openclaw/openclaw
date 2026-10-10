@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { captureCronMutationCommit } from "../../cron/mutation-completion.js";
 import { readInProcessAgentRuntimeIdentity } from "../../gateway/in-process-agent-runtime-identity.js";
 import {
   bindInProcessSessionDeliveryGeneration,
@@ -10,6 +11,10 @@ import {
   readInProcessSubagentResume,
 } from "../../gateway/in-process-subagent-resume.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  createAdmittedRunOperatorAuthority,
+  prepareSystemAgentRunAdmission,
+} from "../admitted-run-context.js";
 
 const mocks = vi.hoisted(() => ({
   hasContext: true,
@@ -33,7 +38,6 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
 vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
 vi.mock("../../gateway/call.js", () => ({ callGateway: mocks.callGateway }));
 
-import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -48,6 +52,11 @@ import {
 } from "./in-process-gateway.js";
 
 describe("trusted in-process Gateway session creation", () => {
+  const creation = {
+    via: "spawn" as const,
+    actor: { type: "agent" as const, id: "main" },
+    requesterSessionKey: "agent:main:main",
+  };
   beforeEach(() => {
     mocks.hasContext = true;
     mocks.dispatch.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
@@ -55,120 +64,146 @@ describe("trusted in-process Gateway session creation", () => {
     mocks.callGatewayTool.mockReset().mockResolvedValue({ key: "agent:main:dashboard:child" });
   });
 
-  it("keeps task resume authority inside trusted in-process admission and refuses transport fallback", async () => {
-    const subagentResume = {
-      caller: { agentId: "main", sessionKey: "agent:main:main", assertCurrent: vi.fn() },
-      childSessionKey: "agent:main:dashboard:child",
-      childSessionId: "child-session",
-      previousRunId: "paused-run",
-      taskRunId: "original-task",
-      generation: 1,
-      createdAt: 100,
-    };
-    const request = bindInProcessSubagentResume(
-      {
-        method: "agent",
-        params: { message: "Continue", sessionKey: subagentResume.childSessionKey },
+  const subagentResume = {
+    caller: { agentId: "main", sessionKey: "agent:main:main", assertCurrent: vi.fn() },
+    childSessionKey: "agent:main:dashboard:child",
+    childSessionId: "child-session",
+    previousRunId: "paused-run",
+    taskRunId: "original-task",
+    generation: 1,
+    createdAt: 100,
+  };
+  const generation = {
+    agentId: "main",
+    storePath: "/test/agents/main/sessions/sessions.json",
+    sessionKey: "agent:main:main",
+    sessionId: "session-one",
+    lifecycleRevision: null,
+  };
+  const identity = {
+    kind: "agentRuntime",
+    agentId: "main",
+    sessionKey: "agent:main:worker",
+    operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+    delegatedAuthority: {
+      kind: "local",
+      lifecycleGeneration: "generation-1",
+      claimId: "claim-1",
+      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
+    },
+  } as const;
+
+  it.each([
+    {
+      name: "task resume",
+      request: bindInProcessSubagentResume(
+        {
+          method: "agent",
+          params: { message: "Continue", sessionKey: subagentResume.childSessionKey },
+        },
+        subagentResume,
+      ),
+      read: readInProcessSubagentResume,
+      binding: subagentResume,
+      carrierIndex: 2,
+      error: "trusted in-process Gateway dispatch",
+    },
+    {
+      name: "session delivery",
+      request: {
+        method: "send",
+        params: bindInProcessSessionDeliveryGeneration(
+          { channel: "telegram", to: "recipient", message: "Ready", idempotencyKey: "result-one" },
+          generation,
+        ),
       },
-      subagentResume,
-    );
-    await callAgentToolGatewayRequest(request);
-    expect(mocks.dispatch).toHaveBeenCalledWith("agent", request.params, expect.anything());
-    expect(readInProcessSubagentResume(mocks.dispatch.mock.calls[0]?.[2])).toBe(subagentResume);
-    expect(request.params).not.toHaveProperty("subagentResume");
-    mocks.hasContext = false;
-    await expect(callAgentToolGatewayRequest(request)).rejects.toThrow(
-      "trusted in-process Gateway dispatch",
-    );
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("surfaces creation provenance only on in-process dispatch", async () => {
-    const creation = {
-      via: "spawn" as const,
-      actor: { type: "agent" as const, id: "main" },
-      requesterSessionKey: "agent:main:main",
-    };
-    await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation);
-
-    expect(mocks.dispatch).toHaveBeenCalledWith(
-      "sessions.create",
-      { agentId: "main" },
-      {
-        forceSyntheticClient: true,
-        operatorRoleActor: { kind: "system" },
-        sessionCreation: creation,
-        syntheticScopeMode: "minimum",
-        syntheticScopes: ["operator.write"],
-      },
-    );
-    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-
-    mocks.hasContext = false;
-    await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation);
-
-    expect(mocks.callGatewayTool).toHaveBeenCalledWith(
-      "sessions.create",
-      {},
-      { agentId: "main" },
-      { scopes: ["operator.write"] },
-    );
-  });
-
-  it("keeps session-bound delivery in its admitted Gateway instead of dropping its binding on transport", async () => {
-    const generation = {
-      agentId: "main",
-      storePath: "/test/agents/main/sessions/sessions.json",
-      sessionKey: "agent:main:main",
-      sessionId: "session-one",
-      lifecycleRevision: null,
-    };
-    const params = bindInProcessSessionDeliveryGeneration(
-      { channel: "telegram", to: "recipient", message: "Ready", idempotencyKey: "result-one" },
-      generation,
-    );
-    await callAgentToolGatewayRequest({ method: "send", params });
-    expect(readInProcessSessionDeliveryGeneration(mocks.dispatch.mock.calls[0]?.[1])).toEqual(
-      generation,
-    );
-    expect(readInProcessSessionDeliveryGeneration({ ...params })).toBeUndefined();
-    mocks.hasContext = false;
-    await expect(callAgentToolGatewayRequest({ method: "send", params })).rejects.toThrow(
-      "Session-bound delivery requires its admitted in-process Gateway",
-    );
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+      read: readInProcessSessionDeliveryGeneration,
+      binding: generation,
+      carrierIndex: 1,
+      error: "Session-bound delivery requires its admitted in-process Gateway",
+    },
+    {
+      name: "runtime identity",
+      request: withAgentToolGatewayRuntimeIdentity(
+        { method: "chat.send", params: { sessionKey: "agent:main:child" } },
+        identity,
+      ),
+      read: readInProcessAgentRuntimeIdentity,
+      binding: identity,
+      carrierIndex: 2,
+      error: "trusted agent runtime identity requires in-process Gateway dispatch",
+    },
+  ])(
+    "keeps $name private and refuses transport fallback",
+    async ({ request, read, binding, carrierIndex, error }) => {
+      await callAgentToolGatewayRequest(request);
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        request.method,
+        request.params,
+        expect.anything(),
+      );
+      const carrier = mocks.dispatch.mock.calls[0]?.[carrierIndex];
+      if (carrierIndex === 1) {
+        expect(read(carrier)).toEqual(binding);
+        expect(read({ ...request.params })).toBeUndefined();
+      } else {
+        expect(read(carrier)).toBe(binding);
+      }
+      expect(request.params).not.toHaveProperty("subagentResume");
+      if (request.method === "chat.send") {
+        expect(JSON.stringify(request)).toBe(
+          '{"method":"chat.send","params":{"sessionKey":"agent:main:child"}}',
+        );
+      }
+      mocks.hasContext = false;
+      await expect(callAgentToolGatewayRequest(request)).rejects.toThrow(error);
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses an explicitly bound Gateway when worker creation has no ambient request scope", async () => {
     mocks.hasContext = false;
     const admitted = {} as GatewayRequestContext;
     const resolveGatewayContext = () => admitted;
     const sessionMutationCommitGuard = vi.fn();
-    const creation = {
-      via: "spawn" as const,
-      actor: { type: "agent" as const, id: "main" },
+    const workerCreation = {
+      ...creation,
       requesterSessionKey: "agent:main:dashboard:worker",
       inheritedToolPolicy: { version: 1 as const, allow: ["sessions_spawn"], deny: [] },
     };
 
-    await callInProcessGatewayToolWithCreation("sessions.create", { agentId: "main" }, creation, {
-      resolveGatewayContext,
-      sessionMutationCommitGuard,
-    });
+    await callInProcessGatewayToolWithCreation(
+      "sessions.create",
+      { agentId: "main" },
+      workerCreation,
+      {
+        resolveGatewayContext,
+        sessionMutationCommitGuard,
+      },
+    );
 
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "sessions.create",
       { agentId: "main" },
       expect.objectContaining({
         resolveGatewayContext: expect.any(Function),
-        sessionMutationCommitGuard,
-        sessionCreation: creation,
+        sessionMutationCommitGuard: expect.any(Function),
+        sessionCreation: workerCreation,
       }),
     );
+    const dispatchedOptions = mocks.dispatch.mock.calls[0]?.[2];
+    expect(dispatchedOptions.resolveGatewayContext()).toBe(admitted);
+    expect(() => dispatchedOptions.sessionMutationCommitGuard()).not.toThrow();
+    expect(sessionMutationCommitGuard).toHaveBeenCalledOnce();
+    const refusal = new Error("worker creation authority retired");
+    sessionMutationCommitGuard.mockImplementationOnce(() => {
+      throw refusal;
+    });
+    expect(() => dispatchedOptions.sessionMutationCommitGuard()).toThrow(refusal);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("carries visible-spawn policy through signed identity on fallback dispatch", async () => {
+  it("carries visible-spawn policy and its timeout through signed fallback dispatch", async () => {
     mocks.hasContext = false;
     const inheritedToolPolicy = {
       version: 1 as const,
@@ -180,6 +215,7 @@ describe("trusted in-process Gateway session creation", () => {
 
     mocks.callGatewayTool.mockImplementationOnce(async () => {
       expect(getGatewaySessionSpawnContext()).toEqual({
+        requesterSenderIsOwner: true,
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
         resolvedModel,
@@ -200,16 +236,18 @@ describe("trusted in-process Gateway session creation", () => {
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey: "agent:main:main",
+        requesterSenderIsOwner: true,
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
         inheritedToolPolicy,
         resolvedModel,
         spawnModelAutoSelection,
       },
+      { timeoutMs: 120_000 },
     );
 
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "sessions.create",
-      {},
+      { timeoutMs: 120_000 },
       {
         agentId: "main",
         parentSessionKey: "agent:main:main",
@@ -228,11 +266,6 @@ describe("trusted in-process Gateway session creation", () => {
     const admitted = { gateway: "admitted" } as unknown as GatewayRequestContext;
     const replacement = { gateway: "replacement" } as unknown as GatewayRequestContext;
     const params = { agentId: "main", label: "worker" };
-    const creation = {
-      via: "spawn" as const,
-      actor: { type: "agent" as const, id: "main" },
-      requesterSessionKey: "agent:main:main",
-    };
     const controller = new AbortController();
     let current = admitted;
     let admittedDispatches = 0;
@@ -241,10 +274,6 @@ describe("trusted in-process Gateway session creation", () => {
       options:
         | {
             resolveGatewayContext?: () => GatewayRequestContext | undefined;
-            sessionCreation?: unknown;
-            signal?: AbortSignal;
-            syntheticScopes?: string[];
-            timeoutMs?: number;
           }
         | undefined,
     ) => {
@@ -377,6 +406,35 @@ describe("trusted in-process Gateway session creation", () => {
       { scopes: ["operator.write"], signal },
     );
   });
+
+  it("refuses creation transport before forwarding admitted operator authority", async () => {
+    mocks.hasContext = false;
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operatorAuthority: createAdmittedRunOperatorAuthority({
+            profileId: "operator",
+            scopes: ["operator.write"],
+            assertCurrent: () => {},
+          }),
+        },
+        () =>
+          callInProcessGatewayToolWithCreation(
+            "sessions.create",
+            { agentId: "main" },
+            {
+              ...creation,
+              inheritedToolPolicy: { version: 1, allow: ["read"], deny: [] },
+            },
+          ),
+      ),
+    ).rejects.toThrow("operator run authority requires its admitted Gateway");
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+  });
 });
 
 describe("request-shaped in-process Gateway dispatch", () => {
@@ -386,122 +444,53 @@ describe("request-shaped in-process Gateway dispatch", () => {
     mocks.callGateway.mockReset().mockResolvedValue({ runId: "run-1" });
   });
 
-  it("uses the local router with least privilege and transport-equivalent request options", async () => {
-    const controller = new AbortController();
-    const onAccepted = vi.fn();
-    const agentToolCaller = {
-      agentId: "main",
-      sessionKey: "agent:main:discord:direct:colin",
-    };
-
-    await callAgentToolGatewayRequest({
-      method: "agent",
-      params: { sessionKey: "agent:main:worker", message: "run" },
-      agentToolCaller,
-      expectFinal: true,
-      onAccepted,
-      signal: controller.signal,
-    });
-
-    expect(mocks.dispatch).toHaveBeenCalledWith(
-      "agent",
-      { sessionKey: "agent:main:worker", message: "run" },
-      {
-        forceSyntheticClient: true,
-        operatorRoleActor: { kind: "system" },
-        agentToolCaller,
-        syntheticScopeMode: "minimum",
-        syntheticScopes: ["operator.write"],
-        expectFinal: true,
-        onAccepted,
-        signal: controller.signal,
-        timeoutMs: 10_000,
-        resolveGatewayContext: expect.any(Function),
-      },
-    );
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
-
-  it("carries trusted runtime identity only through the private in-process carrier", async () => {
-    const identity = {
-      kind: "agentRuntime",
-      agentId: "main",
-      sessionKey: "agent:main:worker",
-      operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-      delegatedAuthority: {
-        kind: "local",
-        lifecycleGeneration: "generation-1",
-        claimId: "claim-1",
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-      },
-    } as const;
-    const request = withAgentToolGatewayRuntimeIdentity(
-      { method: "chat.send", params: { sessionKey: "agent:main:child" } },
-      identity,
-    );
-    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
-      expect(readInProcessAgentRuntimeIdentity(options)).toBe(identity);
-      return { runId: "run-1" };
-    });
-
-    await callAgentToolGatewayRequest(request);
-
-    expect(JSON.stringify(request)).toBe(
-      '{"method":"chat.send","params":{"sessionKey":"agent:main:child"}}',
-    );
-  });
-
   it.each([
+    [undefined, 10_000],
     [null, undefined],
     [0, 0],
-    [25_000, 25_000],
-  ] as const)("maps timeout %s to the local dispatch deadline", async (timeoutMs, expected) => {
-    await callAgentToolGatewayRequest({ method: "sessions.list", timeoutMs });
+  ] as const)(
+    "preserves request options and maps timeout %s to %s",
+    async (timeoutMs, expected) => {
+      const controller = new AbortController();
+      const onAccepted = vi.fn();
+      const agentToolCaller = {
+        agentId: "main",
+        sessionKey: "agent:main:discord:direct:colin",
+      };
 
-    const options = mocks.dispatch.mock.calls[0]?.[2] as { timeoutMs?: number } | undefined;
-    expect(options?.timeoutMs).toBe(expected);
-  });
+      await callAgentToolGatewayRequest({
+        method: "agent",
+        params: { sessionKey: "agent:main:worker", message: "run" },
+        agentToolCaller,
+        expectFinal: true,
+        onAccepted,
+        timeoutMs,
+        signal: controller.signal,
+      });
 
-  it("routes abort cleanup through the same local caller", async () => {
-    mocks.dispatch.mockImplementation(
-      async (
-        method: string,
-        _params: unknown,
-        options?: { onSignalAbort?: () => Promise<void> },
-      ) => {
-        if (method === "conversations.turn.cancel") {
-          return { status: "ok" };
-        }
-        await options?.onSignalAbort?.();
-        throw new Error("primary aborted");
-      },
-    );
-
-    await expect(
-      callAgentToolGatewayRequest({
-        method: "conversations.turn",
-        params: { turnId: "turn-1" },
-        onSignalAbort: async (request) => {
-          await request("conversations.turn.cancel", { turnId: "turn-1" });
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "agent",
+        { sessionKey: "agent:main:worker", message: "run" },
+        {
+          forceSyntheticClient: true,
+          operatorRoleActor: { kind: "system" },
+          agentToolCaller,
+          syntheticScopeMode: "minimum",
+          syntheticScopes: ["operator.write"],
+          expectFinal: true,
+          onAccepted,
+          signal: controller.signal,
+          ...(expected === undefined ? {} : { timeoutMs: expected }),
+          resolveGatewayContext: expect.any(Function),
         },
-      }),
-    ).rejects.toThrow("primary aborted");
-    expect(mocks.dispatch.mock.calls).toContainEqual([
-      "conversations.turn.cancel",
-      { turnId: "turn-1" },
-      expect.objectContaining({ forceSyntheticClient: true }),
-    ]);
-    expect(
-      mocks.dispatch.mock.calls.filter(([method]) => method === "conversations.turn.cancel"),
-    ).toHaveLength(1);
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
+      );
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+    },
+  );
 
-  it("does not route abort cleanup through a replacement Gateway", async () => {
+  it("refuses abort cleanup after its admitted Gateway is replaced", async () => {
     const admitted = {} as GatewayRequestContext;
-    const replacement = {} as GatewayRequestContext;
     let current = admitted;
-    let cancelDispatches = 0;
     mocks.dispatch.mockImplementation(
       async (
         method: string,
@@ -509,24 +498,18 @@ describe("request-shaped in-process Gateway dispatch", () => {
         options?: { onSignalAbort?: () => Promise<void> },
       ) => {
         if (method === "conversations.turn.cancel") {
-          cancelDispatches += 1;
           return { status: "ok" };
         }
-        current = replacement;
+        current = {} as GatewayRequestContext;
         await options?.onSignalAbort?.();
         throw new Error("primary aborted");
       },
     );
-
     await expect(
       withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          gatewayContextResolver: () => current,
-        },
-        async () =>
-          await callAgentToolGatewayRequest({
+        { agentId: "main", sessionKey: "agent:main:main", gatewayContextResolver: () => current },
+        () =>
+          callAgentToolGatewayRequest({
             method: "conversations.turn",
             params: { turnId: "turn-1" },
             onSignalAbort: async (request) => {
@@ -534,8 +517,11 @@ describe("request-shaped in-process Gateway dispatch", () => {
             },
           }),
       ),
-    ).rejects.toThrow(/Gateway|gateway|unavailable/u);
-    expect(cancelDispatches).toBe(0);
+    ).rejects.toThrow("Gateway instance unavailable");
+    expect(
+      mocks.dispatch.mock.calls.filter(([method]) => method === "conversations.turn.cancel"),
+    ).toHaveLength(0);
+    expect(mocks.callGateway).not.toHaveBeenCalled();
   });
 
   it("keeps a captured multi-request operation on its original Gateway", async () => {
@@ -631,30 +617,6 @@ describe("request-shaped in-process Gateway dispatch", () => {
     });
     expect(mocks.dispatch).not.toHaveBeenCalled();
   });
-
-  it("does not drop a private runtime identity onto the transport fallback", async () => {
-    mocks.hasContext = false;
-    const request = withAgentToolGatewayRuntimeIdentity(
-      { method: "chat.send", params: { sessionKey: "agent:main:child" } },
-      {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:worker",
-        operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        delegatedAuthority: {
-          kind: "local",
-          lifecycleGeneration: "generation-1",
-          claimId: "claim-1",
-          operationalRunInstance: { instanceId: "instance-1", runId: "run-1" },
-        },
-      },
-    );
-
-    await expect(callAgentToolGatewayRequest(request)).rejects.toThrow(
-      "trusted agent runtime identity requires in-process Gateway dispatch",
-    );
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-  });
 });
 
 describe("built-in Gateway foreground authority", () => {
@@ -665,50 +627,9 @@ describe("built-in Gateway foreground authority", () => {
     mocks.callGatewayTool.mockReset();
   });
 
-  const callers = [
-    {
-      name: "request-shaped",
-      call: () =>
-        callAgentToolGatewayRequest({
-          method: "sessions.patch",
-          params: { key: "target", pinned: true },
-        }),
-    },
-    {
-      name: "generic",
-      call: () => callInProcessGatewayTool("sessions.patch", { key: "target", pinned: true }),
-    },
-    {
-      name: "Cron mutation",
-      call: () => callAgentToolGatewayRequest({ method: "cron.add", params: {} }),
-    },
-  ];
-
-  it.each(callers)(
-    "rejects retained $name work after its exact caller closes",
-    async ({ call }) => {
-      let current = true;
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:caller",
-          operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
-          receiptAuthority: () => current,
-        },
-        async () => {
-          current = false;
-          await expect(call()).rejects.toThrow(/authority.*no longer active/i);
-        },
-      );
-      expect(mocks.dispatch).not.toHaveBeenCalled();
-      expect(mocks.callGateway).not.toHaveBeenCalled();
-      expect(mocks.callGatewayTool).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(callers)(
-    "rechecks $name caller authority at the mutation commit boundary",
-    async ({ call }) => {
+  it.each(["dispatch", "commit"] as const)(
+    "rejects retired caller authority before %s",
+    async (boundary) => {
       const entered = createDeferred();
       const release = createDeferred();
       let current = true;
@@ -727,14 +648,29 @@ describe("built-in Gateway foreground authority", () => {
           operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
           receiptAuthority: () => current,
         },
-        call,
+        async () => {
+          if (boundary === "dispatch") {
+            current = false;
+          }
+          return await callAgentToolGatewayRequest({
+            method: "sessions.patch",
+            params: { key: "target", pinned: true },
+          });
+        },
       );
       const rejected = expect(pending).rejects.toThrow(/authority.*no longer active/i);
-      await entered.promise;
-      current = false;
-      release.resolve();
+      if (boundary === "commit") {
+        await entered.promise;
+        current = false;
+        release.resolve();
+      }
       await rejected;
       expect(committed).toBe(false);
+      if (boundary === "dispatch") {
+        expect(mocks.dispatch).not.toHaveBeenCalled();
+      }
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.callGatewayTool).not.toHaveBeenCalled();
     },
   );
 
@@ -811,5 +747,134 @@ describe("built-in Gateway foreground authority", () => {
       "conversations.turn",
       "conversations.turn.cancel",
     ]);
+  });
+});
+
+function createCaller(request: Parameters<typeof callAgentToolGatewayRequest>[0]) {
+  let current = true;
+  return {
+    revoke: () => {
+      current = false;
+    },
+    invoke: () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:caller",
+          operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
+          receiptAuthority: () => current,
+        },
+        () => callAgentToolGatewayRequest(request),
+      ),
+  };
+}
+
+describe("Cron mutation completion through in-process Gateway", () => {
+  beforeEach(() => {
+    mocks.hasContext = true;
+    mocks.dispatch.mockReset().mockResolvedValue({ ok: true });
+  });
+
+  it.each([
+    ["cron.run", { committed: true }, true],
+    ["cron.add", { created: true, job: { id: "unattested" } }, false],
+    ["cron.remove", new Error("mutation detail"), false],
+    ["cron.remove", new Error("mutation detail"), true],
+    ["cron.get", { privateJob: true }, false],
+  ] as const)(
+    "settles revoked %s result %o only with a commit receipt: %s",
+    async (method, result, committed) => {
+      const caller = createCaller({ method, params: method === "cron.get" ? { id: "job" } : {} });
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+        if (committed) {
+          if (!(result instanceof Error)) {
+            options.sessionMutationCommitGuard();
+          }
+          captureCronMutationCommit(method)?.();
+        }
+        caller.revoke();
+        if (result instanceof Error) {
+          throw result;
+        }
+        return result;
+      });
+      const pending = caller.invoke();
+      if (!committed) {
+        await expect(pending).rejects.toThrow(/authority.*no longer active/i);
+      } else if (result instanceof Error) {
+        await expect(pending).rejects.toBe(result);
+      } else {
+        await expect(pending).resolves.toEqual(result);
+      }
+    },
+  );
+
+  it.each(["committed", "committed-error", "no-op"] as const)(
+    "settles %s Cron work when its request is cancelled after the owner returns",
+    async (outcome) => {
+      const controller = new AbortController();
+      const cleanupError = new Error("committed mutation cleanup failed");
+      mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+        expect(options.signal).toBeUndefined();
+        options.sessionMutationCommitGuard();
+        if (outcome !== "no-op") {
+          captureCronMutationCommit("cron.add")?.();
+        }
+        controller.abort(new Error("creator request cancelled"));
+        if (outcome === "committed-error") {
+          throw cleanupError;
+        }
+        return { created: outcome === "committed" };
+      });
+      const result = callAgentToolGatewayRequest({
+        method: "cron.add",
+        params: {},
+        signal: controller.signal,
+      });
+      if (outcome === "committed") {
+        await expect(result).resolves.toEqual({ created: true });
+      } else if (outcome === "committed-error") {
+        await expect(result).rejects.toBe(cleanupError);
+      } else {
+        await expect(result).rejects.toThrow("creator request cancelled");
+      }
+    },
+  );
+
+  it("keeps Cron cancellation in the mutation owner's pre-commit fence", async () => {
+    const controller = new AbortController();
+    const commit = vi.fn();
+    mocks.dispatch.mockImplementationOnce(async (_method, _params, options) => {
+      controller.abort(new Error("cancelled before commit"));
+      options.sessionMutationCommitGuard();
+      commit();
+      return { created: true };
+    });
+    await expect(
+      callAgentToolGatewayRequest({
+        method: "cron.add",
+        params: {},
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("cancelled before commit");
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it("does not let a late receipt mark a successor invocation", async () => {
+    let previousCommit: (() => undefined) | undefined;
+    mocks.dispatch.mockImplementationOnce(async () => {
+      previousCommit = captureCronMutationCommit("cron.add");
+      return { created: false, updated: false, job: { id: "previous" } };
+    });
+    await callAgentToolGatewayRequest({ method: "cron.add", params: {} });
+    expect(previousCommit).toBeTypeOf("function");
+    const caller = createCaller({ method: "cron.add", params: {} });
+    mocks.dispatch.mockImplementationOnce(async () => {
+      expect(captureCronMutationCommit("cron.remove")).toBeUndefined();
+      previousCommit?.();
+      caller.revoke();
+      return { id: "successor" };
+    });
+    await expect(caller.invoke()).rejects.toThrow(/authority.*no longer active/i);
   });
 });

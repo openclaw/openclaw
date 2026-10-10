@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveAgentIdentity } from "../../agents/identity.js";
 import { deriveContextPromptTokens, type NormalizedUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -18,32 +19,25 @@ function projectHookUsage(usage?: NormalizedUsage): PluginHookReplyUsageState["u
   return { input, output, cacheRead, cacheWrite, total };
 }
 
-export function buildReplyUsageState(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  provider?: string;
-  model?: string;
-  fallbackExhausted?: boolean;
-  winnerProvider?: string;
-  winnerModel?: string;
-  reasoningEffort?: string;
-  fastMode?: boolean;
-  fallbackUsed?: boolean;
-  agentId: string;
-  sessionId: string;
-  chatType?: string;
-  authMode?: string;
-  overrideSource?: string;
-  requestedProvider?: string;
-  requestedModel?: string;
-  compactionCount?: number;
-  contextTokenBudget?: number;
-  contextUsedTokens?: number;
-  promptTokens?: number;
-  usage?: NormalizedUsage;
-  lastCallUsage?: NormalizedUsage;
-  durationMs?: number;
-}): PluginHookReplyUsageState {
+export function buildReplyUsageState(
+  params: Omit<
+    PluginHookReplyUsageState,
+    "resolvedRef" | "requested" | "turnUsd" | "identity" | "usage" | "lastUsage"
+  > & {
+    config: OpenClawConfig;
+    agentDir: string;
+    agentId: string;
+    sessionId: string;
+    fallbackExhausted?: boolean;
+    winnerProvider?: string;
+    winnerModel?: string;
+    requestedProvider?: string;
+    requestedModel?: string;
+    promptTokens?: number;
+    usage?: NormalizedUsage;
+    lastCallUsage?: NormalizedUsage;
+  },
+): PluginHookReplyUsageState {
   const resolvedProvider = params.fallbackExhausted ? undefined : params.winnerProvider;
   const resolvedModel = params.fallbackExhausted ? undefined : params.winnerModel;
   return {
@@ -73,18 +67,14 @@ export function buildReplyUsageState(params: {
     durationMs: params.durationMs,
     identity: resolveAgentIdentity(params.config, params.agentId),
     compactionCount: params.compactionCount,
-    contextTokenBudget:
-      typeof params.contextTokenBudget === "number" && Number.isFinite(params.contextTokenBudget)
-        ? params.contextTokenBudget
-        : undefined,
+    contextTokenBudget: asFiniteNumber(params.contextTokenBudget),
     contextUsedTokens:
-      typeof params.contextUsedTokens === "number" && Number.isFinite(params.contextUsedTokens)
-        ? params.contextUsedTokens
-        : deriveContextPromptTokens({
-            lastCallUsage: params.lastCallUsage,
-            promptTokens: params.promptTokens,
-            usage: params.usage,
-          }),
+      asFiniteNumber(params.contextUsedTokens) ??
+      deriveContextPromptTokens({
+        lastCallUsage: params.lastCallUsage,
+        promptTokens: params.promptTokens,
+        usage: params.usage,
+      }),
     usage: projectHookUsage(params.usage),
     lastUsage: projectHookUsage(params.lastCallUsage),
   };

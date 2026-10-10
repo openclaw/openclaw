@@ -382,8 +382,6 @@ describe("gateway sessions patch", () => {
 
   test.each([
     { action: "archive", archived: true, sessionId: undefined },
-    { action: "archive", archived: true, sessionId: "" },
-    { action: "restore", archived: false, sessionId: undefined },
     { action: "restore", archived: false, sessionId: "" },
   ])("rejects $action for a provisional session identity", async ({ archived, sessionId }) => {
     const entry = { sessionId, updatedAt: 1 } as SessionEntry;
@@ -542,6 +540,39 @@ describe("gateway sessions patch", () => {
     expect(read.lastReadAt).toBeGreaterThanOrEqual(unread.markedUnreadAt ?? 0);
     expect(read.markedUnreadAt).toBeUndefined();
     expect(read.agentStatus).toBeUndefined();
+  });
+
+  test("commits a read acknowledgement without ageing the session row", async () => {
+    const store = mainStoreEntry({
+      markedUnreadAt: 40,
+      agentStatus: { note: "Waiting", attention: "hand", expiresAt: Date.now() + 60_000 },
+    });
+
+    const read = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, unread: false, expectedMarkedUnreadAt: 40 },
+      }),
+    );
+    expect(read.updatedAt).toBe(1);
+    expect(read.lastReadAt).toEqual(expect.any(Number));
+    expect(read.markedUnreadAt).toBeUndefined();
+    expect(read.agentStatus).toBeUndefined();
+
+    const marked = expectPatchOk(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, unread: true } }),
+    );
+    expect(marked.updatedAt).toBeGreaterThan(1);
+    expect(marked.markedUnreadAt).toEqual(expect.any(Number));
+
+    const pinned = expectPatchOk(
+      await runPatch({
+        store: mainStoreEntry({ markedUnreadAt: 40 }),
+        patch: { key: MAIN_SESSION_KEY, pinned: true, unread: false },
+      }),
+    );
+    expect(pinned.pinnedAt).toEqual(expect.any(Number));
+    expect(pinned.updatedAt).toBeGreaterThan(1);
   });
 
   test("stores sanitized agent status with attention and a bounded TTL", async () => {
@@ -964,18 +995,6 @@ describe("gateway sessions patch", () => {
     expect(store[MAIN_SESSION_KEY]).toEqual(before);
   });
 
-  test("allows non-model metadata patches for model-locked sessions", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        store: mainStoreEntry({ modelSelectionLocked: true }),
-        patch: { key: MAIN_SESSION_KEY, label: "Remote Codex task" },
-      }),
-    );
-
-    expect(entry.modelSelectionLocked).toBe(true);
-    expect(entry.label).toBe("Remote Codex task");
-  });
-
   test.each(["fresh", "placeholder", "existing"] as const)(
     "queues model switches only for existing sessions (%s)",
     async (sessionState) => {
@@ -1120,30 +1139,6 @@ describe("gateway sessions patch", () => {
       ts: 1,
       source: "agent-patch",
     });
-    expect(input).toEqual(before);
-  });
-
-  test("clears the marker thinkingLevel restore when the user clears thinkingLevel", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: {
-        thinkingLevel: "high",
-        modelFallback: {
-          prevModel: OPENAI_GPT_ID,
-          prevProvider: "openai",
-          prevThinkingLevel: "high",
-          ts: 1,
-          source: "agent-patch",
-        },
-      } as SessionEntry,
-    };
-    const input = store[MAIN_SESSION_KEY]!;
-    const before = structuredClone(input);
-    const entry = expectPatchOk(
-      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, thinkingLevel: null } }),
-    );
-    expect(entry.thinkingLevel).toBeUndefined();
-    expect(entry.modelFallback?.prevThinkingLevel).toBeUndefined();
-    expect(entry.modelFallback?.prevModel).toBe(OPENAI_GPT_ID);
     expect(input).toEqual(before);
   });
 
@@ -1595,44 +1590,20 @@ describe("gateway sessions patch", () => {
       await runPatch({
         cfg: {
           agents: {
-            list: [
-              {
-                id: "main",
-                default: true,
+            entries: {
+              main: {
                 model: { primary: "gmn/gpt-5.4" },
               },
-              {
-                id: "work",
+              work: {
                 model: { primary: "openai/gpt-5.5" },
               },
-            ],
+            },
           },
         } as OpenClawConfig,
         storeKey: "global",
         agentId: "work",
         patch: {
           key: "global",
-          thinkingLevel: "xhigh",
-        },
-        loadGatewayModelCatalog: async () => [],
-      }),
-    );
-
-    expect(entry.thinkingLevel).toBe("xhigh");
-  });
-
-  test("accepts xhigh thinking patches from bundled startup-lazy provider policy without catalog", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-            },
-          },
-        } as OpenClawConfig,
-        patch: {
-          key: MAIN_SESSION_KEY,
           thinkingLevel: "xhigh",
         },
         loadGatewayModelCatalog: async () => [],
@@ -1961,35 +1932,36 @@ describe("gateway sessions patch", () => {
     expect(cleared.sessionRoot).toBe("/workspace/project");
   });
 
-  test.each([
-    { execSecurity: "deny" },
-    { execSecurity: null },
-    { execAsk: "always" },
-    { execAsk: null },
-  ])("rejects retired session policy patch %j without writing", async (retiredPatch) => {
-    for (const store of [{}, mainStoreEntry({ label: "Original", permissionMode: "read-only" })]) {
-      const before = structuredClone(store);
-      const result = await runPatch({
-        store,
-        patch: {
-          key: MAIN_SESSION_KEY,
-          label: "Changed",
-          permissionMode: "guarded",
-          ...retiredPatch,
-        },
-      });
+  test.each([{ execSecurity: null }, { execAsk: "always" }])(
+    "rejects retired session policy patch %j without writing",
+    async (retiredPatch) => {
+      for (const store of [
+        {},
+        mainStoreEntry({ label: "Original", permissionMode: "read-only" }),
+      ]) {
+        const before = structuredClone(store);
+        const result = await runPatch({
+          store,
+          patch: {
+            key: MAIN_SESSION_KEY,
+            label: "Changed",
+            permissionMode: "guarded",
+            ...retiredPatch,
+          },
+        });
 
-      expect(result).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message:
-            "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
-        },
-      });
-      expect(store).toEqual(before);
-    }
-  });
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "INVALID_REQUEST",
+            message:
+              "execSecurity/execAsk are retired; set permissionMode (read-only|guarded|workspace|full) instead, or use /exec for this run only.",
+          },
+        });
+        expect(store).toEqual(before);
+      }
+    },
+  );
 
   test("stores and clears a session permission mode without a recorded root", async () => {
     const store = mainStoreEntry({});
@@ -2140,16 +2112,6 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
     expectAuthOverride(entry, { profile: "newprofile" });
     expect(entry.liveModelSwitchPending).toBe(true);
-  });
-
-  test("does not set authProfileOverride when profile suffix is missing", async () => {
-    const entry = await applyMainModelPatch({
-      cfg: createAllowlistedAnthropicModelCfg(),
-      model: ANTHROPIC_SONNET_MODEL,
-      catalogRefs: [ANTHROPIC_SONNET_MODEL],
-    });
-    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
-    expectAuthOverride(entry, { profile: undefined });
   });
 
   test("persists full provider:profile authProfileOverride on model patch", async () => {

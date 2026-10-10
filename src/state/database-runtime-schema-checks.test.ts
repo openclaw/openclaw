@@ -1,18 +1,15 @@
 import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listSessionEntriesCore } from "../config/sessions/session-accessor.entry.js";
 import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "./openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
 import {
   openClawStateDatabaseCache,
   recordOpenClawStateDatabaseOpenFailure,
@@ -26,6 +23,8 @@ import {
 
 const trace = vi.hoisted(() => ({
   execute: vi.fn<(database: DatabaseSync, sql: string) => void>(),
+  isVersionProbe: (sql: string) =>
+    /^PRAGMA data_version\b|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
 }));
 vi.mock("../infra/kysely-sync-cache-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/kysely-sync-cache-state.js")>();
@@ -33,7 +32,7 @@ vi.mock("../infra/kysely-sync-cache-state.js", async (importOriginal) => {
     ...actual,
     executeWithCachedStatement: (...args: Parameters<typeof actual.executeWithCachedStatement>) => {
       // Count executions, including hits in the prepared-statement cache.
-      if (!/^PRAGMA data_version\b/i.test(args[1])) {
+      if (!trace.isVersionProbe(args[1])) {
         trace.execute(args[0], args[1]);
       }
       return actual.executeWithCachedStatement(...args);
@@ -50,7 +49,7 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
       vi.spyOn(database, "prepare").mockImplementation((sql) => {
         const statement = prepare(sql);
         // Observe before admission: the state owner retains raw statements outside Kysely.
-        if (/^PRAGMA data_version\b/i.test(sql)) {
+        if (trace.isVersionProbe(sql)) {
           const get = statement.get.bind(statement);
           vi.spyOn(statement, "get").mockImplementation((...bindings) => {
             trace.execute(database, sql);
@@ -64,7 +63,8 @@ vi.mock("../infra/node-sqlite.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-schema-budget-");
+afterAll(() => vi.restoreAllMocks());
 const counts: Array<{
   owner: string;
   userVersion: number;
@@ -72,16 +72,10 @@ const counts: Array<{
   dataVersion: number;
 }> = [];
 
-afterAll(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-});
-
 beforeAll(async () => {
   const scope = {
     agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-budget-") },
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
     sessionKey: "agent:main:schema-budget",
     projection: "list" as const,
   };
@@ -99,9 +93,7 @@ beforeAll(async () => {
   expect(trace.execute.mock.calls.some(([, sql]) => /^PRAGMA user_version\b/i.test(sql))).toBe(
     true,
   );
-  expect(trace.execute.mock.calls.some(([, sql]) => /^PRAGMA data_version\b/i.test(sql))).toBe(
-    true,
-  );
+  expect(trace.execute.mock.calls.some(([, sql]) => trace.isVersionProbe(sql))).toBe(true);
   trace.execute.mockClear();
 
   // No await: all 100 reads of each entry point occur in the same event-loop turn.
@@ -117,7 +109,7 @@ beforeAll(async () => {
       owner,
       userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
       sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-      dataVersion: sql.filter((text) => /^PRAGMA data_version\b/i.test(text)).length,
+      dataVersion: sql.filter(trace.isVersionProbe).length,
     });
   }
   trace.execute.mockClear();
@@ -129,7 +121,7 @@ beforeAll(async () => {
     owner: "state-readonly",
     userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
     sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-    dataVersion: sql.filter((text) => /^PRAGMA data_version\b/i.test(text)).length,
+    dataVersion: sql.filter(trace.isVersionProbe).length,
   });
   console.info("Admitted database checks for 100 reads per entry point:", counts);
 });
@@ -150,37 +142,37 @@ it("keeps admitted reads within the schema-query budget", () => {
   );
 });
 
-it("refuses a revoked cached admission without reading its schema again", () => {
-  const scope = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-revoked-") } };
-  const database = openOpenClawStateDatabase(scope);
-  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
-  const failure = new Error("synthetic revoked state admission");
-  recordOpenClawStateDatabaseOpenFailure(database.path, failure);
-  trace.execute.mockClear();
-  expect(() => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toThrow(
-    failure,
-  );
-  expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(failure);
-  expect(trace.execute).not.toHaveBeenCalled();
-});
-
-it("revalidates locally changed schema facts after a rollback", () => {
-  const scope = { env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-local-") } };
-  const database = openOpenClawStateDatabase(scope);
-  database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
-  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
-  database.db.exec("ROLLBACK");
-  expect(openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toBe(database);
-  database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-  expect(() => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path)).toThrow(
-    /uses newer schema version/,
-  );
-});
+it.each(["revocation", "schema-change"] as const)(
+  "invalidates cached admission after %s",
+  (cause) => {
+    const scope = { env: { OPENCLAW_STATE_DIR: sessionDirs.make() } };
+    const database = openOpenClawStateDatabase(scope);
+    const cached = () => openClawStateDatabaseCache.getCachedOpenClawStateDatabase(database.path);
+    expect(cached()).toBe(database);
+    if (cause === "schema-change") {
+      database.db.exec(`BEGIN; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION - 1}`);
+      expect(cached()).toBe(database);
+      database.db.exec("ROLLBACK");
+      expect(cached()).toBe(database);
+      database.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      expect(cached).toThrow(/uses newer schema version/);
+      return;
+    }
+    const failure = new Error("synthetic revoked state admission");
+    recordOpenClawStateDatabaseOpenFailure(database.path, failure);
+    trace.execute.mockClear();
+    expect(cached).toThrow(failure);
+    expect(() => withExistingOpenClawStateDatabaseReadOnly(() => undefined, scope)).toThrow(
+      failure,
+    );
+    expect(trace.execute).not.toHaveBeenCalled();
+  },
+);
 
 it("refuses schemas migrated by another process on the next read", () => {
   const scope = {
     agentId: "main",
-    env: { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-schema-migration-") },
+    env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
   };
   const databases: Array<[string, number]> = [];
   try {

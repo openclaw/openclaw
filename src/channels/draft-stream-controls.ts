@@ -74,19 +74,15 @@ export function createFinalizableDraftStreamControls<T = string>(
     await loop.flush();
   };
 
-  const stopForClear = async (): Promise<void> => {
-    // Clearing deletes the preview, so stop the loop without flushing another edit first.
-    params.markStopped();
+  const stopPending = async (mark: () => void): Promise<void> => {
+    mark();
     loop.stop();
     await loop.waitForInFlight();
   };
-
-  const seal = async (): Promise<void> => {
-    // Sealing keeps the preview id for callers that already own final delivery/deletion.
-    params.markFinal();
-    loop.stop();
-    await loop.waitForInFlight();
-  };
+  // Clearing deletes the preview, so stop the loop without flushing another edit first.
+  const stopForClear = () => stopPending(() => params.markStopped());
+  // Sealing keeps the preview id for callers that already own final delivery/deletion.
+  const seal = () => stopPending(() => params.markFinal());
 
   return {
     loop,
@@ -261,12 +257,17 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     clearTail = stopRun;
     return stopRun;
   };
-  const resetMessage = () => {
+  const resetMessage = (throttle: "reset" | "keep" = "reset") => {
     params.clearMessageId();
     controls.loop.resetPending();
-    controls.loop.resetThrottleWindow();
+    if (throttle === "reset") {
+      controls.loop.resetThrottleWindow();
+    }
   };
-  const reset = (mode: "preserve" | "discard" = "preserve") => {
+  const reset = (
+    mode: "preserve" | "discard" = "preserve",
+    throttle: "reset" | "keep" = "reset",
+  ) => {
     // A later rotation cannot revoke an earlier request to discard an in-flight create.
     if (mode === "discard") {
       discardThroughGeneration = generation;
@@ -274,11 +275,12 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
     generation += 1;
     params.state.stopped = false;
     params.state.final = false;
-    resetMessage();
+    resetMessage(throttle);
   };
   const createMessage = async (
     send: () => Promise<TMessageId | undefined>,
     publish: (messageId: TMessageId | undefined) => boolean,
+    retirementOptions?: { defer?: boolean },
   ): Promise<boolean> => {
     const startedGeneration = generation;
     const messageId = await send();
@@ -287,7 +289,7 @@ export function createFinalizableDraftLifecycle<TMessageId, TUpdate = string>(
       return publish(messageId);
     }
     if (startedGeneration <= discardThroughGeneration && params.isValidMessageId(messageId)) {
-      await retire(messageId);
+      await retire(messageId, retirementOptions);
     }
     return true;
   };

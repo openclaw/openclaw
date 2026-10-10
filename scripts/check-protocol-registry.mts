@@ -155,8 +155,8 @@ const ownerModules = [
   ...schemaModulesSource.matchAll(/^export \* from "\.\/schema\/([^"]+)\.js";$/gmu),
 ].map(([, moduleName = ""]) => moduleName);
 check(
-  ownerModules.length === 70 && new Set(ownerModules).size === ownerModules.length,
-  "schema-modules.ts must contain one unique 70-module owner list",
+  ownerModules.length === 73 && new Set(ownerModules).size === ownerModules.length,
+  "schema-modules.ts must contain one unique 73-module owner list",
 );
 check(
   schemaModulesSource.split("\n").filter(Boolean).length === ownerModules.length,

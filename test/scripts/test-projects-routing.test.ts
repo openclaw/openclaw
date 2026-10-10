@@ -257,6 +257,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.cli-process.config.ts",
     },
     {
+      title: "routes native Windows argv proof to the process owner",
+      target: "src/daemon/schtasks-process.windows.test.ts",
+      config: "test/vitest/vitest.cli-process.config.ts",
+    },
+    {
       title: "routes the Git backup outcome consumer to the infra config",
       target: "src/snapshot/git-backup.test.ts",
       config: "test/vitest/vitest.infra.config.ts",
@@ -371,7 +376,6 @@ describe("test-projects args", () => {
           "src/agents/openai-transport-stream.base.test.ts",
           "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
           "src/agents/openai-transport-stream.failed-sse.test.ts",
-          "src/agents/openai-transport-stream.incomplete-sse.test.ts",
           "src/agents/openai-transport-stream.replay-and-tools.test.ts",
         ],
         watchMode: false,

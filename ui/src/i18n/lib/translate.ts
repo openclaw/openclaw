@@ -87,29 +87,27 @@ class I18nManager {
     }
   }
 
-  private resolveInitialLocale(): { locale: Locale; shouldPersist: boolean } {
-    const saved = this.readStoredLocale();
-    if (isSupportedLocale(saved)) {
-      return { locale: saved, shouldPersist: true };
-    }
-    return { locale: this.getSystemLocale(), shouldPersist: false };
-  }
-
   private loadLocale() {
-    const initial = this.resolveInitialLocale();
-    if (initial.locale === DEFAULT_LOCALE) {
+    const saved = this.readStoredLocale();
+    const shouldPersist = isSupportedLocale(saved);
+    const locale = shouldPersist ? saved : this.getSystemLocale();
+    if (locale === DEFAULT_LOCALE) {
       this.locale = DEFAULT_LOCALE;
       syncDocumentLocale(DEFAULT_LOCALE);
-      if (!initial.shouldPersist) {
+      if (!shouldPersist) {
         this.persistLocale(null);
       }
       return;
     }
-    void this.applyLocale(initial.locale, false, initial.shouldPersist);
+    void this.applyLocale(locale, false, shouldPersist);
   }
 
   public getLocale(): Locale {
     return this.locale;
+  }
+
+  public getRequestedLocale(): Locale {
+    return this.pendingLocale ?? this.locale;
   }
 
   public getSystemLocale(): Locale {

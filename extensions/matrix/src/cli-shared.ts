@@ -235,6 +235,24 @@ type MatrixCliCommandConfig<TResult> = {
   onTextError?: (message: string) => void;
 };
 
+export async function runMatrixCliAccountCommand<TResult>(
+  options: MatrixCliOptions,
+  config: Omit<MatrixCliCommandConfig<TResult>, "run" | "onText"> & {
+    run: (context: ReturnType<typeof resolveMatrixCliAccountContext>) => Promise<TResult>;
+    onText: (result: TResult, verbose: boolean, accountId: string) => void;
+  },
+): Promise<void> {
+  const context = resolveMatrixCliAccountContext(options.account);
+  await runMatrixCliCommand(options, {
+    ...config,
+    run: () => config.run(context),
+    onText: (result, verbose) => {
+      printAccountLabel(context.accountId);
+      config.onText(result, verbose, context.accountId);
+    },
+  });
+}
+
 export async function runMatrixCliCommand<TResult>(
   options: Pick<MatrixCliOptions, "verbose" | "json">,
   config: MatrixCliCommandConfig<TResult>,
@@ -331,21 +349,6 @@ export type MatrixCliSelfVerificationCommandOptions = {
 
 type MatrixCliVerificationSas = NonNullable<MatrixVerificationSummary["sas"]>;
 
-export function resolveBackupStatus(status: {
-  backupVersion: string | null;
-  backup?: MatrixRoomKeyBackupStatus;
-}): MatrixRoomKeyBackupStatus {
-  return {
-    serverVersion: status.backup?.serverVersion ?? status.backupVersion ?? null,
-    activeVersion: status.backup?.activeVersion ?? null,
-    trusted: status.backup?.trusted ?? null,
-    matchesDecryptionKey: status.backup?.matchesDecryptionKey ?? null,
-    decryptionKeyCached: status.backup?.decryptionKeyCached ?? null,
-    keyLoadAttempted: status.backup?.keyLoadAttempted ?? false,
-    keyLoadError: status.backup?.keyLoadError ?? null,
-  };
-}
-
 function yesNoUnknown(value: boolean | null): string {
   return value === true ? "yes" : value === false ? "no" : "unknown";
 }
@@ -368,20 +371,6 @@ export function printVerificationIdentity(status: {
 }): void {
   console.log(`User: ${formatMatrixCliText(status.userId)}`);
   console.log(`Device: ${formatMatrixCliText(status.deviceId)}`);
-}
-
-export function printVerificationBackupSummary(status: {
-  backupVersion: string | null;
-  backup?: MatrixRoomKeyBackupStatus;
-}): void {
-  printBackupSummary(resolveBackupStatus(status));
-}
-
-export function printVerificationBackupStatus(status: {
-  backupVersion: string | null;
-  backup?: MatrixRoomKeyBackupStatus;
-}): void {
-  printBackupStatus(resolveBackupStatus(status));
 }
 
 export function printVerificationTrustDiagnostics(status: {
@@ -484,7 +473,7 @@ function buildVerificationGuidance(
   status: MatrixCliVerificationStatus,
   accountId?: string,
 ): string[] {
-  const backup = resolveBackupStatus(status);
+  const backup = status.backup;
   const nextSteps = new Set<string>();
   if (!status.verified) {
     if (status.recoveryKeyAccepted === true && status.backupUsable === true) {
@@ -587,7 +576,7 @@ export function printVerificationStatus(
   if (status.serverDeviceKnown === false) {
     console.log("Device issue: current Matrix device is missing from the homeserver device list");
   }
-  const backup = resolveBackupStatus(status);
+  const backup = status.backup;
   const backupIssue = resolveMatrixRoomKeyBackupIssue(backup);
   printBackupSummary(backup);
   if (backupIssue.message) {

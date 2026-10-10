@@ -4,7 +4,7 @@ import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
-  buildDirectChatContext,
+  buildSourceConversationContext,
   buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
@@ -83,6 +83,7 @@ type CodexDynamicToolFunctionSpec = {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  deferLoading?: boolean;
 };
 
 type CodexDynamicToolNamespaceSpec = {
@@ -301,12 +302,18 @@ const baseConfig: OpenClawConfig = {
         every: "30m",
       },
     },
-    entries: { main: { default: true } },
+    entries: { main: {} },
   },
 };
 
 const dynamicToolsConfig: OpenClawConfig = {
   ...baseConfig,
+  tools: {
+    // Exclude optional media factories before they inspect ambient provider credentials.
+    deny: ["image_generate", "video_generate", "music_generate", "pdf"],
+    // This happy-path catalog includes search regardless of ambient credentials.
+    web: { search: { provider: "duckduckgo" } },
+  },
   plugins: {
     enabled: true,
     slots: {
@@ -510,10 +517,8 @@ function createDynamicTools(params: {
     modelId: MODEL_ID,
     modelApi: "responses",
     model: happyPathModel,
-    // No provider runtime plugin owns tool-schema hooks for the `codex`
-    // harness provider, so a runtime plugin load can only rediscover that
-    // through the jiti source loader (minutes of core re-transpilation).
-    // Registry-only resolution keeps the same no-op outcome instantly.
+    // Codex has no provider tool-schema hooks; keep that no-op registry-only
+    // rather than rediscovering it through the cold source loader.
     allowProviderRuntimePluginLoad: false,
   });
   return params.codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
@@ -620,7 +625,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: telegramDirectCtx,
-        chatContext: buildDirectChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: telegramDirectCtx,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -668,7 +673,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       prompt: createPrompt(heartbeatCtx, heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? ""),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: heartbeatCtx,
-        chatContext: buildDirectChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: heartbeatCtx,
           sourceReplyDeliveryMode: "message_tool_only",
         }),

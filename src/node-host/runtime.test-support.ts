@@ -79,8 +79,7 @@ vi.mock("./skills.js", () => ({
 
 // Retain local bindings after mock registration for Vitest's export transform.
 const { prepareNodeHostRuntime } = await import("./runtime.js");
-const { listRegisteredNodeHostCapsAndCommands } = await import("./plugin-node-host.js");
-export { mocks, prepareNodeHostRuntime, listRegisteredNodeHostCapsAndCommands };
+export { mocks };
 
 export const frame = {
   id: "invoke-1",
@@ -119,7 +118,6 @@ export async function startRuntime(
     config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
-    enableWorkerRuns: true,
   });
   return prepared.start({ client });
 }

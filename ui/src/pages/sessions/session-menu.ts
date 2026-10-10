@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { isMobileNavLayout } from "../../app/mobile-nav-layout.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { sessionMenuReasons } from "../../components/session-menu-access.ts";
 import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
@@ -52,6 +53,7 @@ export function renderSessionManagementMenu(params: {
     <openclaw-session-menu
       .session=${{
         label: normalizeOptionalString(row.label) ?? row.key,
+        target: { key: row.key, agentId: row.agentId },
         sessionId: normalizeOptionalString(row.sessionId) ?? null,
         pinned: row.pinned === true,
         pinnable,
@@ -67,6 +69,7 @@ export function renderSessionManagementMenu(params: {
         color: normalizeOptionalString(row.color) ?? null,
         categoryClearReturnsToGroups: false,
       }}
+      .compact=${isMobileNavLayout()}
       .anchor=${params.menu}
       .trigger=${params.trigger}
       .disabled=${params.disabled}

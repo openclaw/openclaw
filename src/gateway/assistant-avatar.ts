@@ -66,11 +66,11 @@ export async function prepareGatewayAssistantAvatar(params: {
 }): Promise<PreparedGatewayAssistantAvatarProjection> {
   const { cfg, identity } = params;
   const source = identity.avatar;
+  const image = prepareGatewayAvatarDataUrl(cfg, identity.agentId, source);
   if (isAvatarHttpUrl(source)) {
     return { resolution: { kind: "remote", url: source, source } };
   }
   if (isAvatarDataUrl(source)) {
-    const image = prepareGatewayAvatarDataUrl(source);
     return image
       ? { resolution: { kind: "data", url: source, source }, image }
       : { resolution: { kind: "none", reason: "unsupported_data_url", source } };

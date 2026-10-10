@@ -2,17 +2,12 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   getCliHistoryWriter,
   isKnownCliHistoryBoundary,
-  type CliHistoryWriter,
+  type CliHistoryWriterFacts,
 } from "./cli-history-boundary.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import type { InternalSessionEntry } from "./types.js";
-
-export type CliHistoryWriterFacts = Pick<
-  CliHistoryWriter,
-  "runId" | "authFingerprint" | "lifecycleRevision" | "expectedWriterRunId"
->;
 
 /** Advance only a contiguous prefix written by the exact prepared CLI account's live owner. */
 export function advanceCliHistoryBoundaryInTransaction(
@@ -54,7 +49,7 @@ export function advanceCliHistoryBoundaryRangeInTransaction(
     !isKnownCliHistoryBoundary(boundary) ||
     entry.sessionId !== scope.sessionId ||
     boundary.sessionId !== scope.sessionId ||
-    entry.activeWriterRunId !== writer.expectedWriterRunId ||
+    entry.activeWriterRunId !== writer.runId ||
     entry.lifecycleRevision !== writer.lifecycleRevision ||
     boundary.writerRunId !== writer.runId ||
     boundary.authFingerprint !== writer.authFingerprint ||

@@ -116,16 +116,6 @@ const sessionCleanupMocks = vi.hoisted(() => ({
     vi.fn<
       (typeof import("../../auto-reply/reply/queue/cleanup.js"))["clearSessionLifecycleQueues"]
     >(),
-  clearSessionQueues: vi.fn((keys: Array<string | undefined>) => {
-    const clearedKeys = Array.from(
-      new Set(
-        keys
-          .map((key) => (typeof key === "string" ? key.trim() : ""))
-          .filter((key) => key.length > 0),
-      ),
-    );
-    return { followupCleared: 0, laneCleared: 0, keys: clearedKeys };
-  }),
   stopSessionResetSubagents: vi.fn(async () => {}),
 }));
 
@@ -190,16 +180,6 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   retireSessionMcpRuntime: vi.fn(async (_params: RetireSessionMcpRuntimeParams) => true),
 }));
 
-vi.mock("../../auto-reply/reply/queue.js", async () => {
-  const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
-    "../../auto-reply/reply/queue.js",
-  );
-  return {
-    ...actual,
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
-  };
-});
-
 vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue/cleanup.js")>(
     "../../auto-reply/reply/queue/cleanup.js",
@@ -209,7 +189,6 @@ vi.mock("../../auto-reply/reply/queue/cleanup.js", async () => {
     clearSessionLifecycleQueues: sessionCleanupMocks.clearSessionLifecycleQueues.mockImplementation(
       actual.clearSessionLifecycleQueues,
     ),
-    clearSessionQueues: sessionCleanupMocks.clearSessionQueues,
   };
 });
 
@@ -338,7 +317,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     sessionCleanupMocks.clearSessionLifecycleQueues.mockClear();
-    sessionCleanupMocks.clearSessionQueues.mockClear();
     sessionCleanupMocks.stopSessionResetSubagents.mockClear();
     bootstrapCacheMocks.clearBootstrapSnapshot.mockReset();
     sessionHookMocks.hasInternalHookListeners.mockReset();
@@ -396,7 +374,12 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
     const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
     testState.sessionStorePath = storeTemplate;
     testState.sessionConfig = { scope: "global" };
-    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+    testState.agentConfig = {
+      ...testState.agentConfig,
+      systemAgent: { agentId: "main" },
+      sessionStore: { agentId: "main" },
+    };
     return {
       dir,
       storeTemplate,
@@ -467,7 +450,11 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
       configPath,
       `${JSON.stringify(
         {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: {
+            ownership: "explicit",
+            entries: { main: {}, work: {} },
+            defaults: { systemAgent: { agentId: "main" }, sessionStore: { agentId: "main" } },
+          },
           session: { scope: "global", store: storeTemplate },
         },
         null,
@@ -574,7 +561,6 @@ export function expectActiveRunCleanup(
 
 export function expectNoSessionQueueCleanup() {
   expect(sessionCleanupMocks.clearSessionLifecycleQueues).not.toHaveBeenCalled();
-  expect(sessionCleanupMocks.clearSessionQueues).not.toHaveBeenCalled();
 }
 
 type SessionsHandlers = Awaited<ReturnType<typeof getSessionsHandlers>>;
@@ -612,11 +598,13 @@ export async function directSessionReq<TPayload = unknown>(
   if (!handler) {
     throw new Error(`missing sessions handler for ${method}`);
   }
+  const contextKey = opts?.context ?? defaultDirectContext;
+  const existingContext = directContexts.get(contextKey);
   const contextFields: GatewayRequestContext = createDirectChatContext({
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
-    dedupe: new Map(),
+    chatAbortControllers: existingContext?.chatAbortControllers ?? new Map(),
+    chatQueuedTurns: existingContext?.chatQueuedTurns ?? new Map(),
+    dedupe: existingContext?.dedupe ?? new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     readPreparedGatewayModelCatalog: async () => {
       const catalog = await contextFields.loadGatewayModelCatalogSnapshot();
@@ -625,8 +613,7 @@ export async function directSessionReq<TPayload = unknown>(
     getRuntimeConfig,
     ...opts?.context,
   });
-  const contextKey = opts?.context ?? defaultDirectContext;
-  const context = directContexts.get(contextKey) ?? createDirectChatContext();
+  const context = existingContext ?? createDirectChatContext();
   Object.assign(context, contextFields);
   directContexts.set(contextKey, context);
   if (
@@ -634,6 +621,8 @@ export async function directSessionReq<TPayload = unknown>(
       "chat.startup",
       "chat.history",
       "sessions.list",
+      "sessions.processes.list",
+      "sessions.processes.stop",
       "sessions.describe",
       "sessions.get",
       "sessions.preview",

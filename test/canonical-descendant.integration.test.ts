@@ -75,7 +75,7 @@ import {
   listSessionStateEventsSince,
   registerSessionStateWatch,
 } from "../src/sessions/session-state-events.js";
-import { readSessionUpstreamLink } from "../src/sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "../src/sessions/session-upstream-links.kernel.js";
 import { runSessionUpstreamMonitorTick } from "../src/sessions/session-upstream-monitor.test-support.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -187,7 +187,7 @@ async function withFixture(
       agents: {
         ownership: "explicit",
         defaults: { model: { primary: "openai/gpt-5.5" } },
-        list: [{ id: "main", agentDir: state.agentDir(), workspace: state.workspaceDir }],
+        entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
       },
       tools: { web: { search: { enabled: false } } },
       ...(options.mcpResolver
@@ -265,21 +265,21 @@ async function withFixture(
             ownerEpoch: 7,
           });
           let placement = await placements.startDispatch(target);
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "requested",
             to: "provisioning",
             expectedGeneration: placement.generation,
             patch: { environmentId: "policy-worker" },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "provisioning",
             to: "syncing",
             expectedGeneration: placement.generation,
             patch: { workerBundleHash: "a".repeat(64) },
           });
-          placement = placements.transition({
+          placement = await placements.transition({
             sessionId,
             from: "syncing",
             to: "starting",
@@ -289,7 +289,7 @@ async function withFixture(
               remoteWorkspaceDir: "/workspace/policy",
             },
           });
-          placements.transition({
+          await placements.transition({
             sessionId,
             from: "starting",
             to: "active",
@@ -1177,13 +1177,26 @@ describe("canonical descendant lifecycle through real owners", () => {
       );
       const child = expectDefined(fixture.native.threads.get(binding.threadId), "native child");
       expect(child.thread.turns).toHaveLength(12);
-      registerSessionStateWatch({ watcherSessionKey: "agent:main:main", targetSessionKey: key });
-      const events = () => listSessionStateEventsSince(key, "main", 0).events;
-      const before = events();
+      await registerSessionStateWatch({
+        watcherSessionKey: "agent:main:main",
+        targetSessionKey: key,
+      });
+      const events = async () => (await listSessionStateEventsSince(key, "main", 0)).events;
+      const before = await events();
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events()).toEqual(before);
-      const link = expectDefined(readSessionUpstreamLink(key, "main"), "child link");
-      const root = expectDefined(readSessionUpstreamLink(source.sessionKey, "main"), "root link");
+      expect(await events()).toEqual(before);
+      const link = expectDefined(
+        readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, key, "main"),
+        "child link",
+      );
+      const root = expectDefined(
+        readSessionUpstreamLinkInDatabase(
+          openOpenClawStateDatabase().db,
+          source.sessionKey,
+          "main",
+        ),
+        "root link",
+      );
       expect(link).toMatchObject({
         threadId: root.threadId,
         upstreamRef: root.upstreamRef,
@@ -1197,11 +1210,11 @@ describe("canonical descendant lifecycle through real owners", () => {
         });
       });
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events().slice(before.length)).toEqual([
+      expect((await events()).slice(before.length)).toEqual([
         expect.objectContaining({ kind: "human_direct_message" }),
       ]);
       await runSessionUpstreamMonitorTick({ providers: [fixture.catalog] });
-      expect(events()).toHaveLength(before.length + 1);
+      expect(await events()).toHaveLength(before.length + 1);
     });
   }, 180_000);
 
@@ -1311,8 +1324,14 @@ describe("canonical descendant lifecycle through real owners", () => {
               key.endsWith(`:${firstBinding.threadId}`),
             ),
           ).toBe(false);
-          const link = readSessionUpstreamLink(source.sessionKey, "main");
-          expect(readSessionUpstreamLink(firstKey, "main")).toMatchObject({
+          const link = readSessionUpstreamLinkInDatabase(
+            openOpenClawStateDatabase().db,
+            source.sessionKey,
+            "main",
+          );
+          expect(
+            readSessionUpstreamLinkInDatabase(openOpenClawStateDatabase().db, firstKey, "main"),
+          ).toMatchObject({
             threadId: link?.threadId,
             marker: { turnId: null, userMessageCount: 0 },
           });

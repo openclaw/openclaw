@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import {
   isArchivePathWithin,
@@ -123,7 +124,19 @@ export function parseUpdateRecoveryBackupManifest(raw: string): UpdateRecoveryBa
   }
   const sources = new Map<string, (typeof manifest.entries)[number]>();
   const payloads = new Set<string>();
+  const excluded = new Set(manifest.excludedRoots);
+  if (
+    excluded.size !== manifest.excludedRoots.length ||
+    [...manifest.roots, ...manifest.protectedPaths, ...manifest.configPaths].some((pathname) =>
+      excluded.has(pathname),
+    )
+  ) {
+    throw new Error("Update recovery exclusions conflict with retained resource inventory.");
+  }
   for (const entry of manifest.entries) {
+    if (excluded.has(entry.sourcePath)) {
+      throw new Error(`Excluded update recovery source has a retained entry: ${entry.sourcePath}`);
+    }
     if (entry.kind === "missing" && entry.sqlite && entry.directory) {
       throw new Error("Missing SQLite inventory cannot describe a directory.");
     }
@@ -340,6 +353,18 @@ function parseBackupManifestSqliteSnapshots(
   });
 }
 
+function readRequiredManifestString(
+  record: Record<string, unknown>,
+  key: string,
+  label = "Backup manifest",
+): string {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
+    throw new Error(`${label} is missing ${key}.`);
+  }
+  return value;
+}
+
 export function parseBackupManifest(raw: string): BackupManifest {
   let parsed: unknown;
   try {
@@ -354,36 +379,22 @@ export function parseBackupManifest(raw: string): BackupManifest {
   if (parsed.schemaVersion !== 1) {
     throw new Error(`Unsupported backup manifest schemaVersion: ${String(parsed.schemaVersion)}`);
   }
-  if (typeof parsed.archiveRoot !== "string" || !parsed.archiveRoot.trim()) {
-    throw new Error("Backup manifest is missing archiveRoot.");
-  }
-  if (typeof parsed.createdAt !== "string" || !parsed.createdAt.trim()) {
-    throw new Error("Backup manifest is missing createdAt.");
-  }
+  const archiveRoot = readRequiredManifestString(parsed, "archiveRoot");
+  const createdAt = readRequiredManifestString(parsed, "createdAt");
   if (!Array.isArray(parsed.assets)) {
     throw new Error("Backup manifest is missing assets.");
   }
 
-  const assets: BackupManifest["assets"] = [];
-  for (const asset of parsed.assets) {
+  const assets = parsed.assets.map((asset) => {
     if (!isRecord(asset)) {
       throw new Error("Backup manifest contains a non-object asset.");
     }
-    if (typeof asset.kind !== "string" || !asset.kind.trim()) {
-      throw new Error("Backup manifest asset is missing kind.");
-    }
-    if (typeof asset.sourcePath !== "string" || !asset.sourcePath.trim()) {
-      throw new Error("Backup manifest asset is missing sourcePath.");
-    }
-    if (typeof asset.archivePath !== "string" || !asset.archivePath.trim()) {
-      throw new Error("Backup manifest asset is missing archivePath.");
-    }
-    assets.push({
-      kind: asset.kind,
-      sourcePath: asset.sourcePath,
-      archivePath: asset.archivePath,
-    });
-  }
+    return {
+      kind: readRequiredManifestString(asset, "kind", "Backup manifest asset"),
+      sourcePath: readRequiredManifestString(asset, "sourcePath", "Backup manifest asset"),
+      archivePath: readRequiredManifestString(asset, "archivePath", "Backup manifest asset"),
+    };
+  });
 
   const externalSymbolicLinks: BackupSymbolicLink[] = [];
   if (parsed.externalSymbolicLinks !== undefined) {
@@ -404,12 +415,9 @@ export function parseBackupManifest(raw: string): BackupManifest {
 
   return {
     schemaVersion: 1,
-    archiveRoot: parsed.archiveRoot,
-    createdAt: parsed.createdAt,
-    runtimeVersion:
-      typeof parsed.runtimeVersion === "string" && parsed.runtimeVersion.trim()
-        ? parsed.runtimeVersion
-        : "unknown",
+    archiveRoot,
+    createdAt,
+    runtimeVersion: readNonBlankString(parsed.runtimeVersion) ?? "unknown",
     platform: typeof parsed.platform === "string" ? parsed.platform : "unknown",
     nodeVersion: typeof parsed.nodeVersion === "string" ? parsed.nodeVersion : "unknown",
     paths: isRecord(parsed.paths)

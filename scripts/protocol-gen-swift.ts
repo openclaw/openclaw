@@ -1,6 +1,3 @@
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { ErrorCodes } from "../packages/gateway-protocol/src/schema/error-codes.js";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
@@ -8,23 +5,8 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../packages/gateway-protocol/src/version.js";
-import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
 import { type JsonSchema, schemaSignature } from "./lib/protocol-codegen-schema.js";
 
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const check = process.argv.includes("--check");
-const outPaths = [
-  path.join(
-    repoRoot,
-    "apps",
-    "shared",
-    "OpenClawKit",
-    "Sources",
-    "OpenClawProtocol",
-    "GatewayModels.swift",
-  ),
-];
 const STRICT_LITERAL_STRUCTS = new Set([
   "PluginsSessionActionSuccessResult",
   "PluginsSessionActionFailureResult",
@@ -264,9 +246,8 @@ function swiftInitializerParam(params: {
   name: string;
   schema: JsonSchema;
   required: boolean;
-  allowStructuralNamed?: boolean;
 }): string {
-  const type = swiftType(params.schema, params.required, params.allowStructuralNamed ?? true);
+  const type = swiftType(params.schema, params.required, true);
   return params.required ? `${params.name}: ${type}` : `${params.name}: ${type} = nil`;
 }
 
@@ -278,19 +259,6 @@ function emitEnum(name: string, schema: JsonSchema): string {
     "}",
     "",
   ].join("\n");
-}
-
-function stringLiteralUnionValues(schema: JsonSchema): string[] | undefined {
-  const branches = schema.oneOf ?? schema.anyOf;
-  if (!branches || branches.length < 2) {
-    return undefined;
-  }
-  const values = branches.map((branch) => literalSchemaValue(branch));
-  if (values.some((value) => typeof value !== "string")) {
-    return undefined;
-  }
-  const stringValues = values as string[];
-  return new Set(stringValues).size === stringValues.length ? stringValues : undefined;
 }
 
 function emitStruct(
@@ -850,7 +818,10 @@ function emitGatewayFrame(): string {
   ].join("\n");
 }
 
-async function generate() {
+export function generateSwiftProtocol(): string {
+  schemaNameByObject.clear();
+  schemaNameBySignature.clear();
+  schemaNamesByIdentity.clear();
   const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
   const objectAliases = resolveSchemaObjectAliases(definitions);
 
@@ -868,11 +839,6 @@ async function generate() {
     }
     if (stringEnumCases(schema)) {
       parts.push(emitEnum(name, schema));
-      continue;
-    }
-    const literalUnionValues = stringLiteralUnionValues(schema);
-    if (literalUnionValues) {
-      parts.push(emitEnum(name, { enum: literalUnionValues }));
     }
   }
 
@@ -902,32 +868,5 @@ async function generate() {
   // Frame enum must come after payload structs
   parts.push(emitGatewayFrame());
 
-  const content = parts.join("\n");
-  for (const outPath of outPaths) {
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    const result = writeGeneratedOutput({
-      repoRoot,
-      outputPath: path.relative(repoRoot, outPath),
-      next: content,
-      check,
-    });
-    const displayPath = path.relative(repoRoot, result.outputPath);
-    if (check && result.changed) {
-      console.error(
-        `[protocol-gen-swift] stale generated output at ${displayPath}; run "pnpm protocol:gen:swift" and commit the result`,
-      );
-      process.exitCode = 1;
-    } else if (!check) {
-      console.log(
-        result.wrote
-          ? `[protocol-gen-swift] wrote ${displayPath}`
-          : `[protocol-gen-swift] unchanged ${displayPath}`,
-      );
-    }
-  }
+  return parts.join("\n");
 }
-
-generate().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});

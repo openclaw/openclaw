@@ -149,20 +149,6 @@ export function buildSlackEventDeliveryKey(
   });
 }
 
-export function createSlackEventDeliveryTracker() {
-  const deliveredKeys = new Set<string>();
-  return {
-    hasDelivered(key: string | null) {
-      return key ? deliveredKeys.has(key) : false;
-    },
-    markDelivered(key: string | null) {
-      if (key) {
-        deliveredKeys.add(key);
-      }
-    },
-  };
-}
-
 export async function resolveSlackStreamRecipientTeamId(params: {
   client: Pick<PreparedSlackMessage["ctx"]["app"]["client"], "users">;
   token: string;

@@ -8,6 +8,9 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -117,20 +120,16 @@ function maybeWarnZeroCountVisibleDispatch<TDispatchResult>(
   });
 }
 
-function resolveBotLoopProtectionDrop<TDispatchResult>(
+function dropPreparedChannelTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
-): ChannelTurnResult<TDispatchResult> | undefined {
-  if (!params.botLoopProtection) {
-    return undefined;
-  }
-  const botLoopResult = recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection);
-  if (!botLoopResult.suppressed) {
-    return undefined;
-  }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "bot-loop-protection" };
+  reason: "bot-loop-protection" | "outbound-echo",
+  messageId = params.messageId,
+): ChannelTurnResult<TDispatchResult> {
+  const admission: ChannelTurnAdmission = { kind: "drop", reason };
   emit(params, {
     stage: "authorize",
     event: "drop",
+    messageId,
     admission: admission.kind,
     reason: admission.reason,
   });
@@ -178,20 +177,7 @@ function resolveOutboundEchoDrop<TDispatchResult>(
   if (!matchedMessageId && !matchesSource) {
     return undefined;
   }
-  const admission: ChannelTurnAdmission = { kind: "drop", reason: "outbound-echo" };
-  emit(params, {
-    stage: "authorize",
-    event: "drop",
-    messageId: params.messageId ?? matchedMessageId,
-    admission: admission.kind,
-    reason: admission.reason,
-  });
-  return {
-    admission,
-    dispatched: false,
-    ctxPayload: params.ctxPayload,
-    routeSessionKey: params.routeSessionKey,
-  };
+  return dropPreparedChannelTurn(params, "outbound-echo", params.messageId ?? matchedMessageId);
 }
 
 export async function runPreparedChannelTurnCore<
@@ -219,8 +205,11 @@ async function runPreparedChannelTurnCoreInTrace<
     await params.runDispatchLifecycle?.onDispatchSkipped("outboundEcho");
     return outboundEchoDrop;
   }
-  const botLoopDrop = resolveBotLoopProtectionDrop(params);
-  if (botLoopDrop) {
+  if (
+    params.botLoopProtection &&
+    recordChannelBotPairLoopAndCheckSuppression(params.botLoopProtection).suppressed
+  ) {
+    const botLoopDrop = dropPreparedChannelTurn(params, "bot-loop-protection");
     clearPendingHistoryAfterTurn(params.history);
     await params.runDispatchLifecycle?.onDispatchSkipped("botLoopProtection");
     return botLoopDrop;
@@ -231,23 +220,37 @@ async function runPreparedChannelTurnCoreInTrace<
   // path before the next group turn can replay stale context.
   try {
     const recordSessionKey = resolveRecordSessionKey(params);
-    if (params.ctxPayload.SessionTranscriptContext) {
-      const { mergeSessionTranscriptContext } =
-        await import("../inbound-event/session-transcript-context.runtime.js");
-      await mergeSessionTranscriptContext({
-        agentId: params.ctxPayload.AgentId,
-        ctx: params.ctxPayload,
-        sessionKey: recordSessionKey,
-        storePath: params.storePath,
+    const emitStage = (
+      stage: "record" | "dispatch",
+      event: "start" | "done" | "error",
+      error?: unknown,
+    ) =>
+      emit(params, {
+        stage,
+        event,
+        ...(stage === "record" ? { sessionKey: recordSessionKey } : {}),
+        admission: admission.kind,
+        ...(event === "error" ? { error } : {}),
       });
-    }
-    emit(params, {
-      stage: "record",
-      event: "start",
-      sessionKey: recordSessionKey,
-      admission: admission.kind,
-    });
     try {
+      const agentId =
+        params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
+      if (agentId) {
+        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+          signal: getPluginServiceSchedulerBinding()?.().signal,
+        });
+      }
+      if (params.ctxPayload.SessionTranscriptContext) {
+        const { mergeSessionTranscriptContext } =
+          await import("../inbound-event/session-transcript-context.runtime.js");
+        await mergeSessionTranscriptContext({
+          agentId: params.ctxPayload.AgentId,
+          ctx: params.ctxPayload,
+          sessionKey: recordSessionKey,
+          storePath: params.storePath,
+        });
+      }
+      emitStage("record", "start");
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,
@@ -258,22 +261,11 @@ async function runPreparedChannelTurnCoreInTrace<
         onRecordError: params.record?.onRecordError ?? (() => undefined),
         trackSessionMetaTask: params.record?.trackSessionMetaTask,
       });
-      emit(params, {
-        stage: "record",
-        event: "done",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-      });
+      emitStage("record", "done");
       await params.afterRecord?.();
       await deliverPendingDeliveryNotice(recordSessionKey, params.storePath);
     } catch (err) {
-      emit(params, {
-        stage: "record",
-        event: "error",
-        sessionKey: recordSessionKey,
-        admission: admission.kind,
-        error: err,
-      });
+      emitStage("record", "error", err);
       try {
         await params.onPreDispatchFailure?.(err);
       } catch {
@@ -282,11 +274,7 @@ async function runPreparedChannelTurnCoreInTrace<
       throw err;
     }
 
-    emit(params, {
-      stage: "dispatch",
-      event: "start",
-      admission: admission.kind,
-    });
+    emitStage("dispatch", "start");
     let dispatchResult: TDispatchResult;
     try {
       let processedOutcome: DispatchProcessedNote | undefined;
@@ -314,19 +302,10 @@ async function runPreparedChannelTurnCoreInTrace<
         processedOutcome,
       });
     } catch (err) {
-      emit(params, {
-        stage: "dispatch",
-        event: "error",
-        admission: admission.kind,
-        error: err,
-      });
+      emitStage("dispatch", "error", err);
       throw err;
     }
-    emit(params, {
-      stage: "dispatch",
-      event: "done",
-      admission: admission.kind,
-    });
+    emitStage("dispatch", "done");
 
     return {
       admission,

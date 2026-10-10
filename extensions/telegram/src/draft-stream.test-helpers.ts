@@ -15,6 +15,7 @@ type TestDraftStream = {
   waitForInFlight: ReturnType<typeof vi.fn<() => Promise<void>>>;
   messageId: ReturnType<typeof vi.fn<() => number | undefined>>;
   lastDeliveredText: ReturnType<typeof vi.fn<() => string>>;
+  isStopped: ReturnType<typeof vi.fn<() => boolean>>;
   currentMessageSnapshot: ReturnType<typeof vi.fn<() => TelegramDraftMessageSnapshot | undefined>>;
   clear: ReturnType<typeof vi.fn<() => Promise<void>>>;
   stop: ReturnType<typeof vi.fn<() => Promise<void>>>;
@@ -69,6 +70,7 @@ export function createTestDraftStream(params?: {
     }),
     messageId: vi.fn().mockImplementation(() => messageId),
     lastDeliveredText: vi.fn().mockImplementation(() => lastDeliveredText),
+    isStopped: vi.fn().mockImplementation(() => stopped),
     currentMessageSnapshot: vi
       .fn()
       .mockImplementation(() =>
