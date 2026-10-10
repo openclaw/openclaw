@@ -96,7 +96,16 @@ export class AcpTranslatorAgentEvents {
       const preambles = (pending.sentPreambles ??= new Map());
       let sent = preambles.get(itemId) ?? "";
       const preview = pending.assistantItem;
-      const previewText = preview?.text.trimEnd();
+      let previewText = preview?.text.trimEnd();
+      if (
+        preview?.prefix &&
+        previewText?.startsWith(preview.prefix) &&
+        !text.startsWith(previewText) &&
+        !previewText.startsWith(text)
+      ) {
+        // Raw snapshots can retain earlier answer blocks in the same model message.
+        previewText = previewText.slice(preview.prefix.length).replace(/^\n+/, "");
+      }
       const replacement =
         pending.textReplacement?.seq === payload.seq
           ? pending.textReplacement

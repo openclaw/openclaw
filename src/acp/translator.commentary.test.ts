@@ -148,12 +148,25 @@ describe("ACP commentary reclassification", () => {
     ]);
   });
 
-  it("keeps an earlier answer prefix while transferring its provisional suffix to commentary", async () => {
+  it.each([false, true])("keeps an earlier answer prefix (deferred=%s)", async (deferred) => {
     const h = await createHarness();
+    await h.send("agent", {
+      stream: "assistant",
+      data: { itemId: "earlier-answer", text: "First answer.", phase: "final_answer" },
+    });
     await h.chat("First answer.");
+    await h.send("agent", {
+      stream: "assistant",
+      data: { itemId: "preview", text: "First answer.\n\nChecking again." },
+    });
     await h.chat("First answer.\n\nChecking again.");
-    await h.chat("First answer.", { replace: true, seq: 100 });
+    if (!deferred) {
+      await h.chat("First answer.", { replace: true, seq: 100 });
+    }
     await h.preamble("commentary", "Checking again.", { seq: 100 });
+    if (deferred) {
+      await h.chat("First answer.", { replace: true });
+    }
     await h.tool("read", "start");
     await h.tool("read", "result");
     await h.chat("First answer.\n\nDone.", { state: "final" });
