@@ -8,7 +8,7 @@ import {
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
 import type { ChatHistoryResult } from "../pages/chat/chat-history-snapshot.ts";
-import "./control-ui-session-summary.ts";
+import "./control-ui-session-summary.tsx";
 
 const gateways: ApplicationGateway[] = [];
 afterEach(async () => {

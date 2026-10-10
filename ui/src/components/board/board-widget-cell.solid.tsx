@@ -1,5 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { dynamic, type JSX } from "@solidjs/web";
+import { ContextNotFoundError } from "@solidjs/signals";
+import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -8,6 +9,8 @@ import {
   onCleanup,
   onSettled,
   Show,
+  Switch,
+  Match,
   untrack,
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -17,32 +20,38 @@ import {
   LazyCustomElementRequestController,
 } from "../../app/lazy-custom-element.ts";
 import { t } from "../../i18n/index.ts";
-import type { BoardGridDirection, BoardGridRect } from "../../lib/board/grid.ts";
 import {
   BOARD_DOCUMENT_AUTO_MAX_ROWS,
   boardChromeRowPx,
   exactBoardWidgetHeightPx,
 } from "../../lib/board/grid.ts";
-import type { BoardWidgetAppViewState } from "../../lib/board/provider.ts";
-import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
-import type { BoardGrantDecision, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
+import type { BoardWidget } from "../../lib/board/types.ts";
 import {
   CORE_BOARD_WIDGET_ELEMENTS,
   getPluginWidgetKindContribution,
   pluginIdForWidgetKind,
 } from "../../lib/board/widgets/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { showToast } from "../../lib/toast.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "../../plugins/control-ui-disabled.solid.tsx";
-import { PluginContribution } from "../../plugins/control-ui-view.solid.tsx";
+import { PluginContribution } from "../../plugins/control-ui-view.runtime.tsx";
+import { LazyViewError } from "../solid/lazy-view-error.tsx";
 import { BoardMcpAppContent } from "./board-mcp-app-content.tsx";
 import { BoardMcpAppLifecycle } from "./board-mcp-app-lifecycle.ts";
 import {
   BoardGrantedCapabilities,
   BoardPendingCapabilities,
 } from "./board-widget-capabilities.solid.tsx";
-import { BOARD_SIZE_PRESETS, closeBoardWidgetMenu } from "./board-widget-cell-options.ts";
+import {
+  BOARD_SIZE_PRESETS,
+  closeBoardWidgetMenu,
+  type BoardWidgetCellHandle,
+  type BoardWidgetCellMethods,
+  type BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
 import {
   BoardDisabledPlugin,
   BoardWidgetError,
@@ -52,64 +61,33 @@ import {
 import { BoardWidgetFrameLifecycle } from "./board-widget-frame.tsx";
 import "../web-awesome.ts";
 
+export type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellHandle,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
+
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
-export type BoardWidgetCellCallbacks = {
-  appViewGeneration: () => number;
-  grant: (name: string, decision: BoardGrantDecision) => Promise<void>;
-  movePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
-  resizePointerDown: (widget: BoardWidget, event: PointerEvent) => void;
-  moveToTab: (widget: BoardWidget, tabId: string) => Promise<void>;
-  resizeTo: (widget: BoardWidget, w: number, h: number) => Promise<void>;
-  setHeightMode: (widget: BoardWidget, mode: "auto" | "fixed") => Promise<void>;
-  reportContentHeight: (name: string, height: number) => void;
-  remove: (widget: BoardWidget) => Promise<void>;
-  nudge: (widget: BoardWidget, direction: BoardGridDirection) => Promise<void>;
-  focus: (widget: BoardWidget, direction: BoardGridDirection) => void;
-  focusChanged: (name: string) => void;
-  frameLoadFailed: (name: string) => Promise<void>;
-  widgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
-  refreshWidgetAppView: (name: string, revision: number) => Promise<BoardWidgetAppViewState>;
-};
+const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
 
-export type BoardWidgetCellProps = {
-  widget?: BoardWidget;
-  rect?: BoardGridRect;
-  contentHeightPx?: number;
-  fitAutoContent?: boolean;
-  pageChrome?: boolean;
-  tabs?: readonly BoardTab[];
-  session?: BoardGetParams;
-  sessionKey?: string;
-  widgetFrameUrl?: BoardWidgetFrameUrl;
-  callbacks?: BoardWidgetCellCallbacks;
-  active?: boolean;
-  bridgeEnabled?: boolean;
-  dragging?: boolean;
-  focusTabIndex?: number;
-  positionInSet?: number;
-  setSize?: number;
-  busy?: boolean;
-  canMutate?: boolean;
-  canGrant?: boolean;
-  loadingCovered?: boolean;
-};
-export type BoardWidgetCellHandle = {
-  readonly presentationReady: boolean;
-  selectMenuItem(value: string | undefined): void;
-  teardown(): Promise<void>;
-  restartAfterTeardown(): void;
-};
-
-export function BoardWidgetCellContents(
-  props: BoardWidgetCellProps & {
-    host: () => HTMLElement;
-    expose: (handle: BoardWidgetCellHandle) => void;
-    context?: ApplicationContext;
-  },
+function BoardWidgetCellContent(
+  props: BoardWidgetCellProps,
+  host: SolidBridgeElement<BoardWidgetCellProps, BoardWidgetCellMethods>,
 ) {
-  const context = () => props.context;
-  const host = untrack(() => props.host());
-  const expose = untrack(() => props.expose);
+  let context: ApplicationContext | undefined;
+  try {
+    context = useApplication();
+  } catch (error) {
+    // Standalone capless cells have no application provider.
+    if (!(error instanceof ContextNotFoundError)) {
+      throw error;
+    }
+  }
+  Object.defineProperty(host, "presentationReady", {
+    configurable: true,
+    get: () => cells.get(host)?.presentationReady ?? false,
+  });
+  onCleanup(() => cells.delete(host));
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const requestUpdate = () => {
     if (connected) {
@@ -127,21 +105,22 @@ export function BoardWidgetCellContents(
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
   const canGrant = () => props.canGrant !== false;
-  const plugins = projectSource(untrack(context)?.plugins, {
+  const plugins = projectSource(context?.plugins, {
     read: (runtime) => runtime,
     subscribe: (runtime, notify) => runtime?.subscribe(notify) ?? (() => {}),
     equality: "revision",
   });
-  const gateway = projectSource(untrack(context)?.gateway, {
+  const gateway = projectSource(context?.gateway, {
     read: (owner) => owner?.snapshot,
     subscribe: (owner, notify) => owner?.subscribe?.(notify) ?? (() => {}),
     equality: "revision",
   });
-  createEffect(context, (next) => {
-    plugins.replaceSource(next?.plugins);
-    gateway.replaceSource(next?.gateway);
-  });
   const loader = new LazyCustomElementRequestController({ requestUpdate });
+  const loadError = () => {
+    revision();
+    const value = loader.visibleState;
+    return value?.status === "error" ? value : undefined;
+  };
   const appView = new BoardMcpAppLifecycle({
     active,
     connected: () => connected,
@@ -154,7 +133,7 @@ export function BoardWidgetCellContents(
     connected: () => connected,
     loadingCovered: () => props.loadingCovered ?? false,
     bridgeEnabled: () => props.bridgeEnabled !== false,
-    context,
+    context: () => context,
     refreshFrame: () => props.callbacks?.frameLoadFailed,
     reportContentHeight: (name, height) => props.callbacks?.reportContentHeight(name, height),
     scrollBy: (deltaY) =>
@@ -251,20 +230,18 @@ export function BoardWidgetCellContents(
     props.widget.grantState === "rejected" ||
     bodyErrored ||
     frame.presentationReady;
-  expose({
+  cells.set(host, {
     get presentationReady() {
       return presentationReady();
     },
     selectMenuItem,
     async teardown() {
-      await props
-        .host()
+      await host
         .querySelector<HTMLElement & { teardown?: () => Promise<void> }>("mcp-app-view")
         ?.teardown?.();
     },
     restartAfterTeardown() {
-      props
-        .host()
+      host
         .querySelector<HTMLElement & { restartAfterTeardown?: () => void }>("mcp-app-view")
         ?.restartAfterTeardown?.();
     },
@@ -410,105 +387,82 @@ export function BoardWidgetCellContents(
       <p class="board-widget__plugin-loading">{t("board.widget.pluginLoading")}</p>
     );
     return (
-      <Show
-        when={contribution()}
+      <Switch
         fallback={
+          <BoardDisabledPlugin
+            pluginId={pluginId()}
+            disabled={unavailable()}
+            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+          >
+            <Show
+              when={disabled()}
+              fallback={
+                <strong>{t("board.widget.disabledPlugin", { pluginId: pluginId() })}</strong>
+              }
+            >
+              <CustomPluginUiDisabled context={context} pluginId={pluginId()} />
+            </Show>
+          </BoardDisabledPlugin>
+        }
+      >
+        <Match when={contribution()}>
           <Show
-            when={native()}
+            when={loadError()}
             fallback={
               <Show
-                when={
-                  (context() && gateway.read()?.phase !== "connected") ||
-                  plugins.read()?.isLoading(pluginId())
-                }
-                fallback={
-                  <Show
-                    when={runtimeError()}
-                    fallback={
-                      <BoardDisabledPlugin
-                        pluginId={pluginId()}
-                        disabled={unavailable()}
-                        onRemove={() =>
-                          void runAction(() => props.callbacks!.remove(props.widget!))
-                        }
-                      >
-                        <Show
-                          when={disabled()}
-                          fallback={
-                            <strong>
-                              {t("board.widget.disabledPlugin", { pluginId: pluginId() })}
-                            </strong>
-                          }
-                        >
-                          <CustomPluginUiDisabled context={context()} pluginId={pluginId()} />
-                        </Show>
-                      </BoardDisabledPlugin>
-                    }
-                  >
-                    <BoardWidgetError
-                      error={runtimeError()?.message}
-                      onRetry={() => void plugins.read()?.refresh()}
-                    />
-                  </Show>
-                }
+                when={(revision(), isOptionalElementDefined(contribution()!))}
+                fallback={<Loading />}
               >
-                <Loading />
+                <CoreWidget />
               </Show>
             }
           >
-            <PluginContribution
-              kind="widgets"
-              contributionKey={key()}
-              props={{
-                ...(props.session ?? { sessionKey: "" }),
-                widget: { name: props.widget!.name, props: props.widget!.props },
-                canMutate: canMutate(),
-                canGrant: canGrant(),
-              }}
-              presented={active()}
-            />
+            {(error) => (
+              <LazyViewError
+                error={error().error}
+                stale={error().stale}
+                subtitle={error().element.label}
+                onRetry={() => loader.retry()}
+              />
+            )}
           </Show>
-        }
-      >
-        <Show
-          when={(revision(), loader.visibleState?.status === "error")}
-          fallback={
-            <Show
-              when={(revision(), contribution() && isOptionalElementDefined(contribution()!))}
-              fallback={<Loading />}
-            >
-              <CoreWidget />
-            </Show>
+        </Match>
+        <Match when={native()}>
+          <PluginContribution
+            kind="widgets"
+            contributionKey={key()}
+            props={{
+              ...(props.session ?? { sessionKey: "" }),
+              widget: { name: props.widget!.name, props: props.widget!.props },
+              canMutate: canMutate(),
+              canGrant: canGrant(),
+            }}
+            presented={active()}
+          />
+        </Match>
+        <Match
+          when={
+            (context && gateway.read()?.phase !== "connected") ||
+            plugins.read()?.isLoading(pluginId())
           }
         >
+          <Loading />
+        </Match>
+        <Match when={runtimeError()}>
           <BoardWidgetError
-            error={
-              (revision(), loader.visibleState?.status === "error" ? loader.visibleState.error : "")
-            }
-            onRetry={() => loader.retry()}
+            error={runtimeError()?.message}
+            onRetry={() => void plugins.read()?.refresh()}
           />
-        </Show>
-      </Show>
+        </Match>
+      </Switch>
     );
   };
   const Body = () => (
-    <Show when={!state().frameError} fallback={<BoardWidgetError error={state().frameError} />}>
-      <Show
-        when={renderedMcp()}
-        fallback={
-          <Show
-            when={props.widget?.grantState !== "pending" && props.widget?.grantState !== "rejected"}
-            fallback={<AccessNotice />}
-          >
-            <Show
-              when={props.widget?.contentKind === "plugin" && !props.widget.frameUrl}
-              fallback={<Frame />}
-            >
-              <Plugin />
-            </Show>
-          </Show>
-        }
-      >
+    <Switch fallback={<Frame />}>
+      <Match when={state().frameError}>
+        <BoardWidgetError error={state().frameError} />
+      </Match>
+      <Match when={renderedMcp()}>
         <BoardMcpAppContent
           accessNotice={<AccessNotice />}
           active={active()}
@@ -527,9 +481,18 @@ export function BoardWidgetCellContents(
             }
           }}
         />
-      </Show>
-    </Show>
+      </Match>
+      <Match
+        when={props.widget?.grantState === "pending" || props.widget?.grantState === "rejected"}
+      >
+        <AccessNotice />
+      </Match>
+      <Match when={props.widget?.contentKind === "plugin" && !props.widget.frameUrl}>
+        <Plugin />
+      </Match>
+    </Switch>
   );
+
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
       ? (props.widget.presentation ?? "card")
@@ -544,7 +507,7 @@ export function BoardWidgetCellContents(
       props.widget?.contentKind === "mcp-app" ||
       (props.widget?.contentKind === "plugin" && !props.widget.frameUrl),
     );
-  const style = (): JSX.CSSProperties => {
+  const style = (): SolidJSX.CSSProperties => {
     const rect = props.rect!;
     const height =
       props.dragging || props.pageChrome
@@ -687,3 +650,39 @@ export function BoardWidgetCellContents(
     </Show>
   );
 }
+
+export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidgetCellMethods>(
+  "openclaw-board-widget-cell",
+  BoardWidgetCellContent,
+  {
+    properties: {
+      widget: { default: undefined, attribute: false },
+      rect: { default: undefined, attribute: false },
+      contentHeightPx: { default: undefined, attribute: false },
+      fitAutoContent: { default: false, type: Boolean },
+      pageChrome: { default: false, type: Boolean },
+      tabs: { default: [], attribute: false },
+      session: { default: { sessionKey: "" }, attribute: false },
+      sessionKey: { default: "", attribute: false },
+      widgetFrameUrl: { default: undefined, attribute: false },
+      callbacks: { default: undefined, attribute: false },
+      active: { default: true, type: Boolean },
+      bridgeEnabled: { default: true, type: Boolean },
+      dragging: { default: false, type: Boolean },
+      focusTabIndex: { default: -1, type: Number },
+      positionInSet: { default: 1, type: Number },
+      setSize: { default: 1, type: Number },
+      busy: { default: false, type: Boolean },
+      canMutate: { default: true, type: Boolean },
+      canGrant: { default: true, type: Boolean },
+      loadingCovered: { default: false, type: Boolean },
+    },
+    methods: {
+      selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
+      teardown: async (host) => {
+        await cells.get(host)?.teardown();
+      },
+      restartAfterTeardown: (host) => cells.get(host)?.restartAfterTeardown(),
+    },
+  },
+);

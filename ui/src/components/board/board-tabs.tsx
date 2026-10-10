@@ -32,8 +32,8 @@ export function BoardTabs(props: {
         <wa-tab-group
           class="board-tabs__track"
           prop:active={props.activeTabId}
-          activation="manual"
-          without-scroll-controls
+          prop:activation="manual"
+          prop:withoutScrollControls={true}
           onWa-tab-show={props.onTabShow}
         >
           <For each={visible()} keyed={(tab) => tab.tabId}>
@@ -46,7 +46,7 @@ export function BoardTabs(props: {
                     "board-tabs__tab--drop": tab().tabId === props.hoverTabId,
                   },
                 ]}
-                panel={tab().tabId}
+                prop:panel={tab().tabId}
                 prop:active={tab().tabId === props.activeTabId}
                 data-board-tab-id={tab().tabId}
               >
@@ -91,16 +91,10 @@ export function BoardTabs(props: {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "wa-tab-group": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-tab-group"]> & {
-        "prop:active"?: string;
-        activation?: "auto" | "manual";
-        "without-scroll-controls"?: boolean;
-        "onWa-tab-show"?: (event: CustomEvent<{ name: string }>) => void;
-      };
-      "wa-tab": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-tab"]> & {
-        "prop:active"?: boolean;
-        panel?: string;
-      };
+      "wa-tab-group": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-tab-group"]> &
+        SolidJSX.Properties<HTMLElementTagNameMap["wa-tab-group"]>;
+      "wa-tab": SolidJSX.HTMLAttributes<HTMLElementTagNameMap["wa-tab"]> &
+        SolidJSX.Properties<HTMLElementTagNameMap["wa-tab"]>;
     }
   }
 }

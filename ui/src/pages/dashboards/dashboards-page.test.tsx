@@ -21,7 +21,7 @@ import {
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DashboardsPage } from "./dashboards-page.tsx";
-import type { DashboardsRouteData } from "./view.ts";
+import type { DashboardsRouteData } from "./view.tsx";
 
 type DashboardsPageElement = HTMLElement;
 

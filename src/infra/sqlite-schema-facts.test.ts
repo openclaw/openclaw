@@ -317,9 +317,9 @@ describe("admitted SQLite schema facts", () => {
         expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
         expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
       });
-    read();
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
+      read();
       const insert = writer.prepare("INSERT INTO session_nodes VALUES (?)");
       for (let index = 0; index < 100; index += 1) {
         insert.run(index);
@@ -346,24 +346,30 @@ describe("admitted SQLite schema facts", () => {
     expect(tableExists(database, "original")).toBe(true);
   });
 
-  it("invalidates derived column facts when adopting a foreign schema publication", () => {
+  it("derives owner columns from admitted sibling schema publications without table-info reads", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
     const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
-    expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
-    const writer = openNodeSqliteDatabase(filename);
-    databases.push(writer);
-    writer.exec(`
-      ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_type TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_id TEXT;
-      ALTER TABLE session_nodes ADD COLUMN owner_assigned_at INTEGER;
-    `);
-    const publisher = openDatabase("", true, filename);
-    const facts = getAdmittedSqliteSchemaFacts(publisher);
-    expect(facts).toBeDefined();
-    expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
-    expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
+      const writer = openNodeSqliteDatabase(filename);
+      databases.push(writer);
+      writer.exec(`
+        ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_type TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_assigned_by_id TEXT;
+        ALTER TABLE session_nodes ADD COLUMN owner_assigned_at INTEGER;
+      `);
+      const publisher = openDatabase("", true, filename);
+      const facts = getAdmittedSqliteSchemaFacts(publisher);
+      expect(facts).toBeDefined();
+      expect(adoptSqliteSchemaFacts(reader, facts!)).toBe(true);
+      expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
+      expect(observation.queries.filter((sql) => /pragma_table_info/iu.test(sql))).toEqual([]);
+    } finally {
+      observation.restore();
+    }
   });
   it.each(["data_version", "schema_version", "user_version"])(
     "uses native freshness without consulting a table shadowing %s",

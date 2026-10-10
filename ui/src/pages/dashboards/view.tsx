@@ -1,8 +1,8 @@
 import { Dynamic } from "@solidjs/web";
-import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
-import { registerShellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -15,7 +15,7 @@ import {
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
-import "./dashboard-preview.ts";
+import { DashboardPreview } from "./dashboard-preview.ts";
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;
@@ -112,11 +112,11 @@ function DashboardCard(props: {
         }}
       >
         <div class="dashboard-preview" aria-hidden="true" inert>
-          <openclaw-dashboard-preview
-            prop:gatewaySnapshot={props.gatewaySnapshot}
-            prop:sessionKey={props.row.key}
-            prop:agentId={props.row.agentId}
-            prop:error={props.previewError ?? null}
+          <DashboardPreview
+            gatewaySnapshot={props.gatewaySnapshot}
+            sessionKey={props.row.key}
+            agentId={props.row.agentId}
+            error={props.previewError ?? null}
           />
         </div>
         <div class="dashboard-card__body">
@@ -315,46 +315,40 @@ export function DashboardsView(props: {
   gatewaySnapshot?: ApplicationGatewaySnapshot;
   previewError?: string | null;
 }) {
-  const [layoutHost, setLayoutHost] = createSignal<HTMLElement>();
-  createEffect(layoutHost, (host) =>
-    host
-      ? registerShellLayoutTraits(host, { toolbarHeader: true, settingsWorkspace: true })
-      : undefined,
-  );
   return (
     <>
-      <section ref={(host) => setLayoutHost(host)} class="content-header dashboards-header">
-        <div>
-          <h1 class="page-title">{t("tabs.dashboards")}</h1>
-          <div class="page-subtitle">{t("subtitles.dashboards")}</div>
-        </div>
-        <Show when={props.data?.result}>
-          <div class="dashboards-header__count">
-            <strong>{props.data?.result?.sessions.length}</strong>
-            <span>{t("dashboardsPage.totalLabel")}</span>
+      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+        <section class="content-header dashboards-header">
+          <div>
+            <h1 class="page-title">{t("tabs.dashboards")}</h1>
+            <div class="page-subtitle">{t("subtitles.dashboards")}</div>
           </div>
-        </Show>
-      </section>
+          <Show when={props.data?.result}>
+            <div class="dashboards-header__count">
+              <strong>{props.data?.result?.sessions.length}</strong>
+              <span>{t("dashboardsPage.totalLabel")}</span>
+            </div>
+          </Show>
+        </section>
+      </ShellLayoutBoundary>
       <SettingsWorkspace>
         <Show
-          when={props.data && (props.data.result || props.data.error)}
+          when={props.data && (props.data.result || props.data.error) ? props.data : undefined}
           fallback={<DashboardGallerySkeleton />}
         >
-          <PanelRefreshStatus
-            status={{
-              error: props.data?.error ?? null,
-              hasLoaded: props.data?.result !== null,
-              stale: Boolean(props.data?.result && props.data.error),
-              awaitingGateway: false,
-            }}
-            errorMessage={
-              props.data?.error
-                ? t("dashboardsPage.loadError", { error: props.data.error })
-                : undefined
-            }
-          />
-          <Show when={props.data}>
-            {(data) => (
+          {(data) => (
+            <>
+              <PanelRefreshStatus
+                status={{
+                  error: data().error,
+                  hasLoaded: data().result !== null,
+                  stale: Boolean(data().result && data().error),
+                  awaitingGateway: false,
+                }}
+                errorMessage={
+                  data().error ? t("dashboardsPage.loadError", { error: data().error! }) : undefined
+                }
+              />
               <DashboardList
                 data={data()}
                 filters={props.filters}
@@ -362,23 +356,10 @@ export function DashboardsView(props: {
                 gatewaySnapshot={props.gatewaySnapshot}
                 previewError={props.previewError}
               />
-            )}
-          </Show>
+            </>
+          )}
         </Show>
       </SettingsWorkspace>
     </>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-dashboard-preview": JSX.HTMLAttributes<HTMLElement> & {
-        "prop:gatewaySnapshot"?: ApplicationGatewaySnapshot;
-        "prop:sessionKey"?: string;
-        "prop:agentId"?: string;
-        "prop:error"?: string | null;
-      };
-    }
-  }
 }

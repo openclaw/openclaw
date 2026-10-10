@@ -724,6 +724,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
   ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
   ["skills.workshop.undo", "skills", "operator.admin", "2026.9"],
+  ["memory.search.owner", "memory-search", "operator.admin", "2026.9"],
   ["secrets.store.import", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["secrets.store.allowedHosts", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["users.background.get", "users", "operator.read", "2026.9"],

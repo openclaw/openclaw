@@ -456,7 +456,7 @@ export async function runConfigOperations(params: {
     previousEnv: preparedPreviousValues.resolutionEnv,
   };
   if (options.dryRun) {
-    const topology = prepareConfigWriteTopology({
+    const topology = await prepareConfigWriteTopology({
       snapshot,
       pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
       nextConfig: authoredNextConfig,

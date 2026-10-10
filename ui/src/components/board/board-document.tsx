@@ -21,6 +21,7 @@ import {
 } from "../../lib/gateway-methods.ts";
 import { projectBoardProvider } from "../../lib/reactive/domain-board.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import { Icon } from "../solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 import "../../styles/board-document.css";
@@ -52,10 +53,6 @@ export type BoardDocumentProps = {
 
 // The provider binding remains synchronous; Solid observes its presentation facts.
 class BoardDocumentController {
-  private gatewaySnapshot?: ApplicationGatewaySnapshot;
-  private sessions?: Pick<SessionCapability, "describe">;
-  private sessionKey: string | null = null;
-  private preparedSession: BoardGetParams | null = null;
   documentState: DashboardDocumentState = "loading";
   snapshot?: BoardSnapshot;
   activeTabId = "";
@@ -66,13 +63,12 @@ class BoardDocumentController {
   private providerSubscriptions: (() => void)[] = [];
   private bindingGeneration = 0;
 
-  constructor(private readonly notify: () => void) {}
+  constructor(
+    private readonly props: BoardDocumentProps,
+    private readonly notify: () => void,
+  ) {}
 
-  update(binding: Omit<BoardDocumentProps, "passive" | "onDocumentClose">): void {
-    this.gatewaySnapshot = binding.gatewaySnapshot;
-    this.sessions = binding.sessions;
-    this.sessionKey = binding.sessionKey ?? null;
-    this.preparedSession = binding.preparedSession ?? null;
+  update(): void {
     this.synchronizeProvider();
     this.notify();
   }
@@ -98,13 +94,14 @@ class BoardDocumentController {
   }
 
   private synchronizeProvider(): void {
-    const sessionKey = (this.preparedSession?.sessionKey ?? this.sessionKey)?.trim() ?? "";
+    const sessionKey =
+      (this.props.preparedSession?.sessionKey ?? this.props.sessionKey)?.trim() ?? "";
     if (!sessionKey) {
       this.releaseProvider();
       this.documentState = "missing-session";
       return;
     }
-    const snapshot = this.gatewaySnapshot;
+    const snapshot = this.props.gatewaySnapshot;
     const client = snapshot?.client;
     if (!snapshot || !client) {
       this.releaseProvider();
@@ -120,9 +117,10 @@ class BoardDocumentController {
     const capabilityKey = JSON.stringify(capabilities);
     if (
       this.binding?.client === client &&
-      this.binding.sessions === this.sessions &&
+      this.binding.sessions === this.props.sessions &&
       this.binding.sessionKey === sessionKey &&
-      (!this.preparedSession || this.binding.session.agentId === this.preparedSession.agentId) &&
+      (!this.props.preparedSession ||
+        this.binding.session.agentId === this.props.preparedSession.agentId) &&
       this.binding.capabilityKey === capabilityKey
     ) {
       this.providerLease?.update(client, snapshot.phase === "connected", capabilities);
@@ -132,10 +130,10 @@ class BoardDocumentController {
     this.documentState = "loading";
     const generation = this.bindingGeneration;
     void this.bindProvider(
-      { client, sessions: this.sessions, sessionKey, capabilityKey },
+      { client, sessions: this.props.sessions, sessionKey, capabilityKey },
       capabilities,
       generation,
-      this.preparedSession,
+      this.props.preparedSession ?? null,
     );
   }
 
@@ -164,7 +162,7 @@ class BoardDocumentController {
         this.notify();
         return;
       }
-      const current = this.gatewaySnapshot;
+      const current = this.props.gatewaySnapshot;
       if (!current || current.client !== binding.client) {
         return;
       }
@@ -287,7 +285,10 @@ class BoardDocumentController {
       ? {
           ...snapshot,
           widgets: snapshot.widgets.filter((widget) =>
-            isPassiveBoardWidget(widget, this.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? []),
+            isPassiveBoardWidget(
+              widget,
+              this.props.gatewaySnapshot?.hello?.controlUiWidgetKinds ?? [],
+            ),
           ),
         }
       : snapshot;
@@ -302,9 +303,9 @@ class BoardDocumentController {
   }
 }
 
-export function BoardDocument(props: BoardDocumentProps) {
+function BoardDocumentContent(props: BoardDocumentProps) {
   const [revision, setRevision] = createSignal(0);
-  const controller = new BoardDocumentController(() => setRevision((value) => value + 1));
+  const controller = new BoardDocumentController(props, () => setRevision((value) => value + 1));
   createEffect(
     () => ({
       gatewaySnapshot: props.gatewaySnapshot,
@@ -312,7 +313,7 @@ export function BoardDocument(props: BoardDocumentProps) {
       sessionKey: props.sessionKey,
       preparedSession: props.preparedSession,
     }),
-    (binding) => controller.update(binding),
+    () => controller.update(),
   );
   onCleanup(() => controller.dispose());
   const state = createMemo(() => {
@@ -375,4 +376,25 @@ export function BoardDocument(props: BoardDocumentProps) {
       </div>
     </main>
   );
+}
+
+export const OpenClawBoardDocument = defineSolidBridge<BoardDocumentProps>(
+  "openclaw-board-document",
+  BoardDocumentContent,
+  {
+    properties: {
+      gatewaySnapshot: { default: undefined, attribute: false },
+      sessions: { default: undefined, attribute: false },
+      sessionKey: { default: null, attribute: false },
+      preparedSession: { default: null, attribute: false },
+      onDocumentClose: { default: null, attribute: false },
+      passive: { default: false, type: Boolean },
+    },
+  },
+);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-board-document": SolidBridgeElement<BoardDocumentProps>;
+  }
 }

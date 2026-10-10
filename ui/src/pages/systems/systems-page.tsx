@@ -149,7 +149,7 @@ function SystemMeasurements(props: { row: SystemsInventoryRow; controller: Syste
   );
 }
 
-export type SystemsPageProps = { routeData?: SystemsRouteData; presented?: boolean };
+export type SystemsPageProps = { routeData?: SystemsRouteData; presented: boolean };
 type SystemsPageElement = SolidBridgeElement<SystemsPageProps>;
 
 function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
@@ -165,7 +165,7 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
   });
   const controller = () => projection()?.read();
   createEffect(
-    () => ({ controller: props.routeData?.controller, presented: props.presented !== false }),
+    () => ({ controller: props.routeData?.controller, presented: props.presented }),
     ({ controller: active, presented }) => {
       active?.setPresented(presented);
       return () => active?.setPresented(false);
@@ -174,7 +174,7 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
   onSettled(() => {
     const tick = () => {
       const active = controller();
-      if (props.presented === false || !active) {
+      if (!props.presented || !active) {
         return;
       }
       if (active.needsInventoryRefresh) {
@@ -198,7 +198,7 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
     };
     const desktopToggle = (event: Event) => {
       const active = controller();
-      if (props.presented === false || !active?.current || !(event instanceof CustomEvent)) {
+      if (!props.presented || !active?.current || !(event instanceof CustomEvent)) {
         return;
       }
       const detail = isRecord(event.detail) ? event.detail : {};
@@ -235,7 +235,7 @@ function SystemsPageContent(props: SystemsPageProps, host: SystemsPageElement) {
         </p>
       }
     >
-      <SystemsWorkspace controller={controller()!} presented={props.presented !== false} />
+      <SystemsWorkspace controller={controller()!} presented={props.presented} />
     </Show>
   );
 }
@@ -267,7 +267,7 @@ function SystemsDetails(props: { controller: SystemsController; row: SystemsInve
         <dd>{systemPlatform(row()) ?? t("systems.unknown")}</dd>
       </dl>
       <h3>{t("systems.telemetry")}</h3>
-      {<SystemMeasurements row={row()} controller={controller()} />}
+      <SystemMeasurements row={row()} controller={controller()} />
       <h3>{t("systems.relatedSessions")}</h3>
       <p class="systems-detail-hint">{t("systems.relatedHint")}</p>
       {row().sessions.length ? (
@@ -310,17 +310,15 @@ function SystemsDetails(props: { controller: SystemsController; row: SystemsInve
           <h3>{t("systems.attachedSessions")}</h3>
           <p class="systems-detail-hint">{t("systems.attachedHint")}</p>
           <ul>
-            {<For each={environment().worker!.attachedSessionIds}>{(id) => <li>{id}</li>}</For>}
+            <For each={environment().worker!.attachedSessionIds}>{(id) => <li>{id}</li>}</For>
           </ul>
         </>
       ) : null}
       <h3>{t("systems.capabilities")}</h3>
       <div class="systems-capabilities">
-        {
-          <For each={environment().capabilities ?? []}>
-            {(capability) => <span>{capability}</span>}
-          </For>
-        }
+        <For each={environment().capabilities ?? []}>
+          {(capability) => <span>{capability}</span>}
+        </For>
       </div>
     </aside>
   );
@@ -458,18 +456,16 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
           <option value="" disabled selected={!row()}>
             {t("systems.select")}
           </option>
-          {
-            <For each={controller().rows}>
-              {(entry) => (
-                <option
-                  value={entry.environment.id}
-                  selected={entry.environment.id === controller().selectedId}
-                >
-                  {systemName(entry)}
-                </option>
-              )}
-            </For>
-          }
+          <For each={controller().rows}>
+            {(entry) => (
+              <option
+                value={entry.environment.id}
+                selected={entry.environment.id === controller().selectedId}
+              >
+                {systemName(entry)}
+              </option>
+            )}
+          </For>
         </select>
         <button
           class="systems-icon-button"
@@ -512,7 +508,7 @@ function SystemsWorkspace(props: { controller: SystemsController; presented: boo
       {auxiliaryErrors().length ? (
         <details class="systems-callout">
           <summary>{t("systems.errors")}</summary>
-          {<For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>}
+          <For each={auxiliaryErrors()}>{(error) => <p>{error}</p>}</For>
         </details>
       ) : null}
       {controller().showStats && row() ? (

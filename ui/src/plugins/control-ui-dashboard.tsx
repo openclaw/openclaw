@@ -126,9 +126,13 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
       current = false;
     };
   });
-  const hasBoard = createMemo(() => {
-    const state = resource()?.projection.read();
-    return Boolean(state && boardExists(state.snapshot));
+  const board = createMemo(() => {
+    const current = resource();
+    const session = props.session;
+    const state = current?.projection.read();
+    return current && session && state && boardExists(state.snapshot)
+      ? { ...current, session, snapshot: state.snapshot }
+      : null;
   });
   return (
     <section class="plugin-session-dashboard">
@@ -150,47 +154,36 @@ function PluginSessionDashboardContent(props: PluginSessionDashboardProps) {
         </span>
       </button>
       <div class="plugin-session-dashboard__body" hidden={!expanded()}>
-        <Show
-          when={viewError()}
-          fallback={
-            <Show
-              when={hasBoard() && resource()}
-              fallback={
-                <p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>
-              }
-            >
-              {(current) => (
-                <Show when={props.session}>
-                  {(session) => (
-                    <openclaw-board-view
-                      prop:active={expanded() && props.presented}
-                      prop:session={session()}
-                      prop:snapshot={current().projection.read().snapshot}
-                      prop:activeTabId={activeTabId()}
-                      prop:widgetFrameUrl={(name: string, revision: number) =>
-                        current().lease.provider.widgetFrameUrl(name, revision)
-                      }
-                      prop:callbacks={current().callbacks}
-                      prop:canMutate={props.canMutate}
-                      prop:canGrant={props.canGrant}
-                    />
-                  )}
-                </Show>
-              )}
-            </Show>
-          }
-        >
-          {(error) => (
-            <>
-              <p role="alert">{error()}</p>
-              <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
-                {t("common.retry")}
-              </button>
-            </>
-          )}
-        </Show>
+        {viewError() ? (
+          <>
+            <p role="alert">{viewError()}</p>
+            <button type="button" onClick={() => setViewAttempt((value) => value + 1)}>
+              {t("common.retry")}
+            </button>
+          </>
+        ) : (
+          <Show
+            when={board()}
+            fallback={<p class="plugin-session-dashboard__empty">{t("pluginUi.dashboardEmpty")}</p>}
+          >
+            {(current) => (
+              <openclaw-board-view
+                prop:active={expanded() && props.presented}
+                prop:session={current().session}
+                prop:snapshot={current().snapshot}
+                prop:activeTabId={activeTabId()}
+                prop:widgetFrameUrl={(name: string, revision: number) =>
+                  current().lease.provider.widgetFrameUrl(name, revision)
+                }
+                prop:callbacks={current().callbacks}
+                prop:canMutate={props.canMutate}
+                prop:canGrant={props.canGrant}
+              />
+            )}
+          </Show>
+        )}
       </div>
-      <Show when={!expanded() && expansionInitialized() && !hasBoard()}>
+      <Show when={!expanded() && expansionInitialized() && !board()}>
         <p class="plugin-session-dashboard__collapsed-empty">{t("pluginUi.dashboardEmpty")}</p>
       </Show>
     </section>

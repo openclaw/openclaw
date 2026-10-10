@@ -77,53 +77,22 @@ export type PluginPageProps = {
 // Auth grants and retired frame epochs must change synchronously at the effect boundary.
 // Solid observes the lifecycle; its deferred signal writes never own these facts.
 export class PluginPageLifecycle {
-  host: HTMLElement | null = null;
-  private connected = true;
-  private viewState: BundledPluginTabViewState = { status: "idle" };
-  private readyKey: string | null = null;
-  private unavailableKey: string | null = null;
-  private frameGeneration: object = {};
+  private disposed = false;
+  bundledViewState: BundledPluginTabViewState = { status: "idle" };
+  externalAuthReadyKey: string | null = null;
+  externalAuthUnavailableKey: string | null = null;
+  pluginFrameGeneration: object = {};
 
   constructor(
     readonly props: PluginPageProps,
     readonly context: ApplicationContext,
+    private readonly host: HTMLElement,
     private readonly notify: () => void,
-  ) {}
+  ) {
+    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    window.addEventListener("message", this.handlePluginSessionOpen);
+  }
 
-  private get pluginId() {
-    return this.props.pluginId ?? "";
-  }
-  private get tabId() {
-    return this.props.tabId ?? "";
-  }
-  get bundledViewState() {
-    return this.viewState;
-  }
-  private set bundledViewState(value: BundledPluginTabViewState) {
-    this.viewState = value;
-    this.notify();
-  }
-  get externalAuthReadyKey() {
-    return this.readyKey;
-  }
-  private set externalAuthReadyKey(value: string | null) {
-    this.readyKey = value;
-    this.notify();
-  }
-  get externalAuthUnavailableKey() {
-    return this.unavailableKey;
-  }
-  private set externalAuthUnavailableKey(value: string | null) {
-    this.unavailableKey = value;
-    this.notify();
-  }
-  get pluginFrameGeneration() {
-    return this.frameGeneration;
-  }
-  private set pluginFrameGeneration(value: object) {
-    this.frameGeneration = value;
-    this.notify();
-  }
   bundledViewHost: object = {};
   private gatewaySource?: ApplicationContext["gateway"];
   private gatewayClient: GatewayBrowserClient | null = null;
@@ -151,18 +120,14 @@ export class PluginPageLifecycle {
       this.externalAuthRefreshedAt = 0;
       this.pluginFrameGeneration = {};
       this.requestExternalTabAuthRestart(this.externalAuthTargetKey);
+      this.notify();
       return;
     }
     this.refreshExternalTabAuth(this.externalAuthTargetKey);
   };
 
-  connect() {
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
-    window.addEventListener("message", this.handlePluginSessionOpen);
-  }
-
   dispose() {
-    this.connected = false;
+    this.disposed = true;
     document.removeEventListener("visibilitychange", this.handleVisibilityChange);
     window.removeEventListener("message", this.handlePluginSessionOpen);
     this.syncPluginThemeFrame(null);
@@ -171,7 +136,7 @@ export class PluginPageLifecycle {
   }
 
   tabKey(): string {
-    return pluginTabKey({ pluginId: this.pluginId, id: this.tabId });
+    return pluginTabKey({ pluginId: this.props.pluginId ?? "", id: this.props.tabId ?? "" });
   }
 
   private loadBundledView(key: string): Promise<BundledPluginTabView> {
@@ -186,11 +151,13 @@ export class PluginPageLifecycle {
   private startBundledViewLoad(key: string) {
     const loading = { status: "loading", id: key } as const;
     this.bundledViewState = loading;
+    this.notify();
     const settle = (nextState: BundledPluginTabViewState) => {
       if (this.bundledViewState !== loading || !this.hasCurrentBundledDescriptor(key)) {
         return;
       }
       this.bundledViewState = nextState;
+      this.notify();
       if (nextState.status === "error" && isStaleChunkImportError(nextState.error)) {
         void scheduleStaleChunkReload();
       }
@@ -213,9 +180,9 @@ export class PluginPageLifecycle {
     }
   };
 
-  update() {
+  readonly update = () => {
     this.updateGatewaySource(this.context.gateway);
-    if (!this.connected) {
+    if (this.disposed) {
       return;
     }
     const key = this.tabKey();
@@ -232,7 +199,8 @@ export class PluginPageLifecycle {
       this.startBundledViewLoad(key);
     }
     this.syncExternalTabAuth(info, hasBundledDescriptor);
-  }
+    this.notify();
+  };
 
   syncPluginThemeFrame(frame: HTMLIFrameElement | null) {
     if (frame === this.pluginThemeFrame) {
@@ -255,8 +223,7 @@ export class PluginPageLifecycle {
     const context = this.context;
     const descriptor = this.tabInfo();
     if (
-      !this.connected ||
-      !this.host ||
+      this.disposed ||
       !context ||
       this.gatewaySource !== context.gateway ||
       this.gatewayClient !== context.gateway.snapshot.client ||
@@ -368,6 +335,7 @@ export class PluginPageLifecycle {
     const refreshStartedAt = Date.now();
     const abortController = new AbortController();
     this.externalAuthUnavailableKey = null;
+    this.notify();
     this.externalAuthRefreshAbortController = abortController;
     this.externalAuthRefreshWatchdog = setTimeout(() => {
       if (this.externalAuthRefreshAbortController === abortController) {
@@ -406,6 +374,7 @@ export class PluginPageLifecycle {
           this.externalAuthReadyKey = null;
           this.externalAuthUnavailableKey = targetKey;
           this.externalAuthRefreshedAt = 0;
+          this.notify();
         } else {
           this.scheduleExternalTabAuthRefresh(targetKey, false);
         }
@@ -442,12 +411,14 @@ export class PluginPageLifecycle {
           this.externalAuthRefreshedAt = refreshedAt;
           this.scheduleExternalTabAuthExpiry(targetKey, refreshedAt);
           this.scheduleExternalTabAuthRefresh(targetKey, true);
+          this.notify();
           return;
         }
         this.externalAuthReadyKey = null;
         this.externalAuthUnavailableKey = targetKey;
         this.externalAuthRefreshedAt = 0;
         this.clearExternalTabAuthTimers();
+        this.notify();
       });
   }
 
@@ -500,6 +471,7 @@ export class PluginPageLifecycle {
       this.pluginFrameGeneration = {};
       this.clearExternalTabAuthTimers();
       this.requestExternalTabAuthRestart(targetKey);
+      this.notify();
     }, delay);
   }
 
@@ -594,12 +566,11 @@ export class PluginPageLifecycle {
 
   tabInfo(): GatewayControlUiPluginTab | undefined {
     const tabs = this.context?.gateway.snapshot.hello?.controlUiTabs ?? [];
-    const tab = tabs.find((entry) => entry.pluginId === this.pluginId && entry.id === this.tabId);
+    const tab = tabs.find(
+      (entry) =>
+        entry.pluginId === (this.props.pluginId ?? "") && entry.id === (this.props.tabId ?? ""),
+    );
     const path = tab?.path && uiDevGatewayResourceUrl(tab.path);
     return tab && path && path !== tab.path ? { ...tab, path } : tab;
-  }
-
-  readyBundledView() {
-    return this.bundledViewState.status === "ready" ? this.bundledViewState.view : undefined;
   }
 }

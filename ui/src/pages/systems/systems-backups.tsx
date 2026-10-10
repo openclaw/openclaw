@@ -119,7 +119,7 @@ export function SystemsBackups(props: { controller: SystemsController }) {
         <>
           {status()!.targets.length ? (
             <ul class="systems-backups__targets">
-              {<For each={status()!.targets}>{(target) => renderTarget(target, status()!)}</For>}
+              <For each={status()!.targets}>{(target) => renderTarget(target, status()!)}</For>
             </ul>
           ) : (
             <p class="systems-backups__hint">
@@ -157,48 +157,46 @@ export function SystemsBackups(props: { controller: SystemsController }) {
             <>
               <h3>{t("systems.backups.locations")}</h3>
               <ul class="systems-backups__locations">
-                {
-                  <For each={status()!.locations}>
-                    {(location) => {
-                      const probe = () => props.controller.storageProbes.get(location.name);
-                      const busy = () => props.controller.storageProbeBusy(location.name);
-                      return (
-                        <li class="systems-storage-location">
-                          <div>
-                            <strong>{location.name}</strong>
-                            <span class="systems-backup__destination">
-                              {location.displayTarget ?? location.provider}
-                            </span>
-                          </div>
-                          <button
-                            class="systems-backups__check"
-                            disabled={busy() || !props.controller.connected}
-                            aria-label={t("systems.backups.checkLocation", { name: location.name })}
-                            onClick={() => void props.controller.probeStorage(location.name)}
+                <For each={status()!.locations}>
+                  {(location) => {
+                    const probe = () => props.controller.storageProbes.get(location.name);
+                    const busy = () => props.controller.storageProbeBusy(location.name);
+                    return (
+                      <li class="systems-storage-location">
+                        <div>
+                          <strong>{location.name}</strong>
+                          <span class="systems-backup__destination">
+                            {location.displayTarget ?? location.provider}
+                          </span>
+                        </div>
+                        <button
+                          class="systems-backups__check"
+                          disabled={busy() || !props.controller.connected}
+                          aria-label={t("systems.backups.checkLocation", { name: location.name })}
+                          onClick={() => void props.controller.probeStorage(location.name)}
+                        >
+                          {t(busy() ? "systems.backups.checking" : "systems.backups.check")}
+                        </button>
+                        {probe() ? (
+                          <p
+                            class={
+                              probe()!.state === "ok"
+                                ? "systems-backups__hint"
+                                : "systems-backup__error"
+                            }
+                            role="status"
                           >
-                            {t(busy() ? "systems.backups.checking" : "systems.backups.check")}
-                          </button>
-                          {probe() ? (
-                            <p
-                              class={
-                                probe()!.state === "ok"
-                                  ? "systems-backups__hint"
-                                  : "systems-backup__error"
-                              }
-                              role="status"
-                            >
-                              {t("systems.backups.probe." + probe()!.state)}
-                              {probe()!.message ? ` · ${probe()!.message}` : null}
-                              {probe()!.freeBytes === undefined
-                                ? null
-                                : ` · ${t("systems.backups.free", { size: formatByteSize(probe()!.freeBytes!, byteFormat) })}`}
-                            </p>
-                          ) : null}
-                        </li>
-                      );
-                    }}
-                  </For>
-                }
+                            {t("systems.backups.probe." + probe()!.state)}
+                            {probe()!.message ? ` · ${probe()!.message}` : null}
+                            {probe()!.freeBytes === undefined
+                              ? null
+                              : ` · ${t("systems.backups.free", { size: formatByteSize(probe()!.freeBytes!, byteFormat) })}`}
+                          </p>
+                        ) : null}
+                      </li>
+                    );
+                  }}
+                </For>
               </ul>
             </>
           ) : null}

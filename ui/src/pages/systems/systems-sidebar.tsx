@@ -167,21 +167,21 @@ function SystemsInventory(props: { controller: SystemsController }) {
   const renderRow = (row: SystemsInventoryRow) => {
     const online = row.environment.status === "available";
     const platform = systemPlatform(row);
-    const status = systemStatus(row);
+    const status = () => systemStatus(row);
     return (
       <button
         class="systems-machine"
         type="button"
         data-status={row.environment.status}
         aria-pressed={row.environment.id === controller().selectedId ? "true" : "false"}
-        aria-description={platform ? `${status} · ${platform}` : status}
+        aria-description={platform ? `${status()} · ${platform}` : status()}
         onClick={() => controller().select(row.environment.id)}
       >
         <i class="systems-machine__dot" aria-hidden="true" />
         <span class="systems-machine__name">{systemName(row)}</span>
         <span class="systems-machine__meta">
           {!online
-            ? status
+            ? status()
             : row.environment.worker
               ? shortId(row.environment.id)
               : (platform ?? null)}
@@ -240,30 +240,26 @@ function SystemsInventory(props: { controller: SystemsController }) {
             <Icon name="listFilter" />
           </button>
           <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>
-          {
-            <For each={sortOptions}>
-              {(option) => (
-                <MenuOption
-                  value={`sort:${option.value}`}
-                  label={option.labelKey}
-                  checked={controller().sortMode === option.value}
-                />
-              )}
-            </For>
-          }
+          <For each={sortOptions}>
+            {(option) => (
+              <MenuOption
+                value={`sort:${option.value}`}
+                label={option.labelKey}
+                checked={controller().sortMode === option.value}
+              />
+            )}
+          </For>
           <div class="session-menu__separator" role="separator" />
           <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
-          {
-            <For each={statusOptions}>
-              {(option) => (
-                <MenuOption
-                  value={`status:${option.value}`}
-                  label={option.labelKey}
-                  checked={controller().statusFilter === option.value}
-                />
-              )}
-            </For>
-          }
+          <For each={statusOptions}>
+            {(option) => (
+              <MenuOption
+                value={`status:${option.value}`}
+                label={option.labelKey}
+                checked={controller().statusFilter === option.value}
+              />
+            )}
+          </For>
         </wa-dropdown>
         <button
           type="button"
@@ -282,25 +278,23 @@ function SystemsInventory(props: { controller: SystemsController }) {
             {t("systems.loading")}
           </p>
         ) : null}
-        {<For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>}
-        {
-          <For each={["node", "worker"] as const}>
-            {(kind) => {
-              const group = () => rows().filter((row) => systemKind(row) === kind);
-              return (
-                <Show when={group().length}>
-                  <section class="systems-group">
-                    <h3>
-                      <span>{t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
-                      <span class="systems-group__count">{group().length}</span>
-                    </h3>
-                    {<For each={group()}>{renderRow}</For>}
-                  </section>
-                </Show>
-              );
-            }}
-          </For>
-        }
+        <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
+        <For each={["node", "worker"] as const}>
+          {(kind) => {
+            const group = () => rows().filter((row) => systemKind(row) === kind);
+            return (
+              <Show when={group().length}>
+                <section class="systems-group">
+                  <h3>
+                    <span>{t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
+                    <span class="systems-group__count">{group().length}</span>
+                  </h3>
+                  <For each={group()}>{renderRow}</For>
+                </section>
+              </Show>
+            );
+          }}
+        </For>
         {!controller().loading && rows().length === 0 ? (
           <p class="systems-sidebar__empty">
             {t(

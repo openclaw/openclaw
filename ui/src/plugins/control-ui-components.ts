@@ -245,7 +245,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("./control-ui-session-summary.ts");
+          await import("./control-ui-session-summary.tsx");
           return document.createElement("openclaw-plugin-session-summary");
         },
         (element, next, current) => {
@@ -261,7 +261,7 @@ export function createControlUiComponents(options: {
         container,
         props,
         async () => {
-          await import("./control-ui-dashboard.ts");
+          await import("./control-ui-dashboard.tsx");
           return document.createElement("openclaw-plugin-session-dashboard");
         },
         (element, next, current) => {

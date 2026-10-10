@@ -3,6 +3,7 @@ import { For, Show } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import type { BoardTab, BoardWidget } from "../../lib/board/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { Icon } from "../solid/icon.tsx";
 import { BOARD_SIZE_PRESETS } from "./board-widget-cell-options.ts";
 
 export function BoardWidgetMenu(props: {
@@ -87,16 +88,7 @@ export function BoardWidgetMenuItems(props: {
         disabled={props.disabled}
       >
         <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M3 6h18M9 6V4h6v2M5 6l1 14h12l1-14M10 10v6M14 10v6" />
-          </svg>
+          <Icon name="trash" />
         </span>
         {t("board.widget.remove")}
       </wa-dropdown-item>

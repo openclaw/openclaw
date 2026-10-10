@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "./board-document.ts";
+import "./board-document.tsx";
 
 const mounted: HTMLElement[] = [];
 

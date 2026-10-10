@@ -174,7 +174,7 @@ const focusedCases = [
     name: "dashboard",
     label: "dashboard document",
     path: focusPath({ kind: "dashboard", path: "/dashboard/main/12345678" }),
-    modulePath: "ui/src/components/board/board-document.ts",
+    modulePath: "ui/src/components/board/board-document.tsx",
     gateway: {
       sessionKey,
       featureMethods: [...defaultControlUiFeatureMethods, "board.get"],

@@ -15,8 +15,8 @@ import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirm } from "../mcp-app-confirm.ts";
-import "../panel-loading-skeleton.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
+import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
 // module is not worth its startup-bundle cost for one string.
@@ -322,11 +322,11 @@ export class BoardWidgetFrameLifecycle {
                 <Show
                   when={view().waiting}
                   fallback={
-                    <openclaw-panel-loading-skeleton
-                      prop:variant="discussion"
-                      prop:label={t("common.loading")}
-                      prop:compact={false}
-                      prop:overlay={true}
+                    <PanelLoadingSkeleton
+                      variant="discussion"
+                      label={t("common.loading")}
+                      compact={false}
+                      overlay
                     />
                   }
                 >
@@ -347,7 +347,7 @@ export class BoardWidgetFrameLifecycle {
           <iframe
             class="board-widget__frame"
             allow="fullscreen"
-            style={view().visible ? "" : "opacity: 0"}
+            style={{ opacity: view().visible ? undefined : 0 }}
             inert={!view().visible}
             sandbox="allow-scripts allow-same-origin allow-forms"
             referrerpolicy="origin"
@@ -744,16 +744,5 @@ export class BoardWidgetFrameLifecycle {
     }
     this.sandboxHost.setActive(active);
     return this.sandboxHost;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-panel-loading-skeleton": SolidJSX.HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-panel-loading-skeleton"]
-      > &
-        SolidJSX.Properties<HTMLElementTagNameMap["openclaw-panel-loading-skeleton"]>;
-    }
   }
 }

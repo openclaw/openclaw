@@ -24,18 +24,6 @@ type PortalProbeState = {
 };
 
 export class PortalsController {
-  get embedded() {
-    return this.readPresentation().embedded;
-  }
-  get presented() {
-    return this.readPresentation().presented;
-  }
-  get requestedPortalId() {
-    return this.readPresentation().requestedPortalId;
-  }
-  get requestedEnvironmentId() {
-    return this.readPresentation().requestedEnvironmentId;
-  }
   portals: PortalSummary[] = [];
   selectedPortalId: string | null = null;
   loading = false;
@@ -55,24 +43,21 @@ export class PortalsController {
   private readonly lifecycle;
   private readonly unsubscribers: Array<() => void>;
   private environmentTimer: ReturnType<typeof setInterval> | undefined;
-  private readonly environmentPoll = {
-    start: () => {
-      if (this.environmentTimer === undefined) {
-        this.environmentTimer = setInterval(() => void this.loadPendingEnvironment(), 2_000);
-      }
-    },
-    stop: () => {
+  private pollEnvironment(enabled: boolean) {
+    if (!enabled) {
       clearInterval(this.environmentTimer);
       this.environmentTimer = undefined;
-    },
-  };
+    } else if (this.environmentTimer === undefined) {
+      this.environmentTimer = setInterval(() => void this.loadPendingEnvironment(), 2_000);
+    }
+  }
   get connected() {
     return this.context.gateway.snapshot.phase === "connected";
   }
 
   constructor(
     readonly context: ApplicationContext,
-    private readonly readPresentation: () => PortalsPresentation,
+    readonly presentation: () => PortalsPresentation,
   ) {
     this.lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
     this.unsubscribers = [
@@ -119,8 +104,8 @@ export class PortalsController {
       return;
     }
     const targetChanged =
-      previous.requestedPortalId !== this.requestedPortalId ||
-      previous.requestedEnvironmentId !== this.requestedEnvironmentId;
+      previous.requestedPortalId !== this.presentation().requestedPortalId ||
+      previous.requestedEnvironmentId !== this.presentation().requestedEnvironmentId;
     if (targetChanged) {
       this.requestGeneration += 1;
       this.resetPendingEnvironment();
@@ -129,17 +114,19 @@ export class PortalsController {
       this.portalProbeState = null;
       this.applyPortalSet(this.portals);
       void this.loadPresentation();
-    } else if (this.presented && !previous.presented) {
+    } else if (this.presentation().presented && !previous.presented) {
       void this.loadPresentation();
-    } else if (!this.presented) {
-      this.environmentPoll.stop();
+    } else if (!this.presentation().presented) {
+      this.pollEnvironment(false);
       this.environmentRequestGeneration += 1;
       this.environmentLoading = false;
     }
     this.notify();
   }
   get pendingEnvironmentId(): string | null {
-    return this.requestedPortalId ? null : this.requestedEnvironmentId;
+    return this.presentation().requestedPortalId
+      ? null
+      : this.presentation().requestedEnvironmentId;
   }
 
   loadPresentation(): Promise<void> {
@@ -154,7 +141,7 @@ export class PortalsController {
       !scope ||
       !this.canReadPortalState ||
       this.environmentLoading ||
-      (this.embedded && !this.presented)
+      (this.presentation().embedded && !this.presentation().presented)
     ) {
       return;
     }
@@ -177,15 +164,11 @@ export class PortalsController {
         throw new Error("Environment status returned a different target");
       }
       this.pendingEnvironment = environment;
-      if (environment.status === "starting") {
-        this.environmentPoll.start();
-      } else {
-        this.environmentPoll.stop();
-      }
+      this.pollEnvironment(environment.status === "starting");
     } catch (error) {
       if (isCurrent()) {
         this.environmentFailure = { environmentId, message: formatUiError(error) };
-        this.environmentPoll.stop();
+        this.pollEnvironment(false);
       }
     } finally {
       if (isCurrent()) {
@@ -217,7 +200,7 @@ export class PortalsController {
     this.environmentLoading = false;
     this.pendingEnvironment = null;
     this.environmentFailure = null;
-    this.environmentPoll.stop();
+    this.pollEnvironment(false);
   }
 
   resetGatewayState() {
@@ -241,7 +224,7 @@ export class PortalsController {
     const previousPortalId = this.selectedPortalId;
     const selectedPortalId = this.pendingEnvironmentId
       ? null
-      : (this.requestedPortalId ??
+      : (this.presentation().requestedPortalId ??
         (portals.some((portal) => portal.id === previousPortalId)
           ? this.selectedPortalId
           : (portals[0]?.id ?? null)));
@@ -317,7 +300,7 @@ export class PortalsController {
       !this.canReadPortalState ||
       !this.portalListSupported ||
       this.loading ||
-      (this.embedded && !this.presented)
+      (this.presentation().embedded && !this.presentation().presented)
     ) {
       return;
     }

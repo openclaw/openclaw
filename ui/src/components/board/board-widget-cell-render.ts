@@ -10,29 +10,6 @@ export {
   type BoardWidgetPageMenu,
 } from "./board-widget-cell-options.ts";
 
-export function renderBoardWidgetMenu(options: {
-  widget: BoardWidget;
-  tabs: readonly BoardTab[];
-  disabled: boolean;
-  onSelect: (event: CustomEvent<{ item: { value?: string } }>) => void;
-}): TemplateResult {
-  const { onSelect } = options;
-  return html`
-    <wa-dropdown class="board-widget__menu" placement="bottom-end" @wa-select=${onSelect}>
-      <button
-        class="board-widget__menu-trigger"
-        slot="trigger"
-        type="button"
-        aria-label=${t("board.widget.menuLabel")}
-        title=${t("board.widget.menuLabel")}
-      >
-        ⋮
-      </button>
-      ${renderBoardWidgetMenuItems(options)}
-    </wa-dropdown>
-  `;
-}
-
 export function renderBoardWidgetMenuItems(options: {
   widget: BoardWidget;
   tabs: readonly BoardTab[];
@@ -89,50 +66,6 @@ export function renderBoardWidgetMenuItems(options: {
       <span slot="icon" class="board-widget__menu-icon" aria-hidden="true">${icons.trash}</span>
       ${t("board.widget.remove")}
     </wa-dropdown-item>
-  `;
-}
-
-export function renderBoardWidgetRejected(options: {
-  disabled: boolean;
-  onRemove: () => void;
-}): TemplateResult {
-  return html`
-    <div class="board-widget__grant board-widget__grant--rejected" data-test-id="board-rejected">
-      <strong>${t("board.widget.rejected")}</strong>
-      <span>${t("board.widget.rejectedDetail")}</span>
-      <button
-        class="btn btn--small"
-        type="button"
-        ?disabled=${options.disabled}
-        @click=${options.onRemove}
-      >
-        ${t("board.widget.remove")}
-      </button>
-    </div>
-  `;
-}
-
-export function renderBoardDisabledPlugin(options: {
-  pluginId: string;
-  disabled: boolean;
-  onRemove: () => void;
-  content?: TemplateResult;
-}): TemplateResult {
-  return html`
-    <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
-      ${
-        options.content ??
-        html`<strong>${t("board.widget.disabledPlugin", { pluginId: options.pluginId })}</strong>`
-      }
-      <button
-        class="btn btn--small"
-        type="button"
-        ?disabled=${options.disabled}
-        @click=${options.onRemove}
-      >
-        ${t("board.widget.remove")}
-      </button>
-    </div>
   `;
 }
 

@@ -9,7 +9,7 @@ title: "macOS dev setup"
 
 Build and run the OpenClaw macOS application from source.
 
-The packaged app requires macOS 15.0 or later. The build host must also meet
+The packaged app requires macOS 26.2 or later. The build host must also meet
 the Xcode requirements below.
 
 ## Prerequisites

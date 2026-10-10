@@ -10,7 +10,9 @@ import {
 } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveSessionEntryAccessTarget } from "../config/sessions/session-accessor.entry.js";
 import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
+import { assertSessionEntryPatchAuthority } from "../config/sessions/session-entry-patch-authority.js";
 import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -648,6 +650,48 @@ export function createPluginSessionOwnership(
         initialEntry: { ...initialEntry, pluginOwnerId: pluginId },
       });
     },
+    prepareSessionEntryPatch: async (
+      session: PluginSessionRuntime,
+      params: Parameters<PluginSessionRuntime["prepareSessionEntryPatch"]>[0],
+      assertRuntimeCurrent: () => void,
+    ) => {
+      assertSessionEntryPatchAuthority(params.authority);
+      return await session.prepareSessionEntryPatch({
+        ...params,
+        authority: {
+          kind: "source",
+          source: composeSessionSourceAssertion(
+            [params.authority?.kind === "source" ? params.authority.source : undefined],
+            (assertSources) => {
+              assertRuntimeCurrent();
+              if (params.authority?.kind === "host") {
+                params.authority.assertCurrent();
+              }
+              assertSources();
+            },
+          ),
+        },
+        prepare: async (entry, context) => {
+          assertStoreEntryOwned({
+            action: "patch",
+            before: context.existingEntry,
+            entry,
+            sessionKey: params.sessionKey,
+          });
+          const patch = await params.prepare(entry, context);
+          assertRuntimeCurrent();
+          if (patch) {
+            assertStoreEntryOwned({
+              action: "patch",
+              before: context.existingEntry,
+              entry: params.replaceEntry ? patch : { ...entry, ...patch },
+              sessionKey: params.sessionKey,
+            });
+          }
+          return patch;
+        },
+      });
+    },
     patchSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["patchSessionEntry"]>[0],
@@ -676,15 +720,29 @@ export function createPluginSessionOwnership(
     upsertSessionEntry: async (
       session: PluginSessionRuntime,
       params: Parameters<PluginSessionRuntime["upsertSessionEntry"]>[0],
+      assertRuntimeCurrent: () => void,
     ) => {
-      const before = assertStoredSessionEntryOwned({ ...params, action: "upsert" });
-      assertStoreEntryOwned({
-        action: "upsert",
-        before,
-        entry: params.entry,
-        sessionKey: params.sessionKey,
+      await session.prepareSessionEntryPatch({
+        ...params,
+        fallbackEntry: params.entry,
+        replaceEntry: true,
+        authority: { kind: "host", assertCurrent: assertRuntimeCurrent },
+        prepare: (entry, context) => {
+          assertStoreEntryOwned({
+            action: "upsert",
+            before: context.existingEntry,
+            entry,
+            sessionKey: params.sessionKey,
+          });
+          assertStoreEntryOwned({
+            action: "upsert",
+            before: context.existingEntry,
+            entry: params.entry,
+            sessionKey: params.sessionKey,
+          });
+          return params.entry;
+        },
       });
-      await session.upsertSessionEntry(params);
     },
     prepareSessionStoreUpdate: (
       params: Parameters<PluginSessionRuntime["updateSessionStoreEntry"]>[0],

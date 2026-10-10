@@ -22,38 +22,34 @@ export function DashboardsPage(props: DashboardsPageProps) {
   });
   const [previewError, setPreviewError] = createSignal<string | null>(null);
   const [data, setData] = createSignal(() => props.routeData);
-  const gateway = context ? projectGateway(context.gateway) : undefined;
+  const gateway = projectGateway(context.gateway);
 
-  if (context) {
-    const selection = projectAgentSelection(context.agentSelection);
-    const scopeId = createMemo(() => selection.read().state.scopeId?.trim() || null);
-    const query = createMemo(() => dashboardSessionListQuery(scopeId()));
-    const list = createMemo(() =>
-      projectSessionList({ sessions: context.sessions, scope: query() }),
-    );
-    createEffect(
-      () => ({ snapshot: list().read(), query: query() }),
-      ({ snapshot, query: scope }) => {
-        if (snapshot.result || snapshot.error || !data()?.result) {
-          setData(dashboardsRouteData(context, snapshot));
-        }
-        if (snapshot.result?.hasMore && !snapshot.loading && !snapshot.error) {
-          void context.sessions.refreshList({
-            ...scope,
-            append: true,
-            offset: snapshot.result.nextOffset ?? snapshot.result.sessions.length,
-          });
-        } else if (
-          !snapshot.result &&
-          !snapshot.loading &&
-          !snapshot.error &&
-          context.gateway.snapshot.phase === "connected"
-        ) {
-          void context.sessions.refreshList(scope);
-        }
-      },
-    );
-  }
+  const selection = projectAgentSelection(context.agentSelection);
+  const scopeId = createMemo(() => selection.read().state.scopeId?.trim() || null);
+  const query = createMemo(() => dashboardSessionListQuery(scopeId()));
+  const list = createMemo(() => projectSessionList({ sessions: context.sessions, scope: query() }));
+  createEffect(
+    () => ({ snapshot: list().read(), query: query() }),
+    ({ snapshot, query: scope }) => {
+      if (snapshot.result || snapshot.error || !data()?.result) {
+        setData(dashboardsRouteData(context, snapshot));
+      }
+      if (snapshot.result?.hasMore && !snapshot.loading && !snapshot.error) {
+        void context.sessions.refreshList({
+          ...scope,
+          append: true,
+          offset: snapshot.result.nextOffset ?? snapshot.result.sessions.length,
+        });
+      } else if (
+        !snapshot.result &&
+        !snapshot.loading &&
+        !snapshot.error &&
+        context.gateway.snapshot.phase === "connected"
+      ) {
+        void context.sessions.refreshList(scope);
+      }
+    },
+  );
 
   onSettled(() => {
     let active = true;
@@ -74,9 +70,9 @@ export function DashboardsPage(props: DashboardsPageProps) {
       filters={filters()}
       handlers={{
         onFilterChange: (filter) => setFilters((current) => ({ ...current, ...filter })),
-        onNavigate: context?.navigate,
+        onNavigate: context.navigate,
       }}
-      gatewaySnapshot={gateway?.read().snapshot}
+      gatewaySnapshot={gateway.read().snapshot}
       previewError={previewError()}
     />
   );

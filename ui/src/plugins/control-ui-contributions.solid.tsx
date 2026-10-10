@@ -10,13 +10,14 @@ import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { runControlUiPluginAction } from "./control-ui-actions.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import { observePluginProperties, PluginContribution } from "./control-ui-view.solid.tsx";
+import { observePluginProperties, PluginContribution } from "./control-ui-view.runtime.tsx";
 
 type ContributionsProps = {
   kind: "navigation" | "session-header" | "composer" | "header";
   sessionKey: string;
   agentId: string | undefined;
   navigationKey: string;
+  navigationChildren: boolean;
   navigationMenus: SidebarMenusController | undefined;
   presented: boolean;
 };
@@ -143,6 +144,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
         ]}
         href={link.item.href}
         aria-current={link.item.active ? "page" : undefined}
+        aria-label={link.item.entry.value.label}
         aria-haspopup={link.item.entry.value.actions?.length ? "menu" : undefined}
         onContextMenu={menu}
         onKeyDown={menu}
@@ -283,6 +285,7 @@ function PluginContributionsContent(props: ContributionsProps, host: Contributio
           return (
             <Show
               when={
+                props.navigationChildren &&
                 children().length > 0 &&
                 (parent().active || children().some((child) => child.active))
               }
@@ -321,6 +324,7 @@ export const PluginContributions = defineSolidBridge<ContributionsProps>(
       sessionKey: { default: "", attribute: false },
       agentId: { default: undefined, attribute: false },
       navigationKey: { default: "", attribute: false },
+      navigationChildren: { default: true, type: Boolean },
       navigationMenus: { default: undefined, attribute: false },
       presented: { default: true, type: Boolean },
     },

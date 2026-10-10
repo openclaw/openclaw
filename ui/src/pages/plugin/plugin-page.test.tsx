@@ -52,6 +52,7 @@ function externalPluginConfig(
     terminalEnabled: false,
     uploadsEnabled: true,
     pluginAssetsRequireAuth: true,
+    pluginControlUiModules: [],
     pluginFrameGrants,
   };
 }
@@ -227,6 +228,7 @@ describe("PluginPage", () => {
     listeners.forEach((listener) => listener());
     await settle();
     expect(fixture.page.textContent).toContain("Custom plugin UI is off");
+    expect(fixture.page.params).toEqual({ document: "saved-draft" });
     const link = fixture.page.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
     expect(link?.textContent?.trim()).toBe("Open Labs");
     link?.click();

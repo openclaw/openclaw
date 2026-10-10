@@ -11,7 +11,7 @@ export type DashboardPreviewProps = {
   error?: string | null;
 };
 
-export function DashboardPreview(props: DashboardPreviewProps, host: HTMLElement) {
+export function DashboardPreviewContent(props: DashboardPreviewProps, host: HTMLElement) {
   const [nearVisible, setNearVisible] = createSignal(false);
   onSettled(() => {
     const visibility = new NearViewportObserver(200, () => setNearVisible(visibility.nearVisible));

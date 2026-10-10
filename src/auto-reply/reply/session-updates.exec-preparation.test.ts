@@ -23,7 +23,6 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeExecApprovalsConfigRow } from "../../infra/exec-approvals-sqlite.js";
 import * as approvalStore from "../../infra/exec-approvals-store.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -266,7 +265,7 @@ it.each(["metadata", "lifecycle", "refresh"] as const)(
           pending,
           "skill preparation did not start",
         );
-        if (change === "refresh") {
+        if (change === "refresh" || change === "metadata") {
           await replaceSessionEntry(scope, {
             ...entry,
             pinnedAt: undefined,
@@ -274,25 +273,7 @@ it.each(["metadata", "lifecycle", "refresh"] as const)(
             systemSent: true,
           });
         } else {
-          const foreign = new (requireNodeSqlite().DatabaseSync)(reader.database.path);
-          try {
-            foreign
-              .prepare(
-                "UPDATE session_nodes SET entry_json = json_patch(entry_json, ?), updated_at = ?, pinned_at = ? WHERE session_key = ?",
-              )
-              .run(
-                JSON.stringify(
-                  change === "metadata"
-                    ? { pinnedAt: null, updatedAt: 2, systemSent: true }
-                    : { lifecycleRevision: "replacement" },
-                ),
-                change === "metadata" ? 2 : 1,
-                change === "metadata" ? null : 1,
-                scope.sessionKey,
-              );
-          } finally {
-            foreign.close();
-          }
+          await replaceSessionEntry(scope, { ...entry, lifecycleRevision: "replacement" });
         }
         resume.resolve();
         if (change === "lifecycle") {

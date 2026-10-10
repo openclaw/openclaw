@@ -8,8 +8,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { acquireBoardProviderForSession, type BoardProviderLease } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
-import "./control-ui-dashboard.ts";
-import "./control-ui-view.runtime.ts";
+import "./control-ui-dashboard.tsx";
+import "./control-ui-view.runtime.tsx";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
   updateComplete: Promise<boolean>;

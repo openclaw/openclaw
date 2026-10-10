@@ -5,6 +5,26 @@ import {
   type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
+/** The host retains error presentation and conversation cleanup at the write boundary. */
+export async function requireSystemAgentPersistentApplyInference(
+  params: Parameters<typeof import("./setup-inference.js").resolvePersistentApplyInference>[0],
+  onUnavailable: (failures: readonly unknown[]) => never,
+) {
+  if (!params.binding) {
+    throw new SystemAgentInferenceUnavailableError("conversation");
+  }
+  try {
+    const { resolvePersistentApplyInference } = await import("./setup-inference.js");
+    const route = await resolvePersistentApplyInference(params);
+    if (route) {
+      return route;
+    }
+  } catch (error) {
+    return onUnavailable([error]);
+  }
+  return onUnavailable([]);
+}
+
 /** Read guards share failure classification; the conversation retains cleanup ownership. */
 export async function requireSystemAgentInferenceRoute(
   binding: SystemAgentVerifiedInferenceBinding | undefined,

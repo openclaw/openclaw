@@ -30,8 +30,11 @@ import "../../styles/board.css";
 import "../web-awesome-tabs.ts";
 import "../web-awesome.ts";
 import { BoardTabs, orderedBoardTabs } from "./board-tabs.tsx";
-import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import {
+  BoardWidgetCell,
+  type BoardWidgetCellCallbacks,
+  type BoardWidgetCellProps,
+} from "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
   dropValid: boolean;
@@ -87,17 +90,9 @@ class BoardViewState {
   initialLoading = true;
   gesture: BoardPointerGesture | null = null;
   private mutationRequestId = 0;
-  readonly stableCellOrder = new Map<string, number>();
-  stableCellOrderSequence = 0;
   readonly visitedTabs = new Set<string>();
   readonly contentHeights = new Map<string, number>();
-  private previous?: {
-    session: BoardGetParams;
-    snapshot?: BoardSnapshot;
-    activeTabId: string;
-    pageWidgetName: string;
-    active: boolean;
-  };
+  private previous?: BoardViewProps;
 
   constructor(
     readonly props: BoardViewProps,
@@ -106,15 +101,9 @@ class BoardViewState {
   ) {}
 
   sync(): void {
-    const next = {
-      session: this.props.session,
-      snapshot: this.props.snapshot,
-      activeTabId: this.props.activeTabId,
-      pageWidgetName: this.props.pageWidgetName,
-      active: this.props.active,
-    };
     const previous = this.previous;
-    this.previous = next;
+    const next = this.props;
+    this.previous = { ...next };
     const snapshotChanged = previous?.snapshot !== next.snapshot;
     const ownerChanged =
       previous?.session.agentId !== next.session.agentId ||
@@ -124,8 +113,6 @@ class BoardViewState {
       this.initialLoading = true;
       this.host.scrollTop = 0;
       this.visitedTabs.clear();
-      this.stableCellOrder.clear();
-      this.stableCellOrderSequence = 0;
       this.contentHeights.clear();
       this.mutationRequestId += 1;
       this.mutationPending = false;
@@ -148,8 +135,6 @@ class BoardViewState {
       }
       const tabIds = new Set(next.snapshot?.tabs.map((tab) => tab.tabId));
       for (const tabId of this.visitedTabs) if (!tabIds.has(tabId)) this.visitedTabs.delete(tabId);
-      for (const name of this.stableCellOrder.keys())
-        if (!currentByName.has(name)) this.stableCellOrder.delete(name);
     }
     if (previous?.activeTabId !== next.activeTabId) this.focusName = "";
     if (
@@ -575,17 +560,28 @@ class BoardViewState {
 }
 
 const views = new WeakMap<HTMLElement, BoardViewState>();
-type CellEntry = { key: string; hidden: boolean; options: BoardWidgetCellProps };
+type CellEntry = {
+  key: string;
+  present: boolean;
+  retiring?: boolean;
+  element?: HTMLElementTagNameMap["openclaw-board-widget-cell"];
+  options: BoardWidgetCellProps;
+};
 
 function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new BoardViewState(props, host, () => setRevision((value) => value + 1));
   views.set(host, state);
+  // Grid coordinates change; map insertion order keeps iframe nodes in place.
   const entries = new Map<string, CellEntry>();
-  const cells = new Map<string, HTMLElementTagNameMap["openclaw-board-widget-cell"]>();
-  const retiring = new Set<string>();
-  let currentKeys = new Set<string>();
   let disposed = false;
+  const cellKey = (name: string) =>
+    JSON.stringify([
+      props.session.agentId,
+      props.session.sessionKey,
+      props.snapshot?.sessionKey,
+      name,
+    ]);
   const view = createMemo(() => {
     revision();
     state.sync();
@@ -597,7 +593,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     if (activeTab) state.visitedTabs.add(activeTabId);
     // A widget moved to an unvisited tab keeps its already mounted document.
     const widgets = (snapshot?.widgets ?? []).filter(
-      (widget) => state.visitedTabs.has(widget.tabId) || state.stableCellOrder.has(widget.name),
+      (widget) => state.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
     const rects = tabs.flatMap((tab) =>
       layout(
@@ -613,111 +609,85 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     );
     const activeNames = new Set(activeWidgets.map((widget) => widget.name));
     const activeRects = rects.filter((rect) => activeNames.has(rect.name));
-    for (const rect of rects) {
-      if (!state.stableCellOrder.has(rect.name))
-        state.stableCellOrder.set(rect.name, state.stableCellOrderSequence++);
-    }
-    // Keep insertion order independent of grid coordinates; moving an iframe
-    // node in the DOM reloads its browsing context in supported browsers.
-    const stableRects = rects.toSorted(
-      (left, right) =>
-        (state.stableCellOrder.get(left.name) ?? 0) -
-          (state.stableCellOrder.get(right.name) ?? 0) || left.name.localeCompare(right.name),
-    );
     const fullWidth = activeWidgets.length === 1 && activeWidgets[0]?.sizeW === BOARD_GRID_COLUMNS;
     const page =
       fullWidth &&
       (activeWidgets[0]?.name === props.pageWidgetName ||
         activeWidgets[0]?.pluginKind === "session:website" ||
         activeWidgets[0]?.pluginKind === "browser:dashboard");
-    return {
-      tabs,
-      activeTabId,
-      stableRects,
-      activeNames,
-      activeRects,
-      fullWidth,
-      page,
-      widgets: new Map(widgets.map((widget) => [widget.name, widget])),
-      positions: new Map(activeRects.map((rect, index) => [rect.name, index])),
-      focusName: activeRects.some((rect) => rect.name === state.focusName)
-        ? state.focusName
-        : (activeRects[0]?.name ?? ""),
-      loading: !snapshot || state.initialLoading,
-      sessionKey: snapshot?.sessionKey ?? "",
-      hoverTabId: state.hoverTabId,
-      gestureName: state.gestureName,
-      moving: state.gesture?.mode === "move",
-      mutationPending: state.mutationPending,
-      actionError: state.actionError,
-      announcement: state.announcement,
-      announcementRevision: state.announcementRevision,
-    };
-  });
-  const renderedCells = createMemo(() => {
-    const current = view();
-    currentKeys = new Set();
-    for (const rect of current.stableRects) {
-      const key = JSON.stringify([
-        props.session.agentId,
-        props.session.sessionKey,
-        current.sessionKey,
-        rect.name,
-      ]);
-      currentKeys.add(key);
-      const visible = current.activeNames.has(rect.name);
+    const loading = !snapshot || state.initialLoading;
+    const widgetsByName = new Map(widgets.map((widget) => [widget.name, widget]));
+    const positions = new Map(activeRects.map((rect, index) => [rect.name, index]));
+    const focusName = activeRects.some((rect) => rect.name === state.focusName)
+      ? state.focusName
+      : (activeRects[0]?.name ?? "");
+    for (const entry of entries.values()) entry.present = false;
+    for (const rect of rects) {
+      const key = cellKey(rect.name);
+      const visible = activeNames.has(rect.name);
       entries.set(key, {
+        ...entries.get(key),
         key,
-        hidden: !visible,
+        present: true,
         options: {
-          widget: current.widgets.get(rect.name),
+          widget: widgetsByName.get(rect.name),
           rect,
           contentHeightPx: state.contentHeights.get(rect.name),
           fitAutoContent: props.fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
-          tabs: current.tabs,
+          tabs,
           session: props.session,
-          sessionKey: current.sessionKey,
+          sessionKey: snapshot?.sessionKey ?? "",
           widgetFrameUrl: props.widgetFrameUrl,
           callbacks: state.cellCallbacks,
           active: props.active && visible,
           bridgeEnabled: props.bridgeEnabled,
-          dragging: rect.name === current.gestureName,
-          focusTabIndex: rect.name === current.focusName ? 0 : -1,
-          positionInSet: (current.positions.get(rect.name) ?? 0) + 1,
-          setSize: current.activeRects.length,
-          busy: current.mutationPending,
+          dragging: rect.name === state.gestureName,
+          focusTabIndex: rect.name === focusName ? 0 : -1,
+          positionInSet: (positions.get(rect.name) ?? 0) + 1,
+          setSize: activeRects.length,
+          busy: state.mutationPending,
           canMutate: props.canMutate,
           canGrant: props.canGrant,
-          loadingCovered: current.loading,
+          loadingCovered: loading,
         },
       });
     }
     for (const [key, entry] of entries) {
-      if (currentKeys.has(key)) continue;
-      const cell = cells.get(key);
-      if (entry.options.widget?.contentKind !== "mcp-app" || !cell) {
+      if (entry.present) continue;
+      if (entry.options.widget?.contentKind !== "mcp-app" || !entry.element) {
         entries.delete(key);
-        cells.delete(key);
-      } else if (!retiring.has(key)) {
-        // MCP teardown talks to the mounted app; freeze its last binding until
-        // acknowledgement (or the app owner's bounded timeout) completes.
-        retiring.add(key);
-        entries.set(key, { ...entry, hidden: true, options: { ...entry.options, active: false } });
+      } else if (!entry.retiring) {
+        // Keep the last binding connected until the app's bounded teardown completes.
+        entries.set(key, {
+          ...entry,
+          retiring: true,
+          options: { ...entry.options, active: false },
+        });
+        const element = entry.element;
         const finish = () => {
           if (disposed) return;
-          retiring.delete(key);
-          if (currentKeys.has(key)) cell.restartAfterTeardown();
-          else {
-            entries.delete(key);
-            cells.delete(key);
-          }
+          const current = entries.get(key);
+          if (current?.present) {
+            current.retiring = false;
+            element.restartAfterTeardown();
+          } else entries.delete(key);
           state.requestUpdate();
         };
-        void cell.teardown().then(finish, finish);
+        void element.teardown().then(finish, finish);
       }
     }
-    return [...entries.values()];
+    return {
+      tabs,
+      activeTabId,
+      activeNames,
+      empty: activeRects.length === 0,
+      fullWidth,
+      page,
+      loading,
+      cells: [...entries.values()],
+      state,
+    };
   });
   createEffect(
     () => view(),
@@ -766,53 +736,35 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         <BoardTabs
           tabs={view().tabs}
           activeTabId={view().activeTabId}
-          hoverTabId={view().hoverTabId}
+          hoverTabId={view().state.hoverTabId}
           onTabShow={state.handleTabShow}
           onOverflowSelect={state.handleOverflowSelect}
         />
-        <Show when={Boolean(props.snapshot) || renderedCells().length > 0}>
+        <Show when={Boolean(props.snapshot) || view().cells.length > 0}>
           <div
             class="board-grid"
             role="list"
             aria-label={t("board.gridLabel")}
-            hidden={view().activeRects.length === 0}
+            hidden={view().empty}
           >
-            <For each={renderedCells()} keyed={(entry) => entry.key}>
+            <For each={view().cells} keyed={(entry) => entry.key}>
               {(entry) => (
-                <openclaw-board-widget-cell
-                  ref={(cell: HTMLElementTagNameMap["openclaw-board-widget-cell"]) =>
-                    cells.set(entry().key, cell)
-                  }
-                  hidden={entry().hidden}
-                  inert={entry().hidden}
-                  prop:widget={entry().options.widget}
-                  prop:rect={entry().options.rect}
-                  prop:contentHeightPx={entry().options.contentHeightPx}
-                  prop:fitAutoContent={entry().options.fitAutoContent}
-                  prop:pageChrome={entry().options.pageChrome}
-                  prop:tabs={entry().options.tabs}
-                  prop:session={entry().options.session}
-                  prop:sessionKey={entry().options.sessionKey}
-                  prop:widgetFrameUrl={entry().options.widgetFrameUrl}
-                  prop:callbacks={entry().options.callbacks}
-                  prop:active={entry().options.active}
-                  prop:bridgeEnabled={entry().options.bridgeEnabled}
-                  prop:dragging={entry().options.dragging}
-                  prop:focusTabIndex={entry().options.focusTabIndex}
-                  prop:positionInSet={entry().options.positionInSet}
-                  prop:setSize={entry().options.setSize}
-                  prop:busy={entry().options.busy}
-                  prop:canMutate={entry().options.canMutate}
-                  prop:canGrant={entry().options.canGrant}
-                  prop:loadingCovered={entry().options.loadingCovered}
+                <BoardWidgetCell
+                  {...entry().options}
+                  ref={(element) => {
+                    const current = entries.get(entry().key);
+                    if (current) current.element = element;
+                  }}
+                  hidden={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
+                  inert={!entry().present || !view().activeNames.has(entry().options.widget!.name)}
                 />
               )}
             </For>
-            <Show when={view().moving}>
+            <Show when={view().state.gesture?.mode === "move"}>
               <div class="board-grid__append-zone" aria-hidden="true" />
             </Show>
           </div>
-          <Show when={view().activeRects.length === 0}>
+          <Show when={view().empty}>
             <div class="board-empty" data-test-id="board-empty">
               <span class="board-empty__mark" aria-hidden="true">
                 ＋
@@ -822,15 +774,17 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
             </div>
           </Show>
         </Show>
-        <Show when={view().actionError}>
+        <Show when={view().state.actionError}>
           <div class="board-view__error" role="alert">
-            {view().actionError}
+            {view().state.actionError}
           </div>
         </Show>
         <div class="board-announcer" aria-live="polite" aria-atomic="true">
-          <Show when={view().announcementRevision || undefined} keyed>
+          <Show when={view().state.announcementRevision || undefined} keyed>
             {(announcementRevision) => (
-              <span data-announcement-revision={announcementRevision}>{view().announcement}</span>
+              <span data-announcement-revision={announcementRevision}>
+                {view().state.announcement}
+              </span>
             )}
           </Show>
         </div>

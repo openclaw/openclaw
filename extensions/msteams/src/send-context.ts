@@ -1,16 +1,21 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveChannelMediaMaxBytes,
   type MSTeamsConfig,
   type OpenClawConfig,
 } from "../runtime-api.js";
+import {
+  resolveDefaultMSTeamsAccountId,
+  resolveMSTeamsAccount,
+  resolveMSTeamsAccountConfigPath,
+} from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import {
   describeBotFrameworkServiceUrlHost,
   isAllowedBotFrameworkServiceUrl,
   normalizeBotFrameworkServiceUrl,
 } from "./bot-framework-service-url.js";
-import { resolveMSTeamsAccount } from "./channel-config.js";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
@@ -25,7 +30,7 @@ import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } f
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { resolveMSTeamsCredentials } from "./token.js";
+import { resolveMSTeamsCredentials } from "./token-config.js";
 
 type MSTeamsConversationType = "personal" | "groupChat" | "channel";
 
@@ -128,26 +133,37 @@ async function findConversationReference(recipient: {
   return found ? { conversationId: found.conversationId, ref: found.reference } : null;
 }
 
-export async function resolveMSTeamsSendContext(params: { cfg: OpenClawConfig; to: string }) {
-  const msteamsCfg = params.cfg.channels?.msteams;
+export async function resolveMSTeamsSendContext(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+}) {
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
+  );
+  const account = resolveMSTeamsAccount({ cfg: params.cfg, accountId });
+  const msteamsCfg = account.config;
 
-  if (!msteamsCfg?.enabled) {
+  if (!account.enabled) {
     throw new Error("msteams provider is not enabled");
   }
 
-  const account = resolveMSTeamsAccount(params.cfg);
   if (account.tokenStatus === "configured_unavailable") {
     throw new Error("msteams credential file is configured but unavailable");
   }
   if (!account.configured) {
     throw new Error("msteams credentials not configured");
   }
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+
+  const creds = resolveMSTeamsCredentials(msteamsCfg, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix: resolveMSTeamsAccountConfigPath(params.cfg, accountId),
+  });
   if (!creds) {
     throw new Error("msteams credentials not configured");
   }
 
-  const store = createMSTeamsConversationStoreState();
+  const store = createMSTeamsConversationStoreState({ accountId });
 
   const recipient = parseRecipient(params.to);
   const found = await findConversationReference({ ...recipient, store });
@@ -231,10 +247,11 @@ export async function resolveMSTeamsSendContext(params: { cfg: OpenClawConfig; t
 
   const mediaMaxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
+    resolveChannelLimitMb: () => msteamsCfg.mediaMaxMb,
   });
 
   return {
+    accountId,
     conversationId,
     ref: safeRef,
     app,

@@ -1,7 +1,7 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
 import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
 import { titleForRoute } from "../../app-navigation.ts";
-import { registerShellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPortalsEnglish } from "../../i18n/locales/en-portals.ts";
@@ -9,18 +9,13 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { PortalsController } from "./portals-controller.ts";
+import { PortalsController, type PortalsPresentation } from "./portals-controller.ts";
 import "./portals.css";
 
 registerEnglishCatalog(registerPortalsEnglish);
 const PORTAL_FRAME_SANDBOX =
   "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts";
-export type PortalsPageProps = {
-  embedded?: boolean;
-  presented?: boolean;
-  requestedPortalId?: string | null;
-  requestedEnvironmentId?: string | null;
-};
+export type PortalsPageProps = PortalsPresentation;
 
 type PortalsPageMethods = { handleToggleRequest(event: Event): void };
 type PortalsPageElement = SolidBridgeElement<PortalsPageProps, PortalsPageMethods>;
@@ -28,18 +23,7 @@ const controllers = new WeakMap<HTMLElement, PortalsController>();
 
 function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
   const context = useApplication();
-  createEffect(
-    () => !props.embedded,
-    (standalone) =>
-      standalone ? registerShellLayoutTraits(host, { toolbarHeader: true }) : undefined,
-  );
-  const presentation = () => ({
-    embedded: props.embedded === true,
-    presented: props.presented !== false,
-    requestedPortalId: props.requestedPortalId ?? null,
-    requestedEnvironmentId: props.requestedEnvironmentId ?? null,
-  });
-  const owner = new PortalsController(context, presentation);
+  const owner = new PortalsController(context, () => props);
   controllers.set(host, owner);
   onCleanup(() => {
     controllers.delete(host);
@@ -51,8 +35,15 @@ function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
     equality: "revision",
   });
   const controller = () => projection.read();
-  createEffect(presentation, (_value, previous) => owner.presentationChanged(previous));
-  return <PortalContent controller={controller()} />;
+  createEffect(
+    () => ({ ...props }),
+    (_value, previous) => owner.presentationChanged(previous),
+  );
+  return (
+    <ShellLayoutBoundary traits={{ toolbarHeader: !props.embedded }}>
+      <PortalContent controller={controller()} />
+    </ShellLayoutBoundary>
+  );
 }
 
 function EmptyState(props: { controller: PortalsController }) {
@@ -68,12 +59,12 @@ function EmptyState(props: { controller: PortalsController }) {
                 <>
                   <div class="portals-empty__title">
                     {t(
-                      props.controller.requestedPortalId
+                      props.controller.presentation().requestedPortalId
                         ? "portalsPage.unavailable"
                         : "portalsPage.emptyHint",
                     )}
                   </div>
-                  <Show when={!props.controller.requestedPortalId}>
+                  <Show when={!props.controller.presentation().requestedPortalId}>
                     <div class="portals-empty__prompts">
                       <span>{t("portalsPage.promptShow")}</span>
                       <span>{t("portalsPage.promptStart")}</span>
@@ -238,7 +229,8 @@ function PortalContent(props: { controller: PortalsController }) {
   const selectedPortal = () =>
     props.controller.portals.find(
       (portal) =>
-        portal.id === (props.controller.requestedPortalId ?? props.controller.selectedPortalId),
+        portal.id ===
+        (props.controller.presentation().requestedPortalId ?? props.controller.selectedPortalId),
     );
   return (
     <Show
@@ -248,7 +240,7 @@ function PortalContent(props: { controller: PortalsController }) {
       }
       fallback={
         <Show
-          when={props.controller.embedded}
+          when={props.controller.presentation().embedded}
           fallback={
             <>
               <section class="content-header content-header--page">

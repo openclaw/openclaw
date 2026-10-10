@@ -25,9 +25,9 @@ import { extractText } from "../lib/chat/message-extract.ts";
 import { normalizeMessage } from "../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../lib/chat/sender-label.ts";
 import { projectGateway, projectGatewayEvents } from "../lib/reactive/application.ts";
-import { projectAgentIdentity } from "../lib/reactive/domain-capabilities.ts";
 import { projectProgressCard } from "../lib/reactive/domain-keyed.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { sessionProgressCardsForGateway } from "../lib/session-progress-cards.ts";
 import { readSessionChangedEvent } from "../lib/sessions/reconcile.ts";
 import { uiSessionEventMatches, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
@@ -64,38 +64,6 @@ function LitContent(props: { content: TemplateResult | typeof nothing }) {
   return host;
 }
 
-function AgentAvatar(props: {
-  agentId: string;
-  label: string;
-  agent: AgentsListResult["agents"][number] | undefined;
-  identity: AgentIdentityCapability | null;
-}) {
-  const projection = createMemo(() =>
-    props.identity
-      ? projectAgentIdentity({ identities: props.identity, agentId: props.agentId })
-      : null,
-  );
-  createEffect(
-    () => {
-      projection()?.read();
-      return { identity: props.identity, agentId: props.agentId };
-    },
-    (current) => {
-      void current.identity?.ensure([current.agentId]);
-    },
-  );
-  return (
-    <openclaw-agent-avatar
-      prop:option={{
-        value: props.agentId,
-        label: props.label,
-        agent: props.agent ?? { id: props.agentId },
-      }}
-      prop:identity={projection()?.read() ?? null}
-    />
-  );
-}
-
 type SummaryScope = {
   gateway: ApplicationGateway;
   client: NonNullable<ApplicationGateway["snapshot"]["client"]>;
@@ -106,7 +74,6 @@ type SummaryScope = {
 function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope }) {
   const scope = untrack(() => props.scope);
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
-  const [loading, setLoading] = createSignal(true);
   const [error, setError] = createSignal(false);
   let alive = true;
   let pending = false;
@@ -133,7 +100,7 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     options: { admitAutomaticRead: current },
   });
   const events = projectGatewayEvents(scope.gateway);
-  const refresh = () => {
+  const refresh = async () => {
     if (!current()) {
       return;
     }
@@ -144,33 +111,28 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
     pending = true;
     dirty = false;
     setError(false);
-    void scope.client
-      .request<ChatHistoryResult>("chat.history", {
+    try {
+      const result = await scope.client.request<ChatHistoryResult>("chat.history", {
         ...scope.session,
         toolResultMaxChars: 2_000,
         limit: 20,
         maxChars: 12000,
-      })
-      .then((result) => {
-        if (current()) {
-          setHistory(result);
-        }
-      })
-      .catch(() => {
-        if (current()) {
-          setError(true);
-        }
-      })
-      .finally(() => {
-        if (!current()) {
-          return;
-        }
-        pending = false;
-        setLoading(false);
-        if (dirty) {
-          refresh();
-        }
       });
+      if (current()) {
+        setHistory(result);
+      }
+    } catch {
+      if (current()) {
+        setError(true);
+      }
+    } finally {
+      if (current()) {
+        pending = false;
+        if (dirty) {
+          void refresh();
+        }
+      }
+    }
   };
   onCleanup(
     events.subscribe((event) => {
@@ -191,12 +153,12 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
           changed.agentId,
         )
       ) {
-        refresh();
+        void refresh();
       }
     }),
   );
   onSettled(() => {
-    refresh();
+    void refresh();
   });
   const messages = createMemo(() =>
     (history()?.messages ?? []).slice(-20).flatMap((message) => {
@@ -239,33 +201,49 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
       return [{ text, label, sender, agentId, agent, time, role: message.role }];
     }),
   );
+  const identity = createMemo(() => props.agentIdentity);
+  const identities = createMemo(() => {
+    const source = identity();
+    return source
+      ? projectSource(source, {
+          read: (owner) => owner,
+          subscribe: (owner, notify) => owner.subscribe(notify),
+          equality: "revision",
+        })
+      : null;
+  });
+  createEffect(
+    () => ({
+      owner: identities()?.read(),
+      ids: messages().flatMap((message) =>
+        !message.sender && message.agentId ? [message.agentId] : [],
+      ),
+    }),
+    ({ owner, ids }) => {
+      void owner?.ensure(ids);
+    },
+  );
   return (
     <div class="plugin-session-summary">
-      <Show
-        when={progress.read().error || progress.read().card === undefined || progress.read().card}
-      >
+      <Show when={progress.read().error || progress.read().card !== null}>
         <section class="plugin-session-summary__progress">
-          <Show
-            when={!progress.read().error}
-            fallback={<p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>}
-          >
-            <Show
-              when={progress.read().card !== undefined}
-              fallback={<p>{t("sessionProgressCard.widgetLoading")}</p>}
-            >
-              <LitContent
-                content={renderSessionProgressCard(
-                  progress.read().card,
-                  "board",
-                  undefined,
-                  history()?.sessionInfo?.status,
-                  history()?.sessionInfo?.startedAt,
-                  history()?.sessionInfo?.endedAt,
-                  history()?.sessionInfo?.hasActiveRun === true,
-                )}
-              />
-            </Show>
-          </Show>
+          {progress.read().error ? (
+            <p role="alert">{t("sessionProgressCard.widgetUnavailable")}</p>
+          ) : progress.read().card === undefined ? (
+            <p>{t("sessionProgressCard.widgetLoading")}</p>
+          ) : (
+            <LitContent
+              content={renderSessionProgressCard(
+                progress.read().card,
+                "board",
+                undefined,
+                history()?.sessionInfo?.status,
+                history()?.sessionInfo?.startedAt,
+                history()?.sessionInfo?.endedAt,
+                history()?.sessionInfo?.hasActiveRun === true,
+              )}
+            />
+          )}
         </section>
       </Show>
       <section
@@ -273,72 +251,63 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
         aria-label={t("pluginUi.sessionRecentMessages")}
       >
         <h3>{t("pluginUi.sessionRecentMessages")}</h3>
-        <Show when={!loading() && (history() || error())} fallback={<p>{t("common.loading")}</p>}>
-          <Show
-            when={!error()}
-            fallback={<p role="alert">{t("pluginUi.sessionHistoryUnavailable")}</p>}
+        {error() ? (
+          <p role="alert">{t("pluginUi.sessionHistoryUnavailable")}</p>
+        ) : !history() ? (
+          <p>{t("common.loading")}</p>
+        ) : (
+          <For
+            keyed={false}
+            each={messages()}
+            fallback={<p>{t("pluginUi.sessionHistoryEmpty")}</p>}
           >
-            <For
-              keyed={false}
-              each={messages()}
-              fallback={<p>{t("pluginUi.sessionHistoryEmpty")}</p>}
-            >
-              {(message) => (
-                <article class="plugin-session-summary__message">
-                  <header class="plugin-session-summary__message-header">
-                    <span class="plugin-session-summary__avatar">
-                      <Show
-                        when={message().sender}
-                        fallback={
-                          <Show
-                            when={message().agentId}
-                            fallback={
-                              <span class="plugin-session-summary__unknown" aria-hidden="true">
-                                <Icon name={message().role === "user" ? "users" : "bot"} />
-                              </span>
-                            }
-                          >
-                            {(agentId) => (
-                              <AgentAvatar
-                                agentId={agentId()}
-                                label={message().label}
-                                agent={message().agent}
-                                identity={props.agentIdentity}
-                              />
-                            )}
-                          </Show>
-                        }
-                      >
-                        {(sender) => <LitContent content={renderChatAuthorAvatar(sender())} />}
-                      </Show>
-                    </span>
-                    <strong class="plugin-session-summary__role">{message().label}</strong>
-                    <Show when={message().time}>
-                      {(time) => (
-                        <time datetime={time().toISOString()} title={time().toLocaleString()}>
-                          {time().toLocaleTimeString(undefined, {
-                            hour: "numeric",
-                            minute: "2-digit",
-                          })}
-                        </time>
-                      )}
-                    </Show>
-                  </header>
-                  <SanitizedHtml
-                    class="sidebar-markdown"
-                    html={toSanitizedMarkdownHtml(message().text)}
-                  />
-                </article>
-              )}
-            </For>
-          </Show>
-        </Show>
+            {(message) => (
+              <article class="plugin-session-summary__message">
+                <header class="plugin-session-summary__message-header">
+                  <span class="plugin-session-summary__avatar">
+                    {message().sender ? (
+                      <LitContent content={renderChatAuthorAvatar(message().sender)} />
+                    ) : message().agentId ? (
+                      <openclaw-agent-avatar
+                        prop:option={{
+                          value: message().agentId!,
+                          label: message().label,
+                          agent: message().agent ?? { id: message().agentId! },
+                        }}
+                        prop:identity={identities()?.read().get(message().agentId) ?? null}
+                      />
+                    ) : (
+                      <span class="plugin-session-summary__unknown" aria-hidden="true">
+                        <Icon name={message().role === "user" ? "users" : "bot"} />
+                      </span>
+                    )}
+                  </span>
+                  <strong class="plugin-session-summary__role">{message().label}</strong>
+                  <Show when={message().time}>
+                    {(time) => (
+                      <time datetime={time().toISOString()} title={time().toLocaleString()}>
+                        {time().toLocaleTimeString(undefined, {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
+                      </time>
+                    )}
+                  </Show>
+                </header>
+                <SanitizedHtml
+                  class="sidebar-markdown"
+                  html={toSanitizedMarkdownHtml(message().text)}
+                />
+              </article>
+            )}
+          </For>
+        )}
       </section>
       <Show when={error() || progress.read().error}>
         <button
           class="btn"
           onClick={() => {
-            refresh();
+            void refresh();
             void store.load(scope.session).catch(() => undefined);
           }}
         >
@@ -349,16 +318,22 @@ function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope
   );
 }
 
-function PresentedSummary(
-  props: PluginSessionSummaryProps & { activeGateway: ApplicationGateway },
-) {
-  const gateway = createMemo(() => projectGateway(props.activeGateway));
+function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
+  const gateway = createMemo(() => (props.presented ? props.gateway : null));
+  const projection = createMemo(() => {
+    const current = gateway();
+    return current ? projectGateway(current) : null;
+  });
   const scope = createMemo<SummaryScope | null>(
     () => {
-      const state = gateway().read();
-      return state.snapshot.phase === "connected" && state.snapshot.client && props.session
+      const current = gateway();
+      const state = projection()?.read();
+      return current &&
+        state?.snapshot.phase === "connected" &&
+        state.snapshot.client &&
+        props.session
         ? {
-            gateway: props.activeGateway,
+            gateway: current,
             client: state.snapshot.client,
             revision: state.connectionRevision,
             session: { ...props.session },
@@ -375,25 +350,13 @@ function PresentedSummary(
     },
   );
   return (
-    <Show
-      when={scope()}
-      keyed
-      fallback={<p role="status">{t("pluginUi.sessionHistoryUnavailable")}</p>}
-    >
-      {(current) => <SessionHistory {...props} scope={current} />}
-    </Show>
-  );
-}
-
-function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
-  return (
     <Show when={props.presented}>
       <Show
-        when={props.gateway}
+        when={scope()}
         keyed
         fallback={<p role="status">{t("pluginUi.sessionHistoryUnavailable")}</p>}
       >
-        {(gateway) => <PresentedSummary {...props} activeGateway={gateway} />}
+        {(current) => <SessionHistory {...props} scope={current} />}
       </Show>
     </Show>
   );
