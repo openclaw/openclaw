@@ -13,14 +13,15 @@ const { resolveChannelMessageToolMediaSourceParamKeysMock } = vi.hoisted(() => (
 }));
 
 vi.mock("../../channels/plugins/message-action-discovery.js", () => ({
-  resolveChannelMessageToolMediaSourceParamKeys: resolveChannelMessageToolMediaSourceParamKeysMock,
+  resolveChannelMessageToolMediaSourceParamKeysAsync:
+    resolveChannelMessageToolMediaSourceParamKeysMock,
 }));
 
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
-  resolveExtraActionMediaSourceParamKeys,
+  resolveExtraActionMediaSourceParamKeysAsync,
   resolveAttachmentMediaPolicy,
 } from "./message-action-params.js";
 
@@ -40,9 +41,9 @@ describe("message action media helpers", () => {
     resolveChannelMessageToolMediaSourceParamKeysMock.mockClear();
   });
 
-  it("skips plugin media discovery when args only use standard action params", () => {
+  it("skips plugin media discovery when args only use standard action params", async () => {
     expect(
-      resolveExtraActionMediaSourceParamKeys({
+      await resolveExtraActionMediaSourceParamKeysAsync({
         cfg,
         action: "send",
         channel: "workspace",
