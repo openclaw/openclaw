@@ -132,13 +132,7 @@ beforeEach(() => {
     ({ channel }: { channel: string }) =>
       getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
   );
-  setActivePluginRegistry(
-    createTargetsTestRegistry([
-      createGenericTargetTestPlugin("alpha", "Alpha"),
-      createGenericTargetTestPlugin("beta", "Beta"),
-      createForumTargetTestPlugin(),
-    ]),
-  );
+  setActivePluginRegistry(createTargetsTestRegistry());
 });
 
 function session(fields: Partial<LegacyDeliveryFixture> = {}): LegacyDeliveryFixture {

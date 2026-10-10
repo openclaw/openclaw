@@ -21,10 +21,10 @@ import {
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { CallGatewayOptions } from "../call.js";
 import { createChannelManager } from "../server-channels.js";
-import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import { requireGatewayRecord } from "../test-helpers.assertions.js";
 import {
   channelAccounts,
+  createDegradedEventLoopHealth,
   createChannelPlugin,
   createChannelDeadlineFixture,
   createRecordedHealthFixture,
@@ -1051,16 +1051,7 @@ describe("channelsHandlers channels.status", () => {
           },
         },
       });
-      const eventLoop: GatewayEventLoopHealth = {
-        degraded: true,
-        degradedSinceMs: 61_000,
-        reasons: ["event_loop_delay"],
-        intervalMs: 62_000,
-        delayP99Ms: 62_000,
-        delayMaxMs: 62_000,
-        utilization: 1,
-        cpuCoreRatio: 1,
-      };
+      const eventLoop = createDegradedEventLoopHealth();
       const options = createOptions({});
       options.context.getEventLoopHealth = () => eventLoop;
       const payload = await runChannelsStatus({ probe: false }, { context: options.context });
