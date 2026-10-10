@@ -354,7 +354,7 @@ Each entry lists the package, distribution route, and description.
 
 - **[twitch](/plugins/reference/twitch)** (`@openclaw/twitch`) - npm or ClawHub: `clawhub:@openclaw/twitch`. OpenClaw Twitch channel plugin for chat and moderation workflows.
 
-- **[typesafe](/plugins/reference/typesafe)** (`@openclaw/typesafe`) - npm or ClawHub: `clawhub:@openclaw/typesafe`. Typed decision provider for hosted Jev and local System One models.
+- **[typesafe](/plugins/reference/typesafe)** (`@openclaw/typesafe`) - npm or ClawHub: `clawhub:@openclaw/typesafe`. Typed decision provider for hosted Jev and local System One models, including Clef vision.
 
 - **[venice](/plugins/reference/venice)** (`@openclaw/venice-provider`) - npm or ClawHub: `clawhub:@openclaw/venice-provider`. Adds Venice model provider support to OpenClaw.
 

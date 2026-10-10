@@ -22,6 +22,7 @@ it("discovers only decision models owned by the manifest without executing its r
           name: " Fast decisions ",
           capabilities: {
             questionTypes: ["boolean", "choice", "score"],
+            inputModalities: ["text", "image", "image"],
             maxQuestions: 32,
             maxChoiceAlternatives: 64,
             maxScoreLevels: 64,
@@ -49,6 +50,7 @@ it("discovers only decision models owned by the manifest without executing its r
       name: "Fast decisions",
       capabilities: {
         questionTypes: ["boolean", "choice", "score"],
+        inputModalities: ["text", "image"],
         maxQuestions: 32,
         maxChoiceAlternatives: 64,
         maxScoreLevels: 64,
@@ -77,6 +79,7 @@ it("bounds provider metadata before discovery can expose it to tool diagnostics"
           name: "Bounded",
           capabilities: {
             questionTypes: ["boolean", "boolean"],
+            inputModalities: ["image", "private-provider-diagnostic"],
             maxQuestions: -1,
             maxChoiceAlternatives: 1.5,
             maxScoreLevels: Number.MAX_SAFE_INTEGER + 1,
@@ -91,6 +94,12 @@ it("bounds provider metadata before discovery can expose it to tool diagnostics"
           id: "invalid",
           name: "Invalid",
           capabilities: { questionTypes: ["private-provider-diagnostic"] },
+        },
+        {
+          provider: "fixture",
+          id: "image-only",
+          name: "Image only declaration",
+          capabilities: { questionTypes: ["boolean"], inputModalities: ["image"] },
         },
       ],
     }),
@@ -108,5 +117,11 @@ it("bounds provider metadata before discovery can expose it to tool diagnostics"
       capabilities: { questionTypes: ["boolean"] },
     },
     { provider: "fixture", id: "invalid", name: "Invalid" },
+    {
+      provider: "fixture",
+      id: "image-only",
+      name: "Image only declaration",
+      capabilities: { questionTypes: ["boolean"] },
+    },
   ]);
 });

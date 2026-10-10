@@ -196,6 +196,18 @@ apply their own explicit policy. Provider confidence is a provider-specific metr
 not calibrated correctness. Results include model, optional token usage, and local
 rubric and runtime-generation provenance.
 
+The batch may also contain `images: [{ mimeType, data }]`, where `data` is an
+owned `Uint8Array` of PNG, JPEG, or WebP bytes. Image bytes are outside the
+1 MiB state/rubric JSON limit, but host admission caps each image at 4 MiB,
+the batch at four images and 8 MiB total. The host clones admitted bytes,
+and bounds header-reported dimensions to 8,192 pixels per side and 25 million
+pixels per image. It never writes them to results or diagnostics, and rejects image requests before
+provider dispatch unless the selected model's manifest advertises
+`inputModalities: ["text", "image"]`. Omitted metadata means text-only.
+Plugin consumers must load images under their own scoped media authority; only
+the core agent tool resolves local paths for them. Providers receive bytes,
+not paths or URLs, and own transport-specific encoding and further limits.
+
 Set `agents.defaults.decisionModel` to an explicit `provider/model` reference.
 Unset or empty means off. `agents.entries.<id>.decisionModel` overrides the global
 default; an empty agent value disables decisions for that agent. There is no
@@ -208,7 +220,7 @@ own transport and model-specific translation; no vendor is a core dependency.
 
 The [ONNX plugin](/plugins/onnx) supplies local classifiers; the
 [TypeSafe AI plugin](/plugins/typesafe) supplies hosted Jev and local System One
-adapters, including Kev. Both plugins require
+adapters, including Kev and Clef Flash. Both plugins require
 separate installation, explicit setup, and role selection.
 
 ### Calling from a third-party plugin
@@ -322,6 +334,9 @@ chat, primary, fallback, or utility model catalogs.
 
 Optional model `capabilities` describe supported question types, input limits and
 their accounting scope, Boolean criteria requirements, and confidence semantics.
+`inputModalities` is an optional per-model declaration; include `"image"` only
+when that model's adapter can consume bounded image bytes. The host fails closed
+for image input when the declaration is missing.
 The core `decision_evaluate` tool uses these same manifest facts for guidance;
 provider readiness does not change its definition. See the
 [manifest reference](/plugins/manifest/capabilities#decision-models-reference)

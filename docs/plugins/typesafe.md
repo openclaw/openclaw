@@ -247,6 +247,14 @@ per-agent `decisionModel`; there is no per-call provider or model override. With
 TypeSafe selection, the adapter translates Boolean questions to Noul and sends
 only the supplied evidence to hosted Jev or the configured local endpoint.
 
+Local `typesafe/clef-flash` also accepts explicit `images` through the shared
+Decision tool. Configure `plugins.entries.typesafe.config.baseUrl` to a loopback
+Ollama 0.35.1+ origin (for example `http://127.0.0.1:11434`), start Ollama with
+the Clef Flash model installed, and select `typesafe/clef-flash` as the agent's
+Decision model. The host admits PNG, JPEG, or WebP bytes and rejects image input
+for hosted Jev and local Kev before transmission. No model is downloaded or
+started by OpenClaw. Use image results as advisory evidence only.
+
 A temporary credential or provider failure returns an actionable unavailable
 result and leaves the configured tool available. Clearing the agent's effective
 selection removes eligibility through the normal tool/context refresh lifecycle.

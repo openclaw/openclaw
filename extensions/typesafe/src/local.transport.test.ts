@@ -78,20 +78,67 @@ function registeredProvider(endpoint?: string) {
   return provider;
 }
 
-it("refuses to send the local Kev selection to hosted inference through registered handlers", async () => {
-  const fetch = vi.fn();
+it.each(["kev-latest", "clef-flash"])(
+  "refuses to send local %s selection to hosted inference through registered handlers",
+  async (model) => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const provider = registeredProvider();
+    await expect(
+      provider.evaluate(
+        { state: "local-only evidence", questions: { q: { type: "boolean" } } },
+        {
+          model,
+          signal: new AbortController().signal,
+          deadlineMonotonicMs: performance.now() + 10000,
+        },
+      ),
+    ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
+it("sends admitted Clef image bytes only to the selected loopback System One endpoint", async () => {
+  const fetch = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(
+        JSON.stringify({
+          model: "clef-flash",
+          answers: { b: { type: "noul", noul: 0.91 } },
+          usage: { input_tokens: 8, output_tokens: 1 },
+        }),
+      ),
+  );
   vi.stubGlobal("fetch", fetch);
-  const provider = registeredProvider();
-  await expect(
-    provider.evaluate(
-      { state: "local-only evidence", questions: { q: { type: "boolean" } } },
-      {
-        model: "kev-latest",
-        signal: new AbortController().signal,
-        deadlineMonotonicMs: performance.now() + 10000,
-      },
-    ),
-  ).resolves.toEqual({ status: "unavailable", reason: "unsupported-input" });
+  const image = Uint8Array.from([255, 216, 255, 217]);
+  const batch = {
+    state: "Inspect this synthetic image.",
+    questions: { b: { type: "boolean" as const } },
+    images: [{ mimeType: "image/jpeg" as const, data: image }],
+  };
+  const context = {
+    model: "clef-flash",
+    signal: new AbortController().signal,
+    deadlineMonotonicMs: performance.now() + 10_000,
+  };
+  await expect(registeredProvider(baseUrl).evaluate(batch, context)).resolves.toMatchObject({
+    status: "ok",
+    result: { answers: { b: { type: "boolean", probabilityTrue: 0.91 } } },
+  });
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch.mock.calls[0]?.[0]).toBe(`${baseUrl}/v1/systemone`);
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).has("authorization")).toBe(false);
+  const body = fetch.mock.calls[0]?.[1]?.body;
+  assert(typeof body === "string");
+  expect(JSON.parse(body)).toMatchObject({
+    model: "clef-flash",
+    images: [Buffer.from(image).toString("base64")],
+  });
+  fetch.mockClear();
+  await expect(registeredProvider().evaluate(batch, context)).resolves.toEqual({
+    status: "unavailable",
+    reason: "unsupported-input",
+  });
   expect(fetch).not.toHaveBeenCalled();
 });
 

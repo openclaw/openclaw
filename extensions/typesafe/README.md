@@ -1,7 +1,7 @@
 # TypeSafe AI for OpenClaw
 
 Official external plugin for typed decisions with hosted TypeSafe AI Jev models
-or a local Kev System One server.
+or a local Kev/Clef System One server.
 It provides Choice, Score, and Boolean judgments through OpenClaw's shared
 decision-model API. Core supplies the provider-neutral `decision_evaluate` agent
 tool when the agent has an effective `decisionModel` selection, subject to normal
@@ -25,6 +25,12 @@ server's loopback origin, such as `http://127.0.0.1:8009`, omit `apiKey`, and se
 `typesafe/kev-latest`. The plugin calls `/v1/systemone` without a hosted credential.
 Start the server separately with your chosen checkpoint; the decision-model
 selection labels requests and does not download or load a model.
+
+For local vision, use Ollama 0.35.1 or later, pull `clef-flash`, set the loopback
+`baseUrl` (for example `http://127.0.0.1:11434`), and select
+`typesafe/clef-flash`. `decision_evaluate` then accepts explicit local screenshot
+paths in `images`. The host enforces image access and size limits; hosted Jev and
+local Kev remain text-only. OpenClaw never installs the model automatically.
 
 See the [TypeSafe AI setup guide](https://docs.openclaw.ai/plugins/typesafe) and
 [decision-model documentation](https://docs.openclaw.ai/concepts/decision-models)

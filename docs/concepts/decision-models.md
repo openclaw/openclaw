@@ -153,6 +153,14 @@ answer. The tool collects no ambient conversation. Its trusted calling-agent
 binding selects the provider and model; input cannot override that identity or
 selection.
 
+For a model whose manifest declares image input, add `images` with one to four
+local screenshot paths. The host loads them under its filesystem/sandbox policy
+and sends bounded bytes to the selected Decision provider; it never passes
+paths to the provider. Remote and data URLs are not accepted. Image calls to
+text-only or undeclared models return `unsupported-input` before dispatch. No
+screenshot is captured automatically. An image result is advisory, not
+authority to click or send.
+
 Results preserve Boolean probabilities, fractional zero-based scores, original
 distributions and rounding, optional confidence and usage, and provider/model
 provenance. They do not generate explanations or grant permission to act.

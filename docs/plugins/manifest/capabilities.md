@@ -127,6 +127,7 @@ loading the provider runtime or resolving credentials.
       "name": "Fast decisions",
       "capabilities": {
         "questionTypes": ["boolean", "choice", "score"],
+        "inputModalities": ["text", "image"],
         "maxQuestions": 32,
         "maxChoiceAlternatives": 64,
         "maxScoreLevels": 16,
@@ -147,6 +148,10 @@ saved unavailable selections remain visible for the operator to repair.
 `capabilities` is optional static metadata. It describes provider support for
 discovery and guidance; it does not prove that credentials or the runtime are
 ready, and its limits do not raise OpenClaw's host admission bounds.
+`inputModalities` must include `"text"` and may also include `"image"`;
+omission means text-only.
+The host uses the image declaration to admit an image-bearing Decision call
+before provider dispatch. Declare it per model, not per plugin.
 
 | Field                     | Required | Accepted value                                                             | Omission semantics                                                                                        |
 | ------------------------- | -------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |

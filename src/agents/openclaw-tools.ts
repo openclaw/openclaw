@@ -480,7 +480,7 @@ export function createOpenClawTools(
           presenterContext: widgetPresentation.context,
         }),
     heartbeatTool,
-    createDecisionTool(sessionAgentId, options),
+    createDecisionTool(sessionAgentId, { ...options, workspaceDir, sandbox }),
     createTtsTool({ ...options, agentId: sessionAgentId }),
     options?.githubPublicationAvailable !== undefined ? createGitHubIdentityStatusTool() : null,
     options?.githubPublicationAvailable === true ? createGitHubPublishTool() : null,

@@ -36,6 +36,13 @@ export type DecisionQuestion =
 export type DecisionBatch = {
   readonly state: DecisionEntry;
   readonly questions: Readonly<Record<string, DecisionQuestion>>;
+  /** Host-admitted image bytes. References and URLs never reach a provider. */
+  readonly images?: readonly DecisionImage[];
+};
+
+export type DecisionImage = {
+  readonly mimeType: "image/png" | "image/jpeg" | "image/webp";
+  readonly data: Uint8Array;
 };
 
 export type DecisionAnswer =

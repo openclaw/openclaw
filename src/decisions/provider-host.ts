@@ -258,9 +258,14 @@ export class DecisionProviderHost {
       return this.unavailable("retiring");
     }
     if (decisionDebugEnabled()) {
-      // The runtime already admitted bounded, accessor-free JSON. Never retain its text.
+      // Image bytes are outside the text/JSON limit and never enter diagnostics.
       facts.questionCount = Object.keys(submitted.questions).length;
-      facts.jsonInputBytes = Buffer.byteLength(JSON.stringify(submitted));
+      facts.jsonInputBytes = Buffer.byteLength(
+        JSON.stringify({
+          state: submitted.state,
+          questions: submitted.questions,
+        }),
+      );
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);

@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { captureAmbientGatewayOperatorAuthority } from "../gateway/operator-invocation-authority.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { withPluginHostCleanupTimeout } from "../plugins/host-hook-cleanup-timeout.js";
+import { listAvailableManifestContractPlugins } from "../plugins/manifest-contract-eligibility.js";
 import {
   capturePluginLifecycleAuthority,
   capturePluginRegistryLifecycleEpoch,
@@ -18,7 +19,11 @@ import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-
 import { logDecisionEvaluation } from "./diagnostics.js";
 import type { DecisionProviderHost } from "./provider-host.js";
 import type { DecisionBatch, DecisionOutcome, DecisionRuntimeV1 } from "./types.js";
-import { DecisionContractError, validateDecisionBatch } from "./validation.js";
+import {
+  DecisionContractError,
+  validateDecisionBatch,
+  validateDecisionImageDimensions,
+} from "./validation.js";
 
 type Options = Parameters<DecisionRuntimeV1["evaluate"]>[1];
 
@@ -32,6 +37,29 @@ export async function evaluateDecision(
     options,
     getPluginRegistryForContext(),
     getRuntimeConfig(),
+  );
+}
+
+/** Pin an explicit tool call's selected destination across asynchronous media admission. */
+export async function evaluateDecisionForTool(
+  batch: DecisionBatch,
+  options: Options,
+  selected: { provider: string; model: string } | null,
+): Promise<DecisionOutcome> {
+  const remainsSelected = () => {
+    const current = resolveDecisionModelSetting(getRuntimeConfig(), options.agentId);
+    return Boolean(
+      selected && current?.provider === selected.provider && current.model === selected.model,
+    );
+  };
+  return evaluateDecisionInRegistry(
+    batch,
+    options,
+    getPluginRegistryForContext(),
+    getRuntimeConfig(),
+    undefined,
+    remainsSelected,
+    remainsSelected,
   );
 }
 
@@ -70,6 +98,16 @@ export async function evaluateDecisionInRegistry(
   if (!validateDecisionBatch(batch)) {
     return skipped({ status: "unavailable", reason: "unsupported-input" });
   }
+  let submitted: DecisionBatch;
+  try {
+    submitted = structuredClone(batch);
+  } catch {
+    throw new DecisionContractError();
+  }
+  if (!(await validateDecisionImageDimensions(submitted))) {
+    return skipped({ status: "unavailable", reason: "unsupported-input" });
+  }
+  options.signal.throwIfAborted();
   const selected = resolveDecisionModelSetting(config, options.agentId);
   if (!selected) {
     return skipped({ status: "unavailable", reason: "disabled" });
@@ -86,11 +124,28 @@ export async function evaluateDecisionInRegistry(
   if (config.plugins?.entries?.[entry.pluginId]?.enabled === false) {
     return skipped(entry.host.unavailable("disabled"));
   }
-  let submitted: DecisionBatch;
-  try {
-    submitted = structuredClone(batch);
-  } catch {
-    throw new DecisionContractError();
+  if (submitted.images?.length) {
+    const snapshot = getProcessGatewayPluginMetadataSnapshot();
+    const imageCapable =
+      snapshot &&
+      listAvailableManifestContractPlugins({
+        snapshot,
+        config,
+        contract: "decisionProviders",
+        value: selected.provider,
+      }).some(
+        (plugin) =>
+          plugin.id === entry.pluginId &&
+          plugin.decisionModels?.some(
+            (candidate) =>
+              candidate.provider === selected.provider &&
+              candidate.id === selected.model &&
+              candidate.capabilities?.inputModalities?.includes("image"),
+          ),
+      );
+    if (!imageCapable) {
+      return skipped({ status: "unavailable", reason: "unsupported-input" });
+    }
   }
   const model = normalizeModelRef(selected.provider, selected.model, {
     allowPluginNormalization: false,

@@ -20,6 +20,9 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
     },
     async evaluate(batch: DecisionBatch, context) {
       context.signal.throwIfAborted();
+      if (batch.images?.length && context.model !== "clef-flash") {
+        return { status: "unavailable", reason: "unsupported-input" };
+      }
       // Registration and readiness do not need the transport or compiled validators.
       // Sample configuration and the remaining deadline after the cold import settles.
       const { evaluate: evaluateTypeSafe } = await loadClient();
@@ -45,6 +48,7 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
           context.signal,
           context.deadlineMonotonicMs,
           context.isAdmissible,
+          batch.images,
         );
         context.signal.throwIfAborted();
         const answers: Record<string, DecisionBatchResult["answers"][string]> = {};

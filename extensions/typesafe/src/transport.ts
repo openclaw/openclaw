@@ -83,7 +83,7 @@ async function readBody(response: Response, signal?: AbortSignal): Promise<Buffe
 }
 
 export async function requestEvaluation(params: {
-  body: EvaluationInput & { model: string };
+  body: EvaluationInput & { model: string; images?: string[] };
   apiKey?: string;
   baseUrl?: string;
   timeoutMs: number;
@@ -94,7 +94,7 @@ export async function requestEvaluation(params: {
   const baseUrl = localBaseUrl(params.baseUrl);
   const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
   const body = JSON.stringify(params.body);
-  if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
+  if (Buffer.byteLength(body) > (baseUrl ? 16 * 1024 * 1024 : MAX_JSON_BYTES)) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
   }
   const timeoutMs =

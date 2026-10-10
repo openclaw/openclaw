@@ -1,3 +1,4 @@
+import type { DecisionBatch } from "openclaw/plugin-sdk/decisions";
 import type { RuntimeConfig } from "./config.js";
 import { EvaluationError, evaluationError } from "./errors.js";
 import { localInput, parseLocalResult } from "./local.js";
@@ -11,6 +12,7 @@ export async function evaluate(
   signal?: AbortSignal,
   deadlineMonotonicMs?: number,
   isAdmissible?: () => boolean,
+  images?: DecisionBatch["images"],
 ) {
   if (signal?.aborted) {
     throw evaluationError(undefined, true);
@@ -20,11 +22,14 @@ export async function evaluate(
   if (!model) {
     throw new EvaluationError("TypeSafe requires a host-selected model.", "unsupported-input");
   }
-  if (model === "kev-latest" && !config.baseUrl) {
+  if ((model === "kev-latest" || model === "clef-flash") && !config.baseUrl) {
     throw new EvaluationError(
-      "Kev requires a local System One server. Configure baseUrl in TypeSafe plugin Settings.",
+      "This model requires a local System One server. Configure baseUrl in TypeSafe plugin Settings.",
       "unsupported-input",
     );
+  }
+  if (images?.length && (!config.baseUrl || model !== "clef-flash")) {
+    throw new EvaluationError("Images require a local Clef Flash server.", "unsupported-input");
   }
   if (!config.baseUrl && !config.apiKey) {
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
@@ -32,7 +37,13 @@ export async function evaluate(
   try {
     const wireInput = config.baseUrl ? localInput(parsed) : parsed;
     const response = await requestEvaluation({
-      body: { ...wireInput, model },
+      body: {
+        ...wireInput,
+        model,
+        ...(images?.length
+          ? { images: images.map((image) => Buffer.from(image.data).toString("base64")) }
+          : {}),
+      },
       apiKey: config.baseUrl ? undefined : config.apiKey,
       baseUrl: config.baseUrl,
       timeoutMs: config.timeoutMs,

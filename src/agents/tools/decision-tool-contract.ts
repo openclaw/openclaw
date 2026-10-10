@@ -36,6 +36,14 @@ export const DecisionEvaluateInput = Type.Unsafe({
   required: ["state", "questions"],
   properties: {
     state: entry,
+    images: {
+      type: "array",
+      minItems: 1,
+      maxItems: 4,
+      items: { type: "string", minLength: 1 },
+      description:
+        "Optional local image paths already available to this agent. Remote URLs are not accepted.",
+    },
     questions: {
       type: "object",
       minProperties: 1,
@@ -64,7 +72,7 @@ export const DecisionEvaluateOutput = Type.Unsafe({
 });
 
 /** Validate before traversing the rubric; null means the shared resource guard rejected it. */
-export function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null {
+function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null {
   try {
     if (!validateDecisionBatch(value)) {
       return null;
@@ -76,6 +84,77 @@ export function parseDecisionEvaluateInput(value: unknown): DecisionBatch | null
   } catch {
     throw new Error(
       "Invalid decision_evaluate input: provide state and a nonempty questions map with boolean, choice, or score questions; no evidence was sent.",
+    );
+  }
+}
+
+/** Tool references are resolved by the host before constructing a provider batch. */
+function parseDecisionImageReferences(value: unknown): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (
+    !Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Array.prototype ||
+    value.length < 1 ||
+    value.length > 4 ||
+    Reflect.ownKeys(value).length !== value.length + 1
+  ) {
+    throw new Error("Invalid decision_evaluate images: provide one to four local image paths.");
+  }
+  const paths: string[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, index);
+    if (
+      !descriptor?.enumerable ||
+      typeof descriptor.value !== "string" ||
+      !descriptor.value.trim()
+    ) {
+      throw new Error("Invalid decision_evaluate images: provide one to four local image paths.");
+    }
+    paths.push(descriptor.value);
+  }
+  return paths;
+}
+
+export function parseDecisionEvaluateToolInput(value: unknown): {
+  batch: DecisionBatch | null;
+  imageRefs: string[];
+} {
+  try {
+    if (
+      !value ||
+      typeof value !== "object" ||
+      Array.isArray(value) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(value))
+    ) {
+      throw new Error();
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const stateDescriptor = descriptors.state;
+    const questionsDescriptor = descriptors.questions;
+    if (
+      Reflect.ownKeys(descriptors).some(
+        (key) => key !== "state" && key !== "questions" && key !== "images",
+      ) ||
+      !stateDescriptor ||
+      !questionsDescriptor ||
+      !Object.hasOwn(stateDescriptor, "value") ||
+      !Object.hasOwn(questionsDescriptor, "value") ||
+      (descriptors.images && !Object.hasOwn(descriptors.images, "value"))
+    ) {
+      throw new Error();
+    }
+    return {
+      batch: parseDecisionEvaluateInput({
+        state: stateDescriptor.value,
+        questions: questionsDescriptor.value,
+      }),
+      imageRefs: parseDecisionImageReferences(descriptors.images?.value),
+    };
+  } catch {
+    throw new Error(
+      "Invalid decision_evaluate input: provide state and a nonempty questions map with boolean, choice, or score questions; images, if present, must contain one to four local image paths; no evidence was sent.",
     );
   }
 }
@@ -126,7 +205,10 @@ export function capabilityGuidance(capabilities: DecisionProviderCapabilities): 
       : capabilities.confidence === "provider-specific"
         ? " Optional confidence is a provider-specific distribution metric, not correctness probability."
         : "";
-  return `The selected provider supports ${capabilities.questionTypes.join(", ")} questions.${limits.length ? ` Limits: ${limits.join(", ")}.` : ""}${boolean}${confidence}`;
+  const images = capabilities.inputModalities?.includes("image")
+    ? " This model accepts local image evidence."
+    : "";
+  return `The selected provider supports ${capabilities.questionTypes.join(", ")} questions.${limits.length ? ` Limits: ${limits.join(", ")}.` : ""}${images}${boolean}${confidence}`;
 }
 
 const unavailableGuidance: Record<
@@ -146,7 +228,7 @@ const unavailableGuidance: Record<
   transport:
     "The selected provider could not be reached. Check its service or endpoint before trying again.",
   "unsupported-input":
-    "Shorten the state or rubric, reduce question counts, and check the selected model's declared limits. Host bounds are 256 questions, 1 MiB of JSON, 20000 JSON nodes, and depth 32. No evidence was truncated or sent on a host-bound rejection.",
+    "Shorten the state or rubric, reduce question counts or image sizes, and check the selected model's declared limits. Host bounds are 256 questions, 1 MiB of JSON, 20000 JSON nodes, depth 32, and up to four PNG/JPEG/WebP images (4 MiB each, 8 MiB total, 25 megapixels each). No evidence was truncated or sent on a host-bound rejection.",
   "invalid-response":
     "The selected provider returned an invalid result. No answers were accepted; ask the operator to check its adapter or service.",
   retiring:

@@ -46,6 +46,14 @@ function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabili
   const capabilities: DecisionProviderCapabilities = {
     questionTypes: [...new Set<"boolean" | "choice" | "score">(value.questionTypes)],
   };
+  if (
+    Array.isArray(value.inputModalities) &&
+    value.inputModalities.length > 0 &&
+    value.inputModalities.includes("text") &&
+    value.inputModalities.every((kind) => kind === "text" || kind === "image")
+  ) {
+    capabilities.inputModalities = [...new Set<"text" | "image">(value.inputModalities)];
+  }
   // Limits are provider facts, not host admission overrides.
   for (const key of [
     "maxQuestions",
