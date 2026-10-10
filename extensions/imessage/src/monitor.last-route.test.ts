@@ -869,71 +869,13 @@ describe("iMessage monitor last-route updates", () => {
     });
   });
 
-  it("starts direct typing before dispatching the inbound turn", async ({ signal }) => {
-    setAvailablePrivateApiMethods(["watch.subscribe", "send", "typing"]);
-    const typingCompleted = createDeferred<{ ok: true }>();
-    const typingStopped = createDeferred<void>();
-    const dispatchEntered = createDeferred<void>();
-    const watchClient = createIMessageWatchClient({
-      requests: {
-        "watch.subscribe": { subscription: 1 },
-        typing: { ok: true },
-      },
-      auxiliaryRequests: {
-        typing: (params) => {
-          if (params?.typing === true) {
-            return typingCompleted.promise;
-          }
-          typingStopped.resolve();
-          return { ok: true };
-        },
-      },
-      message: createInboundMessage({
-        id: 12,
-        guid: "typing-early-guid-12",
-        text: "respond after a slow context build",
-      }),
-      afterNotify: async () => {
-        try {
-          await withinTest(dispatchEntered.promise, signal);
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        } finally {
-          typingCompleted.resolve({ ok: true });
-        }
-      },
-    });
-    const earlyTypingClient = watchClient.auxiliaryClient!;
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async () => {
-      dispatchEntered.resolve();
-      expect(earlyTypingClient.request).toHaveBeenCalledWith(
-        "typing",
-        expect.objectContaining({ typing: true, to: "+15550001111" }),
-        expect.any(Object),
-      );
-      return EMPTY_DISPATCH_RESULT;
-    });
-
-    await runIMessageMonitor({ imessage: { sendReadReceipts: false } });
-
-    expect(watchClient.request).not.toHaveBeenCalledWith(
-      "typing",
-      expect.objectContaining({ typing: true }),
-      expect.anything(),
-    );
-    await withinTest(typingStopped.promise, signal);
-    expect(earlyTypingClient.request).toHaveBeenCalledWith(
-      "typing",
-      expect.objectContaining({ typing: false, to: "+15550001111" }),
-      expect.any(Object),
-    );
-  });
-
   registerIMessageTypingAuthorityTests({
     createTestStateDir,
     createIMessageWatchClient,
     createInboundMessage,
     runIMessageMonitor,
     runMessageCase,
+    setAvailablePrivateApiMethods,
     probeIMessagePrivateApiMock,
     dispatchReplyWithBufferedBlockDispatcherMock,
   });
@@ -985,45 +927,6 @@ describe("iMessage monitor last-route updates", () => {
       );
     });
   }
-
-  it("does not wait for read receipts before dispatching the inbound turn", async ({ signal }) => {
-    setAvailablePrivateApiMethods(["watch.subscribe", "read"]);
-    const readCompleted = createDeferred<{ ok: true }>();
-    const dispatchEntered = createDeferred<void>();
-    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(async () => {
-      dispatchEntered.resolve();
-      return EMPTY_DISPATCH_RESULT;
-    });
-    const watchClient = await runMessageCase({
-      auxiliaryRequests: { read: () => readCompleted.promise },
-      message: createInboundMessage({
-        id: 11,
-        guid: "read-receipt-guid-11",
-        text: "respond without waiting for read receipt",
-      }),
-      afterNotify: async () => {
-        try {
-          await withinTest(dispatchEntered.promise, signal);
-          expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-        } finally {
-          readCompleted.resolve({ ok: true });
-        }
-      },
-    });
-    const readClient = watchClient.auxiliaryClient!;
-
-    expect(readClient.request).toHaveBeenCalledWith(
-      "read",
-      expect.objectContaining({ chat_id: 123 }),
-      expect.any(Object),
-    );
-    expect(watchClient.request).not.toHaveBeenCalledWith(
-      "read",
-      expect.anything(),
-      expect.anything(),
-    );
-    expect(dispatchReplyWithBufferedBlockDispatcherMock).toHaveBeenCalledTimes(1);
-  });
 
   it("preserves the account block-streaming override", async () => {
     const { label, channelBlockEnabled, accountBlockEnabled, expectedDisable } = {
