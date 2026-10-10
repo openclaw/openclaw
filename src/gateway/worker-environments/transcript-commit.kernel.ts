@@ -13,7 +13,6 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
-import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
 import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
