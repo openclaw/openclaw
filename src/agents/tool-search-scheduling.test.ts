@@ -166,7 +166,7 @@ describe("Tool Search execution scheduling", () => {
     }
   });
 
-  it.each(["remove", "append"] as const)(
+  it.each(["remove", "replace", "append"] as const)(
     "revalidates queued targets after catalog %s",
     async (change) => {
       const events: string[] = [];
@@ -184,7 +184,7 @@ describe("Tool Search execution scheduling", () => {
       } else {
         registerHeadlessToolSearchCatalog({
           catalogRef,
-          tools: [a.tool, b.tool, other.tool],
+          tools: change === "append" ? [a.tool, b.tool, other.tool] : [a.tool, { ...b.tool }],
         });
       }
       try {

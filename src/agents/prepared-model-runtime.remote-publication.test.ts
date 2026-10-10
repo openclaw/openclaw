@@ -6,6 +6,11 @@ import {
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { dispatchLowLevelChannelReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
+import { getPreparedReplyDispatchRuntime } from "../auto-reply/reply/prepared-reply-dispatch-context.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelsHandlers } from "../gateway/server-methods/models.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
@@ -25,9 +30,9 @@ import { markPluginRegistryActive, quiescePluginRegistry } from "../plugins/regi
 import { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import * as runtimePluginLoadPlan from "./harness/runtime-plugin-load-plan.js";
+import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import { scopePreparedModelRuntimeLease } from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import * as catalogWorker from "./prepared-model-catalog-worker.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
@@ -136,6 +141,123 @@ async function listModels(refresh: boolean) {
   return respond.mock.calls[0]?.[1];
 }
 afterEach(() => setRemoteModelCatalogOverlaySourcesForTest());
+
+it("delivers the first reply when catalog adoption retires its captured dispatch publication", async () => {
+  await setup({ allowGatewaySubagentBinding: true });
+  const preparing = createDeferred();
+  const commit = createDeferred();
+  const preparePricing = pricing.prepareModelPricingContext;
+  const pricingSpy = vi
+    .spyOn(pricing, "prepareModelPricingContext")
+    .mockImplementationOnce(async (...args) => {
+      preparing.resolve();
+      await commit.promise;
+      return await preparePricing(...args);
+    });
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  await preparing.promise;
+  const deliver = vi.fn(async (_payload: ReplyPayload) => undefined);
+  const dispatcher = createReplyDispatcher({ deliver });
+  try {
+    const result = await dispatchLowLevelChannelReplyFromConfig({
+      cfg: config,
+      ctx: finalizeInboundContext({
+        Body: "hello",
+        From: "synthetic-user",
+        To: "synthetic-bot",
+        AgentId: "default",
+        SessionKey: "agent:default:main",
+        MessageSid: "catalog-adoption-first-reply",
+        Provider: "synthetic-channel",
+        Surface: "synthetic-channel",
+        ChatType: "direct",
+        InboundAccessAuthorized: true,
+      }),
+      dispatcher,
+      replyResolver: async () => {
+        const runtime = getPreparedReplyDispatchRuntime()!;
+        commit.resolve();
+        expect(await adoption).toBe("published");
+        await using lease = await acquireAgentRunPreparedModelRuntime(
+          {
+            config: runtime.config,
+            agentId: runtime.agentId,
+            agentDir: runtime.agentDir,
+            workspaceDir: runtime.workspaceDir,
+            allowGatewaySubagentBinding: true,
+            runtimePluginSelections: [
+              { provider: "custom", modelId: "remote-200", runtime: "openclaw" },
+            ],
+          },
+          { catalogMode: "static", pluginGeneration: runtime.pluginGeneration },
+        );
+        expect(runtime.readFullModelCatalog?.()?.entries.map((row) => row.id)).toContain(
+          "remote-200",
+        );
+        expect(lease.pluginGeneration.remoteCatalog?.generatedAt).toBe(200);
+        expect(lease.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-200");
+        expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+        return { text: "first reply completed" };
+      },
+    });
+    expect(result.queuedFinal).toBe(true);
+  } finally {
+    commit.resolve();
+    await Promise.allSettled([adoption]);
+    pricingSpy.mockRestore();
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+  }
+  expect(deliver.mock.calls.map(([payload]) => payload.text)).toEqual(["first reply completed"]);
+});
+
+it("keeps derived parents confined to their selections after a catalog publication", async () => {
+  await setup();
+  const input = fixture.agentInput("default", config);
+  await using configured = await acquirePublishedPreparedModelRuntime(input);
+  const selected = {
+    ...input,
+    workspaceDir: configured.snapshot.workspaceDir,
+    runtimePluginSelections: [{ provider: "custom", modelId: "selected", runtime: "first" }],
+  };
+  // Each selection resolves its own harness owner; the parent registry holds only "first".
+  const ownersSpy = vi
+    .spyOn(runtimePluginLoadPlan, "resolveAgentRuntimePluginSelectionOwners")
+    .mockImplementation(({ selections }) => {
+      const pluginIds = selections.map((selection) =>
+        selection.provider === "openai" ? "openai" : "first",
+      );
+      return { pluginIds, forceActivatedPluginIds: pluginIds };
+    });
+  const registry = createEmptyPluginRegistry();
+  registry.plugins.push(createPluginRecord({ id: "first", status: "loaded" }));
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  try {
+    await using parent = scopePreparedModelRuntimeLease(
+      await acquireAgentRunPreparedModelRuntime(selected, {
+        catalogMode: "static",
+        pluginGeneration: configured.pluginGeneration,
+      }),
+    );
+    expect(parent.pluginGeneration).not.toBe(configured.pluginGeneration);
+    expect(await applyRemoteModelCatalogUpdate(() => config)).toBe("published");
+    await expect(
+      parent.run(() =>
+        acquireAgentRunPreparedModelRuntime(
+          {
+            ...selected,
+            runtimePluginSelections: [
+              { provider: "openai", modelId: "gpt-5.6-luna", runtime: "openclaw" },
+            ],
+          },
+          { catalogMode: "static", pluginGeneration: parent.pluginGeneration },
+        ),
+      ),
+    ).rejects.toThrow(PreparedModelRuntimePublicationSupersededError);
+  } finally {
+    ownersSpy.mockRestore();
+  }
+});
 
 it("bounds refresh with two agents while another discovery is held and adopts after it", async ({
   signal,

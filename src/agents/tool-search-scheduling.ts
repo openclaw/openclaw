@@ -100,14 +100,17 @@ export async function runScheduledToolSearchCall<T>(params: {
     await racePromiseWithAbortSignal(admission.ready.promise, signal);
     signal.throwIfAborted();
     const current = owner.current?.entries.find((entry) => entry.id === params.entry.id);
-    if (!current) {
+    if (
+      !current ||
+      current.tool !== params.entry.tool ||
+      (current.tool.executionMode === "sequential") !== exclusive
+    ) {
       throw new ToolInputError("Queued tool changed or is no longer available in this run.");
     }
     scope.active = true;
     // Do not race active execution against abort again: accepted results and
     // finalization own release, not an observer that stops waiting early.
-    // Preserve the admitted implementation if the catalog is rebuilt while queued.
-    return await executionScope.run(scope, () => params.execute(params.entry, signal));
+    return await executionScope.run(scope, () => params.execute(current, signal));
   } finally {
     const release = () => {
       scope.active = false;

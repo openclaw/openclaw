@@ -4,6 +4,7 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
+import { getPreparedModelRuntimeBorrowedSnapshot } from "./prepared-model-runtime-generation-scope.js";
 import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import { isPreparedModelRuntimeMissingOwnerError } from "./prepared-model-runtime.errors.js";
 import {
@@ -115,6 +116,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
   if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
+    const configured = resolveConfiguredOwner(context.owners, input);
+    if (configured?.pending) {
+      assertPreparedModelRuntimeAdmissionCanWait(configured);
+      await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
+      assertAdmission();
+    }
     try {
       input = rebindInputToCommittedConfiguredOwner(context.owners, input);
     } catch (error) {
@@ -169,6 +176,31 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
       (configuredOwner.needsRefresh ||
         configuredOwner.pluginGeneration !== options.pluginGeneration)
     ) {
+      const borrowed = getPreparedModelRuntimeBorrowedSnapshot(options.pluginGeneration);
+      if (
+        !configuredOwner.needsRefresh &&
+        borrowed &&
+        borrowed.metadataSnapshot === options.pluginGeneration.pluginMetadataSnapshot &&
+        preparedModelRuntimeConfigsMatch(borrowed.config, input.config) &&
+        borrowed.agentId === input.agentId &&
+        borrowed.agentDir === input.agentDir &&
+        borrowed.inheritedAuthDir === input.inheritedAuthDir &&
+        borrowed.workspaceDir === input.workspaceDir &&
+        (!input.allowGatewaySubagentBinding || borrowed.allowGatewaySubagentBinding) &&
+        !input.readOnly &&
+        !input.loadRuntimePlugins &&
+        !input.skipCredentials &&
+        !input.env &&
+        preparedPluginGenerationSupportsSelections(options.pluginGeneration, input)
+      ) {
+        // Nested work borrows its still-open parent; it cannot publish or widen that authority.
+        assertAdmission();
+        return {
+          snapshot: borrowed,
+          pluginGeneration: options.pluginGeneration,
+          [Symbol.asyncDispose]: retainPreparedPluginGeneration(options.pluginGeneration),
+        };
+      }
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
       );

@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import * as legacyAuth from "./legacy-inherited-auth-dir.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
@@ -204,6 +205,121 @@ describe("prepared model runtime owner selection", () => {
         ),
       );
     }
+  });
+
+  it("keeps a committed gateway owner current when an admitted turn resumes on its older generation", async () => {
+    const defaults = {
+      model: "openai/gpt-5",
+      models: {
+        "openai/gpt-5": { params: { transport: "sse" as const, openaiWsWarmup: false } },
+      },
+    };
+    const previousConfig = {
+      agents: { defaults },
+      messages: { responsePrefix: "previous" },
+    };
+    const committedConfig = {
+      agents: { defaults },
+      messages: { responsePrefix: "committed" },
+    };
+    const publicationOptions = {
+      allowGatewaySubagentBinding: true,
+      catalogMode: "static" as const,
+      gatewayLifecycle: true,
+    };
+    const runInput = (config: typeof previousConfig) => ({
+      agentId: "default",
+      agentDir: fixture.state.agentDir("default"),
+      allowGatewaySubagentBinding: true,
+      config,
+      runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5", runtime: "openclaw" }],
+      workspaceDir: "/tmp/unused-workspace",
+    });
+
+    await publishGateway(previousConfig, publicationOptions);
+    const admitted = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const previousSnapshot = getPreparedModelRuntimeSnapshot(runInput(previousConfig));
+    expect(admitted?.pluginGeneration).toBeDefined();
+    expect(previousSnapshot).toBeDefined();
+
+    const outerLease = await acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+      catalogMode: "static",
+      pluginGeneration: admitted!.pluginGeneration,
+    });
+    expect(outerLease.snapshot).toBe(previousSnapshot);
+    let outerLeaseActive = true;
+
+    await refreshPreparedModelRuntimeSnapshots(committedConfig, publicationOptions);
+    const committedSnapshot = getPreparedModelRuntimeSnapshot(runInput(committedConfig));
+    const registryLoads = mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
+    expect(committedSnapshot).toBeDefined();
+    expect(committedSnapshot).not.toBe(previousSnapshot);
+    const detachedAdmissionGate = createDeferred();
+    let detachedAdmission!: Promise<unknown>;
+
+    try {
+      await withPreparedModelRuntimePluginGenerationScope(
+        admitted!.pluginGeneration,
+        async () => {
+          const resumed = await withPreparedModelRuntimePluginGenerationScope(
+            admitted!.pluginGeneration,
+            async () =>
+              await acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+                catalogMode: "static",
+                pluginGeneration: admitted!.pluginGeneration,
+              }),
+          );
+
+          expect(resumed.snapshot).toBe(previousSnapshot);
+          expect(getPreparedModelRuntimeSnapshot(runInput(committedConfig))).toBe(
+            committedSnapshot,
+          );
+          expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(registryLoads);
+          await resumed[Symbol.asyncDispose]();
+          const clonedConfigLease = await acquireAgentRunPreparedModelRuntime(
+            runInput(structuredClone(previousConfig)),
+            { pluginGeneration: admitted!.pluginGeneration },
+          );
+          expect(clonedConfigLease.snapshot).toBe(previousSnapshot);
+          await clonedConfigLease[Symbol.asyncDispose]();
+          await expect(
+            acquireAgentRunPreparedModelRuntime(
+              { ...runInput(previousConfig), workspaceDir: "/tmp/different-workspace" },
+              { pluginGeneration: admitted!.pluginGeneration },
+            ),
+          ).rejects.toThrow("plugin generation was superseded");
+          await expect(
+            acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+              pluginGeneration: { ...admitted!.pluginGeneration },
+            }),
+          ).rejects.toThrow("plugin generation was superseded");
+          detachedAdmission = detachedAdmissionGate.promise.then(async () =>
+            acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+              pluginGeneration: admitted!.pluginGeneration,
+            }),
+          );
+        },
+        () => (outerLeaseActive ? outerLease.snapshot : undefined),
+      );
+    } finally {
+      outerLeaseActive = false;
+      await outerLease[Symbol.asyncDispose]();
+      detachedAdmissionGate.resolve();
+      await Promise.allSettled([detachedAdmission]);
+    }
+    detachedAdmissionGate.resolve();
+    await expect(detachedAdmission).rejects.toThrow("plugin generation was superseded");
+
+    await expect(
+      acquireAgentRunPreparedModelRuntime(runInput(previousConfig), {
+        pluginGeneration: admitted!.pluginGeneration,
+      }),
+    ).rejects.toThrow("plugin generation was superseded");
+    expect(getPreparedModelRuntimeSnapshot(runInput(committedConfig))).toBe(committedSnapshot);
+
+    const next = await acquireAgentRunPreparedModelRuntime(runInput(committedConfig));
+    expect(next.snapshot).toBe(committedSnapshot);
+    await next[Symbol.asyncDispose]();
   });
 
   it("does not choose between configured owners sharing one agent directory", async () => {

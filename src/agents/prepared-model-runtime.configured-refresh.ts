@@ -11,10 +11,7 @@ import {
   type RemoteCatalogPublicationResult,
 } from "../model-catalog/remote-overlay.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
-import {
-  capturePreparedModelRuntimeGeneration,
-  retirePreparedModelRuntimeGeneration,
-} from "./prepared-model-runtime.lifecycle.js";
+import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
 import {
   advancePreparedModelRuntimeOwnerConfig,
   preparedModelRuntimeConfigsMatch,
@@ -312,10 +309,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
     return false;
   }
   const controller = params.controller;
-  let parentSignals = [
-    params.signal,
-    ...claims.map(({ owner }) => capturePreparedModelRuntimeGeneration(owner)),
-  ];
+  const signal = AbortSignal.any([controller.signal, params.signal]);
   const abortPreparation = () => {
     if (!controller.signal.aborted) {
       controller.abort(
@@ -325,22 +319,10 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       );
     }
   };
-  const stopWatchingParents = () => {
-    for (const signal of parentSignals) {
-      signal.removeEventListener("abort", abortPreparation);
-    }
-    parentSignals = [];
-  };
-  for (const signal of parentSignals) {
-    signal.addEventListener("abort", abortPreparation, { once: true });
-  }
-  if (parentSignals.some((signal) => signal.aborted)) {
-    abortPreparation();
-  }
   const staged = new Map<string, PreparedModelRuntimeOwner>();
   let committed = false;
   const isCurrent = () =>
-    !controller.signal.aborted &&
+    !signal.aborted &&
     params.isPublicationCurrent() &&
     claims.every(
       ({ owner, generation, input }) =>
@@ -377,7 +359,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       retirePreparedModelRuntimeGeneration(owner);
     }
   };
-  controller.signal.addEventListener("abort", retireCandidates, { once: true });
+  signal.addEventListener("abort", retireCandidates, { once: true });
   try {
     await publishPreparedModelRuntimeOwnerBatch({
       ownersToPublish: candidates,
@@ -385,17 +367,14 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
       agentBuildCompletions: params.agentBuildCompletions,
       buildTimeoutMs: params.buildTimeoutMs,
       registerEntriesAfterBuildStart: true,
-      acquisitionSignal: controller.signal,
+      acquisitionSignal: signal,
       isPublicationCurrent: () => committed || isCurrent(),
       isOwnerRegistered: (key, owner) => (committed ? params.owners : staged).get(key) === owner,
       isOwnerPublished: (key, owner) => committed && params.owners.get(key) === owner,
     });
     // Pricing preparation takes no signal; cancellation, shutdown and a stalled read must not
     // leave adoption pending, so it shares the owner build deadline.
-    const pricingSignal = AbortSignal.any([
-      controller.signal,
-      AbortSignal.timeout(params.buildTimeoutMs),
-    ]);
+    const pricingSignal = AbortSignal.any([signal, AbortSignal.timeout(params.buildTimeoutMs)]);
     for (const config of new Set(candidates.map((owner) => owner.input.config))) {
       await racePromiseWithAbortSignal(prepareModelPricingContext(config), pricingSignal);
     }
@@ -412,7 +391,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
             }),
         ),
       ),
-      controller.signal,
+      signal,
     );
     await params.commit(() => {
       // Any candidate retirement (lost loan or retired cache) leaves it unpublishable.
@@ -428,8 +407,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
         params.owners.set(ownerKey(owner.input), owner);
       }
       committed = true;
-      stopWatchingParents();
-      controller.signal.removeEventListener("abort", retireCandidates);
+      signal.removeEventListener("abort", retireCandidates);
       // Existing leases retain their pair; other owners must rebuild before new admission.
       for (const owner of params.owners.values()) {
         if (owner.provenance !== "configured") {
@@ -446,8 +424,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(params: {
     });
     return true;
   } finally {
-    stopWatchingParents();
-    controller.signal.removeEventListener("abort", retireCandidates);
+    signal.removeEventListener("abort", retireCandidates);
     if (!committed) {
       retireCandidates();
       for (const owner of candidates) {
