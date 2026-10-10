@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import type { WorkerOperations } from "../../state/worker-operation-registry.js";
 import type { PreparedEnvironmentSelection } from "./environment-record.js";
 import type { WorkerPlacementAuthorization } from "./placement-authorization.js";
@@ -12,11 +13,9 @@ import { required, type WorkerSessionPlacementRecord } from "./placement-record.
 import type { WorkerSessionPlacementRetirement } from "./placement-retirement.js";
 import {
   stagePlacementRetirementWorkerPublication,
-  stagePlacementTurnClaimsClearedWorkerPublication,
   stagePlacementTurnClaimWorkerPublication,
   stagePlacementWorkspaceJournalWorkerPublication,
 } from "./placement-turn-authority.js";
-import { signalTurnClaimRelease } from "./placement-turn-claim-events.js";
 import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import { reserveWorkerEnvironmentNativePublication } from "./store-native-publication.js";
 
@@ -35,18 +34,6 @@ function isReceipt(value: unknown): value is PlacementLifecycleReceipt {
       (isRecord(value.placement) && value.placement.sessionId === value.sessionId)) &&
     (value.intent === undefined ||
       (isRecord(value.intent) && value.intent.sessionId === value.sessionId))
-  );
-}
-
-function isRestartReceipt(value: unknown): value is WorkerSessionPlacementRecord[] {
-  return (
-    Array.isArray(value) &&
-    value.every(
-      (placement) =>
-        isRecord(placement) &&
-        typeof placement.sessionId === "string" &&
-        placement.turnClaim === null,
-    )
   );
 }
 
@@ -167,36 +154,21 @@ export function createPlacementLifecycleWorkerOps(runtime: {
   };
   return {
     async clearLocalTurnClaimsAfterRestartAsync(): Promise<number> {
-      const readReceipt = (facts: unknown): WorkerSessionPlacementRecord[] | undefined =>
-        isRestartReceipt(facts) ? facts : undefined;
-      const mutation = createPlacementWorkerMutation<WorkerSessionPlacementRecord[]>({
-        context,
-        label: "Worker placement restart cleanup",
-        nativeLocation: context.admission.databasePath,
-        orderedAdmission: true,
-        stageCommit(facts) {
-          const placements = readReceipt(facts);
-          if (!placements) {
-            throw new Error("Worker placement restart cleanup has no committed placements");
-          }
-          return stagePlacementTurnClaimsClearedWorkerPublication(
-            context.admission.identity,
-            placements,
-          );
-        },
-        readReceipt,
-        publish(placements) {
-          for (const clearedPlacement of placements) {
-            signalTurnClaimRelease(runtime.path, clearedPlacement.sessionId);
-          }
-        },
+      // Startup holds the state-directory lock and has not admitted turns.
+      // An uncertain result aborts startup; the next boot can repeat this clear.
+      const placements = await executeOpenClawStateWorker(context, {
+        type: "workerPlacements.clearLocalTurnClaims",
+        input: { nowMs: runtime.now?.() },
       });
-      const placements = await mutation.run((scope) =>
-        scope.execute({
-          type: "workerPlacements.clearLocalTurnClaims",
-          input: { nowMs: runtime.now?.() },
-        }),
-      );
+      for (const clearedPlacement of placements) {
+        stagePlacementTurnClaimWorkerPublication(
+          context.admission.identity,
+          clearedPlacement,
+          undefined,
+          clearedPlacement.state,
+          clearedPlacement,
+        ).commit();
+      }
       return placements.length;
     },
     async beginPlacementMove(

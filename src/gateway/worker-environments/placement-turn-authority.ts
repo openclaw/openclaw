@@ -558,34 +558,10 @@ export function isPlacementTurnToolAuthorized(
 }
 
 function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
-  return stageWorkerChanges(identity, [input]);
-}
-
-export function stagePlacementTurnClaimsClearedWorkerPublication(
-  identity: DatabasePathIdentity,
-  placements: readonly WorkerSessionPlacementRecord[],
-) {
-  return stageWorkerChanges(
-    identity,
-    placements.map((placement) => {
-      const facts = freezeJsonSnapshot(placement);
-      return {
-        kind: "claim",
-        sessionId: facts.sessionId,
-        localOnly: facts.state === "local",
-        facts,
-        workspacePlacement: facts,
-      };
-    }),
-  );
-}
-
-function stageWorkerChanges(identity: DatabasePathIdentity, inputs: readonly ClaimChange[]) {
   const owner = ownerFor(identity);
-  const changes = inputs.map((input) => ({ ...input, sequence: ++owner.sequence }));
-  for (const change of changes) {
-    owner.pending.add(change);
-  }
+  const sequence = ++owner.sequence;
+  const change = { ...input, sequence };
+  owner.pending.add(change);
   let settled = false;
   const settle = (apply: () => void) => {
     if (!settled) {
@@ -594,42 +570,34 @@ function stageWorkerChanges(identity: DatabasePathIdentity, inputs: readonly Cla
     }
   };
   const publish = () => {
-    for (const change of changes) {
-      commitChange(owner, capturePlacementAuthorityChange(owner, change)(), change.sequence);
-    }
-    for (const change of changes) {
-      for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
-        notifyRevoked(retained);
-      }
+    commitChange(owner, capturePlacementAuthorityChange(owner, change)(), sequence);
+    for (const retained of Array.from(owner.claims.get(change.sessionId) ?? [])) {
+      notifyRevoked(retained);
     }
   };
   return {
     commit: () => settle(publish),
     rollback: () =>
       settle(() => {
-        for (const change of changes) {
-          owner.pending.delete(change);
-          prunePublication(owner, change.sessionId);
-        }
+        owner.pending.delete(change);
         owner.settlementListeners.forEach((listener) => listener());
+        prunePublication(owner, change.sessionId);
       }),
     invalidate: () =>
       settle(() => {
-        for (const change of changes) {
-          change.indeterminate = true;
-          // Uncertain claim/tool writes revoke that incarnation. Workspace-only writes
-          // invalidate read observations while preserving the separate turn authority.
-          if (change.kind === "tools") {
-            change.authority = undefined;
-          } else if (change.kind === "journal") {
-            change.uncertain = true;
-            change.present = undefined;
-          } else if (change.kind === "claim" || change.kind === "workspace-result") {
-            change.facts = undefined;
-            if (change.kind === "claim") {
-              change.workspaceResult = undefined;
-              change.workspacePlacement = undefined;
-            }
+        change.indeterminate = true;
+        // Uncertain claim/tool writes revoke that incarnation. Workspace-only writes
+        // invalidate read observations while preserving the separate turn authority.
+        if (change.kind === "tools") {
+          change.authority = undefined;
+        } else if (change.kind === "journal") {
+          change.uncertain = true;
+          change.present = undefined;
+        } else if (change.kind === "claim" || change.kind === "workspace-result") {
+          change.facts = undefined;
+          if (change.kind === "claim") {
+            change.workspaceResult = undefined;
+            change.workspacePlacement = undefined;
           }
         }
         publish();
