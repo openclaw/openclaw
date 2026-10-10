@@ -2308,7 +2308,6 @@
 ["src/agents/command/model-selection.turn-model-differential.test.ts","../openai-routing.js","c38b373a4beeb1dbee7a7a0d49f076ad1edf3ad7666ac6b7ec1816c24dfd2e07",1]
 ["src/agents/command/model-selection.turn-model-differential.test.ts","../provider-auth-aliases.js","da431204ef8264bc8075c71382cd6b8ccdabd713191a45873abe7ccd5e4aae16",1]
 ["src/agents/command/model-selection.turn-model-differential.test.ts","../session-runtime-compat.js","5d1fc892b51d6373f94a19ef7e80cb1257349d2634a4121ed7776417d00c31f5",1]
-["src/agents/command/model-selection.turn-model-differential.test.ts","../thinking-runtime.js","183d02c0086a3e658c6699ba8b67410c48d97d47628380b2fac7144a987be1fb",1]
 ["src/agents/command/model-selection.turn-model-differential.test.ts","./attempt-execution.shared.js","8b005b36f133e8c16be1471e33e31468d7c6c172d2784788c89c5298cf4a5312",1]
 ["src/agents/command/model-selection.turn-model-differential.test.ts","./model-ref.js","85376995f68ea32b1349cf54ef752b0ff0046ce6abac7dcb3dc681491ea3141e",1]
 ["src/agents/command/model-selection.turn-model-differential.test.ts","./runtime-loaders.js","d0c6f63887c41300af71b41f6082d7bf82b8b4b58bf1e1150434188f6b5c25df",1]
