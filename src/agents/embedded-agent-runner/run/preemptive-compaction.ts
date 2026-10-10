@@ -287,6 +287,16 @@ export function checkMidTurnPrecheck(params: {
         )
     : messages;
   const estimate = createFreshLlmBoundaryTokenEstimator(anchor ? {} : context);
+  // Without a matching prefix, estimate current text but retain measured output:
+  // opaque reasoning can survive a system/tool change without visible token text.
+  const unanchoredCompletionTokens = anchor
+    ? 0
+    : messages.reduce((total, message) => {
+        const usage = message.role === "assistant" ? message.usage?.contextUsage : undefined;
+        const completion =
+          usage?.state === "available" ? usage.totalTokens - usage.promptTokens : 0;
+        return total + (Number.isFinite(completion) ? Math.max(0, completion) : 0);
+      }, 0);
   const precheck = shouldPreemptivelyCompactBeforePrompt({
     ...params,
     messages,
@@ -298,6 +308,7 @@ export function checkMidTurnPrecheck(params: {
     llmBoundaryTokenPressure: {
       estimatedPromptTokens:
         (anchor?.contextTokens ?? 0) +
+        unanchoredCompletionTokens +
         estimate({
           messages: appended,
           prompt: "",

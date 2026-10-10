@@ -66,6 +66,16 @@ describe("mid-turn provider admission", () => {
       completionTokens: 16_000,
     },
     {
+      name: "retains opaque reasoning after a small system change",
+      usage: 15_000,
+      chars: 2_000,
+      cap: 16_000,
+      fits: false,
+      opaque: true,
+      completionTokens: 16_000,
+      tweakSystem: true,
+    },
+    {
       name: "measured oversized tail after projection",
       usage: 14_000,
       chars: 100_000,
@@ -110,6 +120,7 @@ describe("mid-turn provider admission", () => {
       cap,
       fits,
       growSystem,
+      tweakSystem,
       opaque,
       completionTokens,
       assistantChars,
@@ -143,6 +154,8 @@ describe("mid-turn provider admission", () => {
             execute: async () => {
               if (growSystem) {
                 session.setBaseSystemPrompt("Additional instructions. ".repeat(6_000));
+              } else if (tweakSystem) {
+                session.setBaseSystemPrompt(`${systemPrompt}Prefer concise answers.`);
               }
               return { content: [{ type: "text", text: "r".repeat(chars) }], details: {} };
             },
