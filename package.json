@@ -1710,6 +1710,7 @@
     "check:coercion-helpers": "node --import ./scripts/tsx.mjs scripts/check-coercion-helper-declarations.mts",
     "check:control-ui-lit-ratchet": "node --import ./scripts/tsx.mjs scripts/check-control-ui-lit-ratchet.mts",
     "check:database-first-legacy-stores": "node --import ./scripts/tsx.mjs scripts/check-database-first-legacy-stores.mts",
+    "check:database-dialect-ratchet": "node --import ./scripts/tsx.mjs scripts/check-database-dialect-ratchet.mts",
     "check:database-worker-ratchet": "node --import ./scripts/tsx.mjs scripts/check-database-worker-ratchet.mts",
     "check:deprecated-api-usage": "node --import ./scripts/tsx.mjs scripts/check-deprecated-api-usage.mts",
     "check:deprecated-jsdoc": "node --import ./scripts/tsx.mjs scripts/check-deprecated-jsdoc.mts",
