@@ -623,33 +623,29 @@ export function createPluginSessionOwnership(
       });
       await session.upsertSessionEntry(params);
     },
-    updateSessionStoreEntry: async (
-      session: PluginSessionRuntime,
+    prepareSessionStoreUpdate: (
       params: Parameters<PluginSessionRuntime["updateSessionStoreEntry"]>[0],
       assertRuntimeCurrent: () => void,
-    ) => {
+    ): Parameters<PluginSessionRuntime["updateSessionStoreEntry"]>[0]["update"] => {
       assertStoredSessionEntryOwned({
         action: "update",
         sessionKey: params.sessionKey,
         storePath: params.storePath,
       });
-      return await session.updateSessionStoreEntry({
-        ...params,
-        update: async (entry) => {
-          const patch = await params.update(entry);
-          assertRuntimeCurrent();
-          if (!patch) {
-            return patch;
-          }
-          assertStoreEntryOwned({
-            action: "update",
-            before: entry,
-            entry: { ...entry, ...patch },
-            sessionKey: params.sessionKey,
-          });
+      return async (entry) => {
+        const patch = await params.update(entry);
+        assertRuntimeCurrent();
+        if (!patch) {
           return patch;
-        },
-      });
+        }
+        assertStoreEntryOwned({
+          action: "update",
+          before: entry,
+          entry: { ...entry, ...patch },
+          sessionKey: params.sessionKey,
+        });
+        return patch;
+      };
     },
     assertStoredSessionEntryOwned,
     resolveStoredSessionExecutionOwner,

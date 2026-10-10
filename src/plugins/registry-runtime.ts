@@ -178,6 +178,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       assertRuntimeCurrent();
       return runWithPluginScope(run, false, currentInvocationRegistry());
     };
+    const runWithCurrentPluginScope = <T>(run: () => Promise<T>): Promise<T> =>
+      runWithPluginScope(async () => {
+        const result = await run();
+        assertRuntimeCurrent();
+        return result;
+      });
     const facades = {
       media: createRuntimeFacade<PluginRuntime["media"]>(invokeSelectedRuntime, ["loadWebMedia"]),
       imageGeneration: createRuntimeFacade<PluginRuntime["imageGeneration"]>(
@@ -447,26 +453,16 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               });
             },
             openPluginPanel: (params) =>
-              runWithPluginScope(async () => {
-                const result = await gateway.openPluginPanel(params);
-                assertRuntimeCurrent();
-                return result;
-              }),
+              runWithCurrentPluginScope(() => gateway.openPluginPanel(params)),
             readSessionFacts: (params) =>
-              runWithPluginScope(async () => {
-                const result = await gateway.readSessionFacts(params);
-                assertRuntimeCurrent();
-                return result;
-              }),
+              runWithCurrentPluginScope(() => gateway.readSessionFacts(params)),
             withSessionFacts: (select, run) =>
-              runWithPluginScope(async () => {
-                const result = await gateway.withSessionFacts(select, (snapshot) => {
+              runWithCurrentPluginScope(() =>
+                gateway.withSessionFacts(select, (snapshot) => {
                   assertRuntimeCurrent();
                   return run(snapshot);
-                });
-                assertRuntimeCurrent();
-                return result;
-              }),
+                }),
+              ),
             subscribeSessionChanges: (listener) =>
               runWithPluginScope(() =>
                 gateway.subscribeSessionChanges((event) =>
@@ -475,26 +471,19 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               ),
             withUserProfileIdentity: withIdentity
               ? async (params, run) =>
-                  await runWithPluginScope(async () => {
-                    const result = await withIdentity(params, async (assertIdentityCurrent) => {
+                  await runWithCurrentPluginScope(() =>
+                    withIdentity(params, async (assertIdentityCurrent) => {
                       const assertCurrent = () => {
                         assertRuntimeCurrent();
                         assertIdentityCurrent();
                       };
                       assertCurrent();
                       return await run(assertCurrent);
-                    });
-                    assertRuntimeCurrent();
-                    return result;
-                  })
+                    }),
+                  )
               : undefined,
             resolveGitHubAccount: resolveGitHubAccount
-              ? (params) =>
-                  runWithPluginScope(async () => {
-                    const result = await resolveGitHubAccount(params);
-                    assertRuntimeCurrent();
-                    return result;
-                  })
+              ? (params) => runWithCurrentPluginScope(() => resolveGitHubAccount(params))
               : undefined,
           } satisfies PluginRuntime["gateway"];
         }
@@ -532,17 +521,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             resolveStorePath: session.resolveStorePath,
             getSessionEntry: session.getSessionEntry,
             getSessionEntryAsync: (params) =>
-              runWithPluginScope(async () => {
-                const entry = await session.getSessionEntryAsync(params);
-                assertRuntimeCurrent();
-                return entry;
-              }),
+              runWithCurrentPluginScope(() => session.getSessionEntryAsync(params)),
             getSessionEntryByIdAsync: (params) =>
-              runWithPluginScope(async () => {
-                const entry = await session.getSessionEntryByIdAsync(params);
-                assertRuntimeCurrent();
-                return entry;
-              }),
+              runWithCurrentPluginScope(() => session.getSessionEntryByIdAsync(params)),
             listSessionEntries: session.listSessionEntries,
             createSessionEntryListReader: (params) =>
               runWithPluginScope(async () => {
@@ -603,10 +584,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               });
             },
             updateSessionStoreEntry: async (params) => {
-              const { updateSessionStoreEntry } = await loadSessionOwnership();
-              return await runWithPluginScope(() =>
-                updateSessionStoreEntry(session, params, assertRuntimeCurrent),
-              );
+              const { prepareSessionStoreUpdate } = await loadSessionOwnership();
+              return await runWithPluginScope(async () => {
+                const update = prepareSessionStoreUpdate(params, assertRuntimeCurrent);
+                return await session.updateSessionStoreEntry({ ...params, update });
+              });
             },
           } satisfies PluginRuntime["agent"]["session"];
           const runEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (params) => {
