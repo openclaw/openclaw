@@ -126,6 +126,12 @@ Dreaming keeps a narrative **Dream Diary** in `DREAMS.md`. After each phase has 
 
 Diary and consolidation completions use fresh contexts without retaining conversation sessions or delivering chat replies. Failed or empty diary generation writes a local fallback entry and reports a degraded outcome, so missing model output leaves a visible trace.
 
+Diary generation uses the existing agent run budget, `agents.defaults.timeoutSeconds`,
+instead of a separate one-minute deadline. It inherits the same 48-hour default and
+timer-safe unlimited setting as agent runs. The selected provider's
+`models.providers.<provider>.timeoutSeconds` still bounds its model requests, so
+keep both budgets long enough for slow local inference.
+
 <Note>
 The diary is for human reading in the Dreams UI, not a promotion source. Diary/report artifacts are excluded from short-term promotion; only grounded memory snippets are eligible to promote into `MEMORY.md`.
 </Note>

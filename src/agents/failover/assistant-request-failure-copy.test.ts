@@ -140,6 +140,23 @@ describe("renderAssistantRequestFailureCopy", () => {
   });
 
   it.each([
+    "Unknown parameter: 'reasoning_effort'",
+    'Unsupported field: "reasoning_effort"',
+    "got an unexpected keyword argument 'reasoning_effort'",
+    "'reasoning_effort' is not supported for this model",
+  ])("gives the custom-model opt-out for rejected reasoning controls: %s", (detail) => {
+    const assistant = makeAssistantMessageFixture({
+      provider: "custom-local",
+      model: "reasoning-model",
+      errorMessage: `400 ${JSON.stringify({ error: { type: "invalid_request_error", message: detail } })}`,
+    });
+    const expected =
+      "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
+    expect(formatUserFacingAssistantErrorText(assistant)).toBe(expected);
+    expect(renderRecordedAssistantFailureCopy(assistant)).toBe(expected);
+  });
+
+  it.each([
     { errorMessage: "Invalid service_tier argument", errorType: "invalid_request_error" },
     {
       errorMessage: "Invalid service_tier argument",

@@ -13,6 +13,7 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { getAgentDir } from "../config.js";
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
 import { hasUsableCustomProviderApiKey } from "../model-auth-provider-config.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "../model-auth-runtime-config.js";
 import { parseModelCatalogJson } from "../model-catalog-json.js";
 import { modelTransportRoutesMatch } from "../model-compat-catalog.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
@@ -499,7 +500,11 @@ export class ModelRegistry {
               config: this.config,
               isProviderAvailable: (providerId) =>
                 this.authStorage.hasAuth(normalizeProviderId(providerId)) ||
-                hasUsableCustomProviderApiKey(this.config, providerId),
+                hasUsableCustomProviderApiKey(this.config, providerId) ||
+                resolveManagedSecretRefRuntimeProviderAuth({
+                  cfg: this.config,
+                  provider: providerId,
+                }) !== undefined,
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: parsed.providers,
@@ -568,18 +573,13 @@ export class ModelRegistry {
     config: ProviderModelCatalog,
     source: "catalog" | "registration",
   ): void {
-    const hasProviderApi = source === "catalog" && Boolean(config.api);
     const models = config.models ?? [];
-    if (models.length === 0) {
-      return;
-    }
-    if (!config.baseUrl) {
+    if (models.length > 0 && !config.baseUrl) {
       const subject = source === "catalog" ? "custom models" : "models";
       throw new Error(`Provider ${providerName}: "baseUrl" is required when defining ${subject}.`);
     }
     for (const model of models) {
-      const hasApi = source === "catalog" ? hasProviderApi || model.api : model.api || config.api;
-      if (!hasApi) {
+      if (!model.api && !config.api) {
         const guidance = source === "catalog" ? " Set at provider or model level." : "";
         throw new Error(
           `Provider ${providerName}, model ${model.id}: no "api" specified.${guidance}`,

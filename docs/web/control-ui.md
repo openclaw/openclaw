@@ -100,10 +100,12 @@ non-success outcomes remain visible even when collapsed, such as
 Still-streaming assistant text stays at the bottom of its run, below saved output, and
 takes its transcript position once saved.
 
-Steering keeps the current response intact. A steer appears below all server
-output from the run it targets, including live text, restored text, commentary,
-and saved assistant messages. These display rules do not rewrite the stored
-transcript or split an assistant message around a steer.
+Accepted steering messages keep their saved transcript positions. Earlier saved
+output stays above the message; later answers and live output appear below it,
+including when the same run continues after steering. Reloading or reconnecting
+does not move the message to the end of that run. Unsaved assistant text remains
+one live tail until saved rows replace it; the UI does not split or rewrite
+stored assistant messages.
 
 Consecutive tool activity shares one expandable log, including when background
 work resumes in a new run. Visible messages, media, and conversation markers

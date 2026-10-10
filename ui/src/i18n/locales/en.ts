@@ -962,6 +962,7 @@ export const en: TranslationMap & {
     renameSession: "Rename session",
     renameSessionPrompt: "Rename session",
     renameSessionMenu: "Rename…",
+    sessionNameInUse: "A session with this name already exists.",
     setIconMenu: "Set icon",
     setColorMenu: "Color",
     setIconColorMenu: "Icon & color",
