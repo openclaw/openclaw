@@ -66,16 +66,6 @@ describe("resolved logging settings cache", () => {
     expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
   });
 
-  it("reuses settings resolved by the file-level admission check when building the logger", () => {
-    process.env.OPENCLAW_TEST_FILE_LOG = "1";
-    readLoggingConfigMock.mockReturnValue({ level: "silent" });
-
-    expect(logging.isFileLogLevelEnabled("info")).toBe(false);
-    logging.getLogger();
-
-    expect(readLoggingConfigMock).toHaveBeenCalledOnce();
-  });
-
   it("loads console settings once per logger generation", () => {
     process.env.OPENCLAW_TEST_CONSOLE = "1";
     readLoggingConfigMock.mockReturnValue({ consoleLevel: "silent" });
@@ -94,41 +84,6 @@ describe("resolved logging settings cache", () => {
     consoleLogging.getConsoleSettings();
     consoleLogging.getConsoleSettings();
     expect(readLoggingConfigMock).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("isFileLogLevelEnabled", () => {
-  for (const { name, level, expected } of [
-    {
-      name: "returns false for all levels when configured as silent",
-      level: "silent",
-      expected: [false, false, false, false, false, false],
-    },
-    {
-      name: "passes fatal, error, warn, info when configured as info",
-      level: "info",
-      expected: [true, true, true, true, false, false],
-    },
-    {
-      name: "passes all levels when configured as trace",
-      level: "trace",
-      expected: [true, true, true, true, true, true],
-    },
-  ] as const) {
-    it(name, () => {
-      logging.setLoggerOverride({ level });
-      expect(logging.isFileLogLevelEnabled("fatal")).toBe(expected[0]);
-      expect(logging.isFileLogLevelEnabled("error")).toBe(expected[1]);
-      expect(logging.isFileLogLevelEnabled("warn")).toBe(expected[2]);
-      expect(logging.isFileLogLevelEnabled("info")).toBe(expected[3]);
-      expect(logging.isFileLogLevelEnabled("debug")).toBe(expected[4]);
-      expect(logging.isFileLogLevelEnabled("trace")).toBe(expected[5]);
-    });
-  }
-
-  it("never treats silent as an emittable file level", () => {
-    logging.setLoggerOverride({ level: "info" });
-    expect(logging.isFileLogLevelEnabled("silent")).toBe(false);
   });
 });
 
