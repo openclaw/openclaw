@@ -156,12 +156,19 @@ function intersectDirectoryTestPattern(
 ): string[] | null {
   const candidateRoot = directoryTestPatternRoot(candidatePattern);
   if (candidateRoot === null) {
-    return includePatterns.some((pattern) => {
+    const containingPatterns = includePatterns.filter((pattern) => {
       const includeRoot = directoryTestPatternRoot(pattern);
       return includeRoot !== null && patternIsFullyUnderDirectory(candidatePattern, includeRoot);
-    })
-      ? [candidatePattern]
-      : null;
+    });
+    return containingPatterns.length === 0
+      ? null
+      : [
+          ...new Set(
+            containingPatterns.flatMap((pattern) =>
+              intersectTestExtensions(candidatePattern, pattern),
+            ),
+          ),
+        ];
   }
 
   const result: string[] = [];

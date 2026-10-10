@@ -225,6 +225,40 @@ describe("batch file selection", () => {
 describe("intersectIncludePatterns", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it.each([
+    { owner: ["ts"], candidate: "tsx", expected: [] },
+    { owner: ["tsx"], candidate: "ts", expected: [] },
+    { owner: ["ts"], candidate: "{ts,tsx}", expected: ["ui/src/components/view.test.ts"] },
+    { owner: ["{ts,tsx}"], candidate: "tsx", expected: ["ui/src/components/view.test.tsx"] },
+    {
+      owner: ["ts", "tsx"],
+      candidate: "{ts,tsx}",
+      expected: ["ui/src/components/view.test.ts", "ui/src/components/view.test.tsx"],
+    },
+  ])(
+    "preserves extension constraints for non-recursive $candidate globs in $owner",
+    ({ owner, candidate, expected }) => {
+      const selected = intersectIncludePatterns(
+        owner.map((extension) => `ui/src/**/*.test.${extension}`),
+        [`ui/src/components/*.test.${candidate}`],
+        matchesVitestGlob,
+      );
+      expect(
+        filterFilesByPatterns(
+          [
+            "ui/src/components/view.test.ts",
+            "ui/src/components/view.test.tsx",
+            "ui/src/elsewhere/view.test.ts",
+            "ui/src/elsewhere/view.test.tsx",
+          ],
+          selected!,
+          [],
+          matchesVitestGlob,
+        ),
+      ).toEqual(expected);
+    },
+  );
+
   it("preserves native non-browser TS and TSX discovery through directory selection", () => {
     const root = tempDirs.make("vitest-ui-selector-");
     const uiTs = [
