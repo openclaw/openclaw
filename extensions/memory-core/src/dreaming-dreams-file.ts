@@ -4,6 +4,7 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { replaceManagedMarkdownBlock } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readRegularFile, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { captureMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { getMemoryWorkspaceMaintenance } from "./memory-workspace-files.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { readStore } from "./short-term-promotion-store.js";
@@ -84,6 +85,8 @@ export async function writeDreamsFileAtomic(
   content: string,
   workspaceDir?: string,
 ): Promise<void> {
+  const assertCurrent = captureMemoryMutationAuthority();
+  assertCurrent?.();
   const files = workspaceDir ? getMemoryWorkspaceMaintenance(workspaceDir) : undefined;
   if (files) {
     return await files.writeDreams(dreamsPath, content);
@@ -97,6 +100,7 @@ export async function writeDreamsFileAtomic(
     preserveExistingMode: true,
     tempPrefix: `${path.basename(dreamsPath)}.dreams`,
     throwOnCleanupError: true,
+    assertBeforeMutation: assertCurrent,
   });
 }
 

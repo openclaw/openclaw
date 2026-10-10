@@ -380,6 +380,14 @@ export function registerMatrixVerificationCommands(root: Command): void {
         },
       ) => {
         await cli.runMatrixCliAccountCommand(options, {
+          gateway: {
+            method: "matrix.verify.status.owner",
+            params: () => ({
+              accountId: options.account,
+              includeRecoveryKey: options.includeRecoveryKey === true,
+              allowDegradedLocalState: options.allowDegradedLocalState === true,
+            }),
+          },
           run: ({ accountId, cfg }) =>
             verification.getMatrixVerificationStatus({
               accountId,

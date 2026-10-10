@@ -78,8 +78,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
         | "runMemoryReset"
         | "runMemoryPromote"
         | "runMemoryRemHarness"
-        | "runMemoryRemBackfill"
-        | "runMemorySessionBackfill",
+        | "runMemoryRemBackfill",
     ) =>
     async (opts: MemoryCommandOptions) => {
       await runMemoryCliCommand(async () => {
@@ -326,7 +325,10 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
       "Also inspect foreign transcript archive files conservatively",
     )
     .option("--json", "Print JSON")
-    .action(lazyAction("runMemorySessionBackfill"));
+    .action(async (opts: import("./session-backfill.js").MemorySessionBackfillOptions) => {
+      const { runMemorySessionBackfillCli } = await import("./cli-session-backfill.js");
+      await runMemorySessionBackfillCli(opts, hostOptions);
+    });
 
   memory.action(() => {
     memory.outputHelp();

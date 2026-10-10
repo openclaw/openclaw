@@ -12,6 +12,7 @@ import {
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import { withMemoryMutationAuthority } from "./memory-mutation-authority.js";
 import { withMemoryWorkspaceLock } from "./memory-workspace-lock.js";
 import { previewGroundedRemForFile } from "./rem-evidence.js";
 import type {
@@ -21,6 +22,9 @@ import type {
 } from "./session-backfill-contract.js";
 import {
   drainSessionBackfill,
+  SESSION_BACKFILL_TOP_CANDIDATE_LIMIT,
+} from "./session-backfill-drain.js";
+import {
   markSessionBackfillRewindBaseline,
   recordSessionBackfillRewindBatch,
   resetSessionBackfillIngestionState,
@@ -52,8 +56,6 @@ import {
 } from "./short-term-promotion.js";
 
 const SESSION_BACKFILL_QUERY_PREFIX = "__dreaming_session_backfill__";
-const TOP_CANDIDATE_LIMIT = 5;
-const MAX_SESSION_BACKFILL_APPLY_BATCHES = 10_000;
 
 export type MemorySessionBackfillOptions = {
   agent?: string;
@@ -73,6 +75,7 @@ type SessionBackfillScan = Awaited<ReturnType<typeof scanSessionIngestionSource>
 };
 
 type RunSessionBackfillParams = {
+  assertCurrent?: () => void;
   agentId: string;
   workspaceDir: string;
   pluginConfig?: Record<string, unknown>;
@@ -223,7 +226,9 @@ function summarizeDay(day: string, candidates: SessionIngestionCandidate[]): Ses
   return {
     day,
     candidateCount: candidates.length,
-    topCandidates: candidates.slice(0, TOP_CANDIDATE_LIMIT).map((entry) => entry.snippet),
+    topCandidates: candidates
+      .slice(0, SESSION_BACKFILL_TOP_CANDIDATE_LIMIT)
+      .map((entry) => entry.snippet),
   };
 }
 
@@ -285,7 +290,7 @@ async function buildSessionBackfillDiaryEntries(params: {
     bodyLines ??= [
       `Session backfill found ${candidates.length} trusted candidate${candidates.length === 1 ? "" : "s"}.`,
       ...candidates
-        .slice(0, TOP_CANDIDATE_LIMIT)
+        .slice(0, SESSION_BACKFILL_TOP_CANDIDATE_LIMIT)
         .map((candidate) => markLine(day, `- ${candidate.snippet}`, [candidate])),
     ];
     return { isoDay: day, sourcePath: `memory/.dreams/session-corpus/${day}.txt`, bodyLines };
@@ -378,7 +383,10 @@ export async function executeSessionBackfillBatch(
   if (params.rem && params.apply) {
     throw new Error("Memory session-backfill --rem cannot be combined with --apply.");
   }
-  const execute = () => executeSessionBackfillBatchCore({ ...params, workspaceDir });
+  // Acquire/release the workspace lease outside request authority so accepted cleanup settles.
+  const run = () => executeSessionBackfillBatchCore({ ...params, workspaceDir });
+  const assertCurrent = params.assertCurrent;
+  const execute = assertCurrent ? () => withMemoryMutationAuthority(assertCurrent, run) : run;
   return params.apply || params.rem || params.rollback
     ? withMemoryWorkspaceLock(workspaceDir, execute)
     : execute();
@@ -392,10 +400,14 @@ async function executeSessionBackfillBatchCore(
   if (params.rollback) {
     // Backfill diary markers and grounded-only candidates are a shared artifact
     // class with rem-backfill; the stable removal APIs intentionally clear both.
-    const [diary, staged] = await Promise.all([
+    const removals = [
       removeBackfillDiaryEntries({ workspaceDir }),
       removeGroundedShortTermCandidates({ workspaceDir }),
-    ]);
+    ] as const;
+    const [diary, staged] = await Promise.all(removals).finally(async () => {
+      // Keep request authority and the workspace lease until both accepted removals settle.
+      await Promise.allSettled(removals);
+    });
     const rewind = await rewindSessionBackfillIngestionState({
       workspaceDir,
       agentId: params.agentId,
@@ -548,7 +560,5 @@ export async function runSessionBackfill(
 
   return await drainSessionBackfill({
     executeBatch: () => executeSessionBackfillBatch(params),
-    maxBatches: MAX_SESSION_BACKFILL_APPLY_BATCHES,
-    topCandidateLimit: TOP_CANDIDATE_LIMIT,
   });
 }

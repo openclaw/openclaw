@@ -315,9 +315,16 @@ exclusive offline ownership through resource settlement. It never replays an
 uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
 that require an offline Gateway. Optional `scopes` preserves the command's
 existing authorization contract; the default is `operator.admin`.
+Use `onNoOwner: "refuse"` after a multi-request operation has started on the
+Gateway, so later requests cannot acquire offline custody or load local config.
 
 Gateway handlers can use `captureLocalStateMutationGuard` from
 `openclaw/plugin-sdk/gateway-runtime` to bind the expected owner and current
 request authority, then pass the returned assertion to their existing writer
 admission and privileged-effect boundaries. `isImplicitLocalGatewayTargetFromCli`
 from that same entrypoint preserves explicit and configured remote CLI targets.
+`runWithLocalStateMutationOwner` adds the existing channel authority scope for
+plugin transport effects and disclosure; pass its assertion into the plugin's
+database writer and file publication boundaries too. Versioned owner-bound RPC
+names let CLI callers require updated plugin handlers without assuming that an
+updated Gateway also upgraded an independently installed plugin.

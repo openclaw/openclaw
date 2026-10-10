@@ -16,10 +16,12 @@ In encrypted (E2EE) rooms, outbound image events use `thumbnail_file` so image p
 
 All `openclaw matrix` commands accept `--verbose` (full diagnostics), `--json` (machine-readable output), and `--account <id>` (multi-account setups). Output is concise by default.
 
-Stop the local Gateway through its service owner before running these commands,
-including diagnostics, then restart it afterward. Commands refuse while the
-Gateway owns local state because account preparation and shutdown can persist
-crypto data. Offline commands retain exclusive ownership through that cleanup.
+`verify status`, `verify bootstrap`, and `verify device` use the running local
+Gateway's account and crypto owner. Other commands on this page require stopping
+the local Gateway through its service owner first, then restarting it afterward.
+Account preparation and shutdown can persist crypto data, so offline commands
+retain exclusive ownership through that cleanup. Unsupported Gateway versions
+and failed routed requests never fall back to local writes.
 
 ### Enable encryption
 

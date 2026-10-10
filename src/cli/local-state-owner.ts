@@ -44,6 +44,8 @@ export async function runWithLocalStateOwner<T>(params: {
   expectFinal?: boolean;
   /** Local inspection must stay read-only and must not load mutation-capable runtime config. */
   onForeignOwner?: "refuse" | ((scope: Omit<LocalMutationScope, "config">) => Promise<T>);
+  /** A multi-request operation already accepted by the Gateway must never continue offline. */
+  onNoOwner?: "refuse";
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
 }): Promise<T> {
@@ -213,6 +215,13 @@ export async function runWithLocalStateOwner<T>(params: {
     const owner = await discover();
     if (owner) {
       return await route(owner);
+    }
+    if (params.onNoOwner === "refuse") {
+      return refuse(
+        new Error(
+          "The selected Gateway is no longer running; inspect the operation before retrying",
+        ),
+      );
     }
     let lock;
     try {
