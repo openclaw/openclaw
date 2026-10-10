@@ -327,8 +327,8 @@ export type SqliteSessionReclamationResult =
       kind: "maintenance-finalize";
       value: {
         archivedTranscripts: SessionLifecycleArchivedTranscript[];
-        changedEntries: SessionEntryRemovalPlan[];
-        committedEntries: SessionEntryRemovalPlan[];
+        /** Positions in the captured plan; never echo its saved entry snapshots. */
+        committedEntryIndices: number[];
       };
     }
   | { kind: "entry"; value: DeleteSessionEntryLifecycleResult }

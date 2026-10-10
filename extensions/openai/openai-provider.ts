@@ -69,9 +69,9 @@ import {
   resolveOpenAICodexReasoningEfforts,
 } from "./model-route-contract.js";
 import {
+  buildOpenAICodexReadyOutcome,
   type OpenAILiveProviderCatalog,
   projectOpenAICatalog,
-  readOpenAICodexServiceTiers,
 } from "./model-service-tiers.js";
 import {
   buildOpenAIChatGPTAuthMethodRuns,
@@ -430,9 +430,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
     const models = rows
       .map((row) => buildOpenAICodexModelFromLiveRow(row, catalogRuntime))
       .filter((model): model is ModelDefinitionConfig => Boolean(model));
-    const modelServiceTiers = readOpenAICodexServiceTiers(rows);
-    // A successful account-scoped response is authoritative even when all
-    // rows are hidden; static hints must not invent subscription access.
     return {
       provider: {
         baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
@@ -440,11 +437,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
         auth: "oauth",
         models,
       },
-      outcome: {
-        provider: PROVIDER_ID,
-        status: "ready",
-        ...(modelServiceTiers.length ? { modelServiceTiers } : {}),
-      },
+      outcome: buildOpenAICodexReadyOutcome(rows),
     };
   } catch (error) {
     if (

@@ -26,7 +26,10 @@ requests. On Discord and Telegram, it also keeps the current operation and
 delegated task status visible without a detailed tool log or utility model.
 Intermediate tool failures and nonzero command exits stay out of the draft.
 Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `Bash: run tests`.
+including tool failures, with rows such as `Bash: run tests`. Telegram
+prefixes each tool row with a text glyph for its tool, such as
+`📖 Read: from docs/index.md`; other channels keep plain rows. Channel plugins opt in
+through the `toolIcons` option of `createChannelProgressDraftCompositor`.
 
 <Note>
   Discord and Telegram default to `progress` without additional config. Set
@@ -67,7 +70,7 @@ migration, see [Streaming and chunking](/concepts/streaming).
 | Status headline | On Discord and Telegram, the model preamble; Discord adds a utility filler. |
 | Label           | Optional starter/status line such as `Working`.                             |
 | Progress lines  | Plan milestones, enabled commentary/reasoning, and approval requests.       |
-| Tool log        | Optional tool rows using the same icons and detail formatter as `/verbose`. |
+| Tool log        | Optional tool rows using the same detail formatter as `/verbose`.           |
 
 The status headline sits above the progress lines. With
 `progress.toolProgress: true`, tool rows remain visible underneath it.
