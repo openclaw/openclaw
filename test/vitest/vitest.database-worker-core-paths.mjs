@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/interrupted-input-context.integration.test.ts",
   "src/agents/command-runtime.incognito.test.ts",
   "src/agents/runtime-recovery.incognito.test.ts",
   "src/agents/cli-runner/history-boundary.incognito.test.ts",
