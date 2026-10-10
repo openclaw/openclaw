@@ -67,11 +67,11 @@ type ReplyRunState = {
   followupAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   successorAdmissionBarriersByKey: Map<string, ReplyRunAdmissionBarrier>;
   sourceTurnByKey: Map<string, string>;
-  completionObservationsByKey?: Map<string, Set<ReplyRunCompletionObservation>>;
-  evictOperationByOperation?: WeakMap<ReplyOperation, () => void>;
-  clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
-  executionStartedOperations?: WeakSet<ReplyOperation>;
-  lifecycleAdmissionByOperation?: WeakMap<ReplyOperation, ReplyOperationAdmission>;
+  completionObservationsByKey: Map<string, Set<ReplyRunCompletionObservation>>;
+  evictOperationByOperation: WeakMap<ReplyOperation, () => void>;
+  clearOperationByOperation: WeakMap<ReplyOperation, () => void>;
+  executionStartedOperations: WeakSet<ReplyOperation>;
+  lifecycleAdmissionByOperation: WeakMap<ReplyOperation, ReplyOperationAdmission>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -84,10 +84,14 @@ export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STA
   followupAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   successorAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   sourceTurnByKey: new Map<string, string>(),
+  completionObservationsByKey: new Map(),
+  evictOperationByOperation: new WeakMap(),
+  clearOperationByOperation: new WeakMap(),
+  executionStartedOperations: new WeakSet(),
+  lifecycleAdmissionByOperation: new WeakMap(),
 }));
 // Admission and the active operation must remain visible across transformed SDK graphs.
-export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionByOperation ??=
-  new WeakMap<ReplyOperation, ReplyOperationAdmission>());
+export const lifecycleAdmissionByOperation = replyRunState.lifecycleAdmissionByOperation;
 
 /** Resolve only the supplied operation's borrow; a key lookup could select its successor. */
 export function getReplyOperationSessionReader(operation: ReplyOperation | undefined) {
@@ -104,10 +108,7 @@ export function acknowledgeReplySessionTransition(
 ) {
   return lifecycleAdmissionByOperation.get(operation)?.afterTransition?.(transition);
 }
-replyRunState.followupAdmissionBarriersByKey ??= new Map();
-replyRunState.successorAdmissionBarriersByKey ??= new Map();
-replyRunState.sourceTurnByKey ??= new Map();
-const replyRunCompletionObservations = (replyRunState.completionObservationsByKey ??= new Map());
+const replyRunCompletionObservations = replyRunState.completionObservationsByKey;
 
 /** Observe owner departures only for the lifetime of one awaited admission attempt. */
 export function observeReplyRunCompletions(sessionKey: string) {
@@ -162,11 +163,9 @@ export function prepareReplyRunKeyUpdate(
 }
 
 // Retain the owning closure across transformed SDK module graphs.
-export const clearReplyOperationByOperation = (replyRunState.clearOperationByOperation ??=
-  new WeakMap<ReplyOperation, () => void>());
+export const clearReplyOperationByOperation = replyRunState.clearOperationByOperation;
 
-export const evictReplyOperationByOperation = (replyRunState.evictOperationByOperation ??=
-  new WeakMap<ReplyOperation, () => void>());
+export const evictReplyOperationByOperation = replyRunState.evictOperationByOperation;
 
 export function notifyReplyRunEnded(sessionKey: string): void {
   // Rekey departures invalidate reads without granting destination-lane lineage.
@@ -223,8 +222,7 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
 }
 
 export const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
-const executionStartedOperations = (replyRunState.executionStartedOperations ??=
-  new WeakSet<ReplyOperation>());
+const executionStartedOperations = replyRunState.executionStartedOperations;
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
   executionStartedOperations.add(operation);
   notifyGatewayWorkMetricsChanged();
@@ -675,7 +673,7 @@ export function clearReplyRunState(operation: ReplyOperation): void {
     }
     return;
   }
-  for (const observation of replyRunState.completionObservationsByKey?.get(sessionKey) ?? []) {
+  for (const observation of replyRunState.completionObservationsByKey.get(sessionKey) ?? []) {
     if (
       !operation.result ||
       operation.key !== sessionKey ||
