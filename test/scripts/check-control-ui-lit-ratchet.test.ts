@@ -49,6 +49,10 @@ describe("Control UI Lit ratchet", () => {
           'import { html as markup } from "lit"; import { state as mark } from "lit/decorators.js"; const view = (markup)`<div />`; (this.requestUpdate)(); class C { @(mark()) value = 0; }',
         ],
         ["import-equals.cts", 'import Lit = require("lit");'],
+        [
+          "commonjs.cts",
+          'const Lit = require("lit"); const { html: markup } = Lit; const draw = markup; const { state: mark } = require("lit/decorators.js"); const { Task: Work } = require("@lit/task"); class C { @mark() value = 0; work = new Work(this, {}); render() { return draw`<div />`; } }',
+        ],
       ]),
     );
     expect(counts.get("view.ts")).toMatchObject({
@@ -68,6 +72,12 @@ describe("Control UI Lit ratchet", () => {
       stateDecorators: 1,
     });
     expect(counts.get("import-equals.cts")).toMatchObject({ litImports: 1 });
+    expect(counts.get("commonjs.cts")).toMatchObject({
+      litImports: 3,
+      htmlTemplates: 1,
+      stateDecorators: 1,
+      tasks: 1,
+    });
     expect(counts.get("plain.ts")).toMatchObject({
       litImports: 0,
       htmlTemplates: 0,
@@ -81,13 +91,20 @@ describe("Control UI Lit ratchet", () => {
   it("passes shrinkage, rejects each growing metric and new Lit files, and reads staged bytes", () => {
     const root = tempDirs.make("openclaw-lit-ratchet-");
     const sourcePath = path.join(root, "ui/src/view.ts");
+    const commonjsPath = path.join(root, "ui/src/legacy.cts");
+    const commonjs = 'const { html: markup } = require("lit");';
     fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
     fs.writeFileSync(sourcePath, legacy);
+    fs.writeFileSync(commonjsPath, commonjs);
     for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) git(root, args);
     const errors: string[] = [];
     vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
     vi.spyOn(console, "log").mockImplementation(() => {});
     expect(main(root, ["--base", "HEAD"])).toBe(0);
+    fs.writeFileSync(commonjsPath, commonjs + "\nconst view = markup`<div />`;");
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.join("\n")).toContain("ui/src/legacy.cts [htmlTemplates]: 1 > 0");
+    fs.writeFileSync(commonjsPath, commonjs);
     fs.writeFileSync(sourcePath, "export {};\n");
     expect(main(root, ["--base", "HEAD"])).toBe(0);
     for (const [addition, metric] of [
@@ -118,6 +135,7 @@ describe("Control UI Lit ratchet", () => {
       "export const lib = import(`lit`);",
       'export const lib = import((("lit")));',
       'export const lib = require(("lit" as const));',
+      'import "@lit-labs/scoped-registry-mixin";',
     ]) {
       fs.writeFileSync(newPath, source);
       errors.length = 0;

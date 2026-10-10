@@ -29,7 +29,7 @@ function isLitModule(node: ts.Node | undefined) {
   const literal = unwrap(node);
   return (
     (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal)) &&
-    /^(?:lit(?:-html|-element)?|@lit\/[^/]+)(?:\/|$)/u.test(literal.text)
+    /^(?:lit(?:-html|-element)?|@lit(?:-labs)?\/[^/]+)(?:\/|$)/u.test(literal.text)
   );
 }
 
@@ -86,12 +86,24 @@ export type MigrationMetrics = ReturnType<typeof emptyMetrics>;
 
 function nameOf(node: ts.Node): string | undefined {
   node = unwrap(node);
+  if (ts.isComputedPropertyName(node)) return nameOf(node.expression);
   if (ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))
     return node.text;
   if (ts.isPropertyAccessExpression(node)) return node.name.text;
   if (ts.isElementAccessExpression(node) && node.argumentExpression)
     return nameOf(node.argumentExpression);
   return undefined;
+}
+
+function isLitLoad(node: ts.Node): boolean {
+  node = unwrap(node);
+  if (ts.isAwaitExpression(node)) return isLitLoad(node.expression);
+  return (
+    ts.isCallExpression(node) &&
+    (unwrap(node.expression).kind === ts.SyntaxKind.ImportKeyword ||
+      nameOf(node.expression) === "require") &&
+    isLitModule(node.arguments[0])
+  );
 }
 
 export function countMigrationSources(root: string, sources: ReadonlyMap<string, string>) {
@@ -110,9 +122,11 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
     }
     const metrics = emptyMetrics();
     const aliases = new Map<string, string>();
+    const namespaces = new Set<string>();
     for (const statement of tree.statements) {
       if (!ts.isImportDeclaration(statement) || !isLitModule(statement.moduleSpecifier)) continue;
       const bindings = statement.importClause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
       if (bindings && ts.isNamedImports(bindings)) {
         for (const binding of bindings.elements)
           aliases.set(binding.name.text, (binding.propertyName ?? binding.name).text);
@@ -122,6 +136,52 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
       const name = nameOf(node);
       return name ? (aliases.get(name) ?? name) : undefined;
     };
+    const isLitNamespace = (node: ts.Node): boolean => {
+      const expression = unwrap(node);
+      return (
+        isLitLoad(expression) || (ts.isIdentifier(expression) && namespaces.has(expression.text))
+      );
+    };
+    const collectBindings = (node: ts.Node): void => {
+      if (
+        ts.isImportEqualsDeclaration(node) &&
+        ts.isExternalModuleReference(node.moduleReference) &&
+        isLitModule(node.moduleReference.expression)
+      )
+        namespaces.add(node.name.text);
+      if (ts.isVariableDeclaration(node) && node.initializer) {
+        const initializer = unwrap(node.initializer);
+        if (isLitNamespace(initializer)) {
+          if (ts.isIdentifier(node.name)) namespaces.add(node.name.text);
+          if (ts.isObjectBindingPattern(node.name)) {
+            for (const binding of node.name.elements) {
+              if (!ts.isIdentifier(binding.name)) continue;
+              if (binding.dotDotDotToken) {
+                namespaces.add(binding.name.text);
+                continue;
+              }
+              const imported = nameOf(binding.propertyName ?? binding.name);
+              if (imported) aliases.set(binding.name.text, imported);
+            }
+          }
+        } else if (ts.isIdentifier(node.name)) {
+          if (ts.isIdentifier(initializer) && aliases.has(initializer.text))
+            aliases.set(node.name.text, aliases.get(initializer.text)!);
+          if (ts.isPropertyAccessExpression(initializer) && isLitNamespace(initializer.expression))
+            aliases.set(node.name.text, initializer.name.text);
+          if (
+            ts.isElementAccessExpression(initializer) &&
+            isLitNamespace(initializer.expression) &&
+            initializer.argumentExpression
+          ) {
+            const imported = nameOf(initializer.argumentExpression);
+            if (imported) aliases.set(node.name.text, imported);
+          }
+        }
+      }
+      node.forEachChild(collectBindings);
+    };
+    collectBindings(tree);
     const visit = (node: ts.Node): void => {
       // Count module references, including side-effect imports, exports, import types,
       // and dynamic imports. Comments and ordinary strings never become imports.
@@ -144,11 +204,7 @@ export function countMigrationSources(root: string, sources: ReadonlyMap<string,
         metrics.litImports++;
       if (ts.isCallExpression(node)) {
         const expression = unwrap(node.expression);
-        if (
-          (expression.kind === ts.SyntaxKind.ImportKeyword || nameOf(expression) === "require") &&
-          isLitModule(node.arguments[0])
-        )
-          metrics.litImports++;
+        if (isLitLoad(node)) metrics.litImports++;
         if (nameOf(node.expression) === "requestUpdate") metrics.requestUpdate++;
         if (
           ts.isPropertyAccessExpression(expression) &&
