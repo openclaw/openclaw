@@ -3,15 +3,11 @@ openclaw-chat-details {
   min-width: 0;
 }
 
-/* Reserve a header row so Details cannot cover the transcript's first actions. */
+/* One gutter owns notices, Details, and suggestions so their controls never overlap. */
 .chat-gutter-stack--details {
-  position: relative;
-  top: auto;
-  right: auto;
-  order: -1;
-  flex: 0 0 auto;
-  width: auto;
-  margin: calc(var(--chat-mobile-pane-header-height, 0px) + 10px) 14px 0;
+  width: calc(100% - 28px);
+  max-height: calc(100cqh - var(--chat-mobile-pane-header-height, 0px) - 20px);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .chat-gutter-stack--details .chat-gutter-header {
@@ -36,13 +32,6 @@ openclaw-chat-details {
 }
 
 .chat-gutter-stack--details .task-suggestions {
-  /* Suggestions still overlay the transcript, below the reserved header. */
-  position: absolute;
-  top: calc(100% + var(--space-3));
-  right: 0;
-  max-height: calc(
-    100cqh - 100% - var(--chat-mobile-pane-header-height, 0px) - 20px - var(--space-3)
-  );
   width: min(450px, 100%);
   min-height: 0;
 }
