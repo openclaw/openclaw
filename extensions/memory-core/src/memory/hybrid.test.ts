@@ -5,7 +5,7 @@ import {
   scoreExactPathTieForTemporalDecay,
   selectHybridSearchResults,
 } from "./hybrid.js";
-import { bm25RankToScore, buildFtsQuery } from "./keyword-query.js";
+import { bm25RankToScore } from "./keyword-query.js";
 
 type HybridInputs = Parameters<typeof mergeHybridResults>[0];
 type VectorHit = HybridInputs["vector"][number];
@@ -38,14 +38,6 @@ function keywordHit(id: string, textScore: number, details: Partial<KeywordHit> 
 }
 
 describe("memory hybrid helpers", () => {
-  it("buildFtsQuery tokenizes and AND-joins", () => {
-    expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
-    expect(buildFtsQuery("FOO_bar baz-1")).toBe('"FOO_bar" AND "baz" AND "1"');
-    expect(buildFtsQuery("金银价格")).toBe('"金银价格"');
-    expect(buildFtsQuery("価格 2026年")).toBe('"価格" AND "2026年"');
-    expect(buildFtsQuery("   ")).toBeNull();
-  });
-
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);

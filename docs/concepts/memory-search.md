@@ -84,6 +84,10 @@ flowchart LR
 - **BM25 keyword search** matches exact terms (IDs, error strings, config
   keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
   rebuilding existing indexes, including notes that mix those forms across words.
+  Search first requires every query term. Only when neither body nor filename
+  search finds a match does it retry body search once with any query term and
+  language-specific keyword expansion, ranked by BM25. This recovers answers without broadening a
+  keyword query that already has matches.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,
   while snippets and body keyword scores still come from note content.

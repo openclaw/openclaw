@@ -425,7 +425,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         preparedKeyword = undefined;
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available
-            ? await this.searchKeywordWithFallback(
+            ? await this.searchKeyword(
                 normalizedQuery,
                 candidates,
                 keywordOptions,

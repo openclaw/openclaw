@@ -333,7 +333,7 @@ describe("memory index", () => {
     expect(results[0]?.path).toContain("memory/body-match.md");
   });
 
-  it("bounds the merged six-term fallback candidate set", async () => {
+  it("bounds the relaxed keyword candidate set", async () => {
     providerFixture.forceNoProvider = true;
     const manager = await getPersistentManager(createCfg({ provider: "none", minScore: 0 }));
     const terms = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
