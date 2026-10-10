@@ -141,8 +141,9 @@ export function registerWorkboardGatewayMethods(params: {
     handler: (request: GatewayMethodContext) => unknown,
   ) => {
     const requestHandler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1] = async (
-      request,
+      initialRequest,
     ) => {
+      let request = initialRequest;
       let assertOwnerCurrent: (() => void) | undefined;
       if (request.params?.expectedOwnerId !== undefined) {
         try {

@@ -132,25 +132,14 @@ const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
 const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
   /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
 
-function stripSensitiveQueryParamsFromText(rawUrl: string): string {
-  let sanitized = rawUrl;
-  for (;;) {
-    const next = sanitized
-      .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
-        match.endsWith("&") ? separator : "",
-      )
-      .replace(/[?&]$/, "")
-      .replace("?&", "?");
-    if (next === sanitized) {
-      return next;
-    }
-    sanitized = next;
+function sanitizeControlUiPublicUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
   }
-}
-
-function stripSensitiveQueryParams(rawUrl: string): string {
+  const fragmentIndex = rawUrl.indexOf("#");
+  let sanitized = fragmentIndex === -1 ? rawUrl : rawUrl.slice(0, fragmentIndex);
   try {
-    const url = new URL(rawUrl);
+    const url = new URL(sanitized);
     for (const key of Array.from(url.searchParams.keys())) {
       if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
         url.searchParams.delete(key);
@@ -158,17 +147,19 @@ function stripSensitiveQueryParams(rawUrl: string): string {
     }
     return url.toString();
   } catch {
-    return stripSensitiveQueryParamsFromText(rawUrl);
+    for (;;) {
+      const next = sanitized
+        .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
+          match.endsWith("&") ? separator : "",
+        )
+        .replace(/[?&]$/, "")
+        .replace("?&", "?");
+      if (next === sanitized) {
+        return next;
+      }
+      sanitized = next;
+    }
   }
-}
-
-function sanitizeControlUiPublicUrl(url: string | null): string | null {
-  if (!url) {
-    return null;
-  }
-  const fragmentIndex = url.indexOf("#");
-  const withoutFragment = fragmentIndex === -1 ? url : url.slice(0, fragmentIndex);
-  return stripSensitiveQueryParams(withoutFragment);
 }
 
 const QA_EVIDENCE_CONTENT_TYPES: Record<string, string> = {

@@ -287,21 +287,6 @@ suite.define(() => {
             const tool = createSessionsSendTool({
               agentSessionKey: "agent:main:main",
               expectedTargetSessionId: sessionId,
-              callGateway: async (request) =>
-                await page.evaluate(
-                  async ({ method, params }) => {
-                    const app = document.querySelector("openclaw-app") as HTMLElement & {
-                      runtime: {
-                        context: { gateway: { snapshot: { client: GatewayBrowserClient } } };
-                      };
-                    };
-                    return await app.runtime.context.gateway.snapshot.client.request(
-                      method,
-                      params,
-                    );
-                  },
-                  { method: request.method, params: request.params },
-                ),
             });
             const sent = await tool.execute("setup-send", {
               sessionKey,

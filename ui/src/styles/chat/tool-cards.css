@@ -874,6 +874,10 @@
   overflow: visible;
 }
 
+.chat-tool-card__preview[data-content-kind="canvas-html"] {
+  border-radius: 0;
+}
+
 /* MCP Apps are responsive documents, so give them the assistant column instead
    of letting the content-sized reply bubble collapse their iframe to ~300px. */
 .chat-group.assistant .chat-bubble:has(> .chat-tool-card__widget-host) {
@@ -934,8 +938,9 @@
 .chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
   top: auto;
   bottom: 100%;
-  left: auto;
-  right: 0;
+  /* Keep the top-right gutter clear for Details without moving the transcript. */
+  left: 0;
+  right: auto;
   flex-direction: row;
   padding: 0;
   opacity: 0.6;

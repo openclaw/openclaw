@@ -420,22 +420,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompts[2]).toBe(prompts[0]);
   });
 
-  it("keeps date rollover and timezone changes below the prompt-cache boundary", () => {
-    const build = (userDate: string, userTimezone: string) =>
-      buildPromptParts({ toolNames: ["session_status"], userDate, userTimezone });
-    const first = build("2026-01-05", "America/Chicago");
-    const nextDay = build("2026-01-06", "America/Chicago");
-    const nextZone = build("2026-01-06", "Asia/Tokyo");
-    expect(first.prefix).toBe(nextDay.prefix);
-    expect(first.prefix).toBe(nextZone.prefix);
-    expect(first.prefix).not.toContain("2026-01-05");
-    expect(first.prefix).not.toContain("America/Chicago");
-    expect(first.suffix).toContain("## Temporal Context");
-    expect(first.suffix).toContain("Time zone: America/Chicago");
-    expect(first.suffix).toContain("Current date: 2026-01-05");
-    expect(nextDay.suffix).toContain("Current date: 2026-01-06");
-    expect(nextZone.suffix).toContain("Time zone: Asia/Tokyo");
-  });
+  it.each(["full", "minimal", "none"] as const)(
+    "keeps the entire %s system prompt byte-identical across midnight",
+    (promptMode) => {
+      const clock = vi.spyOn(Date, "now");
+      const build = (now: string) => {
+        clock.mockReturnValue(Date.parse(now));
+        return renderPrompt({
+          ...buildSystemPromptParams({
+            config: { agents: { defaults: { userTimezone: "America/Chicago" } } },
+            runtime: { host: "host", os: "os", arch: "arch", node: "node", model: "model" },
+          }),
+          promptMode,
+          toolNames: ["session_status"],
+        });
+      };
+      try {
+        const beforeMidnight = build("2026-01-06T05:59:59Z");
+        const afterMidnight = build("2026-01-06T06:00:01Z");
+        expect(afterMidnight).toBe(beforeMidnight);
+        expect(beforeMidnight).not.toContain("Current date:");
+        expect(beforeMidnight).not.toContain("Time zone:");
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
 
   it.each<PromptCase>([
     [

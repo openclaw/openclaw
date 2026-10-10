@@ -258,6 +258,7 @@ function hybridResultRangeKey(entry: HybridResultRange): string {
 export function selectHybridSearchResults<TSource extends HybridSource>(params: {
   merged: HybridSearchResult<TSource>[];
   keyword: HybridResultRange<TSource>[];
+  vectorCandidates: HybridResultRange<TSource>[];
   maxResults: number;
   minScore: number;
 }): HybridSearchResult<TSource>[] {
@@ -268,16 +269,17 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
   }
 
   const keywordKeys = new Set(params.keyword.map((entry) => hybridResultRangeKey(entry)));
+  const isLexicalCandidate = (entry: HybridSearchResult<TSource>) =>
+    entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry));
   if (strict.length === 0) {
     // Preserve the established all-lexical fallback when every weighted score
     // is below the configured threshold.
-    return params.merged
-      .filter((entry) => entry.score >= 0 && keywordKeys.has(hybridResultRangeKey(entry)))
-      .slice(0, params.maxResults);
+    return params.merged.filter(isLexicalCandidate).slice(0, params.maxResults);
   }
 
-  // Strict recall owns the result window. MMR-ranked keyword-only hits may use
-  // spare capacity, but must never displace a qualifying result.
+  // Score completion does not turn a keyword-only candidate into a vector
+  // candidate. Preserve its spare-capacity eligibility after enrichment.
+  const vectorKeys = new Set(params.vectorCandidates.map(hybridResultRangeKey));
   const seen = new Set(selected.map((entry) => hybridResultRangeKey(entry)));
   for (const entry of params.merged) {
     if (selected.length === params.maxResults) {
@@ -286,8 +288,8 @@ export function selectHybridSearchResults<TSource extends HybridSource>(params: 
     const key = hybridResultRangeKey(entry);
     if (
       entry.score < params.minScore &&
-      entry.vectorScore === 0 &&
-      keywordKeys.has(key) &&
+      (entry.vectorScore === 0 || !vectorKeys.has(key)) &&
+      isLexicalCandidate(entry) &&
       !seen.has(key)
     ) {
       seen.add(key);

@@ -115,11 +115,14 @@ export async function runWithLocalStateOwner<T>(params: {
   const discover = async () => {
     try {
       assertTargetCurrent();
-      return await readActiveGatewayLockIdentity({
+      const options = {
         env,
         requireInspection: true,
         signal: controller.signal,
-      });
+      };
+      return params.onForeignOwner
+        ? await readActiveGatewayLockIdentity({ ...options, includeEmbedded: true })
+        : await readActiveGatewayLockIdentity(options);
     } catch (error) {
       return refuse(error);
     }
@@ -136,7 +139,9 @@ export async function runWithLocalStateOwner<T>(params: {
     assertCurrent();
     return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
   };
-  const route = async (owner: GatewayLockIdentity): Promise<T> => {
+  const route = async (
+    owner: Omit<GatewayLockIdentity, "port"> & { port?: number },
+  ): Promise<T> => {
     if (typeof params.onForeignOwner === "function") {
       assertTargetCurrent();
       const result = await params.onForeignOwner({
@@ -153,6 +158,10 @@ export async function runWithLocalStateOwner<T>(params: {
     if (!owner.ownerId) {
       return refuse(new Error("Gateway lacks the expected-owner contract; update the Gateway."));
     }
+    const port = owner.port;
+    if (port === undefined) {
+      return refuse(new Error("The state owner has no Gateway listener"));
+    }
     const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
     let dispatched = false;
     try {
@@ -162,7 +171,7 @@ export async function runWithLocalStateOwner<T>(params: {
         method: params.method,
         configPath: paths.configPath,
         params: { ...input, expectedOwnerId: owner.ownerId },
-        localPortOverride: owner.port,
+        localPortOverride: port,
         ignoreEnvUrlOverride: true,
         requiredMethods: [params.method],
         requiredCapabilities: [
@@ -177,7 +186,11 @@ export async function runWithLocalStateOwner<T>(params: {
         mode: GATEWAY_CLIENT_MODES.CLI,
         prepareDispatchCurrent: async () => {
           const current = await discover();
-          if (!current || !isSameGatewayLockIdentity(owner, current)) {
+          if (
+            !current ||
+            current.port === undefined ||
+            !isSameGatewayLockIdentity({ ...owner, port }, { ...current, port: current.port })
+          ) {
             refuse(new Error("Gateway owner changed before dispatch"));
           }
         },

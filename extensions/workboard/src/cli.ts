@@ -270,6 +270,8 @@ export function registerWorkboardCli(params: {
               await store.dispatch({ boardId: options.board, assertOwnerCurrent: assertCurrent }),
             ),
             gatewayUnavailable: true,
+            started: [],
+            startFailures: [],
           }),
           {
             scopes,

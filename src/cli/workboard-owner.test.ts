@@ -1,19 +1,28 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import workboard from "../../extensions/workboard/index.js";
-import { registerWorkboardGatewayMethods } from "../../extensions/workboard/runtime-api.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
 import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
+import {
+  loadBundledPluginFacade,
+  resolveBundledPluginPublicModulePath,
+} from "../test-utils/bundled-plugin-public-surface.js";
 import { useLocalStateOwnerFixture } from "./local-state-owner.fixture.test-support.js";
 const fixture = useLocalStateOwnerFixture();
 const { invoke, transport: ownerTransport } = fixture;
-const runtimeSource = fileURLToPath(
-  new URL("../../extensions/workboard/index.ts", import.meta.url),
-);
+const runtimeSource = resolveBundledPluginPublicModulePath({
+  pluginId: "workboard",
+  artifactBasename: "index.js",
+});
+const { default: workboard } = await loadBundledPluginFacade<{
+  default: { register(api: OpenClawPluginApi): void };
+}>({ pluginId: "workboard", artifactBasename: "index.js" });
+const { registerWorkboardGatewayMethods } = await loadBundledPluginFacade<{
+  registerWorkboardGatewayMethods: (params: { api: OpenClawPluginApi }) => void;
+}>({ pluginId: "workboard", artifactBasename: "runtime-api.js" });
 async function program() {
   const result = new Command().exitOverride();
   const registrars: Array<Parameters<OpenClawPluginApi["registerCli"]>[0]> = [];
@@ -108,7 +117,7 @@ describe("Workboard CLI owner routing", () => {
         }
         return { runId: "accepted-run" };
       });
-      await startOwner({ subagent: { run } } as OpenClawPluginApi["runtime"]);
+      await startOwner(createPluginRuntimeMock({ subagent: { run } }));
       const cli = await program();
       await cli.parseAsync(["workboard", "create", "First", "--status", "ready"], { from: "user" });
       await cli.parseAsync(["workboard", "create", "Later", "--status", "ready"], { from: "user" });
@@ -145,7 +154,14 @@ describe("Workboard CLI owner routing", () => {
     await expect(fs.stat(database)).rejects.toMatchObject({ code: "ENOENT" });
     await cli.parseAsync(["workboard", "create", "Offline card"], { from: "user" });
     await cli.parseAsync(["workboard", "list", "--json"], { from: "user" });
-    expect(process.stdout.write).toHaveBeenCalledWith(expect.stringContaining("Offline card"));
+    expect(fixture.output).toContain("Offline card");
+    const outputStart = fixture.output.length;
+    await cli.parseAsync(["workboard", "dispatch", "--json"], { from: "user" });
+    expect(JSON.parse(fixture.output.slice(outputStart))).toMatchObject({
+      gatewayUnavailable: true,
+      started: [],
+      startFailures: [],
+    });
     expect(ownerTransport.request).not.toHaveBeenCalled();
     expect(await readActiveGatewayLockIdentity({ env: process.env })).toBeUndefined();
   });

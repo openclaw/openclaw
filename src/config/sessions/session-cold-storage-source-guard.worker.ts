@@ -117,7 +117,7 @@ export function prepareSessionColdSourceGuard(
         readSessionSourceValidation(reader, [predicate], undefined, foreign ? undefined : entries);
       const current = foreign
         ? runSqliteDeferredTransactionSync(reader.db, () =>
-            runSqliteReadOperationSync(reader.db, readPredicate, "fresh"),
+            runSqliteReadOperationSync(reader.db, readPredicate),
           )
         : readPredicate();
       if (current.refusedSource) {

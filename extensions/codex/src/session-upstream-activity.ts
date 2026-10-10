@@ -127,7 +127,7 @@ function normalizeUserMessageTexts(item: CodexTurn["items"][number]): string[] {
 async function checkCodexUpstreamActivity(
   probes: SessionUpstreamProbe[],
   control: CodexUpstreamControl,
-  resolveThreadId: (probe: SessionUpstreamProbe) => string,
+  resolveThreadId: (probe: SessionUpstreamProbe) => Promise<string>,
 ): Promise<SessionUpstreamActivity[]> {
   return await control.withPinnedConnection(async (pinned) => {
     const activities: SessionUpstreamActivity[] = [];
@@ -141,7 +141,7 @@ async function checkCodexUpstreamActivity(
         continue;
       }
       try {
-        const threadId = resolveThreadId(probe);
+        const threadId = await resolveThreadId(probe);
         const page = await pinned
           .listTurnPage({
             threadId,
@@ -185,10 +185,14 @@ export function createChecker(params: {
   control: CodexSessionCatalogControlFactory;
   getRuntimeConfig: () => OpenClawConfig | undefined;
 }): NonNullable<SessionCatalogProvider["checkUpstreamActivity"]> {
-  const resolveThreadId = (probe: SessionUpstreamProbe) => {
+  const resolveThreadId = async (probe: SessionUpstreamProbe) => {
     const config = params.getRuntimeConfig();
-    const entry = params.api.runtime.agent.session.getSessionEntry({
+    const storePath = params.api.runtime.agent.session.resolveStorePath(config?.session?.store, {
       agentId: probe.agentId,
+    });
+    const entry = await params.api.runtime.agent.session.getSessionEntryAsync({
+      agentId: probe.agentId,
+      storePath,
       sessionKey: probe.sessionKey,
       readConsistency: "latest",
     });
