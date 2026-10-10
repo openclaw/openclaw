@@ -114,11 +114,9 @@ export class ConnectMachineSetupState {
                         >${setup.installedCommand}</code
                       >
                     </p>
-                    ${
-                      setup.versionNote
-                        ? html`<p class="connect-machine-dialog__hint">${setup.versionNote}</p>`
-                        : nothing
-                    }
+                    <p class="connect-machine-dialog__hint" ?hidden=${!setup.versionNote}>
+                      ${setup.versionNote}
+                    </p>
                     <details>
                       <summary>${t("newSession.connectMachineCommandOnly")}</summary>
                       ${renderConnectCommand(setup.serviceCommand)}
