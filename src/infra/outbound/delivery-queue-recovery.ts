@@ -124,6 +124,7 @@ type EntryRecoveryOptions = RecoveryOptions & {
     results: OutboundDeliveryResult[],
     outcomes: OutboundPayloadDeliveryOutcome[],
   ) => void;
+  onAttemptFailed?: (error: OutboundDeliveryError) => void;
 };
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedDelivery>();
@@ -656,12 +657,16 @@ async function drainQueuedEntry(
   const messageSentEvents: IndexedMessageSentEvent[] = [];
   let postSendState: QueuedPostSendState | undefined;
   let platformSendStarted = false;
+  let attemptError: OutboundDeliveryError | undefined;
   let deliveredResults: OutboundDeliveryResult[] = [];
   let commitHooksRun = false;
   const collectPayloadOutcome = (outcome: OutboundPayloadDeliveryOutcome): void => {
     if (!payloadOutcomes.includes(outcome)) {
       payloadOutcomes.push(outcome);
     }
+  };
+  const recordAttemptError = (error: unknown): void => {
+    attemptError = owner.project(error, { results: deliveredResults, payloadOutcomes });
   };
   const runCommitHooksAfterAck = async (): Promise<void> => {
     if (postSendState !== "acked" || commitHooksRun) {
@@ -821,6 +826,7 @@ async function drainQueuedEntry(
       }
       opts.onFailed?.(entry, error);
       opts.log.warn(`Delivery entry ${entry.id} ${error}; preserving unknown_after_send`);
+      recordAttemptError(new Error(error));
       // The pending row still owns reconciliation. Emit its one stable terminal
       // only when recovery later acks or dead-letters that durable custody.
       return "failed";
@@ -852,6 +858,7 @@ async function drainQueuedEntry(
       const errMsg = "recovered send completed but queue finalization failed";
       opts.onFailed?.(entry, errMsg);
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}; preserving unknown_after_send`);
+      recordAttemptError(new Error(errMsg));
       return "failed";
     }
     if (postSendState !== "acked") {
@@ -876,6 +883,7 @@ async function drainQueuedEntry(
         }
         opts.onFailed?.(entry, ackError);
         opts.log.warn(`Delivery entry ${entry.id} ${ackError}`);
+        recordAttemptError(new Error(ackError));
         return "failed";
       }
     }
@@ -897,9 +905,15 @@ async function drainQueuedEntry(
     }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
-    if (isOutboundDeliveryError(err) && err.results.length > 0) {
-      deliveredResults = [...err.results];
+    if (isOutboundDeliveryError(err)) {
+      if (err.results.length > 0) {
+        deliveredResults = [...err.results];
+      }
+      for (const outcome of err.payloadOutcomes) {
+        collectPayloadOutcome(outcome);
+      }
     }
+    recordAttemptError(err);
     const hasSendEvidence =
       deliveredResults.length > 0 ||
       postSendState !== undefined ||
@@ -989,6 +1003,12 @@ async function drainQueuedEntry(
     );
     if (!pending) {
       await releaseSpoolArtifacts(recoverySpoolPaths, opts.stateDir);
+    }
+    if (attemptError) {
+      if (!pending) {
+        attemptError.queueCustody = "released";
+      }
+      opts.onAttemptFailed?.(attemptError);
     }
   }
 }
@@ -1145,34 +1165,54 @@ async function processQueuedRecovery(
   return result === "stopped" ? "stop" : "continue";
 }
 
+type LiveFinalDeliveryResult =
+  | { status: "not-attempted" }
+  | {
+      status: "recovered";
+      results: OutboundDeliveryResult[];
+      payloadOutcomes: OutboundPayloadDeliveryOutcome[];
+    }
+  | {
+      status: "failed";
+      error: OutboundDeliveryError;
+      results: OutboundDeliveryResult[];
+      payloadOutcomes: OutboundPayloadDeliveryOutcome[];
+    };
+
 /** The live producer keeps its claim and waits for the same recovery owner as restart. */
 export async function recoverLiveFinalDelivery(
   params: RecoveryOptions & {
     entryId: string;
-    onDelivered: NonNullable<EntryRecoveryOptions["onDelivered"]>;
   },
   stateContext: DeliveryQueueStateContext,
-): Promise<OutboundDeliveryResult[] | undefined> {
+): Promise<LiveFinalDeliveryResult> {
   const entry = await loadUnfinishedDelivery(params.entryId, params.stateDir, stateContext);
   if (!entry || !canReplayAmbiguousFinalText(entry) || entry.settlement) {
-    return undefined;
+    return { status: "not-attempted" };
   }
   const eligibility = isDeliveryRecoveryRetryEligible(entry, Date.now());
   if (!eligibility.eligible) {
     await sleep(eligibility.remainingBackoffMs);
   }
-  let results: OutboundDeliveryResult[] | undefined;
+  const outcome: { value: LiveFinalDeliveryResult } = { value: { status: "not-attempted" } };
   const current = await loadUnfinishedDelivery(entry.id, params.stateDir, stateContext);
   if (!current) {
-    return undefined;
+    return outcome.value;
   }
   await processQueuedRecovery(
     {
       ...params,
       entry: current,
       onDelivered: (delivered, outcomes) => {
-        results = delivered;
-        params.onDelivered(delivered, outcomes);
+        outcome.value = { status: "recovered", results: delivered, payloadOutcomes: outcomes };
+      },
+      onAttemptFailed: (error) => {
+        outcome.value = {
+          status: "failed",
+          error,
+          results: error.results,
+          payloadOutcomes: error.payloadOutcomes,
+        };
       },
     },
     {
@@ -1182,17 +1222,20 @@ export async function recoverLiveFinalDelivery(
     },
     stateContext,
   );
-  if (results !== undefined) {
-    return results;
+  if (outcome.value.status === "recovered") {
+    return outcome.value;
   }
   const pending = await loadUnfinishedDelivery(entry.id, params.stateDir, stateContext);
   if (pending && resolveDeliveryQueueAttemptCount(pending) >= resolveMaxRetries(pending)) {
-    await settleQueuedFailure(
+    const settled = await settleQueuedFailure(
       { ...params, entry: pending, error: pending.lastError ?? "delivery retry budget exhausted" },
       stateContext,
     );
+    if (settled === "moved-to-failed" && outcome.value.status === "failed") {
+      outcome.value.error.queueCustody = "released";
+    }
   }
-  return undefined;
+  return outcome.value;
 }
 
 export async function drainPendingDeliveriesCore(

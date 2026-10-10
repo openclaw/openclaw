@@ -29,6 +29,7 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type * as SleepModule from "../../utils/sleep.js";
+import { sleep } from "../../utils/sleep.js";
 import { sendDurableMessageBatchCore } from "../message/send.js";
 import type { ChannelMessageSendTextContext } from "../message/types.js";
 import {
@@ -198,16 +199,71 @@ describe("final delivery after plugin replacement", () => {
     expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
   });
 
-  it("returns terminal failure only after its one automatic retry is exhausted", async () => {
+  it("reports the second failure after its one automatic retry is exhausted", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
     const fixture = await replacementFixture({ sameGeneration: true });
-    fixture.sendText.mockRejectedValue(
-      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-    );
-    await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
+    fixture.sendText
+      .mockRejectedValueOnce(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))
+      .mockRejectedValueOnce(new Error("Telegram rejected the saved final"));
+    await expect(fixture.deliver()).resolves.toMatchObject({
+      status: "failed",
+      error: { message: "Telegram rejected the saved final", queueCustody: "released" },
+    });
     expect(fixture.sendText).toHaveBeenCalledTimes(2);
     expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
   });
+
+  it("retains the accepted chunk when the final retry fails without replaying it", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ sameGeneration: true });
+    fixture.sendText
+      .mockRejectedValueOnce(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))
+      .mockImplementationOnce(async (ctx) => {
+        await ctx.onDeliveryResult?.({ messageId: "accepted-retry-chunk" });
+        throw new Error("second retry chunk rejected");
+      });
+    await expect(fixture.deliver()).resolves.toMatchObject({
+      status: "failed",
+      sentBeforeError: true,
+      error: {
+        message: "second retry chunk rejected",
+        deliveryResult: { visibleReplySent: true, messageIds: ["accepted-retry-chunk"] },
+        cause: {
+          results: [expect.objectContaining({ messageId: "accepted-retry-chunk" })],
+          payloadOutcomes: [expect.objectContaining({ status: "failed", sentBeforeError: true })],
+        },
+      },
+    });
+    expect(fixture.sendText).toHaveBeenCalledTimes(2);
+    expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
+  });
+
+  it.each(["backoff", "preparation"] as const)(
+    "blocks the retry when its runtime is superseded during %s",
+    async (phase) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+      const fixture = await replacementFixture({ sameGeneration: true });
+      fixture.sendText.mockRejectedValueOnce(
+        Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+      );
+      const supersede = async () => {
+        fixture.publication.current = undefined;
+      };
+      if (phase === "backoff") {
+        vi.mocked(sleep).mockImplementationOnce(supersede);
+      } else {
+        fixture.beforeSendAttempt
+          .mockImplementationOnce(async () => {})
+          .mockImplementationOnce(supersede);
+      }
+      await expect(fixture.deliver()).resolves.toMatchObject({
+        status: "failed",
+        error: { message: expect.stringContaining("runtime changed") },
+      });
+      expect(fixture.sendText).toHaveBeenCalledTimes(1);
+      expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
+    },
+  );
 
   it.each([
     { text: "A photo", mediaUrl: "https://example.com/photo.png" },

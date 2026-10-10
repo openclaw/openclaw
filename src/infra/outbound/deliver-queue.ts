@@ -14,6 +14,7 @@ import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { runWithQuestionChannelDeliveries } from "../question-channel-runtime.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import { prepareDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import { resolveOutboundDurableFinalDeliverySupport } from "./deliver-channel.js";
 import type {
@@ -411,12 +412,25 @@ async function runOutboundDeliveryWithQueue(
       (params.requireUnknownSendReconciliation === true ||
         support.automaticUnknownSendReconciliation);
   }
+  const isTextOnlyChannelData =
+    params.retryAmbiguousFinalText === true &&
+    preparedPayloads.length === 1 &&
+    preparedPayloads[0]?.channelData !== undefined
+      ? (
+          await resolveOutboundChannelMessageAdapter({
+            cfg: params.cfg,
+            agentId: params.session?.agentId,
+            channel,
+          })
+        )?.durableFinal?.isTextOnlyChannelData
+      : undefined;
   const deliveryParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
     payloads: preparedPayloads,
     preparedBatch,
     retryAmbiguousFinalText:
-      params.retryAmbiguousFinalText === true && isOrdinaryFinalText(preparedPayloads)
+      params.retryAmbiguousFinalText === true &&
+      isOrdinaryFinalText(preparedPayloads, isTextOnlyChannelData)
         ? true
         : undefined,
     // Recovery must preserve the provider-facing plan captured before local
@@ -471,6 +485,7 @@ async function runOutboundDeliveryWithQueue(
       )
     : params.deliveryQueueOwner;
   deliveryParams.deliveryQueueOwner = queueOwner;
+  let recoveredFailure: Error | undefined;
   try {
     if (queued?.created && stablePreparationOwner) {
       stablePreparationOwner.markPublished();
@@ -607,28 +622,47 @@ async function runOutboundDeliveryWithQueue(
                     {
                       ...recoveryParams,
                       deps: claimedDeliveryParams.deps,
+                      abortSignal:
+                        claimedDeliveryParams.abortSignal && recoveryParams.abortSignal
+                          ? AbortSignal.any([
+                              claimedDeliveryParams.abortSignal,
+                              recoveryParams.abortSignal,
+                            ])
+                          : (claimedDeliveryParams.abortSignal ?? recoveryParams.abortSignal),
+                      assertDirectAdapterHandoff: () => {
+                        recoveryParams.assertDirectAdapterHandoff?.();
+                        claimedDeliveryParams.assertDirectAdapterHandoff?.();
+                      },
+                      onPlatformSendDispatch: async () => {
+                        await recoveryParams.onPlatformSendDispatch?.();
+                        await claimedDeliveryParams.onPlatformSendDispatch?.();
+                      },
                       onError: (error, payload) => {
                         finalError = [error, payload];
                       },
                     },
                     params.deliveryQueueStateContext,
                   ),
-                onDelivered: (_results, recoveredOutcomes) => {
-                  outcomes.length = 0;
-                  outcomes.push(...recoveredOutcomes);
-                },
               },
               params.deliveryQueueStateContext,
             )
-          : undefined;
+          : { status: "not-attempted" as const };
+        if (recovered.status !== "not-attempted") {
+          outcomes.length = 0;
+          outcomes.push(...recovered.payloadOutcomes);
+        }
         for (const outcome of outcomes) {
           claimedDeliveryParams.onPayloadDeliveryOutcome?.(outcome);
         }
-        if (recovered !== undefined) {
-          return recovered;
+        if (recovered.status === "recovered") {
+          return recovered.results;
         }
         if (finalError) {
           claimedDeliveryParams.onError?.(...finalError);
+        }
+        if (recovered.status === "failed") {
+          recoveredFailure = recovered.error;
+          throw recovered.error;
         }
         throw error;
       }
@@ -645,6 +679,9 @@ async function runOutboundDeliveryWithQueue(
     }
     throw new Error(`Delivery intent is already claimed: ${queueId}`);
   } catch (error) {
+    if (recoveredFailure !== undefined && error === recoveredFailure) {
+      throw error;
+    }
     throw queueOwner ? queueOwner.project(error) : error;
   }
 }
