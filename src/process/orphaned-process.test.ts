@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   ps: vi.fn(),
@@ -35,6 +35,7 @@ type KernelProcess = {
 const processes = new Map<number, KernelProcess>();
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
+let killSpy: MockInstance<typeof process.kill>;
 let onPs: ((pid?: number) => void) | undefined;
 let onSignal: ((...args: Parameters<typeof process.kill>) => void) | undefined;
 
@@ -106,7 +107,7 @@ beforeEach(() => {
     const row = processes.get(pid);
     return row && { executable: row.executable, argv: [...row.argv] };
   });
-  vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+  killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     if (onSignal) {
       onSignal(pid, signal);
     } else {
@@ -136,10 +137,10 @@ it("reaps only the captured managed macOS tree", async () => {
   add(103, { parentPid: 100, executable: "/other/llama-server" });
   add(104, { parentPid: 103 });
   expect(await reap()).toEqual([100]);
-  expect(process.kill).toHaveBeenCalledTimes(3);
-  expect(process.kill).toHaveBeenCalledWith(100, "SIGTERM");
-  expect(process.kill).toHaveBeenCalledWith(101, "SIGTERM");
-  expect(process.kill).toHaveBeenCalledWith(102, "SIGTERM");
+  expect(killSpy).toHaveBeenCalledTimes(3);
+  expect(killSpy).toHaveBeenCalledWith(100, "SIGTERM");
+  expect(killSpy).toHaveBeenCalledWith(101, "SIGTERM");
+  expect(killSpy).toHaveBeenCalledWith(102, "SIGTERM");
   expect([...processes.keys()]).toEqual([103, 104]);
 });
 
@@ -154,14 +155,14 @@ it.each([
 ])("leaves $name untouched", async ({ change }) => {
   add(100, change);
   expect(await reap()).toEqual([]);
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
   expect(processes.has(100)).toBe(true);
 });
 
 it("reports unavailable precise identity only for a matching process", async () => {
   add(100, { startedAt: null });
   await expect(reap()).rejects.toThrow("Cannot verify orphaned process 100");
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("leaves hosts without native birth identity support unchanged", async () => {
@@ -171,7 +172,7 @@ it("leaves hosts without native birth identity support unchanged", async () => {
   );
   expect(await reap()).toEqual([]);
   expect(mocks.ps).not.toHaveBeenCalled();
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -181,7 +182,7 @@ it.each([
   add(100, { cwd });
   mocks.realpath.mockReturnValue("/state");
   expect(await reap({ cwd: "/state-alias" })).toEqual(expected);
-  expect(process.kill).toHaveBeenCalledTimes(expected.length);
+  expect(killSpy).toHaveBeenCalledTimes(expected.length);
 });
 
 it("does not inspect an unreadable server from another installation", async () => {
@@ -191,7 +192,7 @@ it("does not inspect an unreadable server from another installation", async () =
   });
   expect(await reap()).toEqual([]);
   expect(mocks.command).not.toHaveBeenCalled();
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("refuses a root that acquires a live parent before signaling its tree", async () => {
@@ -204,7 +205,7 @@ it("refuses a root that acquires a live parent before signaling its tree", async
       },
     }),
   ).rejects.toThrow("changed identity");
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("treats disappearance during the final process inspection as already stopped", async () => {
@@ -215,7 +216,7 @@ it("treats disappearance during the final process inspection as already stopped"
     }
   };
   expect(await reap()).toEqual([]);
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("does not signal any captured process when the root PID is recycled before TERM", async () => {
@@ -228,7 +229,7 @@ it("does not signal any captured process when the root PID is recycled before TE
       },
     }),
   ).toEqual([]);
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
 
 it("finishes captured children after root exit without signaling a reused PID or new descendant", async () => {
@@ -250,9 +251,9 @@ it("finishes captured children after root exit without signaling a reused PID or
   const result = reap();
   await vi.advanceTimersByTimeAsync(5_000);
   expect(await result).toEqual([100]);
-  expect(process.kill).toHaveBeenCalledWith(102, "SIGKILL");
-  expect(process.kill).not.toHaveBeenCalledWith(101, "SIGKILL");
-  expect(process.kill).not.toHaveBeenCalledWith(103, expect.anything());
+  expect(killSpy).toHaveBeenCalledWith(102, "SIGKILL");
+  expect(killSpy).not.toHaveBeenCalledWith(101, "SIGKILL");
+  expect(killSpy).not.toHaveBeenCalledWith(103, expect.anything());
   expect([...processes.keys()]).toEqual([101, 103]);
 });
 
@@ -282,10 +283,10 @@ it.each(["before inspection", "before TERM", "after TERM"])(
     await vi.advanceTimersByTimeAsync(5_000);
     await rejected;
     if (when === "after TERM") {
-      expect(process.kill).toHaveBeenCalledWith(100, "SIGKILL");
-      expect(process.kill).toHaveBeenCalledWith(101, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(100, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(101, "SIGKILL");
     } else {
-      expect(process.kill).not.toHaveBeenCalled();
+      expect(killSpy).not.toHaveBeenCalled();
     }
     expect(processes.has(200)).toBe(true);
   },
@@ -312,7 +313,7 @@ it.each(["arguments", "executable", "user", "working directory"])(
     );
     await vi.advanceTimersByTimeAsync(10_000);
     await rejected;
-    expect(process.kill).toHaveBeenCalledExactlyOnceWith(100, "SIGTERM");
+    expect(killSpy).toHaveBeenCalledExactlyOnceWith(100, "SIGTERM");
   },
 );
 
@@ -324,9 +325,9 @@ it("reports a surviving process after both bounded stop attempts", async () => {
   );
   await vi.advanceTimersByTimeAsync(10_000);
   await rejected;
-  expect(process.kill).toHaveBeenCalledTimes(2);
-  expect(process.kill).toHaveBeenCalledWith(100, "SIGTERM");
-  expect(process.kill).toHaveBeenCalledWith(100, "SIGKILL");
+  expect(killSpy).toHaveBeenCalledTimes(2);
+  expect(killSpy).toHaveBeenCalledWith(100, "SIGTERM");
+  expect(killSpy).toHaveBeenCalledWith(100, "SIGKILL");
 });
 
 it.each(["linux", "win32"])("does not infer orphanhood from PID 1 on %s", async (platform) => {
@@ -334,5 +335,5 @@ it.each(["linux", "win32"])("does not infer orphanhood from PID 1 on %s", async 
   add(100);
   expect(await reap()).toEqual([]);
   expect(mocks.ps).not.toHaveBeenCalled();
-  expect(process.kill).not.toHaveBeenCalled();
+  expect(killSpy).not.toHaveBeenCalled();
 });
