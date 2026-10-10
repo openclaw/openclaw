@@ -38,7 +38,7 @@ import {
   hasReplyTargetContext,
 } from "./get-reply-run-helpers.js";
 import type { RunPreparedReplyParams } from "./get-reply-run.types.js";
-import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
+import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import {
   buildInboundMetaSystemPrompt,
@@ -179,7 +179,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
-  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -198,25 +197,16 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const buildSourceConversationContext = (mode: typeof sourceReplyDeliveryMode) => {
-    if (isDirectChat) {
-      return buildDirectChatContext({
-        sourceReplyDeliveryMode: mode,
-        sessionCtx: promptSessionCtx,
-      });
-    }
-    return isGroupChat
-      ? buildGroupChatContext({
-          sessionCtx: promptSessionCtx,
-          sourceReplyDeliveryMode: mode,
-          silentReplyPolicy: silentReplySettings.policy,
-          silentToken: SILENT_REPLY_TOKEN,
-        })
-      : "";
-  };
+  const sourceConversationContext = (mode: typeof sourceReplyDeliveryMode) =>
+    buildSourceConversationContext({
+      sourceReplyDeliveryMode: mode,
+      sessionCtx: promptSessionCtx,
+      silentReplyPolicy: silentReplySettings.policy,
+      silentToken: SILENT_REPLY_TOKEN,
+    });
   const sourceConversationContextByMode = {
-    automatic: buildSourceConversationContext("automatic"),
-    message_tool_only: buildSourceConversationContext("message_tool_only"),
+    automatic: sourceConversationContext("automatic"),
+    message_tool_only: sourceConversationContext("message_tool_only"),
   };
   // CLI sessions keep their creation-time conversation prompt. Embedded attempts
   // can instead select the variant owned by their final prepared harness.
