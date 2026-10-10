@@ -20,6 +20,10 @@ import { handleEmbeddedAssistantFailure } from "./assistant-failure.js";
 import { recoverEmbeddedRunAttempt } from "./attempt-recovery.js";
 import {
   disabledCompactionRuntime,
+  emptyLengthScenario,
+  outputLimitDetails,
+  outputLimitScenario,
+  outputLimitScenarios,
   recoverAfterTransportDrop,
   type TransportDropScenario,
 } from "./attempt-recovery.test-support.js";
@@ -112,35 +116,6 @@ function handleAssistantFailureAfterRecovery(
     suspensionSessionId: "session:transport-drop",
   });
 }
-
-const outputLimitDetails = {
-  eventType: "response.incomplete",
-  stopReason: "length",
-  incompleteReason: "max_output_tokens",
-};
-
-const outputLimitScenario = {
-  errorCode: "incomplete_tool_call",
-  errorMessage: "Responses stream completed with an incomplete terminal tool call",
-  diagnostics: [
-    {
-      type: "openai_responses_terminal",
-      timestamp: 1,
-      details: outputLimitDetails,
-    },
-  ],
-  usage: createMockUsage(440_445, 128_000),
-} satisfies TransportDropScenario;
-
-const emptyLengthScenario = {
-  assistant: buildEmbeddedRunnerAssistant({
-    stopReason: "length",
-    content: [],
-    usage: createMockUsage(1000, 4096),
-  }),
-} satisfies TransportDropScenario;
-
-const outputLimitScenarios = [outputLimitScenario, emptyLengthScenario];
 
 const unsettledBatches: Array<[string, TransportDropScenario]> = [
   ["a tool result is missing", { missingToolResult: true }],

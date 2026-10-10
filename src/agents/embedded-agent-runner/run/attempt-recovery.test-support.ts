@@ -16,6 +16,35 @@ import { createEmbeddedRunFailoverRetryController } from "./failover-retry-contr
 import { normalizeEmbeddedRunAttemptResult } from "./run-attempt-result.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 
+export const outputLimitDetails = {
+  eventType: "response.incomplete",
+  stopReason: "length",
+  incompleteReason: "max_output_tokens",
+};
+
+export const outputLimitScenario = {
+  errorCode: "incomplete_tool_call",
+  errorMessage: "Responses stream completed with an incomplete terminal tool call",
+  diagnostics: [
+    {
+      type: "openai_responses_terminal",
+      timestamp: 1,
+      details: outputLimitDetails,
+    },
+  ],
+  usage: createMockUsage(440_445, 128_000),
+} satisfies TransportDropScenario;
+
+export const emptyLengthScenario = {
+  assistant: buildEmbeddedRunnerAssistant({
+    stopReason: "length",
+    content: [],
+    usage: createMockUsage(1000, 4096),
+  }),
+} satisfies TransportDropScenario;
+
+export const outputLimitScenarios = [outputLimitScenario, emptyLengthScenario];
+
 export type TransportDropScenario = {
   config?: OpenClawConfig;
   assistant?: AssistantMessage;
