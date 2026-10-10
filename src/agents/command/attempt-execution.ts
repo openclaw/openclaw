@@ -258,7 +258,7 @@ export function runAgentAttempt(
   });
   const effectivePrompt = isRawModelRun
     ? resolvedPrompt
-    : annotateInterSessionPromptText(params.body, params.opts.inputProvenance);
+    : annotateInterSessionPromptText(resolvedPrompt, params.opts.inputProvenance);
   const embeddedExecApprovalContinuationPromptRange = rebaseExecApprovalContinuationPromptRange({
     body: params.body,
     prompt: effectivePrompt,
@@ -523,10 +523,9 @@ export function runAgentAttempt(
               priorContextPrelude: claudeCliFallbackPrelude,
             })
           : resolvedPrompt;
-        const cliEffectivePrompt = annotateInterSessionPromptText(
-          cliResolvedPrompt,
-          params.opts.inputProvenance,
-        );
+        const cliEffectivePrompt = params.opts.execApprovalContinuationPromptRange
+          ? annotateInterSessionPromptText(cliResolvedPrompt, params.opts.inputProvenance)
+          : effectivePrompt;
         const cliTranscriptPrompt =
           continuationTranscriptBody === undefined || !continuationTranscriptPromptRange
             ? continuationTranscriptBody
@@ -768,16 +767,6 @@ export function runAgentAttempt(
     );
   }
 
-  // The admitted user projection is immutable once the primary dispatches. Retry
-  // status and CLI history belong to the existing runtime-context carrier instead.
-  const fallbackContext = isRawModelRun
-    ? ""
-    : resolveFallbackRetryPrompt({
-        body: "",
-        isFallbackRetry: params.isFallbackRetry,
-        sessionHasHistory: params.sessionHasHistory,
-        priorContextPrelude: claudeCliFallbackPrelude,
-      }).trim();
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
@@ -825,12 +814,7 @@ export function runAgentAttempt(
       : undefined,
     cronCreatorAuthorityCapability: params.opts.cronCreatorAuthorityCapability,
     internalEvents: params.opts.internalEvents,
-    runtimeContextFragments: fallbackContext
-      ? [
-          ...(params.opts.runtimeContextFragments ?? []),
-          { kind: "conversation-data", text: fallbackContext },
-        ]
-      : params.opts.runtimeContextFragments,
+    runtimeContextFragments: params.opts.runtimeContextFragments,
     requireExplicitMessageTarget: params.opts.requireExplicitMessageTarget,
     disableMessageTool: params.opts.disableMessageTool,
     swarmCollector: params.opts.swarmCollector,

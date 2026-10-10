@@ -97,8 +97,6 @@ async function startProvider(scenario: Scenario) {
     authorization?: string;
     toolCount: number;
     hasInstructions: boolean;
-    taskInput: ProviderRequest["input"][number] | undefined;
-    hasRetryContext: boolean;
   }> = [];
   const errors: unknown[] = [];
   let spawn: Receipt | undefined;
@@ -122,12 +120,6 @@ async function startProvider(scenario: Scenario) {
         child: child && !title,
         toolCount: body.tools?.length ?? 0,
         hasInstructions: typeof body.instructions === "string",
-        taskInput: body.input.findLast(
-          (item) => item.role === "user" && JSON.stringify(item).includes(WORKER),
-        ),
-        hasRetryContext: JSON.stringify(body.input).includes(
-          "[Retry after the previous model attempt failed or timed out]",
-        ),
         authorization: request.headers.authorization,
       });
       if (child && !title && body.model === "primary" && primaryRateLimited) {
@@ -545,19 +537,6 @@ describe("sessions_spawn model fallback through the Gateway", () => {
           if (scenario.backup) {
             expect(childRequests.map((request) => request.model)).toContain(scenario.backup);
             expect(text).toContain(SUCCESS);
-            if (scenario.visible === false || scenario.directAgent) {
-              const primaryRequest = childRequests.find((request) => request.model === "primary");
-              const fallbackRequest = childRequests.find(
-                (request) => request.model === scenario.backup,
-              );
-              expect(primaryRequest?.taskInput).toBeDefined();
-              expect(fallbackRequest?.taskInput).toEqual(primaryRequest?.taskInput);
-              expect(fallbackRequest?.hasRetryContext).toBe(true);
-              const userMessages = history.messages.filter((message) => message.role === "user");
-              expect(extractTextFromChatContent(userMessages.at(-1)?.content)).toBe(
-                `Return exactly ${SUCCESS}. ${WORKER}`,
-              );
-            }
             if (scenario.inherited || scenario.directAgent) {
               expect(childRequests.map((request) => request.model)).not.toContain("backup");
             }
