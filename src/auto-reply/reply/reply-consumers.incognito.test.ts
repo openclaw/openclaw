@@ -5,12 +5,12 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.entry-mutation.js";
+import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
 } from "../../config/sessions/session-incognito-binding.js";
-import { appendTranscriptMessage } from "../../config/sessions/transcript.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { IncognitoSessionEndedError } from "../../state/incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
@@ -45,7 +45,7 @@ afterAll(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-async function create(name: string, fields: Partial<SessionEntry> = {}) {
+async function create(name: string, fields: Partial<InternalSessionEntry> = {}) {
   const scope = {
     agentId: actor.agentId,
     storePath: actor.path,
@@ -144,6 +144,7 @@ it("reads the completed fallback model from the actor transcript", async () => {
     status: "done",
     lastRunId: "fallback-run",
     fallbackNotice: {
+      kind: "active",
       selectedModel: "openai/selected",
       activeModel: "openai/fallback",
       reason: "rate_limit",
