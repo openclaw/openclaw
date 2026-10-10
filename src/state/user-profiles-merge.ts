@@ -59,7 +59,7 @@ export function mergeUserProfiles(
     db,
     sourceProfileId,
     targetProfileId,
-    mutation?.publishGitHubConnections,
+    mutation?.publishGitHubConnections?.bind(mutation),
   );
   for (const mergedProfileId of sourceProfileIds) {
     mergeUserPreferences(db, mergedProfileId, targetProfileId);

@@ -52,8 +52,9 @@ export function bindGitHubPublicationSourceLifetime(
   lifetime: AbortSignal,
 ): GitHubPublicationSourceCapability {
   const binding = bindings.get(capability);
-  if (!binding || binding.admitted)
+  if (!binding || binding.admitted) {
     throw new Error("GitHub publication source lifetime was already admitted.");
+  }
   const signal = AbortSignal.any([binding.signal, lifetime]);
   signal.throwIfAborted();
   binding.signal = signal;
@@ -64,7 +65,9 @@ export function bindGitHubPublicationSourceLifetime(
 
 export function bindGitHubPublicationSource(capability: GitHubPublicationSourceCapability) {
   const binding = bindings.get(capability);
-  if (!binding) throw new Error("GitHub publication source capability is unavailable.");
+  if (!binding) {
+    throw new Error("GitHub publication source capability is unavailable.");
+  }
   binding.signal.throwIfAborted();
   return {
     context: binding.context,
@@ -108,7 +111,9 @@ export async function prepareGitHubPublicationSource(params: {
   const release = () =>
     (releasing ??= (async () => {
       await drain();
-      for (const stop of releases.splice(0).toReversed()) stop();
+      for (const stop of releases.splice(0).toReversed()) {
+        stop();
+      }
     })());
   const assertCurrent = () => {
     signal.throwIfAborted();
@@ -133,15 +138,18 @@ export async function prepareGitHubPublicationSource(params: {
     }),
     registerOpenClawStateDatabaseAsyncResource({ close: drain }),
     registerOpenClawStateDatabaseLifecycleListener((event) => {
-      if (event.kind !== "opened" && event.path === context.admission.databasePath) revoke();
+      if (event.kind !== "opened" && event.path === context.admission.databasePath) {
+        revoke();
+      }
     }),
     onUserProfilesChanged(revoke),
     observeUserGitHubConnectionAuthority(({ databasePath, changes }) => {
       if (
         databasePath === context.admission.databasePath &&
         changes.some(({ owner }) => owner === params.selector.personalOwnerProfileId)
-      )
+      ) {
         revoke();
+      }
     }),
     githubPublicationReceipts.subscribeFacts((change) => {
       if (
@@ -149,11 +157,14 @@ export async function prepareGitHubPublicationSource(params: {
         (change.kind === "committed" &&
           change.receipt.source.identity === context.admission.identity.key &&
           [...change.receipt.facts.values()].some((fact) => fact.kind !== "postimage"))
-      )
+      ) {
         revoke();
+      }
     }),
     sessionChanges.subscribeFacts((change) => {
-      if ("all" in change || change.sessionKey === params.selector.sessionKey) revoke();
+      if ("all" in change || change.sessionKey === params.selector.sessionKey) {
+        revoke();
+      }
     }),
   );
   try {

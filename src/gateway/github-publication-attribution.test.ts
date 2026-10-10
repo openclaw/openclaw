@@ -136,8 +136,8 @@ describe("Gateway GitHub publication attribution", () => {
             .mockImplementation((params) =>
               execute({
                 ...params,
-                recordEffect: (effect, observed) => {
-                  params.recordEffect?.(effect, observed);
+                recordEffect: async (effect, observed) => {
+                  await params.recordEffect?.(effect, observed);
                   if (effect === boundary && observed === undefined) {
                     optOut();
                   }

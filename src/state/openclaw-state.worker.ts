@@ -6,8 +6,8 @@ import {
 import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statistics.js";
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
-import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import {
+  SQLITE_WORKER_PREPARE_COMMAND,
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
 } from "../infra/sqlite-worker-contract.js";
@@ -221,8 +221,9 @@ function createSharedStateWorkerBackend(
       const source =
         command.type === "githubPublication.sourceFacts" ? command.input.source : undefined;
       if (source) {
-        if (!publicationSource)
+        if (!publicationSource) {
           throw new Error("GitHub publication source runtime is not prepared.");
+        }
         publicationSourceReader ??= publicationSource.createGitHubPublicationSourceWorker();
         publicationSourceReader.prepare(source, open().db);
       }
@@ -297,7 +298,9 @@ function createSharedStateWorkerBackend(
         throw new Error("Shared-state worker is closed");
       }
       if (command.type === "githubPublication.sourceFacts") {
-        if (!publicationSourceReader) throw new Error("GitHub publication source is unavailable.");
+        if (!publicationSourceReader) {
+          throw new Error("GitHub publication source is unavailable.");
+        }
         return publicationSourceReader.read(command.input.source);
       }
       if (commandRegistry.has(command)) {
