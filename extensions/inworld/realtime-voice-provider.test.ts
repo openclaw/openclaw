@@ -118,6 +118,65 @@ describe("buildInworldRealtimeVoiceProvider", () => {
     );
   });
 
+  it("normalizes a bounded documented providerData passthrough", () => {
+    const config = normalizeInworldRealtimeProviderConfig({
+      apiKey: "k", // pragma: allowlist secret
+      providerData: {
+        memory: { enabled: true, turn_interval: 3 },
+        stt: { voice_profile: true },
+        tts: { timestamp_type: "WORD" },
+        backchannel: {},
+      },
+    });
+    expect(config.providerData).toEqual({
+      memory: { enabled: true, turn_interval: 3 },
+      stt: { voice_profile: true },
+      tts: { timestamp_type: "WORD" },
+    });
+    expect(
+      normalizeInworldRealtimeProviderConfig({ providerData: {} }).providerData,
+    ).toBeUndefined();
+    expect(() =>
+      normalizeInworldRealtimeProviderConfig({ providerData: { auto_tool_response: true } }),
+    ).toThrow(/documented sections/);
+    expect(() =>
+      normalizeInworldRealtimeProviderConfig({ providerData: { metadata: { a: 1 } } }),
+    ).toThrow(/unsupported: metadata/);
+    expect(() =>
+      normalizeInworldRealtimeProviderConfig({
+        providerData: { memory: { note: "x".repeat(9000) } },
+      }),
+    ).toThrow(/exceeds/);
+  });
+
+  it("emits the passthrough in session.update under the typed fields with auto_tool_response pinned", async () => {
+    const { socket } = await connect({
+      providerConfig: {
+        apiKey: "inworld-test", // pragma: allowlist secret
+        deliveryMode: "CREATIVE",
+        backchannel: false,
+        providerData: {
+          memory: { enabled: true, turn_interval: 3, max_facts: 20 },
+          stt: { voice_profile: true, min_end_of_turn_silence: 120 },
+          tts: { delivery_mode: "STABLE", timestamp_type: "WORD" },
+          backchannel: { enabled: true, frequency: "low" },
+          responsiveness: { enabled: true },
+        },
+      },
+    });
+    const session = requireSession(socket);
+    expect(session.providerData).toEqual({
+      stt: { voice_profile: true, min_end_of_turn_silence: 120 },
+      // Typed deliveryMode wins over the passthrough's delivery_mode; extra documented keys survive.
+      tts: { timestamp_type: "WORD", delivery_mode: "CREATIVE" },
+      memory: { enabled: true, turn_interval: 3, max_facts: 20 },
+      // Typed backchannel:false wins over the passthrough's enabled:true; frequency survives.
+      backchannel: { frequency: "low", enabled: false },
+      responsiveness: { enabled: true },
+      auto_tool_response: false,
+    });
+  });
+
   it("connects with Basic auth to the Inworld session endpoint and sends the session policy", async () => {
     const tools = [
       {

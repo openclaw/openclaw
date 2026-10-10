@@ -206,10 +206,35 @@ export abstract class InworldRealtimeVoiceProtocol {
             create_response: true,
             interrupt_response: true,
           };
+    const passthrough = cfg.providerData ?? {};
+    const section = (name: keyof typeof passthrough) => passthrough[name] ?? {};
+    // Typed settings win over the documented passthrough; the passthrough can add
+    // documented fields but never replace a typed one.
     const tts = {
+      ...section("tts"),
       ...(cfg.deliveryMode ? { delivery_mode: cfg.deliveryMode } : {}),
       ...(cfg.steeringHandling ? { steering_handling: cfg.steeringHandling } : {}),
       ...(cfg.segmenterStrategy ? { segmenter_strategy: cfg.segmenterStrategy } : {}),
+    };
+    const backchannel = {
+      ...section("backchannel"),
+      ...(cfg.backchannel === undefined ? {} : { enabled: cfg.backchannel }),
+    };
+    const responsiveness = {
+      ...section("responsiveness"),
+      ...(cfg.responsiveness === undefined ? {} : { enabled: cfg.responsiveness }),
+    };
+    const stt = section("stt");
+    const memory = section("memory");
+    const providerData: InworldRealtimeSessionUpdate["session"]["providerData"] = {
+      ...(Object.keys(stt).length > 0 ? { stt } : {}),
+      ...(Object.keys(tts).length > 0 ? { tts } : {}),
+      ...(Object.keys(memory).length > 0 ? { memory } : {}),
+      ...(Object.keys(backchannel).length > 0 ? { backchannel } : {}),
+      ...(Object.keys(responsiveness).length > 0 ? { responsiveness } : {}),
+      // Pinned last: the host owns response.create after tool outputs (OpenAI-compatible
+      // flow), and no passthrough section can reach this key.
+      auto_tool_response: false,
     };
     return {
       type: "session.update",
@@ -235,15 +260,7 @@ export abstract class InworldRealtimeVoiceProtocol {
             ...(cfg.speakingRate === undefined ? {} : { speed: cfg.speakingRate }),
           },
         },
-        providerData: {
-          // The host owns response.create after tool outputs (OpenAI-compatible flow).
-          auto_tool_response: false,
-          ...(Object.keys(tts).length > 0 ? { tts } : {}),
-          ...(cfg.backchannel === undefined ? {} : { backchannel: { enabled: cfg.backchannel } }),
-          ...(cfg.responsiveness === undefined
-            ? {}
-            : { responsiveness: { enabled: cfg.responsiveness } }),
-        },
+        providerData,
         ...(cfg.tools?.length
           ? {
               tools: cfg.tools,

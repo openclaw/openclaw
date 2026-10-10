@@ -25,6 +25,22 @@ export type InworldRealtimeSegmenterStrategy =
   | "fast_start"
   | "per_segment_context";
 
+/** Documented Inworld `providerData` sections operators may pass through (docs.inworld.ai/realtime/provider-data). */
+export const INWORLD_REALTIME_PROVIDER_DATA_SECTIONS = [
+  "stt",
+  "tts",
+  "memory",
+  "backchannel",
+  "responsiveness",
+] as const;
+export type InworldRealtimeProviderDataSection =
+  (typeof INWORLD_REALTIME_PROVIDER_DATA_SECTIONS)[number];
+export type InworldRealtimeProviderDataPassthrough = Partial<
+  Record<InworldRealtimeProviderDataSection, Record<string, unknown>>
+>;
+/** Upper bound for the serialized passthrough so a config typo cannot balloon session.update. */
+export const INWORLD_REALTIME_PROVIDER_DATA_MAX_BYTES = 8 * 1024;
+
 type InworldRealtimeVoiceProviderConfig = Partial<
   ReturnType<typeof normalizeInworldRealtimeProviderConfig>
 >;
@@ -105,13 +121,15 @@ export type InworldRealtimeSessionUpdate = {
     };
     providerData: {
       auto_tool_response: false;
-      tts?: {
+      stt?: Record<string, unknown>;
+      tts?: Record<string, unknown> & {
         delivery_mode?: InworldRealtimeDeliveryMode;
         steering_handling?: InworldRealtimeSteeringHandling;
         segmenter_strategy?: InworldRealtimeSegmenterStrategy;
       };
-      backchannel?: { enabled: boolean };
-      responsiveness?: { enabled: boolean };
+      memory?: Record<string, unknown>;
+      backchannel?: Record<string, unknown> & { enabled?: boolean };
+      responsiveness?: Record<string, unknown> & { enabled?: boolean };
     };
     tools?: RealtimeVoiceBridgeCreateRequest["tools"];
     tool_choice?: string;
@@ -179,6 +197,40 @@ function asEnumValue<T extends string>(
   throw new Error(`Inworld realtime voice ${label} must be one of ${allowed.join(", ")}`);
 }
 
+function normalizeInworldRealtimeProviderData(
+  value: unknown,
+): InworldRealtimeProviderDataPassthrough | undefined {
+  const raw = readInworldObjectRecord(value);
+  if (!raw) {
+    return undefined;
+  }
+  const passthrough: InworldRealtimeProviderDataPassthrough = {};
+  for (const section of INWORLD_REALTIME_PROVIDER_DATA_SECTIONS) {
+    const entry = readInworldObjectRecord(raw[section]);
+    if (entry && Object.keys(entry).length > 0) {
+      passthrough[section] = { ...entry };
+    }
+  }
+  const unknownKeys = Object.keys(raw).filter(
+    (key) => !(INWORLD_REALTIME_PROVIDER_DATA_SECTIONS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `Inworld realtime voice providerData only accepts the documented sections ${INWORLD_REALTIME_PROVIDER_DATA_SECTIONS.join(", ")}; unsupported: ${unknownKeys.join(", ")}`,
+    );
+  }
+  if (Object.keys(passthrough).length === 0) {
+    return undefined;
+  }
+  const bytes = Buffer.byteLength(JSON.stringify(passthrough), "utf8");
+  if (bytes > INWORLD_REALTIME_PROVIDER_DATA_MAX_BYTES) {
+    throw new Error(
+      `Inworld realtime voice providerData exceeds ${INWORLD_REALTIME_PROVIDER_DATA_MAX_BYTES} bytes (${bytes})`,
+    );
+  }
+  return passthrough;
+}
+
 export function normalizeInworldRealtimeProviderConfig(config: RealtimeVoiceProviderConfig) {
   const raw = readNestedInworldConfig(config);
   return {
@@ -224,6 +276,7 @@ export function normalizeInworldRealtimeProviderConfig(config: RealtimeVoiceProv
     prefixPaddingMs: asInworldDurationMs(raw.prefixPaddingMs),
     backchannel: parseBooleanValue(raw.backchannel),
     responsiveness: parseBooleanValue(raw.responsiveness),
+    providerData: normalizeInworldRealtimeProviderData(raw.providerData),
     interruptResponseOnInputAudio: parseBooleanValue(raw.interruptResponseOnInputAudio),
   };
 }
