@@ -93,16 +93,8 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
   return { state, request };
 }
 
-function mockSkillMutationRequests(
-  request: ReturnType<typeof vi.fn<TestRequest>>,
-  installMessage?: string,
-) {
-  request.mockImplementation(async (method: string) => {
-    if (method === "skills.install" && installMessage) {
-      return { message: installMessage };
-    }
-    return {};
-  });
+function mockSkillMutationRequests(request: ReturnType<typeof vi.fn<TestRequest>>) {
+  request.mockResolvedValue({});
 }
 
 function createSkillCardReport(installedVersion?: string, installedAt = 123): SkillStatusReport {
@@ -715,10 +707,10 @@ describe("skill mutations", () => {
       expectedRequest: ["skills.update", { skillKey: "github", apiKey: "sk-test" }],
       expectedMessage: "API key saved — stored in openclaw.json (skills.entries.github)",
     },
-  ])("$name", async ({ run, expectedRequest, expectedMessage, installMessage }) => {
+  ])("$name", async ({ run, expectedRequest, expectedMessage }) => {
     const { state, request } = createState();
     state.skillsAgentId = "research";
-    mockSkillMutationRequests(request, installMessage);
+    mockSkillMutationRequests(request);
 
     await run(state);
 
