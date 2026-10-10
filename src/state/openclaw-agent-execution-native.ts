@@ -58,7 +58,10 @@ import type {
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
-import { requestOpenClawAgentDatabaseIntegrityCheck } from "./openclaw-database-verify.js";
+import {
+  captureOpenClawDatabaseIntegrityVerifier,
+  requestOpenClawAgentDatabaseIntegrityCheck,
+} from "./openclaw-database-verify.js";
 import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
@@ -102,6 +105,7 @@ export function createAgentDatabaseNativeGeneration(
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let integrityCheckPending: "quick" | "full" | undefined;
+  let assertIntegrityVerifierCurrent: (() => void) | undefined;
   let preparationPublished = false;
 
   const assertCurrent = () => {
@@ -138,6 +142,7 @@ export function createAgentDatabaseNativeGeneration(
       const assertSourceCurrent = (identity?: AgentDatabaseFileExecutionIdentity) => {
         source.assertCurrent();
         assertCurrent();
+        assertIntegrityVerifierCurrent?.();
         // The reference checks its captured constraints; this owner checks the path last.
         assertCallerCurrent?.(identity);
         if (identity) {
@@ -246,10 +251,15 @@ export function createAgentDatabaseNativeGeneration(
               agentId,
               path: pathname,
             });
-            facts.validationPort.postMessage(
-              getOpenClawAgentDatabaseValidationForTransfer({ agentId, path: pathname }),
-              [],
-            );
+            assertIntegrityVerifierCurrent = captureOpenClawDatabaseIntegrityVerifier(input);
+            const preparation = {
+              validation: getOpenClawAgentDatabaseValidationForTransfer({
+                agentId,
+                path: pathname,
+              }),
+              deferUnverifiedIntegrity: assertIntegrityVerifierCurrent !== undefined,
+            };
+            facts.validationPort.postMessage(preparation, []);
           } finally {
             facts.validationPort.close();
           }
@@ -559,6 +569,7 @@ export function createAgentDatabaseNativeGeneration(
       });
       preparationPublished = true;
     }
+    assertIntegrityVerifierCurrent?.();
     if (integrityCheckPending) {
       const preparation = captureAgentDatabasePreparationCompletion(agentId, {
         env: input.environment,
@@ -616,6 +627,7 @@ export function createAgentDatabaseNativeGeneration(
       });
       integrityCheckPending = undefined;
     }
+    assertIntegrityVerifierCurrent = undefined;
     return runSqliteWorkerStoreOperation(
       store,
       operation,
@@ -673,23 +685,16 @@ export function createAgentDatabaseNativeGeneration(
         }
         if (nativeStopped && lease) {
           try {
-            await nativeStopped;
-            assertCleanupOwned();
-            // The backend publishes this receipt only after native close and lease release.
-            // A closed client or exited Worker alone still needs orphan recovery.
-            if (
-              storeClosed &&
-              readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)
-            ) {
-              assertExistingDatabaseIdentity(lease.sharedStatePath, lease.sharedStateIdentity);
-            } else {
-              await cleanupRetiredAgentDatabaseLease({
-                context,
-                stopped: nativeStopped,
-                assertOwned: assertCleanupOwned,
-                lease,
-              });
-            }
+            await cleanupRetiredAgentDatabaseLease({
+              context,
+              stopped: nativeStopped,
+              assertOwned: assertCleanupOwned,
+              lease,
+              closed: () =>
+                storeClosed
+                  ? readAgentDatabaseClosedReceipt(readCloseReceipt?.(), nativeIdentity, lease)
+                  : undefined,
+            });
           } catch (error) {
             errors.push(error);
           }

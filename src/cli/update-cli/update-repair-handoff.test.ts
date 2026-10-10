@@ -249,7 +249,13 @@ it.each(["dead", "reused", "nested"] as const)(
   },
 );
 
-it.each(["live", "uninspectable", "EPERM", "surviving group"] as const)(
+// Process-group survival is POSIX-only; Windows children have no detached group to inspect.
+const preservedOwnerCases: readonly ("live" | "uninspectable" | "EPERM" | "surviving group")[] =
+  process.platform === "win32"
+    ? ["live", "uninspectable", "EPERM"]
+    : ["live", "uninspectable", "EPERM", "surviving group"];
+
+it.each(preservedOwnerCases)(
   "repair preserves a %s child-lineage owner with actionable guidance",
   async (identity) => {
     const key = seedLegacyLineage(false, identity === "surviving group");

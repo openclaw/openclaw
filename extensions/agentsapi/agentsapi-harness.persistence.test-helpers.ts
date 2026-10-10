@@ -142,13 +142,22 @@ export function requireExecutorHarness(runtime: PluginRuntime) {
   const registerAgentHarness = vi.fn<OpenClawPluginApi["registerAgentHarness"]>();
   plugin.register(createTestPluginApi({ id: "agentsapi", runtime, registerAgentHarness }));
   const harness = registerAgentHarness.mock.calls[0]?.[0];
-  if (!harness?.runAttempt || !harness.reset || !harness.withSessionDeletion || !harness.dispose) {
-    throw new Error("The Agents API harness requires run, reset, deletion, and disposal");
+  if (
+    !harness?.runAttempt ||
+    !harness.reset ||
+    !harness.withSessionDeletion ||
+    !harness.withSessionContextReset ||
+    !harness.dispose
+  ) {
+    throw new Error(
+      "The Agents API harness requires run, reset, deletion, context reset, and disposal",
+    );
   }
   return {
     runAttempt: harness.runAttempt.bind(harness),
     reset: harness.reset.bind(harness),
     withSessionDeletion: harness.withSessionDeletion,
+    withSessionContextReset: harness.withSessionContextReset,
     dispose: harness.dispose.bind(harness),
   };
 }

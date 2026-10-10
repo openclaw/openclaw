@@ -332,6 +332,7 @@ src/agents/worktrees/preparation-timing.ts
 src/agents/worktrees/provisioned-file-inspection.ts
 src/agents/worktrees/provisioned-snapshot-store.ts
 src/agents/worktrees/provisioned-snapshot.ts
+src/agents/worktrees/registry-publication.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
 src/agents/worktrees/registry-run-end.ts
@@ -340,6 +341,7 @@ src/agents/worktrees/registry.ts
 src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
+src/agents/sandbox/registry-publication.ts
 src/talk/client-voice-session-lifecycle.ts
 src/talk/client-voice-session-source.ts
 src/agents/worktrees/run-lease-owner.ts

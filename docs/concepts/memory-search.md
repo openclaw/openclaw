@@ -82,7 +82,8 @@ flowchart LR
 - **Vector search** matches similar meaning ("gateway host" matches "the
   machine running OpenClaw").
 - **BM25 keyword search** matches exact terms (IDs, error strings, config
-  keys).
+  keys). It accepts NFC and NFD Unicode spellings without rewriting notes or
+  rebuilding existing indexes, including notes that mix those forms across words.
 - **Filename search** indexes paths separately from note bodies. Exact full
   paths, basenames, and filename stems rank ahead of partial path matches,
   while snippets and body keyword scores still come from note content.

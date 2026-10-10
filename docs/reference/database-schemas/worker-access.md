@@ -150,6 +150,38 @@ through it or while it is stopped; this coverage gap does not introduce foreign
 freshness probing. Schemas, persistent bytes, synchronous SDK completion, and
 update behavior are unchanged; there is no migration or SDK export change.
 
+### Sandbox, worktree, and publication receipts
+
+Typed sandbox registry, worktree registry, and GitHub publication writers capture
+their committed authority postimages or deletion tombstones through the same installation
+boundary. They reuse rows already held by the writer or `RETURNING` on its existing
+mutation; receipt construction adds no SQL. Native compatibility and offline
+writes install facts before returning. Worker writes retain pending state through
+native settlement, install committed facts before the ordinary reply, and preserve
+commit evidence when that reply is lost. A late receipt cannot restore facts
+superseded by a newer native publication; unknown outcomes do not authorize replay.
+
+| Owner              | Receipt coverage                                                                                                                                                                                                                                                                                                              |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sandbox registry   | Container and browser creation, reservation, completion, activity updates, removal intent, exact-generation removal, and insert-if-missing import. Rows include generation, backend, workspace/config identity, and removal state.                                                                                            |
+| Worktree registry  | Creation, activity and lifecycle updates, rebinding, retirement, offline discard/path migration, and run-lease insertion, stale pruning, release, and synchronous process-exit cleanup. Existing run-end acknowledgments remain part of settlement.                                                                           |
+| GitHub publication | Shared, personal, and repository request insertion, claim, checkpoint/head/effect updates, completion, interruption, deferral, reporting, and request/lifecycle cleanup. Request and lifecycle facts publish together after their existing transaction commits, including personal rows omitted from shared UI notifications. |
+
+Publication authority facts retain request digests and execution/source identities
+without copying title, body, or next-action text. These receipts certify typed row
+changes, not complete cross-domain authority. Protecting session/placement sets,
+worktree provisioned-chunk presence, and pending/template records retain their
+own owners, existing acknowledgments, and validators. Personal
+GitHub credential selection and profile-merge publication remain a separate,
+incomplete receipt domain. Arbitrary raw SQL, trigger/cascade side effects, and
+unmanaged transactions still need complete write-set settlement. Existing sandbox
+dispatch, worktree cleanup, and publication source/effect guards remain in place;
+no receipt grants permission or excludes another source mutation through a
+destination commit. Other processes must route writes through the Gateway or use
+offline custody while it is stopped; these owners add no foreign-commit probes.
+Schema versions, stored bytes, durability, retention, SDK contracts, and update
+behavior are unchanged. Published updaters need no receipt migration.
+
 ### Durable cross-store source fences
 
 Typed durable worker operations can reserve their source databases through the
