@@ -29,7 +29,7 @@ reusing accepted closed days when retrying a partially failed run; manual genera
 still refreshes the requested day. Automatic collection waits at least five minutes
 after service start, and intraday runs keep their aligned UTC boundaries.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
-Model summary calls are optional; set `summaries.enabled: false` for deterministic text.
+Model summary calls are optional; set `summaries.enabled: false` for text without a model.
 
 Failed activity collection preserves the previous daily report, per-person
 counts, and overlapping weekly/monthly reports during that generation. If no

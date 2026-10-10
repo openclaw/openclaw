@@ -87,7 +87,7 @@ export async function inspectMemorySourceState(params: {
       ...Array.from(
         skippedRoots,
         (root) =>
-          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its resolved absolute directory instead`,
       ),
     ],
   };

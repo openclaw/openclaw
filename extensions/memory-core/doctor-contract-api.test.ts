@@ -1421,7 +1421,7 @@ describe("memory-core doctor dreaming migration", () => {
 
       expect(result.warnings).toEqual([]);
       expect(result.changes).toEqual([
-        "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+        "Resolved Memory Core legacy memory index conflict for agent main by keeping existing per-agent SQLite rows",
         expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
       ]);
       expect(readMemoryRows(agentPath)).toEqual({
@@ -1453,7 +1453,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([
       expect.stringContaining(
-        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match canonical memory chunks_vec dimensions 4",
+        "Skipped Memory Core legacy memory index import for agent main because legacy rows could not be imported: Error: legacy memory chunks_vec dimensions 3 do not match current memory chunks_vec dimensions 4",
       ),
     ]);
     expect(result.changes).toEqual([]);
@@ -1469,7 +1469,7 @@ describe("memory-core doctor dreaming migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual([
-      "Resolved Memory Core legacy memory index conflict for agent main by keeping canonical per-agent SQLite rows",
+      "Resolved Memory Core legacy memory index conflict for agent main by keeping existing per-agent SQLite rows",
       expect.stringContaining("Archived Memory Core legacy memory index sidecar"),
     ]);
     await expect(fs.access(legacyPath)).rejects.toThrow();

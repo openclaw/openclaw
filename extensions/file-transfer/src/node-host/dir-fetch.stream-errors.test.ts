@@ -166,7 +166,7 @@ describe("dir.fetch process wrapper", () => {
           label: "changed canonical path",
           result: commandResult({ code: 78 }),
           code: "CANONICAL_PATH_CHANGED",
-          message: "canonical path differs from the authorized target",
+          message: "resolved path differs from the authorized target",
         },
         {
           label: "launch error",

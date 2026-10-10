@@ -56,13 +56,11 @@ export const visitorListDetailsSchema = Type.Object(
           grantId: Type.Optional(
             Type.String({ description: "Stable selector for canceling this invitation." }),
           ),
-          profileId: Type.Optional(
-            Type.String({ description: "Canonical person selector for visitor_revoke." }),
-          ),
+          profileId: Type.Optional(Type.String({ description: "Person ID for visitor_revoke." })),
           githubLogin: Type.Optional(
             Type.String({
               description:
-                "Current verified GitHub identity selected by the Gateway profile, when available. Use grantId to cancel one invitation; GitHub input selects its immutable account and the canonical person's recorded grants.",
+                "Current verified GitHub identity selected by the Gateway profile, when available. Use grantId to cancel one invitation; GitHub input selects its immutable account and the person's recorded grants.",
             }),
           ),
           invitedAt: Type.String(),

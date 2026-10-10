@@ -254,7 +254,7 @@ async function readRestorableVersion(
       }
       // Restored files must stay addressable by view/patch, which use the canonical path.
       if (canonical !== filePath) {
-        throw refuse(`${filePath} is not a canonical skill file path.`);
+        throw refuse(`${filePath} is not a valid skill file path.`);
       }
     }
     let content: Buffer;

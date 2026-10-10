@@ -25,7 +25,7 @@ export function renderMarkdown(report: ReportDocument, summary?: SummaryDocument
   ];
   if (!summary || summary.source === "fallback") {
     lines.push(
-      "> Deterministic summary: model summaries are disabled, pending, or unavailable.",
+      "> Summary without a model: model summaries are disabled, pending, or unavailable.",
       "",
     );
   }

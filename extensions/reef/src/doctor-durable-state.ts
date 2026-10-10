@@ -317,7 +317,7 @@ async function importReefRuntimeRecords<T>(params: {
   for (const { key, value } of records) {
     const existing = canonical.get(key);
     if (existing && !params.matches(existing, value)) {
-      throw new Error(`canonical ${params.recordLabel} ${key} differs`);
+      throw new Error(`current ${params.recordLabel} ${key} differs`);
     }
   }
   const missing = records.filter(({ key }) => !canonical.has(key));
@@ -331,7 +331,7 @@ async function importReefRuntimeRecords<T>(params: {
   }
   for (const entry of canonicalEntries) {
     if (JSON.stringify(await store.lookup(entry.key)) !== JSON.stringify(entry.value)) {
-      throw new Error(`canonical ${params.recordLabel} ${entry.key} changed during import`);
+      throw new Error(`current ${params.recordLabel} ${entry.key} changed during import`);
     }
   }
   for (const { key, value } of missing) {
@@ -395,7 +395,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
             ? canonical.length === 0
             : canonical.length !== pending.expectedEntries
         ) {
-          throw new Error("canonical audit trail does not match the verified import");
+          throw new Error("saved audit trail does not match the verified import");
         }
         await migrationStore.delete(REEF_AUDIT_MIGRATION_KEY);
         changes.push("Verified Reef audit trail; cleared completed migration marker");
@@ -422,7 +422,7 @@ export const reefAuditStateMigration: PluginDoctorStateMigration = {
       canonical = await readStoredReefAudit(store, headStore);
     } catch (error) {
       warnings.push(
-        `Failed reading canonical Reef audit trail: ${String(error)}; left legacy source in place`,
+        `Failed reading saved Reef audit trail: ${String(error)}; left legacy source in place`,
       );
       return { changes, warnings };
     }
@@ -592,7 +592,7 @@ export const reefRuntimeStateMigration: PluginDoctorStateMigration = {
       for (const [digest, record] of retained) {
         const existing = await store.lookup(digest);
         if (existing && JSON.stringify(existing) !== JSON.stringify(record)) {
-          throw new Error(`canonical review ${digest} differs`);
+          throw new Error(`saved review ${digest} differs`);
         }
         if (!existing) {
           await store.registerIfAbsent(digest, record);

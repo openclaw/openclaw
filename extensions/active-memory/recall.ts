@@ -226,16 +226,14 @@ async function resolveActiveRecall(
       summary: null,
     };
     if (params.config.logging) {
-      params.api.logger.info?.(
-        `${logPrefix} skipped (circuit breaker open after consecutive timeouts)`,
-      );
+      params.api.logger.info?.(`${logPrefix} skipped (recall paused after consecutive timeouts)`);
     }
     params.abortSignal?.throwIfAborted();
     await persistPluginStatusLines({
       api: params.api,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      statusLine: `${buildPluginStatusLine({ result, config: params.config })} circuit-breaker`,
+      statusLine: `${buildPluginStatusLine({ result, config: params.config })} recall paused after repeated timeouts`,
     });
     return result;
   }

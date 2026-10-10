@@ -88,7 +88,7 @@ export function createNodeWorkspaceBridge(options: {
       throwFromNodePayload(command, payload);
     }
     if (typeof payload.path !== "string" || !path.posix.isAbsolute(payload.path)) {
-      throw new Error(`Missing canonical path in ${command} response`);
+      throw new Error(`Missing resolved path in ${command} response`);
     }
     relativeWithin(remoteRoot, payload.path, path.posix);
     return payload;
@@ -136,7 +136,7 @@ export function createNodeWorkspaceBridge(options: {
         },
       });
       if (!path.posix.isAbsolute(result.canonicalPath)) {
-        throw new Error("Missing canonical path in file.fetch response", { cause: error });
+        throw new Error("Missing resolved path in file.fetch response", { cause: error });
       }
       return {
         ...result,
@@ -196,7 +196,7 @@ export function createNodeWorkspaceBridge(options: {
         throwFromNodePayload("file.create", payload ?? {});
       }
       if (typeof payload?.path !== "string" || !path.posix.isAbsolute(payload.path)) {
-        throw new Error("Missing canonical path in file.create response");
+        throw new Error("Missing resolved path in file.create response");
       }
       relativeWithin(remoteRoot, payload.path, path.posix);
       if (payload.status === "exists") {

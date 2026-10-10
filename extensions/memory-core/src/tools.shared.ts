@@ -17,7 +17,7 @@ import { DEFAULT_MEMORY_SEARCH_TIMEOUT_MS } from "./memory/search-deadline.js";
 // without importing a core-internal module across the plugin boundary.
 const SESSION_CANONICAL_KEY_MIGRATION_REQUIRED = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
 const SESSION_CANONICAL_KEY_MIGRATION_WARNING =
-  "Memory search is unavailable because the session catalog requires canonical-key migration.";
+  "Memory search is unavailable because the session catalog requires session-key migration.";
 const SESSION_CANONICAL_KEY_MIGRATION_ACTION =
   "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.";
 
