@@ -4,10 +4,10 @@ import photon from "@silvia-odwyer/photon-node";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import { fingerprintFixtures } from "./fixture-fingerprint.ts";
-import { compareCaptures, hash, type Capture } from "./report.ts";
+import { compareCaptures, hash, writeGallery, type Capture } from "./report.ts";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
-async function fixture(pixel: number | readonly number[], width = 1) {
+async function fixture(pixel: number | readonly number[], width = 1, id = "scene--profile") {
   const directory = temporary.make("parity-report-");
   const image = new photon.PhotonImage(
     new Uint8Array(
@@ -24,7 +24,7 @@ async function fixture(pixel: number | readonly number[], width = 1) {
   } finally {
     image.free();
   }
-  const contract = { expectedShots: ["scene--profile"], fixtures: hash("same-fixture") };
+  const contract = { expectedShots: [id], fixtures: hash("same-fixture") };
   const manifest: Capture = {
     version: 1,
     source: { head: "synthetic", dirty: [] },
@@ -37,8 +37,8 @@ async function fixture(pixel: number | readonly number[], width = 1) {
     failures: [],
     shots: [
       {
-        id: "scene--profile",
-        file: "scene--profile.png",
+        id,
+        file: `${id}.png`,
         scene: "scene",
         profile: "profile",
         label: "Synthetic",
@@ -48,7 +48,7 @@ async function fixture(pixel: number | readonly number[], width = 1) {
       },
     ],
   };
-  await writeFile(path.join(directory, "scene--profile.png"), png);
+  await writeFile(path.join(directory, `${id}.png`), png);
   await writeFile(path.join(directory, "manifest.json"), JSON.stringify(manifest));
   return { directory, manifest };
 }
@@ -99,11 +99,50 @@ it.each([0, 1, 2, 3])(
   },
 );
 
-it("reports changed image dimensions without attempting a mismatched pixel comparison", async () => {
-  const a = await fixture(0),
-    b = await fixture(0, 2);
-  expect(await compareCaptures(a.directory, b.directory, temporary.make("parity-output-"))).toBe(1);
-});
+it.each([
+  ["route-apps--mobile-light", true],
+  ["route-apps--mobile-dark", true],
+  ["route-apps--mobile-reduced-motion", true],
+  ["route-apps--desktop-light", false],
+] as const)(
+  "reports pixel differences for %s with only exact known exceptions",
+  async (id, known) => {
+    const a = await fixture(0, 1, id),
+      b = await fixture(37, 1, id);
+    await writeGallery(a.directory, a.manifest);
+    expect(
+      (await readFile(path.join(a.directory, "index.html"), "utf8")).includes(
+        "Known nondeterministic:",
+      ),
+    ).toBe(known);
+    const output = temporary.make("parity-known-");
+    expect(await compareCaptures(a.directory, b.directory, output)).toBe(known ? 0 : 1);
+    const [name] = await readdir(output);
+    const report = JSON.parse(await readFile(path.join(output, name!, "report.json"), "utf8"));
+    expect(report.changed).toBe(known ? 0 : 1);
+    expect(report.knownNondeterministic).toBe(known ? 1 : 0);
+    expect(report.results[0]).toMatchObject({
+      status: known ? "known-nondeterministic" : "pixels",
+      changedPixels: 1,
+      rasterNoisePixels: 0,
+      diff: `${id}.png`,
+    });
+    const html = await readFile(path.join(output, name!, "index.html"), "utf8");
+    expect(html).toContain(known ? "Image clipping paints differently" : `${id}: pixels`);
+    expect(await readFile(path.join(output, name!, `${id}.png`))).not.toHaveLength(0);
+  },
+);
+
+it.each(["scene--profile", "route-apps--mobile-light"])(
+  "fails changed dimensions for %s",
+  async (id) => {
+    const a = await fixture(0, 1, id),
+      b = await fixture(0, 2, id);
+    expect(await compareCaptures(a.directory, b.directory, temporary.make("parity-output-"))).toBe(
+      1,
+    );
+  },
+);
 
 it.each(["metadata", "missing-shot", "incomplete", "duplicate", "unsafe-path", "checksum"])(
   "rejects %s evidence",

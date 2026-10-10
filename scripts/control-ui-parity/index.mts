@@ -19,7 +19,8 @@ if (values.help || !command) {
   pnpm ui:parity diff <before-directory> <after-directory> [--output <parent>]
 
 Capture prints a fresh artifact directory containing manifest.json, PNGs, and index.html.
-Diff compares decoded RGBA pixels, reports ≤${MAX_RASTER_NOISE_CHANNEL_DELTA}-level raster noise separately, and exits 1 on larger differences.
+Diff compares decoded RGBA pixels, reports ≤${MAX_RASTER_NOISE_CHANNEL_DELTA}-level raster noise separately, and exits 1 on larger unlisted differences.
+The three known nondeterministic Apps shots remain captured and reported separately.
 Use the same browser, platform, source SHA, and selection for repeatability proof.
 --css is an explicit browser-only stylesheet override for sensitivity proof.
 Selectors are opt-in focused captures; omit them for the complete catalog.`);

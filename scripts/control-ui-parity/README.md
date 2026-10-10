@@ -14,8 +14,8 @@ browser-openable `index.html` with per-example feedback fields and **Copy feedba
 The manifest records the source HEAD, dirty paths, browser, platform, fixture
 fingerprint, exact expected shot set, and each PNG's hash and dimensions. The diff
 writes an HTML comparison, JSON report, and changed-pixel PNGs. Exit 0 means all
-expected shots have no failing pixel differences; missing, incomplete, incompatible, or changed
-captures fail.
+expected shots have no unaccepted differences. Missing, incomplete, incompatible,
+or resized captures fail, including the known nondeterministic shots below.
 
 Use the same frozen harness, browser version, platform, fonts, and profile/scene
 selection at each source ref. A screenshot baseline is only evidence for the
@@ -59,16 +59,35 @@ Chromium's fresh-surface screenshot path.
 
 `MAX_RASTER_NOISE_CHANNEL_DELTA = 1` is the comparison policy: a changed pixel
 passes only when its maximum absolute delta across all RGBA channels is at most
-one level. Any channel delta of two or more fails. This accommodates measured
+one level. Any channel delta of two or more fails outside the explicit exceptions
+below. This accommodates measured
 one-level rounding around antialiased shadows after rendering has been pinned;
 it is not a percentage or count allowance. JSON, HTML, and console reports count
 these pixels separately as **raster noise (≤1 level): N px**. Diff images mark
 failing pixels pink and accepted raster noise blue.
 
-The full 924-shot pair must be requalified with this policy before the harness
-serves as the migration gate. The boundary tests prove one-level shifts pass and
-two-level shifts fail in every RGBA channel; the real CSS sensitivity capture
-must still fail. No screenshot baselines are committed.
+The complete same-SHA pair at `10d3967be440ea06a7e2a8c985edf9dc7664e23b`
+captured 924 shots twice: 921 had no failing differences, with 52 one-level noise
+pixels reported separately. The three remaining Apps image-clipping cases are
+accepted as known nondeterministic in `config.ts`:
+
+- `route-apps--mobile-light`
+- `route-apps--mobile-dark`
+- `route-apps--mobile-reduced-motion`
+
+Image clipping paints differently between runs, even under software rasterization.
+These exact shots remain in captures, galleries, and diff reports, with their
+reason and changed-pixel counts. Their pixel differences do not fail the command;
+other shots and structural failures keep the normal gates. Inspect these three
+shots manually when changing Apps. The boundary tests cover the exception list,
+an unlisted Apps shot that still fails, and the one-/two-level RGBA boundary.
+The real CSS inversion probe detected 1,382,400 changed pixels. No screenshot
+baselines are committed.
+
+Migration lanes should capture the base ref and their candidate using the same
+frozen harness and browser installation, then run `diff` on the two printed
+directories. Review the comparison gallery, including the three known exceptions,
+alongside each lane's focused behavior tests.
 
 Run the opt-in report tests through the repository Vitest wrapper:
 

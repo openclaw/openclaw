@@ -4,6 +4,7 @@ import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { z } from "zod";
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
+import { KNOWN_NONDETERMINISTIC_SHOTS } from "./config.ts";
 
 // Repeated pinned Chromium captures can round antialiased shadows by one level.
 // Larger differences remain failures; accepted noise is always counted separately.
@@ -36,6 +37,10 @@ export const hash = (value: string | Uint8Array) =>
 const escape = (text: string) =>
   text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;");
 const safeId = /^[a-z0-9][a-z0-9-]*$/u;
+const knownNondeterministicNote = (id: string) => {
+  const reason = KNOWN_NONDETERMINISTIC_SHOTS.get(id);
+  return reason ? `<p>Known nondeterministic: ${escape(reason)}</p>` : "";
+};
 const captureSchema = z.object({
   version: z.literal(1),
   source: z.object({ head: z.string().min(1), dirty: z.array(z.string()) }),
@@ -99,7 +104,7 @@ export async function writeGallery(directory: string, capture: Capture) {
   const cards = capture.shots
     .map(
       (shot) =>
-        `<article id="${shot.id}"><h2>${escape(shot.id)}</h2><p>${escape(shot.label)}</p><a href="${shot.file}"><img loading="lazy" src="${shot.file}" alt="${escape(shot.label)}"></a><label>Feedback <textarea data-id="${shot.id}" data-label="${escape(shot.label)}"></textarea></label></article>`,
+        `<article id="${shot.id}"><h2>${escape(shot.id)}</h2><p>${escape(shot.label)}</p>${knownNondeterministicNote(shot.id)}<a href="${shot.file}"><img loading="lazy" src="${shot.file}" alt="${escape(shot.label)}"></a><label>Feedback <textarea data-id="${shot.id}" data-label="${escape(shot.label)}"></textarea></label></article>`,
     )
     .join("\n");
   await writeFile(
@@ -140,6 +145,7 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
       rasterNoisePixels: 0,
       totalPixels: 0,
       diff: "",
+      knownNondeterministicReason: KNOWN_NONDETERMINISTIC_SHOTS.get(id) ?? null,
     };
     if (!left || !right) {
       row.status = left ? "missing-after" : "missing-before";
@@ -195,7 +201,7 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
           }
           if (row.changedPixels || row.rasterNoisePixels) {
             if (row.changedPixels) {
-              row.status = "pixels";
+              row.status = row.knownNondeterministicReason ? "known-nondeterministic" : "pixels";
             }
             row.diff = `${id}.png`;
             const rendered = new photon.PhotonImage(diff, width, height);
@@ -213,7 +219,12 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
     }
     results.push(row);
   }
-  const changed = results.filter((row) => row.status !== "equal").length;
+  const changed = results.filter(
+    (row) => row.status !== "equal" && row.status !== "known-nondeterministic",
+  ).length;
+  const knownNondeterministic = results.filter(
+    (row) => row.status === "known-nondeterministic",
+  ).length;
   const rasterNoisePixels = results.reduce((total, row) => total + row.rasterNoisePixels, 0);
   await writeFile(
     path.join(directory, "report.json"),
@@ -224,6 +235,7 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
         incompatible,
         maxRasterNoiseChannelDelta: MAX_RASTER_NOISE_CHANNEL_DELTA,
         changed,
+        knownNondeterministic,
         rasterNoisePixels,
         results,
       },
@@ -237,10 +249,10 @@ export async function compareCaptures(beforeDir: string, afterDir: string, paren
       : "";
   await writeFile(
     path.join(directory, "index.html"),
-    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Control UI parity diff</title><style>body{font:16px system-ui;margin:2rem}img{max-width:32%;vertical-align:top}article{border-top:1px solid #aaa;margin:1rem 0;padding:1rem 0}h2{overflow-wrap:anywhere}</style><h1>${changed} / ${results.length} failing shot differences</h1><p>raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${rasterNoisePixels} px</p><p>Incompatible metadata: ${escape(incompatible.join(", ") || "none")}</p>${results.map((row) => `<article><h2>${row.id}: ${row.status}</h2><p>${row.changedPixels} / ${row.totalPixels} failing pixels; raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${row.rasterNoisePixels} px</p><img alt="Before" src="${href(beforeDir, beforeShots.get(row.id))}"><img alt="After" src="${href(afterDir, afterShots.get(row.id))}">${row.diff ? `<img alt="Difference" src="${row.diff}">` : ""}</article>`).join("\n")}</html>`,
+    `<!doctype html><html lang="en"><meta charset="utf-8"><title>Control UI parity diff</title><style>body{font:16px system-ui;margin:2rem}img{max-width:32%;vertical-align:top}article{border-top:1px solid #aaa;margin:1rem 0;padding:1rem 0}h2{overflow-wrap:anywhere}</style><h1>${changed} / ${results.length} failing shot differences</h1><p>Known nondeterministic differences: ${knownNondeterministic} shots</p><p>raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${rasterNoisePixels} px</p><p>Incompatible metadata: ${escape(incompatible.join(", ") || "none")}</p>${results.map((row) => `<article><h2>${row.id}: ${row.status}</h2>${knownNondeterministicNote(row.id)}<p>${row.changedPixels} / ${row.totalPixels} changed pixels; raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${row.rasterNoisePixels} px</p><img alt="Before" src="${href(beforeDir, beforeShots.get(row.id))}"><img alt="After" src="${href(afterDir, afterShots.get(row.id))}">${row.diff ? `<img alt="Difference" src="${row.diff}">` : ""}</article>`).join("\n")}</html>`,
   );
   console.log(
-    `[control-ui-parity] ${changed}/${results.length} failing shot differences; raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${rasterNoisePixels} px; report: ${directory}`,
+    `[control-ui-parity] ${changed}/${results.length} failing shot differences; known nondeterministic: ${knownNondeterministic} shots; raster noise (≤${MAX_RASTER_NOISE_CHANNEL_DELTA} level): ${rasterNoisePixels} px; report: ${directory}`,
   );
   return changed || incompatible.length ? 1 : 0;
 }
