@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { cleanup } from "@solidjs/testing-library";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   renderDreamingView,
   fullDreamingViewAccess,
@@ -17,7 +17,7 @@ const restoreTranslations = installDreamingViewTestTranslations();
 
 afterAll(() => restoreTranslations());
 afterEach(() => {
-  cleanup();
+  cleanupSolid();
   vi.restoreAllMocks();
 });
 

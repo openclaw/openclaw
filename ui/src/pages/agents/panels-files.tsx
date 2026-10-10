@@ -1,8 +1,8 @@
 import { createMemo, For, Show } from "solid-js";
 import type { AgentFileEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import { icons } from "../../components/icons.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LitContent } from "../../components/solid/lit-content.tsx";
 import "../../components/modal-dialog.ts";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -131,34 +131,32 @@ export function AgentFiles(
   return (
     <>
       <AgentFileError
-        {...{
-          error: params.agentFilesError,
-          conflictName: conflictName(),
-          busy: params.agentFilesLoading || params.agentFileSaving,
-          canWrite: params.canWrite,
-          onReload: params.onFileReload,
-          onOverwrite: params.onFileOverwrite,
-        }}
+        error={params.agentFilesError}
+        conflictName={conflictName()}
+        busy={params.agentFilesLoading || params.agentFileSaving}
+        canWrite={params.canWrite}
+        onReload={params.onFileReload}
+        onOverwrite={params.onFileOverwrite}
       />
       <SettingsSection
-        {...{
-          title: t("agents.files.coreFilesTitle"),
-          description: list() ? (
+        title={t("agents.files.coreFilesTitle")}
+        description={
+          list() ? (
             <>
               {t("agents.files.coreFilesSubtitle")} {t("agents.files.workspace")}:
               <code>{list()?.workspace}</code>
             </>
           ) : (
             t("agents.files.coreFilesSubtitle")
-          ),
-          actions: (
-            <AgentPanelAction
-              label={params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
-              disabled={params.agentFilesLoading}
-              onClick={() => params.onLoadFiles(params.agentId)}
-            />
-          ),
-        }}
+          )
+        }
+        actions={
+          <AgentPanelAction
+            label={params.agentFilesLoading ? t("common.loading") : t("common.refresh")}
+            disabled={params.agentFilesLoading}
+            onClick={() => params.onLoadFiles(params.agentId)}
+          />
+        }
       >
         {!list() ? (
           <SettingsEmpty message={t("agents.files.loadHint")} />
@@ -247,7 +245,7 @@ export function AgentFiles(
                               ?.show();
                           }}
                         >
-                          <LitContent content={() => icons.eye} /> {t("agents.files.preview")}
+                          <Icon name="eye" /> {t("agents.files.preview")}
                         </button>
                         <AgentPanelAction
                           label={t("common.reset")}
@@ -362,7 +360,7 @@ export function AgentFiles(
                             <div class="md-preview-dialog__header">
                               <div class="md-preview-dialog__header-main">
                                 <div class="md-preview-dialog__eyebrow">
-                                  <LitContent content={() => icons.scrollText} />
+                                  <Icon name="scrollText" />
                                   <span>{getExtensionLabel(preview().activeName)}</span>
                                 </div>
                                 <div class="md-preview-dialog__title-wrap">
@@ -402,18 +400,18 @@ export function AgentFiles(
                                     }}
                                   >
                                     <span class="when-normal" aria-hidden="true">
-                                      <LitContent content={() => icons.maximize} />
+                                      <Icon name="maximize" />
                                     </span>
                                     <span class="when-fullscreen" aria-hidden="true">
-                                      <LitContent content={() => icons.minimize} />
+                                      <Icon name="minimize" />
                                     </span>
                                   </button>
                                 </openclaw-tooltip>
                                 <For
                                   each={
                                     [
-                                      ["editFile", icons.edit, true],
-                                      ["closePreview", icons.x, false],
+                                      ["editFile", "edit", true],
+                                      ["closePreview", "x", false],
                                     ] as const
                                   }
                                 >
@@ -428,7 +426,7 @@ export function AgentFiles(
                                         }
                                       >
                                         <span aria-hidden="true">
-                                          <LitContent content={() => icon} />
+                                          <Icon name={icon} />
                                         </span>
                                       </button>
                                     </openclaw-tooltip>

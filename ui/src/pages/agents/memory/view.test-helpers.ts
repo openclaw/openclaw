@@ -1,8 +1,8 @@
-import { render as mountSolid } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderDreaming } from "./view.tsx";
 
 export const fullDreamingViewAccess: Parameters<typeof renderDreaming>[0]["access"] = {

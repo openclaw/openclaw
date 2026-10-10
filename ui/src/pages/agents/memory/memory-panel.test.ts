@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render as mountSolid } from "@solidjs/testing-library";
-import { flush } from "solid-js";
+import { createComponent, flush } from "solid-js";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
+import { ShellLayoutOwner } from "../../../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../../../app/shell-layout-traits-solid.tsx";
 import {
   showConfirmDialog,
   type ConfirmDialogOptions,
@@ -13,10 +14,13 @@ import {
 import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
+import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import type { DreamDiaryActionMethod, DreamingState } from "./dreaming.ts";
 import { AgentMemoryState } from "./memory-panel-state.ts";
-import { AgentMemoryView } from "./memory-panel.tsx";
+import { AgentMemoryPanel, AgentMemoryView } from "./memory-panel.tsx";
 import type { DreamingViewState } from "./view.tsx";
 
 vi.mock("../../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -124,7 +128,7 @@ async function replaceContext(page: TestMemoryPanel, context: ApplicationContext
 }
 
 afterEach(() => {
-  cleanup();
+  cleanupSolid();
   for (const state of states) {
     state.disconnect();
   }
@@ -135,6 +139,50 @@ afterEach(() => {
 });
 
 describe("AgentMemoryPanel gateway lifecycle", () => {
+  it.each(["lit", "solid"] as const)(
+    "registers the memory host and releases shell layout for %s callers",
+    async (renderer) => {
+      const context = contextWithGateway({} as GatewayBrowserClient, false);
+      const content = document.createElement("main");
+      content.className = "content";
+      document.body.append(content);
+      const owner = new ShellLayoutOwner();
+      owner.contentRef(content);
+      if (renderer === "lit") {
+        const provider = createApplicationContextProvider(context);
+        const host = document.createElement("openclaw-agent-memory-panel");
+        host.agentId = "support";
+        provider.append(host);
+        content.append(provider);
+      } else {
+        const provider = createSolidApplicationContextProvider(context);
+        mountSolid(
+          () =>
+            createComponent(ShellLayoutProvider, {
+              value: { owner, host: content },
+              get children() {
+                return createComponent(AgentMemoryPanel, { agentId: "support" });
+              },
+            }),
+          { container: content, wrapper: provider.wrapper },
+        );
+      }
+      const host = content.querySelector("openclaw-agent-memory-panel")!;
+      await host.updateComplete;
+      flush();
+      expect(host.agentId).toBe("support");
+      expect(host.querySelector(".agent-memory-panel__header")).not.toBeNull();
+      expect(owner.current.toolbarHeader).toBe(true);
+      if (renderer === "solid") {
+        cleanupSolid();
+      } else {
+        host.remove();
+      }
+      await Promise.resolve();
+      expect(owner.current.toolbarHeader).toBeUndefined();
+    },
+  );
+
   it("waits for a committed agent before loading agent-scoped memory", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "doctor.memory.status") {

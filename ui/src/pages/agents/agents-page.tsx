@@ -1,14 +1,16 @@
 import { html } from "lit";
-import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
-import { LitContent } from "../../components/solid/lit-content.tsx";
+import { createEffect, createMemo, onCleanup, untrack, useContext } from "solid-js";
+import { shellLayoutOwnerForHost } from "../../app/shell-layout-owner.ts";
+import { ShellLayoutProvider } from "../../app/shell-layout-traits-solid.tsx";
+import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { AgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { Agents, AgentsPageHeader } from "./view.tsx";
 
-export function AgentsPage(props: { routeData?: AgentsRouteData }) {
+function AgentsPageContent(props: { routeData?: AgentsRouteData }) {
   const state = new AgentsPageState();
   state.context = useApplication();
   state.routeData = untrack(() => props.routeData);
@@ -35,19 +37,26 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
   return (
     <>
       <AgentsPageHeader />
-      <section class="settings-workspace">
-        <LitContent
-          content={() =>
-            html`<span hidden ${shellLayoutTraits({ settingsWorkspace: true })}></span>`
-          }
-        />
-        <div class="settings-workspace__body">
-          <Agents {...viewProps()} />
-        </div>
-      </section>
+      <SettingsWorkspace>
+        <Agents {...viewProps()} />
+      </SettingsWorkspace>
     </>
   );
 }
+
+export const AgentsPage = defineSolidBridge<{ routeData: AgentsRouteData | undefined }>(
+  "openclaw-agents-page",
+  (props, host) => {
+    const inherited = useContext(ShellLayoutProvider);
+    const owner = shellLayoutOwnerForHost(host);
+    return (
+      <ShellLayoutProvider value={inherited ?? (owner ? { owner, host } : null)}>
+        <AgentsPageContent {...props} />
+      </ShellLayoutProvider>
+    );
+  },
+  { properties: { routeData: { default: undefined, attribute: false } } },
+);
 
 export const header = true;
 export const render = (data: AgentsRouteData | undefined) =>

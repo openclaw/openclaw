@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { For } from "solid-js";
 import type { ToolsEffectiveEntry, ToolsEffectiveResult } from "../../api/types.ts";
 import { registerToolDiagnosticsEnglish } from "../../i18n/locales/en-tool-diagnostics.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
@@ -13,23 +13,6 @@ function renderProfileInheritance(profiles: ToolAccessDiagnostics["profiles"]) {
     (entry) => entry.source === "tools.profile" || entry.source.endsWith(".tools.profile"),
   );
   const providerProfiles = profiles.filter((entry) => !baseProfiles.includes(entry));
-  const branches = [baseProfiles, providerProfiles].flatMap((entries, index) => {
-    const global = entries.find((entry) => entry.source.startsWith("tools."));
-    const agent = entries.find((entry) => !entry.source.startsWith("tools."));
-    const root = global ?? agent;
-    if (!root) {
-      return [];
-    }
-    const suffix = index === 0 ? "" : "Provider";
-    return [
-      {
-        root,
-        label: t(`agentTools.profile${global ? "Global" : "Agent"}${suffix}`),
-        child: global ? agent : undefined,
-        childLabel: t(`agentTools.profileAgent${suffix}Override`),
-      },
-    ];
-  });
   const renderEntry = (entry: ToolAccessDiagnostics["profiles"][number], label: string) => (
     <>
       <div class="agent-profile-tree__label">{label}</div>
@@ -59,19 +42,26 @@ function renderProfileInheritance(profiles: ToolAccessDiagnostics["profiles"]) {
   );
   return (
     <ul class="agent-profile-tree" role="list">
-      <For each={branches}>
-        {(branch) => (
-          <li class={branch.child ? "agent-profile-tree__branch" : ""}>
-            {renderEntry(branch.root, branch.label)}
-            <Show when={branch.child} keyed>
-              {(child) => (
+      <For each={[baseProfiles, providerProfiles]}>
+        {(entries) => {
+          const global = entries.find((entry) => entry.source.startsWith("tools."));
+          const agent = entries.find((entry) => !entry.source.startsWith("tools."));
+          const root = global ?? agent;
+          if (!root) {
+            return undefined;
+          }
+          const suffix = entries === baseProfiles ? "" : "Provider";
+          return (
+            <li class={global && agent ? "agent-profile-tree__branch" : ""}>
+              {renderEntry(root, t(`agentTools.profile${global ? "Global" : "Agent"}${suffix}`))}
+              {global && agent && (
                 <ul role="list">
-                  <li>{renderEntry(child, branch.childLabel)}</li>
+                  <li>{renderEntry(agent, t(`agentTools.profileAgent${suffix}Override`))}</li>
                 </ul>
               )}
-            </Show>
-          </li>
-        )}
+            </li>
+          );
+        }}
       </For>
     </ul>
   );
@@ -131,7 +121,6 @@ export function renderToolPolicyDetails(
         diagnostic.reasons.length > 0
           ? [
               "agentTools.policySources",
-
               <For each={diagnostic.reasons}>
                 {(reason) => (
                   <div>

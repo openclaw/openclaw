@@ -108,22 +108,20 @@ export function AgentChannels(params: {
         <div class="callout info">{t("agents.channels.loadHint")}</div>
       ) : undefined}
       <SettingsSection
-        {...{
-          title: t("agents.channels.title"),
-          description: (
-            <>
-              {t("agents.channels.subtitle")}{" "}
-              {t("agents.channels.lastRefresh", { time: lastSuccessLabel() })}
-            </>
-          ),
-          actions: (
-            <AgentPanelAction
-              label={params.loading ? t("common.refreshing") : t("common.refresh")}
-              disabled={params.loading}
-              onClick={params.onRefresh}
-            />
-          ),
-        }}
+        title={t("agents.channels.title")}
+        description={
+          <>
+            {t("agents.channels.subtitle")}{" "}
+            {t("agents.channels.lastRefresh", { time: lastSuccessLabel() })}
+          </>
+        }
+        actions={
+          <AgentPanelAction
+            label={params.loading ? t("common.refreshing") : t("common.refresh")}
+            disabled={params.loading}
+            onClick={params.onRefresh}
+          />
+        }
       >
         {entries().length === 0 ? (
           <SettingsEmpty message={t("agents.channels.empty")} />
@@ -155,30 +153,26 @@ export function AgentChannels(params: {
             ];
             return (
               <SettingsRow
-                {...{
-                  title: entry.label,
-                  description: metaParts.join(" · "),
-                  control: (
-                    <>
-                      {summary.configured === 0 ? (
-                        <a
-                          class="settings-row__value"
-                          href="https://docs.openclaw.ai/channels"
-                          target="_blank"
-                          rel="noopener"
-                        >
-                          {t("agents.channels.setupGuide")}
-                        </a>
-                      ) : undefined}
-                      <SettingsStatus
-                        {...{
-                          kind: summary.connected > 0 ? "ok" : summary.total ? "warn" : "muted",
-                          label: status,
-                        }}
-                      />
-                    </>
-                  ),
-                }}
+                title={entry.label}
+                description={metaParts.join(" · ")}
+                control={
+                  <>
+                    {summary.configured === 0 ? (
+                      <a
+                        class="settings-row__value"
+                        href="https://docs.openclaw.ai/channels"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {t("agents.channels.setupGuide")}
+                      </a>
+                    ) : undefined}
+                    <SettingsStatus
+                      kind={summary.connected > 0 ? "ok" : summary.total ? "warn" : "muted"}
+                      label={status}
+                    />
+                  </>
+                }
               />
             );
           })
@@ -215,17 +209,15 @@ export function AgentCron(params: {
       )}
       {params.error ? <div class="callout danger">{params.error}</div> : undefined}
       <SettingsSection
-        {...{
-          title: t("agents.cronPanel.schedulerTitle"),
-          description: t("agents.cronPanel.schedulerSubtitle"),
-          actions: (
-            <AgentPanelAction
-              label={params.loading ? t("common.refreshing") : t("common.refresh")}
-              disabled={params.loading}
-              onClick={params.onRefresh}
-            />
-          ),
-        }}
+        title={t("agents.cronPanel.schedulerTitle")}
+        description={t("agents.cronPanel.schedulerSubtitle")}
+        actions={
+          <AgentPanelAction
+            label={params.loading ? t("common.refreshing") : t("common.refresh")}
+            disabled={params.loading}
+            onClick={params.onRefresh}
+          />
+        }
       >
         <For
           each={
@@ -247,15 +239,13 @@ export function AgentCron(params: {
           }
         >
           {([title, value]) => (
-            <SettingsRow {...{ title, control: <SettingsValue value={value} /> }} />
+            <SettingsRow title={title} control={<SettingsValue value={value} />} />
           )}
         </For>
       </SettingsSection>
       <SettingsSection
-        {...{
-          title: t("agents.cronPanel.agentJobsTitle"),
-          description: t("agents.cronPanel.agentJobsSubtitle"),
-        }}
+        title={t("agents.cronPanel.agentJobsTitle")}
+        description={t("agents.cronPanel.agentJobsSubtitle")}
       >
         {params.jobs.length === 0 ? (
           <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
@@ -276,32 +266,28 @@ export function AgentCron(params: {
                 );
                 return (
                   <SettingsRow
-                    {...{
-                      title: job().name,
-                      description: description(),
-                      control: (
-                        <>
-                          <SettingsStatus
-                            {...{
-                              kind: job().enabled ? "ok" : "warn",
-                              label: job().enabled ? t("common.enabled") : t("common.disabled"),
-                            }}
-                          />
-                          <a
-                            class="btn btn--sm"
-                            href={`${pathForRoute("cron", params.basePath)}?job=${encodeURIComponent(job().id)}`}
-                            aria-label={t("agents.cronPanel.editJob", { name: job().name })}
-                          >
-                            {t("agents.cronPanel.edit")}
-                          </a>
-                          <AgentPanelAction
-                            label={t("agents.cronPanel.runNow")}
-                            disabled={!params.canRunNow}
-                            onClick={() => params.onRunNow(job().id)}
-                          />
-                        </>
-                      ),
-                    }}
+                    title={job().name}
+                    description={description()}
+                    control={
+                      <>
+                        <SettingsStatus
+                          kind={job().enabled ? "ok" : "warn"}
+                          label={job().enabled ? t("common.enabled") : t("common.disabled")}
+                        />
+                        <a
+                          class="btn btn--sm"
+                          href={`${pathForRoute("cron", params.basePath)}?job=${encodeURIComponent(job().id)}`}
+                          aria-label={t("agents.cronPanel.editJob", { name: job().name })}
+                        >
+                          {t("agents.cronPanel.edit")}
+                        </a>
+                        <AgentPanelAction
+                          label={t("agents.cronPanel.runNow")}
+                          disabled={!params.canRunNow}
+                          onClick={() => params.onRunNow(job().id)}
+                        />
+                      </>
+                    }
                   />
                 );
               }}

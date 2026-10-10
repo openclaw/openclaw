@@ -1,13 +1,43 @@
-import { createEffect, createMemo, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, onCleanup, untrack, useContext } from "solid-js";
+import { shellLayoutOwnerForHost } from "../../../app/shell-layout-owner.ts";
+import {
+  ShellLayoutBoundary,
+  ShellLayoutProvider,
+} from "../../../app/shell-layout-traits-solid.tsx";
 import { SettingsDefaultDescription } from "../../../components/solid/settings-ui.tsx";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { AgentMemoryState } from "./memory-panel-state.ts";
-import { renderDreamingToggleConfirmation } from "./toggle-confirmation.tsx";
-import { renderDreaming } from "./view.tsx";
+import { renderDreamingToggleConfirmation as DreamingToggleConfirmation } from "./toggle-confirmation.tsx";
+import { renderDreaming as Dreaming } from "./view.tsx";
 
-export function AgentMemoryPanel(props: { agentId: string }) {
+type AgentMemoryPanelProps = { agentId: string };
+
+export const AgentMemoryPanel = defineSolidBridge<AgentMemoryPanelProps>(
+  "openclaw-agent-memory-panel",
+  (props, host) => {
+    const inherited = useContext(ShellLayoutProvider);
+    const owner = inherited?.owner ?? shellLayoutOwnerForHost(host);
+    return (
+      <ShellLayoutProvider value={inherited ?? (owner ? { owner, host } : null)}>
+        <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+          <AgentMemoryContent {...props} />
+        </ShellLayoutBoundary>
+      </ShellLayoutProvider>
+    );
+  },
+  { properties: { agentId: { default: "", attribute: false } } },
+);
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-agent-memory-panel": SolidBridgeElement<AgentMemoryPanelProps>;
+  }
+}
+
+function AgentMemoryContent(props: AgentMemoryPanelProps) {
   const state = new AgentMemoryState();
   state.context = useApplication();
   state.agentId = untrack(() => props.agentId);
@@ -38,24 +68,6 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
       return Reflect.get(target, key, receiver);
     },
   });
-  const dreamingProps = new Proxy(
-    untrack(() => model().dreaming),
-    {
-      get(_target, key, receiver) {
-        return key === "viewState" ? viewState : Reflect.get(model().dreaming, key, receiver);
-      },
-    },
-  );
-  const toggleProps = new Proxy(
-    untrack(() => model().toggle),
-    {
-      get(_target, key, receiver) {
-        return Reflect.get(model().toggle, key, receiver);
-      },
-    },
-  );
-  const content = renderDreaming(dreamingProps);
-  const toggle = renderDreamingToggleConfirmation(toggleProps);
   return (
     <>
       <section class="content-header content-header--page agent-memory-panel__header">
@@ -97,8 +109,8 @@ export function AgentMemoryView(props: { state: AgentMemoryState }) {
           </div>
         </div>
       </section>
-      {content}
-      {toggle}
+      <Dreaming {...model().dreaming} viewState={viewState} />
+      <DreamingToggleConfirmation {...model().toggle} />
     </>
   );
 }

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { cleanup } from "@solidjs/testing-library";
 import { afterEach, describe, expect, it } from "vitest";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { renderDreamingView } from "./view.test-helpers.ts";
 import { createDreamingViewState, renderDreaming } from "./view.tsx";
 
@@ -8,7 +8,7 @@ const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
 let host: HTMLDivElement | undefined;
 
 afterEach(() => {
-  cleanup();
+  cleanupSolid();
   host?.remove();
   host = undefined;
 });

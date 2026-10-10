@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
-import { cleanup } from "@solidjs/testing-library";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   renderDreamingView,
   fullDreamingViewAccess,
@@ -9,7 +9,7 @@ import {
 } from "./view.test-helpers.ts";
 import { createDreamingViewState, renderDreaming } from "./view.tsx";
 
-afterEach(() => cleanup());
+afterEach(() => cleanupSolid());
 
 type DreamingProps = Parameters<typeof renderDreaming>[0];
 

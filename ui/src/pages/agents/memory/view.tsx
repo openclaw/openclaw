@@ -157,6 +157,13 @@ const DREAM_PHRASE_KEYS = [
 ] as const;
 
 const DREAM_PHASES = ["light", "deep", "rem"] as const;
+const DREAM_ACTIONS = [
+  ["dedupeDiary", "onDedupeDreamDiary", "canDedupeDreamDiary"],
+  ["repairCache", "onRepairDreamingArtifacts", "canRepairDreamingArtifacts"],
+  ["backfill", "onBackfillDiary", "canBackfillDiary"],
+  ["reset", "onResetDiary", "canResetDiary"],
+  ["clearGrounded", "onResetGroundedShortTerm", "canResetGroundedShortTerm"],
+] as const;
 
 const DREAM_SWAP_MS = 6_000;
 
@@ -307,11 +314,11 @@ function renderScene(props: DreamingProps, dreamText: () => string) {
               background: ${s.hue === "accent" ? "var(--accent-muted)" : "var(--text)"};
               animation-delay: ${s.delay}s;
             `}
-          ></div>
+          />
         )}
       </For>
 
-      <div class="dreams__moon"></div>
+      <div class="dreams__moon" />
 
       {props.active ? (
         <>
@@ -321,15 +328,15 @@ function renderScene(props: DreamingProps, dreamText: () => string) {
           <div
             class="dreams__bubble-dot"
             style="top: calc(50% - 160px); left: calc(50% - 120px); width: 12px; height: 12px; animation-delay: 0.2s;"
-          ></div>
+          />
           <div
             class="dreams__bubble-dot"
             style="top: calc(50% - 120px); left: calc(50% - 90px); width: 8px; height: 8px; animation-delay: 0.4s;"
-          ></div>
+          />
         </>
       ) : undefined}
 
-      <div class="dreams__glow"></div>
+      <div class="dreams__glow" />
       <div class="dreams__lobster" style={style()}>
         <LitContent content={() => renderLobsterSvg(look(), { sleeping: true })} />
       </div>
@@ -342,7 +349,7 @@ function renderScene(props: DreamingProps, dreamText: () => string) {
           {props.active ? t("dreaming.status.active") : t("dreaming.status.idle")}
         </span>
         <div class="dreams__status-detail">
-          <div class="dreams__status-dot"></div>
+          <div class="dreams__status-dot" />
           <span>
             {props.promotedCount} {t("dreaming.status.promotedSuffix")}
             {props.nextCycle ? (
@@ -383,7 +390,7 @@ function renderScene(props: DreamingProps, dreamText: () => string) {
                   { "dreams__phase--off": phase() !== undefined && !enabled() },
                 ]}
               >
-                <div class={["dreams__phase-dot", { "dreams__phase-dot--on": enabled() }]}></div>
+                <div class={["dreams__phase-dot", { "dreams__phase-dot--on": enabled() }]} />
                 <span class="dreams__phase-name">{t(`dreaming.phase.${phaseId}`)}</span>
                 <span class="dreams__phase-next">{status()}</span>
               </div>
@@ -393,10 +400,7 @@ function renderScene(props: DreamingProps, dreamText: () => string) {
       </div>
 
       {props.statusError ? (
-        <>
-          {" "}
-          <div class="dreams__controls-error">{props.statusError}</div>{" "}
-        </>
+        <div class="dreams__controls-error">{props.statusError}</div>
       ) : undefined}
     </section>
   );
@@ -555,17 +559,9 @@ function renderWikiPreviewOverlay(props: DreamingProps) {
               </div>
               <div class="dreams-diary__preview-body">
                 {current().loading ? (
-                  <>
-                    {" "}
-                    <div class="dreams-diary__empty-text">
-                      {t("dreaming.wiki.loadingPage")}
-                    </div>{" "}
-                  </>
+                  <div class="dreams-diary__empty-text">{t("dreaming.wiki.loadingPage")}</div>
                 ) : current().error ? (
-                  <>
-                    {" "}
-                    <div class="dreams-diary__error">{current().error}</div>{" "}
-                  </>
+                  <div class="dreams-diary__error">{current().error}</div>
                 ) : (
                   <>
                     {current().page.truncated === true ? (
@@ -659,10 +655,7 @@ function AdvancedEntryList(params: {
         </div>
       </div>
       {params.entries.length === 0 ? (
-        <>
-          {" "}
-          <div class="dreams-advanced__empty">{t(params.emptyKey)}</div>{" "}
-        </>
+        <div class="dreams-advanced__empty">{t(params.emptyKey)}</div>
       ) : (
         <div class="dreams-advanced__list">
           <For each={params.entries} keyed={(entry) => entry.key}>
@@ -670,12 +663,7 @@ function AdvancedEntryList(params: {
               const badge = createMemo(() => params.badge?.(entry()));
               return (
                 <article class="dreams-advanced__item" data-entry-key={entry().key}>
-                  {badge() ? (
-                    <>
-                      {" "}
-                      <span class="dreams-advanced__badge">{badge()}</span>{" "}
-                    </>
-                  ) : undefined}
+                  {badge() ? <span class="dreams-advanced__badge">{badge()}</span> : undefined}
                   <div class="dreams-advanced__snippet">{entry().snippet}</div>
                   <div class="dreams-advanced__source">
                     {formatRange(entry().path, entry().startLine, entry().endLine)}
@@ -722,62 +710,22 @@ function renderAdvancedSection(props: DreamingProps) {
         <div class="dreams-advanced__intro">
           <span class="dreams-advanced__eyebrow">{t("dreaming.advanced.eyebrow")}</span>
           <h2 class="dreams-advanced__title">{t("dreaming.advanced.title")}</h2>
-          {description() ? (
-            <>
-              {" "}
-              <p class="dreams-advanced__description">{description()}</p>{" "}
-            </>
-          ) : undefined}
+          {description() ? <p class="dreams-advanced__description">{description()}</p> : undefined}
           <div class="dreams-advanced__summary">{summary()}</div>
         </div>
         <div class="dreams-advanced__actions">
-          <For
-            keyed={(entry) => entry.label}
-            each={[
-              {
-                label: t("dreaming.scene.dedupeDiary"),
-                onClick: props.onDedupeDreamDiary,
-                allowed: props.access.canDedupeDreamDiary,
-              },
-              {
-                label: t("dreaming.scene.repairCache"),
-                onClick: props.onRepairDreamingArtifacts,
-                allowed: props.access.canRepairDreamingArtifacts,
-              },
-              {
-                label: t(
-                  props.dreamDiaryActionLoading
-                    ? "dreaming.scene.working"
-                    : "dreaming.scene.backfill",
-                ),
-                onClick: props.onBackfillDiary,
-                allowed: props.access.canBackfillDiary,
-              },
-              {
-                label: t("dreaming.scene.reset"),
-                onClick: props.onResetDiary,
-                allowed: props.access.canResetDiary,
-              },
-              {
-                label: t("dreaming.scene.clearGrounded"),
-                onClick: props.onResetGroundedShortTerm,
-                allowed: props.access.canResetGroundedShortTerm,
-              },
-            ]}
-          >
-            {(entryValue) => {
-              return (
-                <button
-                  class="btn btn--subtle btn--sm"
-                  disabled={
-                    !entryValue().allowed || props.modeSaving || props.dreamDiaryActionLoading
-                  }
-                  onClick={() => entryValue().onClick()}
-                >
-                  {entryValue().label}
-                </button>
-              );
-            }}
+          <For each={DREAM_ACTIONS}>
+            {([label, onClick, allowed]) => (
+              <DreamingAction
+                label={t(
+                  `dreaming.scene.${label === "backfill" && props.dreamDiaryActionLoading ? "working" : label}`,
+                )}
+                disabled={
+                  !props.access[allowed] || props.modeSaving || props.dreamDiaryActionLoading
+                }
+                onClick={() => props[onClick]()}
+              />
+            )}
           </For>
         </div>
       </div>
@@ -800,105 +748,96 @@ function renderAdvancedSection(props: DreamingProps) {
       ) : undefined}
 
       <div class="dreams-advanced__sections">
-        {
-          <AdvancedEntryList
-            titleKey={"dreaming.advanced.stagedTitle"}
-            descriptionKey={"dreaming.advanced.stagedDescription"}
-            emptyKey={"dreaming.advanced.emptyGrounded"}
-            entries={groundedEntries()}
-            controls={
-              <DreamingAction
-                label={t("dreaming.scene.clearGrounded")}
-                disabled={
-                  !props.access.canResetGroundedShortTerm ||
-                  props.modeSaving ||
-                  props.dreamDiaryActionLoading
+        <AdvancedEntryList
+          titleKey={"dreaming.advanced.stagedTitle"}
+          descriptionKey={"dreaming.advanced.stagedDescription"}
+          emptyKey={"dreaming.advanced.emptyGrounded"}
+          entries={groundedEntries()}
+          controls={
+            <DreamingAction
+              label={t("dreaming.scene.clearGrounded")}
+              disabled={
+                !props.access.canResetGroundedShortTerm ||
+                props.modeSaving ||
+                props.dreamDiaryActionLoading
+              }
+              onClick={() => props.onResetGroundedShortTerm()}
+            />
+          }
+          badge={() => t("dreaming.advanced.originDailyLog")}
+          meta={(entry) => [
+            entry.groundedCount > 0
+              ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
+              : "",
+            entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
+            entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+          ]}
+        />
+        <AdvancedEntryList
+          titleKey={"dreaming.advanced.shortTermTitle"}
+          descriptionKey={"dreaming.advanced.shortTermDescription"}
+          emptyKey={"dreaming.advanced.emptyShortTerm"}
+          entries={waitingEntries()}
+          controls={
+            <div class="dreams-advanced__sort">
+              <For
+                each={
+                  [
+                    ["recent", "dreaming.advanced.sortRecent"],
+                    ["signals", "dreaming.advanced.sortSignals"],
+                  ] as const
                 }
-                onClick={() => props.onResetGroundedShortTerm()}
-              />
-            }
-            badge={() => t("dreaming.advanced.originDailyLog")}
-            meta={(entry) => [
-              entry.groundedCount > 0
-                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
-                : "",
-              entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
-            ]}
-          />
-        }
-        {
-          <AdvancedEntryList
-            titleKey={"dreaming.advanced.shortTermTitle"}
-            descriptionKey={"dreaming.advanced.shortTermDescription"}
-            emptyKey={"dreaming.advanced.emptyShortTerm"}
-            entries={waitingEntries()}
-            controls={
-              <div class="dreams-advanced__sort">
-                <For
-                  each={
-                    [
-                      ["recent", "dreaming.advanced.sortRecent"],
-                      ["signals", "dreaming.advanced.sortSignals"],
-                    ] as const
-                  }
-                >
-                  {(entryValue) => {
-                    const [sort, label] = entryValue;
-                    return (
-                      <button
-                        class={`dreams-advanced__sort-btn ${state.advancedWaitingSort === sort ? "dreams-advanced__sort-btn--active" : ""}`}
-                        onClick={() => {
-                          state.advancedWaitingSort = sort;
-                          props.onViewStateChange();
-                        }}
-                      >
-                        {t(label)}
-                      </button>
-                    );
-                  }}
-                </For>
-              </div>
-            }
-            badge={describeWaitingEntryOrigin}
-            meta={(entry) => [
-              `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`,
-              entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
-              entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
-              entry.groundedCount > 0
-                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
-                : "",
-              entry.phaseHitCount > 0 ? `${entry.phaseHitCount} phase hit` : "",
-            ]}
-          />
-        }
-        {
-          <AdvancedEntryList
-            titleKey={"dreaming.advanced.promotedTitle"}
-            descriptionKey={"dreaming.advanced.promotedDescription"}
-            emptyKey={"dreaming.advanced.emptyPromoted"}
-            entries={props.promotedEntries}
-            badge={describeWaitingEntryOrigin}
-            meta={(entry) => [
-              entry.promotedAt
-                ? `${t("dreaming.advanced.updatedPrefix")} ${formatCompactDateTime(entry.promotedAt)}`
-                : "",
-              entry.groundedCount > 0
-                ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
-                : "",
-              entry.totalSignalCount > 0
-                ? `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`
-                : "",
-            ]}
-          />
-        }
+              >
+                {(entryValue) => {
+                  const [sort, label] = entryValue;
+                  return (
+                    <button
+                      class={`dreams-advanced__sort-btn ${state.advancedWaitingSort === sort ? "dreams-advanced__sort-btn--active" : ""}`}
+                      onClick={() => {
+                        state.advancedWaitingSort = sort;
+                        props.onViewStateChange();
+                      }}
+                    >
+                      {t(label)}
+                    </button>
+                  );
+                }}
+              </For>
+            </div>
+          }
+          badge={describeWaitingEntryOrigin}
+          meta={(entry) => [
+            `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`,
+            entry.recallCount > 0 ? `${entry.recallCount} recall` : "",
+            entry.dailyCount > 0 ? `${entry.dailyCount} daily` : "",
+            entry.groundedCount > 0
+              ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
+              : "",
+            entry.phaseHitCount > 0 ? `${entry.phaseHitCount} phase hit` : "",
+          ]}
+        />
+        <AdvancedEntryList
+          titleKey={"dreaming.advanced.promotedTitle"}
+          descriptionKey={"dreaming.advanced.promotedDescription"}
+          emptyKey={"dreaming.advanced.emptyPromoted"}
+          entries={props.promotedEntries}
+          badge={describeWaitingEntryOrigin}
+          meta={(entry) => [
+            entry.promotedAt
+              ? `${t("dreaming.advanced.updatedPrefix")} ${formatCompactDateTime(entry.promotedAt)}`
+              : "",
+            entry.groundedCount > 0
+              ? `${entry.groundedCount} ${t("dreaming.stats.grounded").toLowerCase()}`
+              : "",
+            entry.totalSignalCount > 0
+              ? `${entry.totalSignalCount} ${t("dreaming.stats.signals").toLowerCase()}`
+              : "",
+          ]}
+        />
       </div>
 
       {props.statusError ? (
-        <>
-          {" "}
-          <div class="dreams__controls-error">{props.statusError}</div>{" "}
-        </>
+        <div class="dreams__controls-error">{props.statusError}</div>
       ) : undefined}
     </section>
   );
@@ -915,12 +854,7 @@ function renderInsightList(labelKey: string, entries: string[]) {
     <div class="dreams-diary__insight-list">
       <strong>{t(labelKey)}</strong>
       <For each={entries} keyed={false}>
-        {(entry) => (
-          <>
-            {" "}
-            <p class="dreams-diary__insight-line">• {entry()}</p>{" "}
-          </>
-        )}
+        {(entry) => <p class="dreams-diary__insight-line">• {entry()}</p>}
       </For>
     </div>
   ) : undefined;
@@ -966,12 +900,7 @@ function renderWikiInsightBody(card: WikiInsightCard, expanded: boolean) {
         {item.preferenceSignals.length > 0 ? (
           <div class="dreams-diary__insight-signals">
             <For each={item.preferenceSignals} keyed={false}>
-              {(signal) => (
-                <>
-                  {" "}
-                  <span class="dreams-diary__insight-signal">{signal()}</span>{" "}
-                </>
-              )}
+              {(signal) => <span class="dreams-diary__insight-signal">{signal()}</span>}
             </For>
           </div>
         ) : undefined}
@@ -982,12 +911,7 @@ function renderWikiInsightBody(card: WikiInsightCard, expanded: boolean) {
   const item = card.item;
   return (
     <>
-      {item.snippet ? (
-        <>
-          {" "}
-          <p class="dreams-diary__insight-line">{item.snippet}</p>{" "}
-        </>
-      ) : undefined}
+      {item.snippet ? <p class="dreams-diary__insight-line">{item.snippet}</p> : undefined}
       {renderInsightList("dreaming.wiki.claims", item.claims)}
       {renderInsightList("dreaming.wiki.openQuestions", item.questions)}
       {renderInsightList("dreaming.wiki.contradictions", item.contradictions)}

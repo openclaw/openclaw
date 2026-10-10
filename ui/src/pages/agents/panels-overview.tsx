@@ -18,11 +18,9 @@ import "../../components/multi-select-registration.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import "../../components/tooltip.ts";
-import {
-  renderPanelRefreshStatus,
-  type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { LitContent } from "../../components/solid/lit-content.tsx";
+import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import {
   type AgentContext,
@@ -224,7 +222,8 @@ export function AgentOverview(
   return (
     <>
       <SettingsSection
-        {...{ title: t("agents.identity.title"), description: t("agents.identity.subtitle") }}
+        title={t("agents.identity.title")}
+        description={t("agents.identity.subtitle")}
       >
         <div class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
@@ -348,7 +347,8 @@ export function AgentOverview(
         </div>
       </SettingsSection>
       <SettingsSection
-        {...{ title: t("agents.overview.title"), description: t("agents.overview.subtitle") }}
+        title={t("agents.overview.title")}
+        description={t("agents.overview.subtitle")}
       >
         {renderAgentPanelFacts([
           [
@@ -374,106 +374,92 @@ export function AgentOverview(
         <div class="callout warn">{t("agents.overview.unsavedConfig")}</div>
       ) : undefined}
       <SettingsSection
-        {...{
-          title: t("agents.overview.modelSelection"),
-          notice: (
-            <LitContent
-              content={() => renderPanelRefreshStatus({ status: params.modelCatalogStatus })}
-            />
-          ),
-          actions: <AgentConfigButtons {...params} buttonType="button" />,
-        }}
+        title={t("agents.overview.modelSelection")}
+        notice={<PanelRefreshNotice status={params.modelCatalogStatus} />}
+        actions={<AgentConfigButtons {...params} buttonType="button" />}
       >
-        <>
-          <SettingsRow
-            {...{
-              title: primaryModelLabel(),
-              control: (
-                <LitContent
-                  content={() =>
-                    renderModelPicker({
-                      label: primaryModelLabel(),
-                      value: selectedPrimary() ?? "",
-                      options: [
-                        {
-                          value: "",
-                          label: isDefault()
-                            ? t("agents.overview.notSet")
-                            : defaultPrimary()
-                              ? t("agents.overview.inheritDefaultModel", {
-                                  model: defaultPrimary(),
-                                })
-                              : t("agents.overview.inheritDefault"),
-                        },
-                        ...buildModelOptions(
-                          configForm(),
-                          effectivePrimary() ?? undefined,
-                          params.modelCatalog,
-                          params.agent.id,
-                        ),
-                      ],
-                      disabled: disabled(),
-                      onChange: (value) => params.onModelChange(params.agent.id, value || null),
-                      onOpen: params.onModelCatalogOpen,
-                    })
-                  }
-                />
-              ),
-            }}
-          />
-          <SettingsRow
-            {...{
-              title: t("chat.modelControls.decisionLabel"),
-              description: t("chat.modelControls.decisionAgentHelp"),
-              control: (
-                <LitContent
-                  content={() =>
-                    renderDecisionModelPicker({
-                      id: "agent-decision-model",
-                      models: params.decisionModels,
-                      value:
-                        typeof config().entry?.decisionModel === "string"
-                          ? config().entry.decisionModel
-                          : undefined,
-                      inherit: {
-                        model:
-                          typeof config().defaults?.decisionModel === "string"
-                            ? config().defaults.decisionModel
-                            : undefined,
-                      },
-                      disabled: disabled(),
-                      onChange: (value) => params.onDecisionModelChange(params.agent.id, value),
-                      onOpen: params.onModelCatalogOpen,
-                    })
-                  }
-                />
-              ),
-            }}
-          />
-          <SettingsRow
-            {...{
-              title: t("agents.overview.fallbacks"),
-              stacked: true,
-              control: (
-                <openclaw-multi-select
-                  class="agent-fallbacks"
-                  prop:options={fallbackOptions()}
-                  prop:value={fallbackChips()}
-                  prop:isExcluded={isPrimaryModel()}
-                  prop:getValueKey={normalizeAgentModelRefForConfig}
-                  prop:placeholder={t("agents.overview.addFallback")}
-                  prop:accessibleLabel={t("agents.overview.fallbacks")}
-                  prop:allowCustom={!catalogOwnsChoices()}
-                  prop:disabled={disabled()}
-                  prop:onChange={(next: string[]) =>
-                    params.onModelFallbacksChange(params.agent.id, next)
-                  }
-                  prop:onOpen={params.onModelCatalogOpen}
-                />
-              ),
-            }}
-          />
-        </>
+        <SettingsRow
+          title={primaryModelLabel()}
+          control={
+            <LitContent
+              content={() =>
+                renderModelPicker({
+                  label: primaryModelLabel(),
+                  value: selectedPrimary() ?? "",
+                  options: [
+                    {
+                      value: "",
+                      label: isDefault()
+                        ? t("agents.overview.notSet")
+                        : defaultPrimary()
+                          ? t("agents.overview.inheritDefaultModel", {
+                              model: defaultPrimary(),
+                            })
+                          : t("agents.overview.inheritDefault"),
+                    },
+                    ...buildModelOptions(
+                      configForm(),
+                      effectivePrimary() ?? undefined,
+                      params.modelCatalog,
+                      params.agent.id,
+                    ),
+                  ],
+                  disabled: disabled(),
+                  onChange: (value) => params.onModelChange(params.agent.id, value || null),
+                  onOpen: params.onModelCatalogOpen,
+                })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title={t("chat.modelControls.decisionLabel")}
+          description={t("chat.modelControls.decisionAgentHelp")}
+          control={
+            <LitContent
+              content={() =>
+                renderDecisionModelPicker({
+                  id: "agent-decision-model",
+                  models: params.decisionModels,
+                  value:
+                    typeof config().entry?.decisionModel === "string"
+                      ? config().entry.decisionModel
+                      : undefined,
+                  inherit: {
+                    model:
+                      typeof config().defaults?.decisionModel === "string"
+                        ? config().defaults.decisionModel
+                        : undefined,
+                  },
+                  disabled: disabled(),
+                  onChange: (value) => params.onDecisionModelChange(params.agent.id, value),
+                  onOpen: params.onModelCatalogOpen,
+                })
+              }
+            />
+          }
+        />
+        <SettingsRow
+          title={t("agents.overview.fallbacks")}
+          stacked={true}
+          control={
+            <openclaw-multi-select
+              class="agent-fallbacks"
+              prop:options={fallbackOptions()}
+              prop:value={fallbackChips()}
+              prop:isExcluded={isPrimaryModel()}
+              prop:getValueKey={normalizeAgentModelRefForConfig}
+              prop:placeholder={t("agents.overview.addFallback")}
+              prop:accessibleLabel={t("agents.overview.fallbacks")}
+              prop:allowCustom={!catalogOwnsChoices()}
+              prop:disabled={disabled()}
+              prop:onChange={(next: string[]) =>
+                params.onModelFallbacksChange(params.agent.id, next)
+              }
+              prop:onOpen={params.onModelCatalogOpen}
+            />
+          }
+        />
       </SettingsSection>
     </>
   );
@@ -485,7 +471,7 @@ export function renderAgentContextSection(
   onSelectPanel: (panel: AgentsPanel) => void,
 ) {
   return (
-    <SettingsSection {...{ title: t("agents.context.title"), description: subtitle }}>
+    <SettingsSection title={t("agents.context.title")} description={subtitle}>
       {renderAgentPanelFacts([
         [
           "agents.context.workspace",

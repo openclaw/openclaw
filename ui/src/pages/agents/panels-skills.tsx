@@ -40,22 +40,15 @@ export function AgentSkills(
     onDisableAll: (agentId: string) => void;
   },
 ) {
-  const configReady = createMemo(
-    () => Boolean(params.configForm) && !params.configLoading && !params.configSaving,
-  );
-  const editable = createMemo(() => params.canUpdateConfig && configReady());
+  const configReady = () =>
+    Boolean(params.configForm) && !params.configLoading && !params.configSaving;
+  const editable = () => params.canUpdateConfig && configReady();
   const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
   const hasExplicitAllowlist = createMemo(() => Array.isArray(config().entry?.skills));
   const allowlist = createMemo(() => resolveAgentSkillsFilter(params.configForm, params.agentId));
   const allowSet = createMemo(() => new Set(allowlist() ?? []));
-  const usingAllowlist = createMemo(() => allowlist() !== undefined);
-  const inheritedAllowlist = createMemo(() => !hasExplicitAllowlist() && usingAllowlist());
-  const canClear = createMemo(
-    () => params.canPatchConfig && hasExplicitAllowlist() && configReady(),
-  );
-  const reportReady = createMemo(() =>
-    Boolean(params.report && params.activeAgentId === params.agentId),
-  );
+  const usingAllowlist = () => allowlist() !== undefined;
+  const reportReady = () => Boolean(params.report && params.activeAgentId === params.agentId);
   const rawSkills = createMemo(() => (reportReady() ? (params.report?.skills ?? []) : []));
   const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
   const filtered = createMemo(() =>
@@ -73,7 +66,6 @@ export function AgentSkills(
       ? rawSkills().filter((skill) => isWorkshopSkill(skill) || allowSet().has(skill.name)).length
       : rawSkills().length,
   );
-  const totalCount = createMemo(() => rawSkills().length);
 
   return (
     <>
@@ -83,7 +75,7 @@ export function AgentSkills(
       <div class="callout info">
         {t(
           usingAllowlist()
-            ? inheritedAllowlist()
+            ? !hasExplicitAllowlist()
               ? "agents.skillsPanel.inheritedAllowlist"
               : "agents.skillsPanel.customAllowlist"
             : "agents.skillsPanel.allEnabled",
@@ -98,9 +90,9 @@ export function AgentSkills(
         description={
           <>
             {t("agents.skillsPanel.subtitle")}
-            {totalCount() > 0 ? (
+            {rawSkills().length > 0 ? (
               <span class="mono">
-                {enabledCount()}/{totalCount()}
+                {enabledCount()}/{rawSkills().length}
               </span>
             ) : undefined}
           </>
@@ -114,7 +106,7 @@ export function AgentSkills(
             />
             <AgentPanelAction
               label={t("common.reset")}
-              disabled={!canClear()}
+              disabled={!params.canPatchConfig || !hasExplicitAllowlist() || !configReady()}
               onClick={() => params.onClear(params.agentId)}
             />
             <AgentConfigButtons {...params}>
@@ -127,106 +119,96 @@ export function AgentSkills(
           </>
         }
       >
-        <>
-          <SettingsRow
-            title={t("agents.skillsPanel.filter")}
-            description={t("agents.skillsPanel.shown", { count: String(filtered().length) })}
-            control={
-              <input
-                class="settings-input"
-                aria-label={t("agents.skillsPanel.filter")}
-                prop:value={params.filter}
-                onInput={(event: Event) => {
-                  const input = event.currentTarget;
-                  if (input instanceof HTMLInputElement) {
-                    params.onFilterChange(input.value);
+        <SettingsRow
+          title={t("agents.skillsPanel.filter")}
+          description={t("agents.skillsPanel.shown", { count: String(filtered().length) })}
+          control={
+            <input
+              class="settings-input"
+              aria-label={t("agents.skillsPanel.filter")}
+              prop:value={params.filter}
+              onInput={(event) => params.onFilterChange(event.currentTarget.value)}
+              placeholder={t("agents.skillsPanel.searchPlaceholder")}
+              autocomplete="off"
+              name="agent-skills-filter"
+            />
+          }
+        />
+        {filtered().length === 0 ? (
+          <SettingsEmpty message={t("agents.skillsPanel.empty")} />
+        ) : (
+          <div class="agents-panel-body agent-skills-groups">
+            <For each={groups()} keyed={(group) => group.id}>
+              {(group) => (
+                <details
+                  class="agent-skills-group"
+                  open={
+                    Boolean(filter()) || (group().id !== "workspace" && group().id !== "built-in")
                   }
-                }}
-                placeholder={t("agents.skillsPanel.searchPlaceholder")}
-                autocomplete="off"
-                name="agent-skills-filter"
-              />
-            }
-          />
-          {filtered().length === 0 ? (
-            <SettingsEmpty message={t("agents.skillsPanel.empty")} />
-          ) : (
-            <div class="agents-panel-body agent-skills-groups">
-              <For each={groups()} keyed={(group) => group.id}>
-                {(group) => (
-                  <details
-                    class="agent-skills-group"
-                    open={
-                      Boolean(filter()) || (group().id !== "workspace" && group().id !== "built-in")
-                    }
-                  >
-                    <summary class="agent-skills-header">
-                      <span>{group().label}</span>
-                      <span class="muted">{group().skills.length}</span>
-                    </summary>
-                    <div class="list skills-grid">
-                      <For each={group().skills} keyed={(skill) => skill.name}>
-                        {(skill) => {
-                          const learned = createMemo(() => isWorkshopSkill(skill()));
-                          const enabled = createMemo(
-                            () => learned() || !usingAllowlist() || allowSet().has(skill().name),
-                          );
-                          const missing = createMemo(() => computeSkillMissing(skill()));
-                          const reasons = createMemo(() => computeSkillReasons(skill()));
-                          return (
-                            <div class="settings-row agent-skill-row">
-                              <div class="settings-row__text">
-                                <span class="settings-row__title">
-                                  {skill().emoji ? `${skill().emoji} ` : ""}
-                                  {skill().name}
+                >
+                  <summary class="agent-skills-header">
+                    <span>{group().label}</span>
+                    <span class="muted">{group().skills.length}</span>
+                  </summary>
+                  <div class="list skills-grid">
+                    <For each={group().skills} keyed={(skill) => skill.name}>
+                      {(skill) => {
+                        const learned = () => isWorkshopSkill(skill());
+                        const enabled = () =>
+                          learned() || !usingAllowlist() || allowSet().has(skill().name);
+                        return (
+                          <div class="settings-row agent-skill-row">
+                            <div class="settings-row__text">
+                              <span class="settings-row__title">
+                                {skill().emoji ? `${skill().emoji} ` : ""}
+                                {skill().name}
+                              </span>
+                              <span class="settings-row__desc">{skill().description}</span>
+                              <LitContent
+                                content={() => renderSkillStatusChips({ skill: skill() })}
+                              />
+                              <For
+                                each={
+                                  [
+                                    ["agents.skillsPanel.missing", computeSkillMissing(skill())],
+                                    ["agents.skillsPanel.reason", computeSkillReasons(skill())],
+                                  ] as const
+                                }
+                              >
+                                {(entry) =>
+                                  entry[1].length > 0 ? (
+                                    <span class="settings-row__desc">
+                                      {t(entry[0], { items: entry[1].join(", ") })}
+                                    </span>
+                                  ) : undefined
+                                }
+                              </For>
+                              {learned() ? (
+                                <span class="settings-row__desc">
+                                  {t("agents.skillsPanel.learnedAlwaysOn")}
                                 </span>
-                                <span class="settings-row__desc">{skill().description}</span>
-                                <LitContent
-                                  content={() => renderSkillStatusChips({ skill: skill() })}
-                                />
-                                <For
-                                  each={
-                                    [
-                                      ["agents.skillsPanel.missing", missing()],
-                                      ["agents.skillsPanel.reason", reasons()],
-                                    ] as const
-                                  }
-                                >
-                                  {(entry) =>
-                                    entry[1].length > 0 ? (
-                                      <span class="settings-row__desc">
-                                        {t(entry[0], { items: entry[1].join(", ") })}
-                                      </span>
-                                    ) : undefined
-                                  }
-                                </For>
-                                {learned() ? (
-                                  <span class="settings-row__desc">
-                                    {t("agents.skillsPanel.learnedAlwaysOn")}
-                                  </span>
-                                ) : undefined}
-                              </div>
-                              <div class="settings-row__control">
-                                <SettingsToggle
-                                  checked={enabled()}
-                                  disabled={learned() || !editable()}
-                                  ariaLabel={skill().name}
-                                  onChange={(checked) =>
-                                    params.onToggle(params.agentId, skill().name, checked)
-                                  }
-                                />
-                              </div>
+                              ) : undefined}
                             </div>
-                          );
-                        }}
-                      </For>
-                    </div>
-                  </details>
-                )}
-              </For>
-            </div>
-          )}
-        </>
+                            <div class="settings-row__control">
+                              <SettingsToggle
+                                checked={enabled()}
+                                disabled={learned() || !editable()}
+                                ariaLabel={skill().name}
+                                onChange={(checked) =>
+                                  params.onToggle(params.agentId, skill().name, checked)
+                                }
+                              />
+                            </div>
+                          </div>
+                        );
+                      }}
+                    </For>
+                  </div>
+                </details>
+              )}
+            </For>
+          </div>
+        )}
       </SettingsSection>
     </>
   );

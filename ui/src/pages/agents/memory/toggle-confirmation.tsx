@@ -55,10 +55,7 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             {detail()}
           </div>
           {props.hasError ? (
-            <>
-              {" "}
-              <div class="exec-approval-error">{t("dreaming.toggleConfirmation.failed")}</div>{" "}
-            </>
+            <div class="exec-approval-error">{t("dreaming.toggleConfirmation.failed")}</div>
           ) : undefined}
           <div class="exec-approval-actions">
             <button

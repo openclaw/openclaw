@@ -1,16 +1,18 @@
-import { html } from "lit";
 import { Show, Switch, Match, createMemo } from "solid-js";
 import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { handleCopyButton } from "../../components/copy-button.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import { renderLearnMoreLink, renderSettingsNavRow } from "../../components/settings-ui.ts";
 import { LitContent } from "../../components/solid/lit-content.tsx";
-import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsEmpty,
+  SettingsSection,
+  SettingsNavRow,
+  LearnMoreLink,
+} from "../../components/solid/settings-ui.tsx";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import "./memory/memory-panel.tsx";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import {
@@ -19,6 +21,7 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { AgentConfigActions } from "./config-actions.tsx";
+import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
 import { AgentSkills } from "./panels-skills.tsx";
@@ -90,22 +93,18 @@ export type AgentsProps = {
   onSetDefault: (agentId: string) => void;
 };
 
-// The legacy shell still consumes these layout facts until its Solid cutover.
 export function AgentsPageHeader() {
   return (
-    <LitContent
-      content={() => html`<section
-        class="content-header"
-        ${shellLayoutTraits({ toolbarHeader: true })}
-      >
+    <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
+      <section class="content-header">
         <div>
-          <div class="page-title">${titleForRoute("agents")}</div>
+          <div class="page-title">{titleForRoute("agents")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("agents")} ${renderLearnMoreLink(AGENTS_DOCS_URL)}
+            {subtitleForRoute("agents")} <LearnMoreLink url={AGENTS_DOCS_URL} />
           </div>
         </div>
-      </section>`}
-    />
+      </section>
+    </ShellLayoutBoundary>
   );
 }
 
@@ -211,14 +210,10 @@ export function Agents(props: AgentsProps) {
       </section>
       <section class="agents-main">
         <div class="settings-group">
-          <LitContent
-            content={() =>
-              renderSettingsNavRow({
-                title: t("agents.defaults.title"),
-                description: t("agents.defaults.description"),
-                onClick: props.onOpenAgentDefaults,
-              })
-            }
+          <SettingsNavRow
+            title={t("agents.defaults.title")}
+            description={t("agents.defaults.description")}
+            onClick={props.onOpenAgentDefaults}
           />
         </div>
         <Show
@@ -318,13 +313,18 @@ export function Agents(props: AgentsProps) {
                   </Match>
                   <Match when={props.activePanel === "memory"}>
                     <div class="settings-group agent-memory-import-row">
-                      <LitContent
-                        content={() =>
-                          html`${renderSettingsNavRow({ title: t("tabs.memory"), description: t("subtitles.memory"), onClick: () => props.onOpenMemorySettings?.() })}${renderSettingsNavRow({ title: t("tabs.memoryImport"), description: t("subtitles.memoryImport"), onClick: () => props.onOpenMemoryImport?.() })}`
-                        }
+                      <SettingsNavRow
+                        title={t("tabs.memory")}
+                        description={t("subtitles.memory")}
+                        onClick={() => props.onOpenMemorySettings?.()}
+                      />
+                      <SettingsNavRow
+                        title={t("tabs.memoryImport")}
+                        description={t("subtitles.memoryImport")}
+                        onClick={() => props.onOpenMemoryImport?.()}
                       />
                     </div>
-                    <openclaw-agent-memory-panel prop:agentId={agent().id} />
+                    <AgentMemoryPanel agentId={agent().id} />
                   </Match>
                 </Switch>
               </div>
