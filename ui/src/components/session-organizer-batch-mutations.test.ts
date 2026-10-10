@@ -32,6 +32,7 @@ import { sessionMenuReasons } from "./session-menu-access.ts";
 import { patchSessionRows } from "./session-organizer-batch-mutations.ts";
 import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
 import {
+  archiveSessionTreeWithUndo,
   deleteSession,
   deleteSessionGroup,
   deleteSessionsBatch,
@@ -195,6 +196,51 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it("rejects a hidden worker as a tree root before reading or changing descendants", async () => {
+    const harness = createHarness();
+    const root = { ...sessionRow(0), key: "agent:main:subagent:hidden" };
+    harness.scope.sessions.describe = vi.fn(async () => ({
+      session: {
+        key: root.key,
+        sessionId: root.sessionId,
+        kind: "direct" as const,
+        updatedAt: null,
+      },
+    }));
+    await archiveSessionTreeWithUndo(harness.host, root, harness.scope);
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      expect.objectContaining({ message: t("sessionsView.archiveTreeRootRequired") }),
+    );
+  });
+
+  it("preserves each archive-tree placement expectation and reports only successful targets", async () => {
+    const first = {
+      ...sessionRow(0),
+      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
+    };
+    const moved = {
+      ...sessionRow(1),
+      archiveGuard: { expectedSidebarRoot: false, expectedCategory: null, expectedArchived: false },
+    };
+    const harness = createHarness({ failedKeys: [moved.key] });
+    expect(
+      await patchSessionRows(harness.host, [first, moved], { archived: true }, harness.scope, {
+        sessionScope: true,
+      }),
+    ).toEqual([first]);
+    expect(harness.request).toHaveBeenCalledWith(
+      "sessions.patchMany",
+      expect.objectContaining({
+        targets: [first, moved].map((row) => Object.assign(sessionTarget(row), row.archiveGuard)),
+        patch: { archived: true },
+      }),
+      expect.anything(),
+    );
+    expect(harness.publishSessionMutationError).toHaveBeenCalled();
+  });
+
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const harness = createHarness();

@@ -56,7 +56,7 @@ export type TestSessionsPage = HTMLElement & {
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
-  archiveSessionWithUndo: (row: GatewaySessionRow) => Promise<void>;
+  archiveActions: { archive: (row: GatewaySessionRow) => Promise<void> };
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };

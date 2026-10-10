@@ -39,6 +39,7 @@ import {
   sessionChangedError as archiveChangedError,
   unexpectedPatchError,
 } from "./sessions-patch-errors.js";
+import { resolveSessionPatchTargetError } from "./sessions-patch-expectations.js";
 import {
   resolveProtectedSessionVisibilityError,
   resolveSessionWorkerPlacementPatchError,
@@ -154,6 +155,10 @@ export async function prepareSessionPatchArchive(params: {
       })
     ) {
       return err(archiveChangedError(target.key));
+    }
+    const expectationError = resolveSessionPatchTargetError(fresh.entry, target);
+    if (expectationError) {
+      return err(expectationError);
     }
     const missingHarnessSessionError = resolveMissingAgentHarnessSessionError(
       freshCanonicalKey,

@@ -32,7 +32,17 @@ export type SessionActionRow = Pick<
   | "active"
   | "category"
   | "sharingRole"
-> & { gatewayHasActiveRun?: boolean; hasActiveRun?: boolean };
+> & {
+  gatewayHasActiveRun?: boolean;
+  hasActiveRun?: boolean;
+  hasActiveSubagentRun?: boolean;
+  isChild?: boolean;
+  sidebarRoot?: boolean;
+  archiveGuard?: Pick<
+    SessionsPatchManyParams["targets"][number],
+    "expectedSidebarRoot" | "expectedCategory" | "expectedArchived" | "expectedSidebarAncestors"
+  >;
+};
 
 export type SessionActionHost = Pick<
   SessionOrganizerControllerHost,
@@ -137,6 +147,7 @@ export async function patchSessionRows(
         key: row.key,
         agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
         ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
+        ...(patch.archived === true ? row.archiveGuard : {}),
       })),
       patch,
     };
