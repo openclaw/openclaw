@@ -36,7 +36,12 @@ sidebarTitle: "Advanced"
     ```
 
     This mode may not support streaming and tool calling simultaneously; you
-    may need `params: { streaming: false }` on the model.
+    may need `params: { streaming: false }` on the model in
+    `models.providers.ollama.models`. You can also set it under
+    `agents.defaults.models["ollama/<model>"].params`. For `openai-completions`,
+    this sends `stream: false` upstream and delivers the completed reply with
+    its usage, reasoning, and tool calls. Streaming remains enabled when unset;
+    this setting does not change native Ollama `/api/chat` requests.
 
     OpenClaw injects `options.num_ctx` by default in this mode so Ollama does
     not silently fall back to a 4096-token context. If your proxy rejects

@@ -1,4 +1,5 @@
 import type { AgentToolParam } from "openai/resources/beta/agents/agents";
+import { resolveStoredSessionPermissionPolicy } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   applyEmbeddedAttemptToolsAllow,
   buildAgentHookContextChannelFields,
@@ -117,6 +118,12 @@ export async function buildAgentsApiToolSurface(
           agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, agentId),
           workspaceDir: params.workspaceDir,
           cwd,
+          sessionPermissionPolicy: resolveStoredSessionPermissionPolicy(
+            params,
+            params.workspaceDir,
+          ),
+          requireWorkspaceOnly: params.requireWorkspaceOnly,
+          exec: { ...params.execOverrides, config: params.config, elevated: params.bashElevated },
           spawnWorkspaceDir: params.workspaceDir,
           preparedModelRuntime: params.preparedModelRuntime,
           skillsSnapshot: params.skillsSnapshot,

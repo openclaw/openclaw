@@ -146,7 +146,6 @@ extensions/qa-lab/src/scorecard-taxonomy.ts
 extensions/qa-lab/src/suite-launch.runtime.test.ts
 extensions/qa-lab/src/suite-launch.runtime.ts
 extensions/qa-lab/web/src/app.ts
-extensions/signal/src/core.test.ts
 extensions/signal/src/monitor/event-handler.inbound-context.test.ts
 extensions/signal/src/monitor/event-handler.ts
 extensions/slack/src/action-runtime.ts
@@ -352,14 +351,11 @@ src/commands/doctor/shared/legacy-config-migrate.test.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/missing-configured-plugin-install.test.ts
 src/commands/gateway-status.test.ts
-src/commands/migrate.test.ts
-src/commands/model-picker.test.ts
 src/commands/models/auth.test.ts
 src/commands/models/auth.ts
 src/commands/models/list.probe.ts
 src/commands/models/list.status-command.ts
 src/commands/models/list.status.test.ts
-src/commands/onboard-channels.e2e.test.ts
 src/commands/onboarding-plugin-install.test.ts
 src/commands/onboarding-plugin-install.ts
 src/config/config.plugin-validation.test.ts
