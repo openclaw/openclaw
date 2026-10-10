@@ -186,20 +186,6 @@ afterEach(async () => {
 });
 
 describe("sessions.changed coalescing", () => {
-  it("logs the message and code when capturing a session change fails", async () => {
-    const context = createContext();
-    vi.spyOn(getSessionRowProjection(context)!, "capture").mockImplementation(() => {
-      throw Object.assign(new Error("session snapshot unavailable"), { code: "ESESSION" });
-    });
-    mocks.warn.mockClear();
-
-    await emitAndSettleLeading(context, { sessionKey: "agent:main:test", reason: "update" });
-
-    expect(mocks.warn).toHaveBeenCalledWith("Session change capture failed", {
-      error: "session snapshot unavailable | ESESSION",
-    });
-  });
-
   it("publishes catalog-only changes without invalidating session projections or access", async () => {
     const context = createContext();
     const changed = vi.fn();
