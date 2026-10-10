@@ -21,7 +21,6 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
   resolveEmbeddingProviderAdapterTransport,
-  resolveEmbeddingProviderIndexIdentity,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
 } from "./embeddings.js";
@@ -51,8 +50,6 @@ export type MemoryEmbeddingProviderRequirement = {
   mode: "fts-only" | "optional" | "required";
   provider: string;
   configuredProvider?: string;
-  /** Adapter-owned, secret-free provider config slice; changes rebuild the manager. */
-  indexIdentity?: Record<string, unknown>;
 };
 export type MemoryEmbeddingBootstrapDebug = NonNullable<
   MemorySearchRuntimeDebug["embeddingBootstrap"]
@@ -92,28 +89,13 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
     params.settings.provider,
     params.cfg,
   );
-  // Requirement and cache key must react to the provider config the adapter
-  // actually reads (endpoint, model). Without this slice a hot reload that
-  // fixes `models.providers` keeps reusing a manager built against the old
-  // config for the lifetime of the process.
-  const identity = resolveEmbeddingProviderIndexIdentity({
-    config: params.cfg,
-    agentDir: resolveAgentDir(params.cfg, normalizeAgentId(params.agentId)),
-    ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
-  });
-  const indexIdentity = identity?.cacheKeyData;
   if (!configuredProvider || configuredProvider === "auto" || adapterTransport === "local") {
-    return {
-      mode: "optional",
-      provider: params.settings.provider,
-      ...(indexIdentity ? { indexIdentity } : {}),
-    };
+    return { mode: "optional", provider: params.settings.provider };
   }
   return {
     mode: "required",
     provider: params.settings.provider,
     configuredProvider,
-    ...(indexIdentity ? { indexIdentity } : {}),
   };
 }
 
