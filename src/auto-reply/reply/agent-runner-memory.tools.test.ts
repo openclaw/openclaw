@@ -19,7 +19,7 @@ import {
   loadSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { createSessionTranscriptHeader } from "../../config/sessions/transcript-header.js";
 import { assertMemoryAudienceSession } from "../../plugins/memory-audience.js";
 import { clearMemoryPluginState } from "../../plugins/memory-state.test-fixtures.js";
