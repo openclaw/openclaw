@@ -59,10 +59,17 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     "loads and caches profile appearance (matching browser mirror: %s)",
     async (mirrored) => {
       if (mirrored) {
-        patchSettings({ accent: "#336699" });
+        patchSettings({ gatewayUrl: "ws://profile.test", accent: "#336699" });
       }
-      const { completeProfileAppearance, context, owner, refreshTheme, request, snapshot } =
-        createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
+      const {
+        completeProfileAppearance,
+        context,
+        owner,
+        refreshTheme,
+        requestUpdate,
+        request,
+        snapshot,
+      } = createProfileAppearanceGateway(mirrored ? "profile-owner" : null);
       owner.synchronizeGateway(snapshot);
       if (!mirrored) {
         owner.handleGatewayEvent({
@@ -78,6 +85,12 @@ describe("ShellGatewayOwner profile appearance integration", () => {
         expect(loadSettings().accent).toBeUndefined();
       }
       await completeProfileAppearance();
+      // Completion republishes readiness even when values already match the boot mirror.
+      await vi.dynamicImportSettled();
+      expect(requestUpdate).toHaveBeenCalledOnce();
+      if (mirrored) {
+        expect(refreshTheme).toHaveBeenCalledWith({ notify: true });
+      }
       expect(refreshTheme).toHaveBeenCalledOnce();
       expect(loadSettings().accent).toBe("#336699");
       expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.get", {

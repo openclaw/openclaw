@@ -26,6 +26,7 @@ function readWitness(
   const pathname = path.join(ref.directory, entry.archivePath);
   const db = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(pathname), { readOnly: true });
   try {
+    // sqlite-allow-raw: disable schema-defined functions while inspecting an immutable backup.
     db.exec("PRAGMA trusted_schema = OFF;");
     assertSqliteIntegrity(db, entry.sourcePath);
     return captureOpenClawMigrationWitness(db, owner, registry);

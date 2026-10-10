@@ -484,8 +484,13 @@ export class ShellGatewayOwner {
       },
     })
       .then((applied) => {
-        if (!applied && remainsCurrent()) {
-          context.theme.refresh();
+        if (remainsCurrent()) {
+          if (!applied) {
+            context.theme.refresh({ notify: true });
+          }
+          // Readiness releases both the shell and private-background descendants,
+          // including an unchanged profile snapshot matching the browser mirror.
+          this.host.requestUpdate();
         }
       })
       .catch((error: unknown) => {

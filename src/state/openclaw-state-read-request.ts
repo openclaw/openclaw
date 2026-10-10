@@ -223,6 +223,16 @@ function stringBytes(values: readonly (string | undefined)[]): number {
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
+  if (command.type === "userBackground.snapshot" || command.type === "userBackground.image") {
+    return (
+      1 +
+      stringBytes([
+        command.type,
+        command.profileId,
+        command.type === "userBackground.image" ? command.assetId : undefined,
+      ])
+    );
+  }
   if (command.type === "userProfiles.catalogIdentity") {
     return Buffer.byteLength(command.type) + Buffer.byteLength(JSON.stringify(command.input));
   }

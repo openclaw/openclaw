@@ -36,6 +36,7 @@ import {
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 import { webkitExpectedFailures } from "./test/webkit-expected-failures.ts";
+import { controlUiSolidPlugin } from "./vite.config.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -174,7 +175,11 @@ export function createUiBrowserVitestConfig(
   const include = includeUiTests(
     browser === "webkit"
       ? webkitTestFiles
-      : ["src/**/*.browser.test.ts", "../extensions/*/browser/**/*.browser.test.ts"],
+      : [
+          "src/**/*.browser.test.ts",
+          "src/**/*.browser.test.tsx",
+          "../extensions/*/browser/**/*.browser.test.ts",
+        ],
     env,
   );
   const runtimeFiles = loadPatternListFromEnv("OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE", env);
@@ -206,6 +211,7 @@ export function createUiBrowserVitestConfig(
   return defineProject({
     root: here,
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
@@ -368,7 +374,11 @@ export default defineConfig({
     projects: [
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -382,11 +392,16 @@ export default defineConfig({
           // The cleanup runner retires that state per file; without it the lane
           // fails whichever sibling the size sequencer happens to pack together.
           runner: nonIsolatedRunnerPath,
-          include: includeUiTests(["src/**/*.test.ts", "../extensions/*/browser/**/*.test.ts"]),
+          include: includeUiTests([
+            "src/**/*.test.ts",
+            "src/**/*.test.tsx",
+            "../extensions/*/browser/**/*.test.ts",
+          ]),
           exclude: [
-            "src/**/*.browser.test.ts",
-            "src/**/*.e2e.test.ts",
+            "src/**/*.browser.test.{ts,tsx}",
+            "src/**/*.e2e.test.{ts,tsx}",
             "src/**/*.node.test.ts",
+            "src/**/*.node.test.tsx",
             "../extensions/*/browser/**/*.browser.test.ts",
             "../extensions/*/browser/**/*.e2e.test.ts",
             "../extensions/*/browser/**/*.node.test.ts",
@@ -398,7 +413,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -416,7 +435,11 @@ export default defineConfig({
       },
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: {
           alias: workspaceSourceAliases,
         },
@@ -430,6 +453,7 @@ export default defineConfig({
           // module graph between files churns that browser and flakes them.
           include: includeUiTests([
             "src/**/*.node.test.ts",
+            "src/**/*.node.test.tsx",
             "../extensions/*/browser/**/*.node.test.ts",
             ...nodeDrivenBrowserLayoutTests,
           ]),
@@ -443,7 +467,11 @@ export default defineConfig({
         : []),
       {
         extends: false,
-        plugins: [controlUiLocaleModulesPlugin(), createVitestProjectCachePlugin()],
+        plugins: [
+          controlUiSolidPlugin(),
+          controlUiLocaleModulesPlugin(),
+          createVitestProjectCachePlugin(),
+        ],
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,

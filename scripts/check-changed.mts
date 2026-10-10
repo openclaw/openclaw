@@ -140,6 +140,8 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
   /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const CONTROL_UI_LIT_RATCHET_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|scripts\/(?:check-control-ui-lit-ratchet|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-lit-ratchet\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -490,6 +492,12 @@ export function createChangedCheckPlan(
   const typechecks = new Set<ChangedCheckCommand>();
   const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
+  const litRatchetArgs = [
+    "check:control-ui-lit-ratchet",
+    ...(options.staged ? ["--staged"] : []),
+    "--base",
+    options.base ?? (options.staged ? "HEAD" : baseEnv.CHECKOUT_BASE_SHA || "origin/main"),
+  ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
   const cwd = process.cwd();
   if (
@@ -590,6 +598,7 @@ export function createChangedCheckPlan(
             }
             if (command.args[0] === "lint") {
               return [
+                { ...command, name: "Control UI Lit ratchet", args: litRatchetArgs },
                 { ...command, name: "Control UI i18n catalog", args: ["lint:ui:i18n"] },
                 {
                   ...command,
@@ -998,6 +1007,9 @@ export function createChangedCheckPlan(
   } else if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
+  if (!runAll && result.paths.some((file) => CONTROL_UI_LIT_RATCHET_PATH_RE.test(file))) {
+    addLint("Control UI Lit ratchet", litRatchetArgs);
+  }
 
   if (typeLanes.all) {
     addTypecheck("typecheck all", ["tsgo:all"]);
@@ -1029,7 +1041,11 @@ export function createChangedCheckPlan(
   }
 
   if (runAll) {
-    addLint("lint", ["lint"]);
+    addLint("lint", [
+      "lint",
+      ...(options.staged ? ["--staged"] : []),
+      ...(options.base ? ["--base", options.base] : []),
+    ]);
     add("runtime import cycles", ["check:import-cycles"]);
     return finishPlan("all");
   }

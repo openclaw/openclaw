@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
+import solid from "@solidjs/vite-plugin";
 import { gzip } from "pako";
 import {
   runnerImport,
@@ -13,6 +14,7 @@ import {
   type ResolveModulePreloadDependenciesFn,
   type UserConfig,
 } from "vite";
+import type { ViteUserConfig } from "vitest/config";
 import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "../scripts/lib/control-ui-i18n-config.ts";
 import {
@@ -42,6 +44,68 @@ const outDir = path.resolve(here, "../dist/control-ui");
 const CONTROL_UI_GIT_READ_TIMEOUT_MS = 2_000;
 const require = createRequire(import.meta.url);
 const json5EsmPath = require.resolve("json5/dist/index.mjs");
+
+export function controlUiSolidPlugin(): Plugin[] {
+  let testMode = false;
+  return [
+    ...solid({
+      include: /\.[jt]sx$/u,
+      // Skip automatic page-wide Chrome performance tracks; keep Solid's dev runtime.
+      performanceTracks: false,
+    }),
+    {
+      name: "openclaw:solid-test-runtime",
+      enforce: "post",
+      apply(config, env) {
+        return env.command === "serve" && env.mode === "test" && config.test !== undefined;
+      },
+      config(_config, env): ViteUserConfig | undefined {
+        testMode = env.mode === "test";
+        if (!testMode) {
+          return undefined;
+        }
+        return {
+          resolve: {
+            alias: [
+              {
+                find: /^solid-js$/u,
+                replacement: path.join(path.dirname(require.resolve("solid-js")), "solid.dev.js"),
+              },
+              {
+                find: /^@solidjs\/web$/u,
+                replacement: path.join(path.dirname(require.resolve("@solidjs/web")), "web.dev.js"),
+              },
+            ],
+          },
+          test: {
+            server: {
+              deps: {
+                // Native imports and optimized browser imports must share one owner graph.
+                inline: [
+                  "solid-js",
+                  "@solidjs/signals",
+                  "@solidjs/web",
+                  "@solidjs/testing-library",
+                ],
+              },
+            },
+          },
+        };
+      },
+      configEnvironment(name, config) {
+        if (testMode && (name === "ssr" || config.consumer === "server") && config.resolve) {
+          // Node-pragmas share this server; only Solid should use its browser runtime.
+          config.resolve.conditions = config.resolve.conditions?.filter(
+            (condition) => condition !== "browser",
+          );
+          config.resolve.externalConditions = config.resolve.externalConditions?.filter(
+            (condition) => condition !== "browser",
+          );
+        }
+      },
+    },
+  ];
+}
 type ControlUiViteAlias = {
   find: string | RegExp;
   replacement: string;
@@ -721,6 +785,7 @@ export default function controlUiViteConfig(
       ...(devGateway ? { proxy: devGateway.proxy } : {}),
     },
     plugins: [
+      controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiIsolatedDesktopRuntimePlugin(),
       {

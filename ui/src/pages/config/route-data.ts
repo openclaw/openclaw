@@ -7,6 +7,7 @@ export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" }
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
   theme: "settings-appearance-theme",
+  background: "settings-appearance-background",
   accent: "settings-appearance-accent",
   typography: "settings-appearance-typography",
   tabIcon: "settings-appearance-tab-icon",

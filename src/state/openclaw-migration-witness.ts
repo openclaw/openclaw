@@ -163,10 +163,20 @@ function hashCell(hash: Hash, type: unknown, value: unknown): void {
   hash.update(`${type}:${bytes.byteLength}:`).update(bytes).update(";");
 }
 
+function witnessIdentifier(name: string, allowedNames: readonly string[], qualifier?: "witness") {
+  if (!allowedNames.includes(name)) {
+    throw new Error(`Migration witness identifier is outside its schema inventory: ${name}`);
+  }
+  return /* kysely-allow-raw: closed schema inventory, preserving literal dots and empty names. */ sql.id(
+    ...(qualifier ? [qualifier, name] : [name]),
+  );
+}
+
 function captureTable(
   database: DatabaseSync,
   role: OpenClawMigrationWitness["role"],
   table: string,
+  tableNames: readonly string[],
   withoutRowid: boolean,
   registry?: RegistryMigrationContext,
 ): OpenClawMigrationWitness["tables"][number] {
@@ -174,8 +184,8 @@ function captureTable(
   const columns = executeSqliteQuerySync(
     database,
     db
-      // kysely-allow-raw: schema-owned table metadata, including declared primary-key order.
       .selectFrom(
+        // kysely-allow-raw: schema-owned table metadata, including declared primary-key order.
         sql<{
           name: string;
           pk: number;
@@ -206,22 +216,30 @@ function captureTable(
     retained.every(Boolean) && !registry
       ? undefined
       : createHash("sha256").update(JSON.stringify(names.filter((_, index) => retained[index])));
-  let query = db.selectFrom(sql<Record<string, Cell>>`${sql.id(table)}`.as("witness")).select(
-    names.flatMap((name, index) => [
-      // kysely-allow-raw: preserve SQLite value kinds and exact 64-bit integers without JS number rounding.
-      sql<string>`typeof(${sql.id("witness", name)})`.as(`type_${index}`),
-      // kysely-allow-raw: numeric text is a lossless witness encoding, not a stored representation change.
-      sql<Cell>`CASE typeof(${sql.id("witness", name)})
-        WHEN 'integer' THEN CAST(${sql.id("witness", name)} AS TEXT)
-        WHEN 'real' THEN printf('%!.17g', ${sql.id("witness", name)})
-        WHEN 'text' THEN CAST(${sql.id("witness", name)} AS BLOB)
-        ELSE ${sql.id("witness", name)} END`.as(`value_${index}`),
-    ]),
-  );
+  let query = db
+    .selectFrom(
+      // kysely-allow-raw: table and columns come from the pinned schema inventory, including plugin stores.
+      sql<Record<string, Cell>>`${witnessIdentifier(table, tableNames)}`.as("witness"),
+    )
+    .select(
+      names.flatMap((name, index) => {
+        const column = witnessIdentifier(name, names, "witness");
+        return [
+          // kysely-allow-raw: preserve SQLite value kinds and exact 64-bit integers without JS number rounding.
+          sql<string>`typeof(${column})`.as(`type_${index}`),
+          // kysely-allow-raw: numeric text is a lossless witness encoding, not a stored representation change.
+          sql<Cell>`CASE typeof(${column})
+            WHEN 'integer' THEN CAST(${column} AS TEXT)
+            WHEN 'real' THEN printf('%!.17g', ${column})
+            WHEN 'text' THEN CAST(${column} AS BLOB)
+            ELSE ${column} END`.as(`value_${index}`),
+        ];
+      }),
+    );
   const primary = columns.filter(({ pk }) => pk > 0).toSorted((a, b) => a.pk - b.pk);
   const primaryNames = primary.map(({ name }) => name);
   for (const column of [...primaryNames, ...names.filter((name) => !primaryNames.includes(name))]) {
-    query = query.orderBy(sql.id("witness", column));
+    query = query.orderBy(witnessIdentifier(column, names, "witness"));
   }
   let rowCount = 0;
   const expectedRegistrations = new Set(
@@ -349,8 +367,10 @@ export function captureOpenClawMigrationWitness(
     const applicationId = executeSqliteQueryTakeFirstSync(
       database,
       db
-        // kysely-allow-raw: read the persistent format identifier from SQLite's header.
-        .selectFrom(sql<{ application_id: number }>`pragma_application_id()`.as("header"))
+        .selectFrom(
+          // kysely-allow-raw: read the persistent format identifier from SQLite's header.
+          sql<{ application_id: number }>`pragma_application_id()`.as("header"),
+        )
         .select("application_id"),
     )?.application_id;
     const schemaVersion = role === "global" ? readStateSchemaContentVersion(database) : userVersion;
@@ -360,8 +380,7 @@ export function captureOpenClawMigrationWitness(
         db
           .selectFrom("schema_meta")
           .select(["role", "agent_id"])
-          // kysely-allow-raw: compare the native version exactly without generic-row numeric coercion.
-          .select(sql<string>`CAST(schema_version AS TEXT)`.as("schema_version"))
+          .select((eb) => eb.cast<string>("schema_version", "text").as("schema_version"))
           .where("meta_key", "=", "primary"),
       );
       if (
@@ -403,8 +422,8 @@ export function captureOpenClawMigrationWitness(
       executeSqliteQuerySync(
         database,
         db
-          // kysely-allow-raw: SQLite owns rowid availability, including WITHOUT ROWID tables.
           .selectFrom(
+            // kysely-allow-raw: SQLite owns rowid availability, including WITHOUT ROWID tables.
             sql<{
               name: string;
               wr: number;
@@ -419,23 +438,24 @@ export function captureOpenClawMigrationWitness(
         { withoutRowid: table.wr !== 0, strict: table.strict !== 0 },
       ]),
     );
-    const tables = catalog
+    const tableNames = catalog
       .map(({ name }) => identifier.parse(name))
       // Planner statistics are derived; sqlite_sequence still carries future row identity.
-      .filter((name) => !name.startsWith("sqlite_stat"))
-      .map((name) => {
-        const kind = tableKinds.get(name);
-        if (kind === undefined) {
-          throw new Error(`Migration witness table disappeared: ${name}`);
-        }
-        return captureTable(
-          database,
-          role,
-          name,
-          kind.withoutRowid,
-          name === "agent_databases" ? registry : undefined,
-        );
-      });
+      .filter((name) => !name.startsWith("sqlite_stat"));
+    const tables = tableNames.map((name) => {
+      const kind = tableKinds.get(name);
+      if (kind === undefined) {
+        throw new Error(`Migration witness table disappeared: ${name}`);
+      }
+      return captureTable(
+        database,
+        role,
+        name,
+        tableNames,
+        kind.withoutRowid,
+        name === "agent_databases" ? registry : undefined,
+      );
+    });
     const schemaHash = createHash("sha256");
     const migrationSchemaHash = createHash("sha256");
     for (const object of iterateSqliteQuerySync(

@@ -175,6 +175,26 @@ In Code Mode, the conversation tools reuse their exact Gateway output contracts.
 
 ## Sending cross-session messages
 
+### Communication preferences
+
+Open **Session settings** in the session menu to choose **Always**, **Ask**, or
+**Never** for **Send messages** and **Receive messages**. Ask presents a pending
+question to an authorized human in the Control UI before new peer input is admitted.
+A refused or expired request does not start work. Requested replies and
+authorized delegated-task guidance and results retain their existing authority.
+
+The session creator or a Gateway administrator can change these preferences.
+Agents cannot change them through session tools. **Reset** clears the overrides
+and follows [`session.communication`](/gateway/config-agents/sessions#communication-defaults).
+Changing a default affects inheriting sessions, not explicit overrides.
+
+Both directions default to Always to preserve existing behavior. These preferences
+never grant access beyond tool policy, sharing, sandbox, or agent-to-agent restrictions.
+They do not hide chat history, control external channel delivery, or block human input.
+Permission is checked again after approval and before the input is dispatched.
+Changing these preferences blocks new admissions; already accepted messages and
+work retain their delivery and completion obligations. Use Stop to cancel running work.
+
 Supply the message body in the required `message` argument. Hidden aliases such as `SendMessage`, `content`, and `text` are not accepted.
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.

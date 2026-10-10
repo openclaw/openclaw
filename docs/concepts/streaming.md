@@ -468,6 +468,10 @@ in the draft:
   is off; other channels keep their existing progress behavior. See
   [Progress drafts](/concepts/progress-drafts#status-headline).
 
+When verbose logging owns standalone commentary, each preamble is sent once.
+Buffered commentary and tool summaries settle before the answer preview;
+text-only progress arriving after final delivery starts is suppressed.
+
 ```json
 {
   "channels": {
