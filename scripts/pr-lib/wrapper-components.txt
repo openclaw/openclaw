@@ -892,6 +892,7 @@ src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
+src/infra/gateway-state-projection.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts

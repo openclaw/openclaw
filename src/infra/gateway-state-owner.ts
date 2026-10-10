@@ -37,6 +37,10 @@ import {
   isGatewayStateOwnerDefinitelyStale,
   StateDatabaseAdmissionPendingError,
 } from "./gateway-state-owner-record.js";
+import {
+  createGatewayStateProjectionResource,
+  type GatewayStateProjection,
+} from "./gateway-state-projection.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 
@@ -48,57 +52,9 @@ export type StateDatabaseSchemaLease = {
   release(this: void): void;
 };
 
-export type GatewayStateProjection = {
-  readonly lockPath: string;
-  readonly verifiedAt: number | undefined;
-  verifyStillHeld(): boolean;
-  retain(): GatewayStateProjection;
-  release(): void;
-};
-
-/** Carry the same physical sidecar through relocation and accepted schema work. */
-export function createGatewayStateProjection(
-  lock: ReturnType<typeof acquireFileLockSync>,
-): GatewayStateProjection {
-  let references = 1;
-  let verifiedAt: number | undefined;
-  const verify = () => {
-    verifiedAt = undefined;
-    if (!lock.verifyStillHeld()) {
-      return false;
-    }
-    verifiedAt = performance.now();
-    return true;
-  };
-  const reference = (): GatewayStateProjection => {
-    let released = false;
-    return {
-      lockPath: lock.lockPath,
-      get verifiedAt() {
-        return released ? undefined : verifiedAt;
-      },
-      verifyStillHeld: () => !released && verify(),
-      retain() {
-        if (released || !verify()) {
-          throw new Error("Gateway state projection is no longer current");
-        }
-        references += 1;
-        return reference();
-      },
-      release() {
-        readOwnerPaths.clear();
-        if (released) {
-          return;
-        }
-        if (references === 1) {
-          lock.release();
-        }
-        references -= 1;
-        released = true;
-      },
-    };
-  };
-  return reference();
+/** Bind physical projection release to the process owner's cached read proofs. */
+export function createGatewayStateProjection(lock: ReturnType<typeof acquireFileLockSync>) {
+  return createGatewayStateProjectionResource(lock, () => readOwnerPaths.clear());
 }
 
 type StateOwnerFile = Pick<GatewayStateProjection, "lockPath" | "verifyStillHeld" | "release">;
@@ -110,6 +66,7 @@ type ProcessOwner = {
   locks: Set<StateOwnerFile>;
   heartbeat?: ReturnType<typeof startGatewayStateOwnerHeartbeat>;
   lost: AbortController;
+  settled: AbortController;
   projectionDirectories: StateOwnerDirectoryIdentity[];
   // Retained leases keep custody after this stops new admission.
   accepting: boolean;
@@ -168,6 +125,7 @@ function loseOwner(owner: ProcessOwner, error: Error) {
   owner.heartbeat?.stop();
   log.error(error.message);
   owner.lost.abort(error);
+  owner.settled.abort();
 }
 
 // Only explicit reads reuse proof for one second; overdue dispatch verifies
@@ -404,6 +362,7 @@ function leaseForFile(
           owner.heartbeat?.stop();
           owner.accepting = false;
           owners.delete(pathname);
+          owner.settled.abort();
         }
       }
       // A failed directory cleanup remains retryable after physical lock release.
@@ -442,6 +401,7 @@ export function acquireGatewayStateOwner(params: {
     locks: new Set(),
     projectionDirectories: [],
     lost: new AbortController(),
+    settled: new AbortController(),
     accepting: true,
   };
   const lock = acquireOwnerFile(params.databasePath, pathname, payload);
@@ -568,6 +528,7 @@ export function acquireStateDatabaseSchemaLease(
       locks: new Set([lock, projection]),
       projectionDirectories,
       lost: new AbortController(),
+      settled: new AbortController(),
       accepting: true,
     };
     owners.set(pathname, owner);
@@ -694,6 +655,22 @@ export function assertStateDatabaseReadAllowed(databasePath: string): void {
     );
   }
   readOwnerPaths.set(key, { pathname, owner, expiresAt: now + READ_OWNERSHIP_MAX_AGE_MS });
+}
+
+/** Only a verified local offline owner can suspend optional periodic work. */
+export function getStateDatabaseMaintenanceDeferral(databasePath: string) {
+  const owner = owners.get(resolveGatewayStateOwnerPath(databasePath));
+  if (owner?.payload.role !== "sqlite-maintenance") {
+    return undefined;
+  }
+  if (!hasPhysicalOwnership(owner)) {
+    throw new Error("OpenClaw state maintenance ownership is no longer current");
+  }
+  return {
+    reason: "offline-maintenance" as const,
+    ownerPid: owner.payload.pid,
+    until: owner.settled.signal,
+  };
 }
 
 /** Ordinary SQLite access observes maintenance; it never borrows schema authority. */

@@ -44,11 +44,11 @@ import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import {
   acquireGatewayStateOwner,
   createGatewayStateProjection,
-  type GatewayStateProjection,
   GatewayStateOwnerContentionError,
   resolveGatewayStateOwnerPath,
   tryBorrowGatewayStateOwner,
 } from "./gateway-state-owner.js";
+import type { GatewayStateProjection } from "./gateway-state-projection.js";
 
 export const GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS = 5 * 60_000;
 const log = createSubsystemLogger("gateway");

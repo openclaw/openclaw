@@ -321,9 +321,9 @@ it("joins private maintenance timer cancellation before retiring its native hand
 
     await maintenance.close();
     await scheduledWork;
-    expect(periodicMaintenance).toBeDefined();
-    expect(periodicSettled).toBe(true);
-    await expect(periodicMaintenance).resolves.toBeUndefined();
+    // Optional timer work does not borrow an offline owner, even for a private handle.
+    expect(periodicMaintenance).toBeUndefined();
+    expect(periodicSettled).toBe(false);
     expect(database?.db.isOpen).toBe(false);
   } finally {
     registration.mockRestore();
@@ -430,57 +430,62 @@ it("refuses independent adoption after its cached handle starts closing", async 
   }
 });
 
-it("refuses checkpoints without borrowing the timer caller's maintenance authority", async ({
-  signal,
-}) => {
-  const { database, periodic } = openWithPeriodicMaintenance(
-    path.join(tempDirs.make("state-wal-maintenance-authority-"), "openclaw.sqlite"),
-  );
-  const owner = acquireGatewayStateOwner({ databasePath: database.path });
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent: owner.assertCurrent,
-    assertDatabaseAccess: owner.assertDatabaseAccess,
-  });
-  const before = sqliteBytes(database.path);
-  const { observations, wait, stop } = observeCheckpoints(database.path);
-  const prepare = vi.spyOn(database.db, "prepare");
-  let periodicWork: Promise<unknown> | undefined;
-  try {
-    periodicWork = Promise.resolve(maintenance.run(() => periodic()));
-    await wait(signal);
-    expect(observations).toEqual(["error"]);
-    expect(database.walMaintenance.health?.error).toContain("offline maintenance");
-    expect(prepare).not.toHaveBeenCalled();
-    expect(database.walMaintenance.checkpoint()).toBe(false);
-    expect(observations).toEqual(["error", "error"]);
-    expect(prepare).not.toHaveBeenCalled();
-    expect(database.db.isOpen).toBe(true);
-    expect(sqliteBytes(database.path)).toEqual(before);
-  } finally {
-    prepare.mockRestore();
-    stop();
+it.for(["before", "queued"] as const)(
+  "defers %s admission without borrowing the timer caller's maintenance authority",
+  async (fence, { signal }) => {
+    const { database, periodic } = openWithPeriodicMaintenance(
+      path.join(tempDirs.make("state-wal-maintenance-authority-"), "openclaw.sqlite"),
+    );
+    const queued = fence === "queued" ? Promise.resolve(periodic()) : undefined;
+    const owner = acquireGatewayStateOwner({ databasePath: database.path });
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: owner.assertCurrent,
+      assertDatabaseAccess: owner.assertDatabaseAccess,
+    });
+    const before = sqliteBytes(database.path);
+    const { observations, wait, stop } = observeCheckpoints(database.path);
+    const prepare = vi.spyOn(database.db, "prepare");
+    let periodicWork: Promise<unknown> | undefined;
     try {
-      await maintenance.close();
+      maintenance.run(() => {
+        periodicWork = queued ?? Promise.resolve(periodic());
+      });
+      await wait(signal);
+      expect(observations).toEqual(["deferred"]);
+      expect(database.walMaintenance.health).toMatchObject({
+        reason: "offline-maintenance",
+        ownerPid: process.pid,
+        warning: false,
+      });
+      expect(prepare).not.toHaveBeenCalled();
+      expect(database.walMaintenance.checkpoint()).toBe(false);
+      expect(observations).toEqual(["deferred", "error"]);
+      expect(prepare).not.toHaveBeenCalled();
+      expect(database.db.isOpen).toBe(true);
+      expect(sqliteBytes(database.path)).toEqual(before);
     } finally {
+      prepare.mockRestore();
+      stop();
       try {
-        await periodicWork;
+        await maintenance.close();
       } finally {
         owner.release();
+        await periodicWork;
       }
     }
-  }
-  const afterRelease = observeCheckpoints(database.path);
-  try {
-    periodicWork = Promise.resolve(periodic());
-    await afterRelease.wait(signal);
-    await periodicWork;
-    expect(afterRelease.observations[0]).toBe("complete");
-  } finally {
-    await periodicWork;
-    afterRelease.stop();
-  }
-});
+    const afterRelease = observeCheckpoints(database.path);
+    try {
+      periodicWork = Promise.resolve(periodic());
+      await afterRelease.wait(signal);
+      await periodicWork;
+      expect(afterRelease.observations[0]).toBe("complete");
+    } finally {
+      await periodicWork;
+      afterRelease.stop();
+    }
+  },
+);
 
 // Windows cannot rename a directory while SQLite retains its native files.
 it.runIf(process.platform !== "win32")(

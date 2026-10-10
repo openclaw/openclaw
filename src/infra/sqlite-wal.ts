@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { waitForAbortSignal } from "./abort-signal.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
 import {
   normalizeSqliteNonNegativeInteger,
@@ -91,6 +92,10 @@ export type SqliteWalMaintenanceOptions = SqliteWalCheckpointOptions & {
   checkpointMode?: SqliteWalCheckpointMode;
   /** Owner-held synchronous exclusion around maintenance writes, including periodic vacuum. */
   runMaintenance?: (operation: () => boolean) => boolean;
+  /** A local owner suspends periodic admission, never explicit caller-owned checkpoints. */
+  deferPeriodic?: () =>
+    | { reason: "offline-maintenance"; ownerPid: number; until: AbortSignal }
+    | undefined;
 };
 
 export type SqliteConnectionPragmaOptions = SqliteWalMaintenanceOptions & {
@@ -403,6 +408,24 @@ export function configureSqliteWalMaintenance(
       const budget = nextPageBudget;
       nextPageBudget = 0;
       return budget;
+    },
+    () => {
+      if (scope.signal.aborted) {
+        return undefined;
+      }
+      const deferred = options.deferPeriodic?.();
+      if (!deferred) {
+        return undefined;
+      }
+      checkpointOwner.defer(deferred.reason, deferred.ownerPid);
+      // Keep the cadence pending without another timer or a worker request. Stop
+      // cancels this wait; accepted worker work still settles through the same scope.
+      return waitForAbortSignal(AbortSignal.any([deferred.until, scope.signal])).then(() => {
+        if (!scope.signal.aborted) {
+          // Ownership loss is not successful maintenance completion.
+          options.deferPeriodic?.();
+        }
+      });
     },
   );
   const schedule = (phase: string, intervalMs: number, run: () => Promise<void>) =>

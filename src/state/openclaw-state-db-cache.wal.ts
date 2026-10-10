@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isAbortError } from "../infra/abort-signal.js";
+import { getStateDatabaseMaintenanceDeferral } from "../infra/gateway-state-owner.js";
 import type { SqliteWalHealth } from "../infra/sqlite-wal-checkpoint.js";
 import {
   registerSqliteWalWorkerMaintenance,
@@ -109,6 +110,11 @@ export function createStateDatabaseWalOwner(
         const context = { ...capturedContext, maintenanceScope };
         const assertCurrent = () => {
           controller.signal.throwIfAborted();
+          if (getStateDatabaseMaintenanceDeferral(database.path)) {
+            throw new StateDatabaseReadAdmissionInvalidatedError(
+              "Shared-state WAL maintenance deferred to the offline owner",
+            );
+          }
           context.admission.assertCurrent();
           maintenanceScope?.assertAdmission();
           if (

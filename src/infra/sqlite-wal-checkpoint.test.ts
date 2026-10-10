@@ -17,6 +17,7 @@ import {
   createSqliteWalCheckpoint,
   onSqliteWalCheckpoint,
   publishSqliteWalCheckpointObservation,
+  summarizeSqliteWalHealth,
   type SqliteWalCheckpointSnapshot,
 } from "./sqlite-wal-checkpoint.js";
 import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
@@ -172,6 +173,7 @@ describe("SQLite WAL checkpoint observations", () => {
       const writer = new DatabaseSync(databasePath, { readBigInts, returnArrays });
       let reader: InstanceType<typeof DatabaseSync> | undefined;
       let maintenance: ReturnType<typeof configureSqliteWalMaintenance> | undefined;
+      const onCheckpointError = vi.fn();
       try {
         writer.exec(`
         PRAGMA journal_mode = WAL;
@@ -188,6 +190,7 @@ describe("SQLite WAL checkpoint observations", () => {
           checkpointIntervalMs: 0,
           checkpointMode,
           databasePath,
+          onCheckpointError,
         });
 
         expect(maintenance.checkpoint()).toBe(false);
@@ -203,7 +206,14 @@ describe("SQLite WAL checkpoint observations", () => {
           warning: false,
         });
         expect(maintenance.checkpoint()).toBe(false);
-        expect(maintenance.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+        expect(maintenance.health).toMatchObject({
+          consecutiveBlocked: 2,
+          warning: true,
+          reason: checkpointMode === "PASSIVE" ? "reader" : "busy",
+        });
+        expect(maintenance.checkpoint()).toBe(false);
+        expect(onCheckpointError).toHaveBeenCalledOnce();
+        expect(maintenance.health?.consecutiveBlocked).toBe(3);
         reader.exec("ROLLBACK;");
         expect(maintenance.checkpoint()).toBe(true);
         expect(maintenance.health).toMatchObject({
@@ -319,6 +329,19 @@ describe("SQLite WAL checkpoint observations", () => {
       });
       expect(maintenance.health?.activeReaders).toHaveLength(8);
       expect(maintenance.health?.readerDiagnostics?.[0]?.connections).toHaveLength(8);
+      const summary = summarizeSqliteWalHealth(maintenance.health);
+      expect(summary).toMatchObject({
+        state: "blocked",
+        reason: "reader",
+        observedReaderCount: 10,
+        oldestObservedReader: {
+          operation: expect.stringMatching(/^fixture.reader-/),
+          pid: process.pid,
+        },
+      });
+      expect(summary).not.toHaveProperty("activeReaders");
+      expect(summary).not.toHaveProperty("readerDiagnostics");
+      expect(JSON.stringify(summary).length).toBeLessThan(1024);
       expect(JSON.stringify(maintenance.health)).not.toContain("SELECT");
       for (const iterator of held) {
         iterator.return?.();

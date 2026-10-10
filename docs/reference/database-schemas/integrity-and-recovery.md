@@ -796,6 +796,20 @@ does not wait on a separate coordination database. Explicit synchronous
 checkpoint and close operations retain their synchronous contract. These changes
 require no state migration.
 
+A verified offline maintenance owner in the same process suspends shared-state
+periodic admission before another checkpoint or worker request starts. The owner
+records a `deferred` observation with reason `offline-maintenance` and its PID,
+then waits for that owner's release instead of retrying on every timer tick.
+Cancellation joins the suspended schedule without starting another writer; normal
+release resumes each existing cadence once. Explicit checkpoints retain their
+existing authority checks. Deferral does not clear an earlier storage warning,
+and lost or foreign ownership, disk errors, and corruption remain errors.
+
+Repeated reader/busy warnings are grouped by their observed cause until recovery
+or a different cause. Logs include a compact summary and the oldest observed
+reader's operation, PID, and thread, not the full connection inventory. Observed
+readers are diagnostic evidence, not proof of which reader owns a native lock.
+
 The warning includes observed WAL and database sizes, checkpointed and total WAL
 frames, the last observed complete checkpoint, the consecutive blocked count,
 the observation time, and up to eight process-local active reader owners when
