@@ -30,6 +30,9 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
+import { projectOutboundDelivery } from "../../../../src/infra/outbound/delivery-queue-projection.js";
+import { readOutboundDeliveriesInDatabase } from "../../../../src/infra/outbound/delivery-queue-storage.kernel.js";
+import { withOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db-readonly.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
 
@@ -1476,8 +1479,6 @@ describe("channel progress presentation through an isolated Gateway", () => {
       body: JSON.stringify(inbound.providerBody),
     });
     expect(injected.ok, await injected.text()).toBe(true);
-    const { loadUnfinishedDeliveries } =
-      await import("../../../../src/infra/outbound/delivery-queue-storage.js");
     const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
     if (!stateDir) {
       throw new Error("isolated Gateway state directory missing");
@@ -1504,7 +1505,14 @@ describe("channel progress presentation through an isolated Gateway", () => {
               lastError: run.delivery.lastError,
             }
           : undefined;
-      const pendingRows = await loadUnfinishedDeliveries(stateDir);
+      // The Gateway writes in another process, outside runtime cache invalidation.
+      const pendingRows = withOpenClawStateDatabaseReadOnly(
+        (database) =>
+          readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }).map(
+            ({ queueName, entry }) => projectOutboundDelivery(queueName, entry),
+          ),
+        { env: gateway.runtimeEnv },
+      );
       queueRows = pendingRows.map(({ id, channel, to, recoveryState, lastError }) => ({
         id,
         channel,
