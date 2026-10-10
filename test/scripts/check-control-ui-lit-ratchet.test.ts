@@ -27,6 +27,35 @@ const legacy = [
 ].join("\n");
 
 describe("Control UI Lit ratchet", () => {
+  it("excepts only the bridge test's Lit imports/templates, with a reason and no sibling allowance", () => {
+    const root = tempDirs.make("openclaw-lit-interop-");
+    const directory = path.join(root, "ui/src/lit");
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "plain.ts"), "export {};\n");
+    for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
+      git(root, args);
+    }
+    const logs: string[] = [];
+    const errors: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...args) => logs.push(args.join(" ")));
+    vi.spyOn(console, "error").mockImplementation((...args) => errors.push(args.join(" ")));
+    const fixture = 'import { html } from "lit"; export const view = html`<div />`;';
+    const exception = path.join(directory, "solid-bridge.test.tsx");
+    fs.writeFileSync(exception, fixture);
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
+    expect(logs.join("\n")).toContain("litImports=1, htmlTemplates=1");
+    expect(logs.join("\n")).toContain("deleted with the bridge at cutover");
+
+    fs.writeFileSync(path.join(directory, "solid-bridge-other.test.tsx"), fixture);
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.join("\n")).toContain("solid-bridge-other.test.tsx [litImports]: 1 > 0");
+    fs.unlinkSync(path.join(directory, "solid-bridge-other.test.tsx"));
+    fs.appendFileSync(exception, "\nexport const extra = <wa-button />;");
+    errors.length = 0;
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.join("\n")).toContain("solid-bridge.test.tsx [waTags]: 1 > 0");
+  });
+
   it("preserves staged and explicit base scope through the full lint entry point", () => {
     const root = tempDirs.make("openclaw-lit-full-lint-");
     const source = path.join(root, "ui/src/view.ts");
