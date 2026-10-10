@@ -75,13 +75,15 @@ export function createMattermostModelPickerInteractionHandler(
           id: params.payload.user_id,
           meta: { name: params.userName },
         });
-        return {
-          ephemeral_text: core.channel.pairing.buildPairingReply({
-            channel: "mattermost",
-            idLine: `Your Mattermost user id: ${params.payload.user_id}`,
-            code,
-          }),
-        };
+        if (code) {
+          return {
+            ephemeral_text: core.channel.pairing.buildPairingReply({
+              channel: "mattermost",
+              idLine: `Your Mattermost user id: ${params.payload.user_id}`,
+              code,
+            }),
+          };
+        }
       }
       const denyText =
         auth.denyReason === "unknown-channel"
