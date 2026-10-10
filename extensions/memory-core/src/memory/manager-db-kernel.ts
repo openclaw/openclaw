@@ -11,13 +11,19 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   rebuildMemoryChunkFts,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
-import { runSqliteImmediateTransactionSync } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import {
+  runSqliteImmediateTransactionSync,
+  tableExists as admittedTableExists,
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
 export const MEMORY_INDEX_STATE_ID = 1;
 
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
+  if (schema === "main") {
+    return admittedTableExists(db, tableName);
+  }
   const row = db
     .prepare(`SELECT 1 AS ok FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`)
     .get(tableName);

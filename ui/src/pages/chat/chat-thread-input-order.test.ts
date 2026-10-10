@@ -74,6 +74,71 @@ beforeEach(() => resetChatThreadState("input-order"));
 afterEach(() => resetChatThreadState("input-order"));
 
 describe("transcript input order", () => {
+  it("keeps parent output around a worker update in the same order live and saved", () => {
+    const original = {
+      role: "user",
+      content: "Publish the change",
+      timestamp: 10,
+      __openclaw: { id: "request", idempotencyKey: "parent:user", seq: 1 },
+    };
+    const update = {
+      role: "assistant",
+      content: "Worker update",
+      timestamp: 30,
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      senderSession: { sessionKey: "agent:main:worker" },
+      __openclaw: { id: "update", seq: 3 },
+    };
+    const before = {
+      role: "assistant",
+      content: "Preparing publication",
+      timestamp: 20,
+      __openclaw: { id: "before", runId: "parent", seq: 2 },
+    };
+    const after = {
+      role: "assistant",
+      content: "Published successfully",
+      timestamp: 40,
+      __openclaw: { id: "after", runId: "parent", seq: 4 },
+    };
+    const next = {
+      role: "user",
+      content: "Next request",
+      timestamp: 50,
+      __openclaw: { id: "next", idempotencyKey: "next:user", seq: 5 },
+    };
+    const expected = [
+      "Publish the change",
+      "Preparing publication",
+      "Worker update",
+      "Published successfully",
+      "Next request",
+    ];
+    for (const mode of ["stream", "segment", "saved"] as const) {
+      expect(
+        visibleRows({
+          messages: [original, before, update, ...(mode === "saved" ? [after] : []), next],
+          runId: mode === "saved" ? null : "parent",
+          runWorking: mode !== "saved",
+          stream: mode === "stream" ? "Published successfully" : null,
+          streamStartedAt: 40,
+          streamSegments:
+            mode === "segment"
+              ? [
+                  {
+                    text: "Published successfully",
+                    ts: 40,
+                    runId: "parent",
+                    itemId: "commentary",
+                    afterUserSendId: "parent",
+                  },
+                ]
+              : [],
+        }),
+        mode,
+      ).toEqual(expected);
+    }
+  });
   it("keeps accepted steers at their transcript positions between same-run answers", () => {
     const messages = [
       { role: "user", content: "Original", __openclaw: { idempotencyKey: "run:user", seq: 1 } },

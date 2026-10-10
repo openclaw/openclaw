@@ -503,7 +503,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Edit a queued message with the pencil on its row, or by double-clicking the row. The row becomes its own textarea and stays in place while the main composer remains independent, including any separate draft and attachments. Submit replaces the row in the same slot and preserves its attachments and delivery choice, even when the composer currently defaults to Steer or Interrupt; Cancel or Escape discards the row-local draft and restores the queued message. A normal composer send remains a separate queued item even while a row edit is open. The queue behind an edited row waits rather than delivering a message you are still rewriting, so that row splits the queue for reordering the same way an in-flight row does. Queued slash commands keep the discard-and-retype flow.
     - **Settings → Appearance → Chat → Follow-ups while the agent is working** can override that server default for the current browser. The page marks an override explicitly and offers **Reset to server default**. `Steer into the active run` sends follow-ups immediately, while `Queue until the run ends` holds them until the run finishes.
     - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band.
-    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort authorized active runs for that session without cascading to children. The Control UI uses the broader `sessions.abort` path when it has no local run ID.
+    - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort authorized active runs for that session, including its active run started without a Gateway chat controller (such as OpenAI-compatible HTTP requests or channel replies), without cascading to children. The Control UI uses the broader `sessions.abort` path when it has no local run ID.
 
   </Accordion>
   <Accordion title="Abort partial retention">
@@ -644,6 +644,12 @@ message, correcting earlier content, or changing rendering options starts a fres
 view. References that change earlier Markdown can also reset the view.
 Completed lists also stay cached as later blocks arrive; loose or nested list
 continuations remain together until the list ends.
+
+Browser results for X and Twitter posts use a wider card with the author, handle,
+available post text, and preview image. **Open post** and **More actions** stay
+visible on touch screens. Text and social images reuse the anonymous page preview;
+when metadata is unavailable, the card keeps the post link and handle. It does
+not load an X embed script or require an X account.
 
 **Copy URL** in browser tab cards also works on plain HTTP connections where the
 browser does not provide its Clipboard API.

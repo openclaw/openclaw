@@ -377,6 +377,10 @@ Live or uninspectable owners remain protected. On Linux with restricted `/proc`
 visibility, retry from the original OS account with process-inspection permissions;
 permission errors never prove that an owner died.
 
+An ordinary installation-root update lease is not legacy custody just because it
+has no mutation-protocol marker. Repair leaves that lease to its current owner;
+normal update admission can reclaim it once its owners and descendants settle.
+
 The original run must be identifiable from its retained helper, update history,
 or generation-bound repair metadata, and readable in the selected state database.
 Repair needs that record to check rollback and recovery evidence. Use the same

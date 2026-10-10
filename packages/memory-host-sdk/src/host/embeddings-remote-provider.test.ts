@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddingProviderCallOptions } from "./embeddings.types.js";
 
 const mocks = vi.hoisted(() => ({
   fetchRemoteEmbeddingVectors: vi.fn(),
@@ -25,15 +26,29 @@ function createProvider(batchQueryInputs?: boolean) {
 
 beforeEach(() => {
   mocks.fetchRemoteEmbeddingVectors.mockReset();
-  mocks.fetchRemoteEmbeddingVectors.mockImplementation(async ({ body }: { body: unknown }) => {
-    const input = (body as { input: string[] }).input;
-    return input.map((_, index) => [index]);
-  });
+  mocks.fetchRemoteEmbeddingVectors.mockImplementation(
+    async ({
+      body,
+      onUsage,
+    }: {
+      body: unknown;
+      onUsage?: EmbeddingProviderCallOptions["onUsage"];
+    }) => {
+      const input = (body as { input: string[] }).input;
+      onUsage?.({ promptTokens: input.length, totalTokens: input.length });
+      return input.map((_, index) => [index]);
+    },
+  );
 });
 
 describe("remote embedding provider request grouping", () => {
   it("runs query batches as one request per input by default", async () => {
-    await createProvider().embedBatch(["first", "second"], { inputType: "query" });
+    const onUsage = vi.fn();
+    await createProvider().embedBatch(["first", "second"], { inputType: "query", onUsage });
+    expect(onUsage.mock.calls).toEqual([
+      [{ promptTokens: 1, totalTokens: 1 }],
+      [{ promptTokens: 1, totalTokens: 1 }],
+    ]);
 
     expect(
       mocks.fetchRemoteEmbeddingVectors.mock.calls.map(([request]) => request.body.input),

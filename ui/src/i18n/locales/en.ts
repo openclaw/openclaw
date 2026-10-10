@@ -1690,6 +1690,8 @@ export const en: TranslationMap & {
     newTab: "New tab",
     closeTab: "Close tab",
     untitledTab: "New tab",
+    tweetPost: "Post on X",
+    openPost: "Open post",
     back: "Back",
     forward: "Forward",
     reload: "Reload",
@@ -2286,7 +2288,19 @@ export const en: TranslationMap & {
     personalWorkspace:
       "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
     unidentified: "Sign in with a personal profile to use My GitHub.",
-    connectHelp: "Connect GitHub in Settings \u2192 Profile \u2192 GitHub connections.",
+    sharedUnavailable: {
+      unavailable:
+        "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings \u2192 Profile \u2192 GitHub connections. My GitHub is separate and optional.",
+      changed: "The Gateway GitHub account changed. Reload and retry publication.",
+      rate_limited:
+        "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
+      unverified:
+        "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
+      unsupported_workspace:
+        "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
+      unknown:
+        "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.",
+    },
   },
   githubConnections: {
     title: "GitHub connections",

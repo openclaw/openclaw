@@ -22,6 +22,7 @@ import {
   renderAssistantFormatFailureCopy,
   renderAssistantRequestFailureCopy,
   renderFormatErrorCopy,
+  renderModelLoadFailureCopy,
 } from "../failover/assistant-request-failure-copy.js";
 import { failoverReasonFromClassification } from "../failover/classification-rules.js";
 import {
@@ -307,6 +308,10 @@ export function formatUserFacingAssistantErrorText(
 ): string {
   if (msg.errorCode === REPEATED_TOOL_ERROR_CODE) {
     return REPEATED_TOOL_ERROR_MESSAGE;
+  }
+  const modelLoadCopy = renderModelLoadFailureCopy(msg);
+  if (modelLoadCopy) {
+    return modelLoadCopy;
   }
   const rawError = msg.errorMessage?.trim();
   const approvalMessage = resolveExecutionApprovalFailureMessage(rawError);

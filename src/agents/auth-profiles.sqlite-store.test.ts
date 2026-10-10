@@ -306,7 +306,7 @@ describe("auth profile sqlite store", () => {
       const inspection = vi
         .spyOn(databaseIdentity, "inspectDatabasePathIdentitySync")
         .mockImplementation((pathname) => {
-          if (path.resolve(pathname) === path.resolve(sourcePath)) {
+          if (!sourceInspectionFailed && path.resolve(pathname) === path.resolve(sourcePath)) {
             sourceInspectionFailed = true;
             throw Object.assign(new Error("permission denied"), { code: "EACCES" });
           }
