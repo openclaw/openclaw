@@ -222,6 +222,30 @@ describe("buildCodexLifecycleTerminalMeta", () => {
       stopReason: "end_turn",
     });
   });
+
+  it("keeps ordinary successful turns terminal", () => {
+    expect(
+      buildCodexLifecycleTerminalMeta({
+        aborted: false,
+        timedOut: false,
+        yielded: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps cancellation stronger than a stale yield signal", () => {
+    expect(
+      buildCodexLifecycleTerminalMeta({
+        aborted: true,
+        timedOut: false,
+        yielded: true,
+      }),
+    ).toEqual({
+      aborted: true,
+      status: "cancelled",
+      stopReason: "stop",
+    });
+  });
 });
 
 describe("Codex terminal dynamic-tool release", () => {
@@ -374,6 +398,21 @@ describe("Codex terminal dynamic-tool release", () => {
       }
     },
   );
+
+  it("keeps steering open when the yield result fails", async () => {
+    const harness = createTerminalReleaseHarness();
+
+    harness.controller.recordDynamicToolResult(terminalYieldResult(false));
+    harness.controller.scheduleTerminalDynamicToolReleaseCheck();
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(harness.cancel).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    expect(harness.state.completed).toBe(false);
+    expect(harness.resolveCompletion).not.toHaveBeenCalled();
+  });
 });
 
 function dynamicToolResult(
@@ -433,6 +472,70 @@ async function settleBatch(
 
 describe("Codex batch release after a tool-authored final reply", () => {
   it.each([
+    { first: "reply", status: "failed", exitCode: 1 },
+    { first: "native", status: "failed", exitCode: 1 },
+    { first: "reply", status: "completed", exitCode: 0 },
+    { first: "native", status: "completed", exitCode: 0 },
+  ])(
+    "continues after an unhandled native $status sibling when $first completes first",
+    async ({ first, status, exitCode }) => {
+      const harness = createTerminalReleaseHarness();
+      await harness.observeResponse(["native", "reply"]);
+      harness.pendingOpenClawDynamicToolCompletionIds.add("reply");
+      await harness.notifyNativeItem("item/started", "inProgress");
+      const completeReply = () => {
+        harness.pendingOpenClawDynamicToolCompletionIds.delete("reply");
+        harness.controller.recordDynamicToolResult(
+          dynamicToolResult("reply", {
+            success: true,
+            terminate: true,
+            toolAuthoredSourceReply: {
+              text: "Premature reply.",
+              toolAuthored: true,
+              sourceReplyFinal: true,
+            },
+          }),
+        );
+      };
+      if (first === "reply") {
+        completeReply();
+        await yieldImmediate();
+      }
+      await harness.notifyNativeItem("item/completed", status, exitCode);
+      await yieldImmediate();
+      if (first === "native") {
+        completeReply();
+        await yieldImmediate();
+      }
+      expect(harness.state.completed).toBe(false);
+      expect(harness.request).not.toHaveBeenCalled();
+      expect(harness.sourceReplies).toEqual([]);
+      // The nonterminal batch has now settled. A later model step may finish
+      // normally; native work in an earlier batch is not a turn-wide veto.
+      try {
+        await harness.observeResponse(["later"]);
+        harness.controller.recordDynamicToolResult(
+          dynamicToolResult("later", {
+            success: true,
+            terminate: true,
+            toolAuthoredSourceReply: {
+              text: "Later reply.",
+              toolAuthored: true,
+              sourceReplyFinal: true,
+            },
+          }),
+        );
+        await yieldImmediate();
+        expect(harness.state.completed).toBe(true);
+        expect(harness.sourceReplies.map((reply) => reply.text)).toEqual(["Later reply."]);
+      } finally {
+        harness.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
+
+  it.each([
     {
       label: "a later authored batch after native-only work",
       toolAuthored: true,
@@ -473,6 +576,49 @@ describe("Codex batch release after a tool-authored final reply", () => {
       expect(harness.sourceReplies.map((reply) => reply.text)).toEqual(
         toolAuthored ? ["Final reply."] : [],
       );
+    } finally {
+      harness.completeTurn();
+      await yieldImmediate();
+    }
+  });
+
+  it("commits all final replies together after every sibling settles", async () => {
+    const harness = createTerminalReleaseHarness();
+    await harness.observeResponse(["first", "second"]);
+    harness.pendingOpenClawDynamicToolCompletionIds.add("second");
+    try {
+      harness.controller.recordDynamicToolResult(
+        dynamicToolResult("first", {
+          success: true,
+          terminate: true,
+          toolAuthoredSourceReply: {
+            text: "First reply.",
+            toolAuthored: true,
+            sourceReplyFinal: true,
+          },
+        }),
+      );
+      await yieldImmediate();
+      expect(harness.sourceReplies).toEqual([]);
+      expect(harness.request).not.toHaveBeenCalled();
+      harness.pendingOpenClawDynamicToolCompletionIds.delete("second");
+      harness.controller.recordDynamicToolResult(
+        dynamicToolResult("second", {
+          success: true,
+          terminate: true,
+          toolAuthoredSourceReply: {
+            text: "Second reply.",
+            toolAuthored: true,
+            sourceReplyFinal: true,
+          },
+        }),
+      );
+      await yieldImmediate();
+      expect(harness.sourceReplies.map((reply) => reply.text)).toEqual([
+        "First reply.",
+        "Second reply.",
+      ]);
+      expect(harness.resolveCompletion).toHaveBeenCalledOnce();
     } finally {
       harness.completeTurn();
       await yieldImmediate();
@@ -524,6 +670,38 @@ describe("Codex batch release after a tool-authored final reply", () => {
       await yieldImmediate();
     }
   });
+
+  it.each([
+    { order: ["reply", "note"] as const, expected: ["reply:open", "note:open"] },
+    { order: ["note", "reply"] as const, expected: ["note:open", "reply:open"] },
+  ])(
+    "keeps the turn open for an unhandled sibling, completing $order",
+    async ({ order, expected }) => {
+      const { harness, releasedAfter } = await settleBatch([...order], { toolAuthored: true });
+      try {
+        expect(releasedAfter).toEqual(expected);
+        expect(harness.request).not.toHaveBeenCalled();
+        expect(harness.resolveCompletion).not.toHaveBeenCalled();
+        expect(harness.sourceReplies).toEqual([]);
+      } finally {
+        harness.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
+
+  it.each([{ order: ["reply", "note"] as const }, { order: ["note", "reply"] as const }])(
+    "does not hide a failed sibling, completing $order",
+    async ({ order }) => {
+      const { harness, releasedAfter } = await settleBatch([...order], {
+        toolAuthored: true,
+        siblingSuccess: false,
+      });
+      expect(releasedAfter.every((entry) => entry.endsWith(":open"))).toBe(true);
+      expect(harness.request).not.toHaveBeenCalled();
+      expect(harness.resolveCompletion).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([{ order: ["reply", "note"] as const }, { order: ["note", "reply"] as const }])(
     "keeps an ordinary terminal tool's batch open after a non-terminal sibling, completing $order",
@@ -670,6 +848,33 @@ describe("Codex authored model response boundary", () => {
         expect(h.cancel).not.toHaveBeenCalled();
         expect(h.sourceReplies).toEqual([]);
         expect(h.request).not.toHaveBeenCalled();
+      } finally {
+        h.completeTurn();
+        await yieldImmediate();
+      }
+    },
+  );
+
+  it.each(["before", "after"] as const)(
+    "waits for response close when authored result completes %s it",
+    async (order) => {
+      const h = createTerminalReleaseHarness();
+      await h.notifyRawCall("reply");
+      if (order === "after") {
+        await h.finishResponse();
+      }
+      h.controller.recordDynamicToolResult(authored("reply"));
+      await yieldImmediate();
+      if (order === "before") {
+        expect(h.state.completed).toBe(false);
+        expect(h.cancel).not.toHaveBeenCalled();
+        expect(h.sourceReplies).toEqual([]);
+        await h.finishResponse();
+        await yieldImmediate();
+      }
+      try {
+        expect(h.sourceReplies.map((reply) => reply.text)).toEqual(["reply"]);
+        expect(h.resolveCompletion).toHaveBeenCalledOnce();
       } finally {
         h.completeTurn();
         await yieldImmediate();

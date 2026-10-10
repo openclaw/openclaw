@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   uninstallDiagnosticStabilityFatalHook,
@@ -544,6 +544,27 @@ describe("diagnostic support export", () => {
     expect(sanitizedConfig.agents?.entries?.main?.instructions).toBe("<redacted>");
   });
 
+  it.each([
+    { agents: { entries: { main: {} } }, expected: { count: 1 } },
+    { agents: { defaults: {} }, expected: undefined },
+    { agents: { entries: [] }, expected: undefined },
+    { agents: { entries: {} }, expected: { count: 0 } },
+  ])(
+    "distinguishes absent, empty, and populated canonical agent rosters: $agents",
+    async ({ agents, expected }) => {
+      const configPath = path.join(tempDir, "openclaw.json");
+      fs.writeFileSync(configPath, JSON.stringify({ agents }));
+      const result = await writeDiagnosticSupportExport({
+        env: { HOME: tempDir, OPENCLAW_CONFIG_PATH: configPath },
+        stateDir: tempDir,
+        readLogTail: async () => emptyLogTail(path.join(tempDir, "openclaw.log")),
+      });
+      const entries = await readZipTextEntries(result.path);
+      expect(JSON.parse(entries["config/shape.json"] ?? "{}").agents).toEqual(expected);
+      expect(JSON.parse(entries["diagnostics.json"] ?? "{}").config.agents).toEqual(expected);
+    },
+  );
+
   it("sanitizes imported stability bundles before adding them to support exports", async () => {
     const bundlePath = path.join(tempDir, "imported-stability.json");
     const outputPath = path.join(tempDir, "support-imported-stability.zip");
@@ -750,6 +771,76 @@ describe("diagnostic support export", () => {
     expect(combined).toContain('"status": "failed"');
     expect(combined).toContain("status snapshot failed");
     expect(combined).toContain("health snapshot failed");
+  });
+
+  it("keeps writing when log tail collection fails", async () => {
+    const fakeToken = "sk-test-log-tail-secret-token-1234567890";
+    const outputPath = path.join(tempDir, "support-failed-log-tail.zip");
+
+    await writeDiagnosticSupportExport({
+      env: {
+        ...process.env,
+        HOME: tempDir,
+        OPENCLAW_STATE_DIR: tempDir,
+      },
+      stateDir: tempDir,
+      outputPath,
+      now: new Date("2026-04-22T12:00:02.000Z"),
+      readLogTail: async () => {
+        throw new Error(`log tail failed at ${tempDir}/openclaw.log with token ${fakeToken}`);
+      },
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    expect(Object.keys(entries).toSorted()).toContain("logs/openclaw-sanitized.jsonl");
+
+    const combined = Object.values(entries).join("\n");
+    expect(combined).not.toContain(fakeToken);
+    expect(combined).not.toContain(tempDir);
+    expect(combined).toContain("log-tail-read-failed");
+    expect(combined).toContain("sanitized log tail unavailable");
+  });
+
+  it("keeps writing when config stat fails", async () => {
+    const fakeToken = "sk-test-config-stat-secret-token-1234567890";
+    const configPath = path.join(tempDir, "openclaw.json");
+    const outputPath = path.join(tempDir, "support-failed-config-stat.zip");
+    fs.writeFileSync(configPath, "{}\n", "utf8");
+
+    const originalStatSync = fs.statSync.bind(fs);
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((target, options) => {
+      if (target === configPath) {
+        throw new Error(`config stat failed with token ${fakeToken}`);
+      }
+      return originalStatSync(target, options as never);
+    });
+
+    try {
+      await writeDiagnosticSupportExport({
+        env: {
+          ...process.env,
+          HOME: tempDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: tempDir,
+        },
+        stateDir: tempDir,
+        outputPath,
+        now: new Date("2026-04-22T12:00:03.000Z"),
+        readLogTail: async () => emptyLogTail(path.join(tempDir, "logs", "openclaw.log")),
+      });
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    const entries = await readZipTextEntries(outputPath);
+    const combined = Object.values(entries).join("\n");
+    expect(Object.keys(entries).toSorted()).toContain("config/shape.json");
+    expect(combined).not.toContain(fakeToken);
+    expect(combined).toContain('"parseOk": false');
+    expect(combined).toContain("config stat failed with token");
+    expect(entries["summary.md"]).toContain("config stat failed with token");
+    expect(entries["summary.md"]).not.toContain("config file not found");
+    expect(combined).toContain("Attach this zip to the bug report");
   });
 
   it("finishes the support export when the config exceeds its read limit", async () => {

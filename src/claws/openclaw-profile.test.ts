@@ -102,28 +102,28 @@ describe("OpenClaw profile reader", () => {
     },
   );
 
-  it.each([["invalid syntax", "schemaVersion: 1\nagent: [\n"]])(
-    "reports a profile YAML %s as a parse failure",
-    async (_label, profile) => {
-      const { root, path: manifestPath } = await profileFixture();
-      await writeFile(join(root, "profiles", "openclaw.yml"), profile);
+  it.each([
+    ["duplicate key", "schemaVersion: 1\nschemaVersion: 1\nagent: {}\n"],
+    ["invalid syntax", "schemaVersion: 1\nagent: [\n"],
+  ])("reports a profile YAML %s as a parse failure", async (_label, profile) => {
+    const { root, path: manifestPath } = await profileFixture();
+    await writeFile(join(root, "profiles", "openclaw.yml"), profile);
 
-      const result = await readClawManifestFile(manifestPath);
+    const result = await readClawManifestFile(manifestPath);
 
-      expect(result).toMatchObject({
-        ok: false,
-        diagnostics: [
-          {
-            level: "error",
-            phase: "parse",
-            path: "$",
-            code: "invalid_openclaw_profile",
-            message: expect.stringContaining("Could not parse profiles/openclaw.yml:"),
-          },
-        ],
-      });
-    },
-  );
+    expect(result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          level: "error",
+          phase: "parse",
+          path: "$",
+          code: "invalid_openclaw_profile",
+          message: expect.stringContaining("Could not parse profiles/openclaw.yml:"),
+        },
+      ],
+    });
+  });
 
   it("loads and integrity-binds the conventional profile", async () => {
     const root = tempDirs.make("openclaw-claw-profile-");
@@ -192,7 +192,10 @@ describe("OpenClaw profile reader", () => {
     expect(second.source.integrity).not.toBe(first.source.integrity);
   });
 
-  it.each([{ toolProfile: "coding", strictOk: false }] as const)(
+  it.each([
+    { toolProfile: "coding", strictOk: false },
+    { toolProfile: "minimal", strictOk: true },
+  ] as const)(
     "loads a legacy dynamic $toolProfile profile through the update migration path",
     async ({ toolProfile, strictOk }) => {
       const { root } = await profileFixture();
@@ -304,6 +307,36 @@ describe("OpenClaw profile reader", () => {
     });
   });
 
+  it("still reads the deprecated metadata profile pointer with a warning", async () => {
+    const { root, path } = await profileFixture("profiles/triage.openclaw.yml");
+    await writeFile(
+      join(root, "profiles", "triage.openclaw.yml"),
+      "schemaVersion: 1\nagent:\n  tools:\n    profile: coding\n    allow: [read]\n",
+      "utf8",
+    );
+
+    const result = await readClawManifestFile(path);
+
+    expect(result).toMatchObject({
+      ok: true,
+      openClawProfile: {
+        schemaVersion: 1,
+        agent: { tools: { profile: "coding", allow: ["read"] } },
+      },
+    });
+    if (!result.ok) {
+      throw new Error("expected the deprecated pointer to keep resolving");
+    }
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "warning",
+        code: "deprecated_openclaw_profile_pointer",
+        path: "$.metadata.openclaw.config",
+      }),
+    );
+    expect(result.diagnostics.some((entry) => entry.level === "error")).toBe(false);
+  });
+
   it("accepts a deprecated pointer that already targets the conventional profile", async () => {
     const { root, path } = await profileFixture("profiles/openclaw.yml");
     await writeFile(
@@ -315,16 +348,6 @@ describe("OpenClaw profile reader", () => {
     const result = await readClawManifestFile(path);
 
     expect(result).toMatchObject({ ok: true, openClawProfile: { schemaVersion: 1 } });
-    if (!result.ok) {
-      throw new Error("expected the deprecated pointer to keep resolving");
-    }
-    expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "warning",
-        code: "deprecated_openclaw_profile_pointer",
-        path: "$.metadata.openclaw.config",
-      }),
-    );
   });
 
   it("fails closed when a deprecated pointer diverges from the conventional profile", async () => {

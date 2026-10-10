@@ -302,6 +302,12 @@ describe("Codex paired-device exec-server relay", () => {
 
   it.each([
     [
+      "mixed-case proxy authorization",
+      [{ name: "pRoXy-AuThOrIzAtIoN", value: "Bearer synthetic-canary" }],
+    ],
+    ["request cookie", [{ name: "Cookie", value: "session=synthetic-canary" }]],
+    ["request signature", [{ name: "X-Request-Signature", value: "synthetic-canary" }]],
+    [
       "credential after repeated safe headers",
       [
         { name: "X-Trace", value: "first" },
@@ -326,8 +332,16 @@ describe("Codex paired-device exec-server relay", () => {
         })(),
       },
     ],
+    ["OAuth URL access token", { url: "https://example.test/path?access_token=synthetic-canary" }],
+    ["session identity", { url: "https://example.test/path?sessionId=synthetic-canary" }],
     ["encoded matrix", { url: "https://x/p%3Bjsessionid%3Dsynthetic-canary" }],
+    ["nested matrix", { url: "https://x/a;region=west/b;session_id=synthetic-canary" }],
     ["nested fragment MFA", { url: "https://x/#/callback?mfa_code=123456" }],
+    ["direct access-token fragment", { url: "https://x/#access_token=synthetic-canary" }],
+    ["nested encoded MFA", { url: "https://x/callback%253Fmfa_code%253D123456" }],
+    ["SAML assertion", { url: "https://example.test/path?SAMLResponse=synthetic-canary" }],
+    ["OAuth consumer key", { url: "https://x/?oauth_consumer_key=synthetic-canary" }],
+    ["encoded token", { url: `https://x/?v=${["sk", "live", "x".repeat(30)].join("%255F")}` }],
     ["encoded nested credential", { url: "https://x/?u%255Bpassword%255D=synthetic-canary" }],
     [
       "OAuth form body",
@@ -338,6 +352,7 @@ describe("Codex paired-device exec-server relay", () => {
         ).toString("base64"),
       },
     ],
+    ["OAuth PKCE JSON", encodeHttpBody("application/json", '{"code_verifier":"synthetic-canary"}')],
     [
       "duplicate escaped JSON",
       encodeHttpBody(
@@ -350,9 +365,14 @@ describe("Codex paired-device exec-server relay", () => {
       encodeHttpBody("application/json", `{"safe":"${"x".repeat(1024 * 1024 + 1)}"}`),
     ],
     [
+      "invalid JSON body",
+      encodeHttpBody("application/json", '{"client_assertion":"synthetic-canary"'),
+    ],
+    [
       "unsupported XML body",
       encodeHttpBody("application/xml", "<credential>synthetic-canary</credential>"),
     ],
+    ["unsupported opaque body", { bodyBase64: Buffer.from("synthetic-canary").toString("base64") }],
     [
       "XML disguised as plain text",
       encodeHttpBody("text/plain", "<credential>synthetic-canary</credential>"),
@@ -364,6 +384,15 @@ describe("Codex paired-device exec-server relay", () => {
         url: new URL(
           ["services", `T${"1".repeat(10)}`, `B${"2".repeat(10)}`, "x".repeat(25)].join("%252F"),
           "https://hooks.slack.com/",
+        ).toString(),
+      },
+    ],
+    [
+      "canonical Discord webhook URL",
+      {
+        url: new URL(
+          ["api", "webhooks", "1".repeat(18), "x".repeat(68)].join("/"),
+          "https://discord.com/",
         ).toString(),
       },
     ],
@@ -392,7 +421,9 @@ describe("Codex paired-device exec-server relay", () => {
       JSON.stringify({ greeting: "hello", token_count: 2, status_code: 200 }),
       "https://x/stream;region=west#/callback?view=summary",
     ],
+    ["ordinary plain text", "text/plain", "ordinary body", "https://x/c%3Fv%3Ds"],
     ["bracketed plain text", "text/plain", "[INFO] deployment completed", "https://x/"],
+    ["large plain text", "text/plain", "x".repeat(1024 * 1024 + 1), "https://x/"],
   ])("forwards credential-free %s byte-for-byte", async (_label, contentType, body, url) => {
     const { transport, client } = await registerNodeRelay();
     const socket = await openSocket(execServerUrlFromClient(client));

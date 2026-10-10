@@ -9,6 +9,7 @@ import {
   installDiagnosticStabilityFatalHook,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
   readDiagnosticStabilityBundleFileSync,
+  readLatestDiagnosticStabilityBundleSync,
   uninstallDiagnosticStabilityFatalHook,
   writeDiagnosticStabilityBundleForFailureSync,
   type DiagnosticStabilityBundle,
@@ -68,6 +69,103 @@ describe("diagnostic stability bundles", () => {
       },
     };
   }
+
+  it("writes a payload-free bundle with safe failure metadata", () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "webhook.error",
+      channel: "telegram",
+      chatId: "chat-secret",
+      error: "raw diagnostic error with message body",
+    });
+    emitDiagnosticEvent({
+      type: "payload.large",
+      surface: "gateway.http.json",
+      action: "rejected",
+      bytes: 2048,
+      limitBytes: 1024,
+      reason: "json_body_limit",
+    });
+
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(
+      new Error(
+        `Startup failed: OPENAI_API_KEY=${secret} while opening google/web-search-contract-api.js`,
+      ),
+      { code: "ERR_TEST" },
+    );
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      error,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
+
+    expect(result.status).toBe("written");
+    const file = result.status === "written" ? result.path : "";
+    const bundle = readBundle(file);
+    const raw = fs.readFileSync(file, "utf8");
+
+    expect(bundle.version).toBe(1);
+    expect(bundle.generatedAt).toBe("2026-04-22T12:00:00.000Z");
+    expect(bundle.reason).toBe("gateway.restart_startup_failed");
+    expect(bundle.error?.name).toBe("Error");
+    expect(bundle.error?.code).toBe("ERR_TEST");
+    expect(bundle.host.hostname).toBe("<redacted-hostname>");
+    expect(bundle.snapshot.count).toBe(2);
+    expect(bundle.snapshot.events[0]?.type).toBe("webhook.error");
+    expect(bundle.snapshot.events[0]?.channel).toBe("telegram");
+    expect(bundle.snapshot.events[0]).not.toHaveProperty("chatId");
+    expect(bundle.snapshot.events[0]).not.toHaveProperty("error");
+    expect(bundle.error?.message).toContain("google/web-search-contract-api.js");
+    expect(bundle.error?.message).not.toContain(secret);
+    expect(raw).not.toContain("chat-secret");
+    expect(raw).not.toContain("message body");
+    expect(raw).not.toContain(secret);
+    expect(raw).not.toContain(os.hostname());
+  });
+
+  it("writes redacted failure stacks even when the recorder snapshot is empty", () => {
+    const secret = "sk-1234567890abcdef";
+    const error = Object.assign(new Error("raw startup config payload"), {
+      code: "ERR_CONFIG_PARSE",
+      stack: `Error: OPENAI_API_KEY=${secret}\n    at finishPosixAuthority (relay-host.js:12:3)`,
+    });
+    const result = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      error,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const bundle = readBundle(result.path);
+    const raw = fs.readFileSync(result.path, "utf8");
+    expect(bundle.reason).toBe("gateway.restart_startup_failed");
+    expect(bundle.error).toEqual({
+      name: "Error",
+      code: "ERR_CONFIG_PARSE",
+      message: "raw startup config payload",
+      stack: expect.stringContaining("\n    at finishPosixAuthority (relay-host.js:12:3)"),
+    });
+    expect(bundle.snapshot.count).toBe(0);
+    expect(bundle.snapshot.events).toEqual([]);
+    expect(raw).not.toContain(secret);
+    const readback = readDiagnosticStabilityBundleFileSync(result.path);
+    expect(readback.status).toBe("found");
+    if (readback.status === "found") {
+      expect(readback.bundle.error?.stack).toContain(
+        "\n    at finishPosixAuthority (relay-host.js:12:3)",
+      );
+      expect(readback.bundle.error?.stack).not.toContain(secret);
+    }
+  });
 
   it("keeps bounded failure messages and stacks UTF-16 safe", () => {
     const prefix = "a".repeat(499);
@@ -202,6 +300,29 @@ describe("diagnostic stability bundles", () => {
     }
   });
 
+  it("retains only the newest bundle files", () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
+
+    for (let index = 0; index < 22; index += 1) {
+      const result = writeDiagnosticStabilityBundleForFailureSync(
+        "gateway.restart_respawn_failed",
+        undefined,
+        {
+          stateDir: tempDir,
+          now: new Date(Date.UTC(2026, 3, 22, 12, 0, index)),
+        },
+      );
+      expect(result.status).toBe("written");
+    }
+
+    const bundleDir = path.join(tempDir, "logs", "stability");
+    const files = fs.readdirSync(bundleDir).toSorted();
+    expect(files).toHaveLength(20);
+    expect(files[0]).toContain("12-00-02");
+    expect(files[19]).toContain("12-00-21");
+  });
+
   it("keeps the published bundle within retention despite future mtimes", () => {
     for (let index = 0; index < 20; index++) {
       const older = writeDiagnosticStabilityBundleForFailureSync(
@@ -236,6 +357,39 @@ describe("diagnostic stability bundles", () => {
     expect(fs.existsSync(current.path)).toBe(true);
     expect(readDiagnosticStabilityBundleFileSync(current.path).status).toBe("found");
     expect(fs.readdirSync(path.dirname(current.path))).toHaveLength(20);
+  });
+
+  it("reads the newest retained bundle", () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({ type: "webhook.received", channel: "telegram" });
+
+    const older = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_startup_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:00.000Z"),
+      },
+    );
+    const newer = writeDiagnosticStabilityBundleForFailureSync(
+      "gateway.restart_respawn_failed",
+      undefined,
+      {
+        stateDir: tempDir,
+        now: new Date("2026-04-22T12:00:01.000Z"),
+      },
+    );
+
+    expect(older.status).toBe("written");
+    expect(newer.status).toBe("written");
+
+    const latest = readLatestDiagnosticStabilityBundleSync({ stateDir: tempDir });
+
+    expect(latest.status).toBe("found");
+    expect(latest.status === "found" ? latest.path : "").toContain("12-00-01");
+    expect(latest.status === "found" ? latest.bundle.reason : "").toBe(
+      "gateway.restart_respawn_failed",
+    );
   });
 
   it("preserves worker memory attribution and unavailable samples in exported bundles", () => {

@@ -25,6 +25,11 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths({ input: 7 })).toEqual([]);
   });
 
+  it("returns an empty array for an empty patch", () => {
+    expect(extractApplyPatchTargetPaths("")).toEqual([]);
+    expect(extractApplyPatchTargetPaths({ input: "" })).toEqual([]);
+  });
+
   it("extracts Update File and Delete File markers", () => {
     const patch = [
       "*** Begin Patch",
@@ -54,6 +59,25 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths({ input: patch })).toEqual([cwdPath("foo.ts")]);
   });
 
+  it("normalizes derived paths before de-duplicating them", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: safe/../secret.ts",
+      "+x",
+      "*** Update File: ./src//old.ts",
+      "*** Move to: src/temp/../renamed.ts",
+      "@@",
+      "+y",
+      "*** Delete File: secret.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([
+      cwdPath("secret.ts"),
+      cwdPath("src/old.ts"),
+      cwdPath("src/renamed.ts"),
+    ]);
+  });
+
   it("preserves POSIX backslashes to match apply_patch execution", () => {
     const patch = [
       "*** Begin Patch",
@@ -69,6 +93,54 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths(patch)).not.toContain(cwdPath("safe", "evil.ts"));
   });
 
+  it("handles CRLF line endings", () => {
+    const patch = ["*** Begin Patch", "*** Add File: crlf.ts", "+x", "*** End Patch"].join("\r\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("crlf.ts")]);
+  });
+
+  it("matches indented hunk headers the same way as the apply_patch executor", () => {
+    const patch = [
+      "  *** Begin Patch",
+      "  *** Add File: src/new.ts",
+      "+x",
+      "  *** Delete File: src/dead.ts",
+      "  *** Update File: src/old.ts",
+      "  *** Move to: src/renamed.ts",
+      "@@",
+      "-old",
+      "+new",
+      "  *** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([
+      cwdPath("src/new.ts"),
+      cwdPath("src/dead.ts"),
+      cwdPath("src/old.ts"),
+      cwdPath("src/renamed.ts"),
+    ]);
+  });
+
+  it("matches single-space-indented top-level headers the same way as the executor", () => {
+    const patch = [
+      "*** Begin Patch",
+      " *** Add File: src/new.ts",
+      "+x",
+      " *** Delete File: src/dead.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([
+      cwdPath("src/new.ts"),
+      cwdPath("src/dead.ts"),
+    ]);
+  });
+
+  it("ignores markers outside of the envelope grammar", () => {
+    expect(
+      extractApplyPatchTargetPaths(
+        ["nothing here", "*** Random Marker: x", "+a", "context"].join("\n"),
+      ),
+    ).toEqual([]);
+  });
+
   it("ignores marker-like context and body lines inside update hunks", () => {
     const patch = [
       "*** Begin Patch",
@@ -81,6 +153,25 @@ describe("extractApplyPatchTargetPaths", () => {
       "*** End Patch",
     ].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("real.ts")]);
+  });
+
+  it("can resolve paths with the same cwd semantics as apply_patch execution", () => {
+    const cwd = path.join(os.tmpdir(), "openclaw-derived-paths");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: @src/../resolved.ts",
+      "+x",
+      "*** Update File: ~/renamed-source.ts",
+      "*** Move to: /tmp/openclaw-target.ts",
+      "@@",
+      "+y",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch, { cwd })).toEqual([
+      path.join(cwd, "resolved.ts"),
+      path.join(os.homedir(), "renamed-source.ts"),
+      path.join("/tmp", "openclaw-target.ts"),
+    ]);
   });
 
   it.each(["host", "mounted sandbox"])(
@@ -173,5 +264,10 @@ describe("extractApplyPatchTargetPaths", () => {
         },
       }),
     ).toEqual(["/host/workspace/src/ok.ts"]);
+  });
+
+  it("does not require the begin/end envelope markers to be present", () => {
+    const patch = ["*** Add File: loose.ts", "+x"].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("loose.ts")]);
   });
 });
