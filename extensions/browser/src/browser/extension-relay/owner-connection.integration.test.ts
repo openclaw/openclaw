@@ -5,11 +5,13 @@ import type { RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it } from "vitest";
 import {
   createBrowserControlContext,
+  getBrowserControlState,
   startBrowserControlServiceFromConfig,
   stopBrowserControlService,
 } from "../../control-service.js";
 import { authenticateRelayOwner } from "./owner-auth-client.js";
 import { withConnectedDaemon } from "./relay-coexistence.test-support.js";
+import { ensureExtensionRelayForProfile } from "./relay-lifecycle.js";
 
 afterEach(clearRuntimeConfigSnapshot);
 
@@ -124,5 +126,32 @@ it("owns malformed-frame errors after owner authentication without stopping the 
       failed.ws.terminate();
       healthy.ws.terminate();
     }
+  });
+});
+
+it("reacquires a borrowed owner after its socket is lost and still enumerates tabs", async () => {
+  await withConnectedDaemon(async () => {
+    await startBrowserControlServiceFromConfig();
+    const state = getBrowserControlState();
+    const profile = createBrowserControlContext().forProfile("chrome");
+    const original = state?.extensionRelays?.get("chrome");
+    if (!state || original?.ownership !== "borrowed") {
+      throw new Error("Expected the daemon's relay to be borrowed");
+    }
+
+    const ownerSocket = (original.client as unknown as { ws: WebSocket }).ws;
+    const closed = once(ownerSocket, "close");
+    ownerSocket.terminate();
+    await closed;
+    await expect(original.client.close()).resolves.toBeUndefined();
+
+    const recovered = await ensureExtensionRelayForProfile(state, profile.profile);
+    if (recovered.ownership !== "borrowed") {
+      throw new Error("Expected the recovered relay to be borrowed");
+    }
+    expect(recovered).not.toBe(original);
+    await expect(profile.listTabs()).resolves.toMatchObject([
+      expect.objectContaining({ url: "https://example.com/fixture" }),
+    ]);
   });
 });
