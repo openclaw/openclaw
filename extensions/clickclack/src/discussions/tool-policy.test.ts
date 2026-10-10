@@ -53,11 +53,11 @@ async function setup(options: { persistedBeforeOpening?: boolean } = {}) {
     overflowPolicy: "reject-new",
   });
   runtime.state.openKeyedStoreV2 = <T>(
-    options: OpenAsyncKeyedStoreOptions,
+    storeOptions: OpenAsyncKeyedStoreOptions,
     authority?: PluginStateActionAuthority,
   ) =>
     authority
-      ? asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options, authority)
+      ? asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, storeOptions, authority)
       : (asyncStore as PluginStateKeyedStore<T, 2>);
   const mainSessionKey = "agent:research:main";
   const initialBinding = {
