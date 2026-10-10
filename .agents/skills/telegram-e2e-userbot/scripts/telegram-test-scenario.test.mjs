@@ -346,44 +346,52 @@ test("a failed run still deletes its run-owned forum before release", async () =
   assert.equal(f.credential.testForum.cleanup.status, "deleted");
 });
 
-test("uncertain forum cleanup preserves its creator and intent in the runner summary", async (context) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-uncertain-forum-"));
-  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const f = fixture();
-  f.credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR = root;
-  const intent = {
-    title: "OpenClaw QA forum uncertain",
-    testerUserId: "123",
-    createdAt: "2026-10-10T14:32:19Z",
-    status: "setup-failed",
-  };
-  const command = f.options.runCommandImpl;
-  f.options.runCommandImpl = async (name, args) => {
-    if (args.includes("prepare-forum")) {
-      fs.writeFileSync(path.join(root, "owned-test-forum.json"), JSON.stringify(intent));
-      return { status: 1, stderr: "Timed out waiting for createNewBasicGroupChat" };
+for (const malformed of [false, true]) {
+  test(`forum cleanup preserves failure evidence with ${malformed ? "truncated" : "complete"} intent`, async (context) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-uncertain-forum-"));
+    context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const f = fixture();
+    f.credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR = root;
+    const intent = {
+      title: "OpenClaw QA forum uncertain",
+      testerUserId: "123",
+      createdAt: "2026-10-10T14:32:19Z",
+      status: "setup-failed",
+    };
+    const command = f.options.runCommandImpl;
+    f.options.runCommandImpl = async (name, args) => {
+      if (args.includes("prepare-forum")) {
+        fs.writeFileSync(
+          path.join(root, "owned-test-forum.json"),
+          malformed ? "{" : JSON.stringify(intent),
+        );
+        return { status: 1, stderr: "Timed out waiting for createNewBasicGroupChat" };
+      }
+      if (args.includes("cleanup-forum")) {
+        return { status: 1, timedOut: true, stderr: "search timed out" };
+      }
+      return await command(name, args);
+    };
+    const output = path.join(root, "summary.json");
+    await assert.rejects(
+      runTelegramTestScenario({
+        args: { createForum: true, scenario: { actions: [] }, output },
+        acquireCredential: async () => f.credential,
+        checkCredential: f.check,
+        driveScenario: async () => assert.fail("uncertain creation cannot start a scenario"),
+      }),
+    );
+    const { cleanup } = JSON.parse(fs.readFileSync(output, "utf8")).testForum;
+    assert.equal(cleanup.status, malformed ? "failed" : "uncertain-creation");
+    assert.match(cleanup.error, /search timed out/);
+    if (!malformed) {
+      assert.equal(cleanup.title, intent.title);
+      assert.equal(cleanup.testerUserId, intent.testerUserId);
+      assert.equal(cleanup.createdAt, intent.createdAt);
     }
-    if (args.includes("cleanup-forum")) {
-      return { status: 1, timedOut: true, stderr: "search timed out" };
-    }
-    return await command(name, args);
-  };
-  const output = path.join(root, "summary.json");
-  await assert.rejects(
-    runTelegramTestScenario({
-      args: { createForum: true, scenario: { actions: [] }, output },
-      acquireCredential: async () => f.credential,
-      checkCredential: f.check,
-      driveScenario: async () => assert.fail("uncertain creation cannot start a scenario"),
-    }),
-  );
-  const { cleanup } = JSON.parse(fs.readFileSync(output, "utf8")).testForum;
-  assert.equal(cleanup.status, "uncertain-creation");
-  assert.equal(cleanup.title, intent.title);
-  assert.equal(cleanup.testerUserId, intent.testerUserId);
-  assert.equal(cleanup.createdAt, intent.createdAt);
-  assert.equal(f.releaseCount(), 0, "failed reconciliation retains the lease for recovery");
-});
+    assert.equal(f.releaseCount(), 0, "failed reconciliation retains the lease for recovery");
+  });
+}
 
 test("DM reaches its SUT with an unusable group and group privacy enabled", async () => {
   const f = fixture();

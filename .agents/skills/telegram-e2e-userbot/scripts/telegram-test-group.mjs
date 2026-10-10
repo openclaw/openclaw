@@ -47,31 +47,29 @@ async function ownTelegramFixture(
         if (evidence.cleanup.ok !== true)
           throw new Error(`Telegram ${kind} cleanup was not confirmed.`);
       } catch (error) {
-        let uncertain = {};
+        evidence.cleanup = { ...evidence.cleanup, status: "failed", error: error.message };
         if (kind === "forum" && credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR) {
-          const manifest = path.join(
-            credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
-            "owned-test-forum.json",
-          );
-          if (fs.existsSync(manifest)) {
-            const record = JSON.parse(fs.readFileSync(manifest, "utf8"));
-            if (record.status !== "deleted") {
-              uncertain = {
-                status: "uncertain-creation",
-                title: record.title,
-                createdAt: record.createdAt,
-                testerUserId: record.testerUserId,
-                groupId: record.groupId || record.basicGroupId,
-              };
+          try {
+            const manifest = path.join(
+              credential.driverEnv.TELEGRAM_USER_DRIVER_STATE_DIR,
+              "owned-test-forum.json",
+            );
+            if (fs.existsSync(manifest)) {
+              const record = JSON.parse(fs.readFileSync(manifest, "utf8"));
+              if (record.status !== "deleted") {
+                Object.assign(evidence.cleanup, {
+                  status: "uncertain-creation",
+                  title: record.title,
+                  createdAt: record.createdAt,
+                  testerUserId: record.testerUserId,
+                  groupId: record.groupId || record.basicGroupId,
+                });
+              }
             }
+          } catch {
+            // Interrupted manifest writes must not replace the original cleanup failure.
           }
         }
-        evidence.cleanup = {
-          ...evidence.cleanup,
-          status: "failed",
-          ...uncertain,
-          error: error.message,
-        };
         throw error;
       }
       await releaseCredential();

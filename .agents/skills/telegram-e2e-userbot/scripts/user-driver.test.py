@@ -247,7 +247,7 @@ class OwnedGroupTest(unittest.TestCase):
         self.assertEqual(kinds[-1], "deleteChat")
 
     def test_uncertain_forum_creation_is_reconciled_or_retained(self):
-        for outcome in ("deleted", "missing", "search-timeout", "readback-present"):
+        for outcome in ("deleted", "missing", "search-timeout", "readback-present", "noncreator", "wrong-identity"):
             with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as root:
                 instance = self.forum_fixture(test_server=True)
                 original = instance.client.request
@@ -268,6 +268,8 @@ class OwnedGroupTest(unittest.TestCase):
                                 "type": {"@type": "chatTypeBasicGroup", "basic_group_id": 2042}}
                     if kind == "getBasicGroup":
                         return {"is_active": outcome == "readback-present"}
+                    if kind == "getChatMember" and outcome == "noncreator":
+                        return {"status": {"@type": "chatMemberStatusMember"}}
                     return original(payload, timeout)
 
                 instance.client.request = request
@@ -275,6 +277,15 @@ class OwnedGroupTest(unittest.TestCase):
                 with patch.object(driver.secrets, "token_hex", return_value="test-owned"):
                     with self.assertRaisesRegex(driver.DriverError, "Timed out"):
                         driver.prepare_forum(instance, manifest, True)
+                if outcome == "wrong-identity":
+                    record = driver.read_json(manifest)
+                    record["testerUserId"] = "999"
+                    driver.write_json_private(manifest, record)
+                if outcome in ("noncreator", "wrong-identity"):
+                    with self.assertRaises(driver.DriverError):
+                        driver.cleanup_forum(instance, manifest, True)
+                    self.assertFalse(any(p["@type"] == "deleteChat" for p in instance.client.requests))
+                    continue
                 result = driver.cleanup_forum(instance, manifest, True)
                 self.assertEqual(result["title"], title)
                 self.assertEqual(result["testerUserId"], "123")
