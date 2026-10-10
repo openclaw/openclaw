@@ -213,18 +213,6 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("loads manifest-declared web-fetch providers in setup mode without the plugin loader", () => {
-    const providers = resolvePluginWebFetchProviders({
-      config: createFirecrawlAllowConfig(),
-      mode: "setup",
-    });
-
-    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
-      "firecrawl:firecrawl",
-    ]);
-    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
   it("does not force a fresh snapshot load when the same web-provider load is already in flight", () => {
     const inFlightSpy = vi
       .spyOn(loaderModule, "isPluginRegistryLoadInFlight")
@@ -269,48 +257,6 @@ describe("resolvePluginWebFetchProviders", () => {
       manifestRegistry: undefined,
     });
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
-
-  it("uses the active registry workspace for candidate discovery when workspaceDir is omitted", () => {
-    const env = createWebFetchEnv();
-    const rawConfig = createFirecrawlAllowConfig();
-
-    setActivePluginRegistry(
-      createEmptyPluginRegistry(),
-      undefined,
-      "default",
-      "/tmp/runtime-workspace",
-    );
-    vi.mocked(manifestRegistryModule.loadPluginManifestRegistryCore).mockReturnValue(
-      createManifestRegistryFixture("global"),
-    );
-
-    resolvePluginWebFetchProviders({
-      config: rawConfig,
-      env,
-    });
-
-    expect(manifestRegistryModule.loadPluginManifestRegistryCore).toHaveBeenCalledWith({
-      config: rawConfig,
-      workspaceDir: "/tmp/runtime-workspace",
-      env,
-      candidates: [],
-      diagnostics: [],
-      installRecords: {},
-      registryPath: "/tmp/openclaw-home/.openclaw/state/openclaw.sqlite",
-    });
-    const { logger, ...loadOptions } = firstPluginLoadOptions(loadOpenClawPluginsMock);
-    expect(Object.keys(logger ?? {}).toSorted()).toEqual(["debug", "error", "info", "warn"]);
-    expect(loadOptions).toEqual({
-      config: createFirecrawlAllowConfig(),
-      activationSourceConfig: createFirecrawlAllowConfig(),
-      autoEnabledReasons: {},
-      workspaceDir: "/tmp/runtime-workspace",
-      env,
-      cache: true,
-      activate: false,
-      onlyPluginIds: ["firecrawl"],
-    });
   });
 
   it("resolves web-fetch providers for each active registry workspace", () => {

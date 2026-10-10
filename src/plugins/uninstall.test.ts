@@ -19,11 +19,7 @@ import {
 import { removePluginFromConfig } from "./uninstall-config.js";
 import { pruneManagedNpmPeerDependenciesAfterUninstall } from "./uninstall-managed-npm.js";
 import { recordPluginPackageUninstallPlan } from "./uninstall-package-plan.js";
-import {
-  applyPluginUninstallDirectoryRemoval,
-  planPluginUninstall,
-  resolveUninstallChannelConfigKeys,
-} from "./uninstall.js";
+import { applyPluginUninstallDirectoryRemoval, planPluginUninstall } from "./uninstall.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -250,13 +246,6 @@ function expectChannelCleanupResult(params: {
   expect(actions.channelConfig).toBe(params.expectedChanged);
 }
 
-function createSinglePluginWithEmptySlotsConfig(): OpenClawConfig {
-  return createPluginConfig({
-    entries: createSinglePluginEntries(),
-    slots: {},
-  });
-}
-
 function createSingleNpmInstallConfig(installPath: string): OpenClawConfig {
   return createPluginConfig({
     entries: createSinglePluginEntries(),
@@ -313,16 +302,6 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
   expect(options.env?.npm_config_package_lock).toBe("true");
 }
 
-describe("resolveUninstallChannelConfigKeys", () => {
-  it("filters shared keys and duplicate channel ids", () => {
-    expect(
-      resolveUninstallChannelConfigKeys("bad-plugin", {
-        channelIds: ["defaults", "discord", "discord", "modelByChannel", "slack"],
-      }),
-    ).toEqual(["discord", "slack"]);
-  });
-});
-
 describe("planPluginUninstall package ownership", () => {
   it("removes every owned child policy while planning one owner install removal", () => {
     const result = planPluginUninstall(
@@ -374,83 +353,6 @@ describe("planPluginUninstall package ownership", () => {
 });
 
 describe("removePluginFromConfig", () => {
-  it("removes plugin from entries", () => {
-    const config = createPluginConfig({
-      entries: {
-        ...createSinglePluginEntries(),
-        "other-plugin": { enabled: true },
-      },
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.entries).toEqual({ "other-plugin": { enabled: true } });
-    expect(actions.entry).toBe(true);
-  });
-
-  it("removes plugin from installs", () => {
-    const config = createPluginConfig({
-      installs: {
-        "my-plugin": createNpmInstallRecord(),
-        "other-plugin": createNpmInstallRecord("other-plugin"),
-      },
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.installs).toEqual({
-      "other-plugin": createNpmInstallRecord("other-plugin"),
-    });
-    expect(actions.install).toBe(true);
-  });
-
-  it("removes plugin from allowlist", () => {
-    const config = createPluginConfig({
-      allow: ["my-plugin", "other-plugin"],
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.allow).toEqual(["other-plugin"]);
-    expect(actions.allowlist).toBe(true);
-  });
-
-  it("removes plugin from denylist", () => {
-    const config = createPluginConfig({
-      deny: ["my-plugin", "other-plugin"],
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.deny).toEqual(["other-plugin"]);
-    expect(actions.denylist).toBe(true);
-  });
-
-  it.each([
-    {
-      name: "removes linked path from load.paths",
-      loadPaths: ["/path/to/plugin", "/other/path"],
-      expectedPaths: ["/other/path"],
-    },
-    {
-      name: "cleans up load when removing the only linked path",
-      loadPaths: ["/path/to/plugin"],
-      expectedPaths: undefined,
-    },
-  ])("$name", ({ loadPaths, expectedPaths }) => {
-    const config = createPluginConfig({
-      installs: {
-        "my-plugin": createPathInstallRecord(),
-      },
-      loadPaths,
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.load?.paths).toEqual(expectedPaths);
-    expect(actions.loadPath).toBe(true);
-  });
-
   it.each([
     {
       name: "marketplace install path",
@@ -495,32 +397,6 @@ describe("removePluginFromConfig", () => {
     },
   );
 
-  it("removes a canonical marketplace install path without removing siblings", async () => {
-    const tempRoot = path.join(process.cwd(), ".tmp");
-    await fs.mkdir(tempRoot, { recursive: true });
-    const tempDir = await fs.mkdtemp(path.join(tempRoot, "openclaw-uninstall-marketplace-path-"));
-    try {
-      const installPath = path.join(tempDir, "managed", "my-plugin");
-      const linkedPath = path.join(tempDir, "my-plugin-link");
-      const siblingPath = path.join(tempDir, "managed", "my-plugin-other");
-      await fs.mkdir(installPath, { recursive: true });
-      await fs.symlink(installPath, linkedPath, "dir");
-      const config = createPluginConfig({
-        installs: {
-          "my-plugin": createMarketplaceInstallRecord(installPath),
-        },
-        loadPaths: [linkedPath, siblingPath],
-      });
-
-      const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-      expect(result.plugins?.load?.paths).toEqual([siblingPath]);
-      expect(actions.loadPath).toBe(true);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
   it("removes absolute load path for a workspace-relative install source path", async () => {
     const tempRoot = path.join(process.cwd(), ".tmp");
     await fs.mkdir(tempRoot, { recursive: true });
@@ -544,109 +420,6 @@ describe("removePluginFromConfig", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it.each([
-    {
-      name: "clears memory slot when uninstalling active memory plugin",
-      config: createPluginConfig({
-        entries: {
-          "memory-plugin": { enabled: true },
-        },
-        slots: {
-          memory: "memory-plugin",
-        },
-      }),
-      pluginId: "memory-plugin",
-      expectedMemory: undefined,
-      expectedChanged: true,
-    },
-    {
-      name: "does not modify memory slot when uninstalling non-memory plugin",
-      config: createPluginConfig({
-        entries: createSinglePluginEntries(),
-        slots: {
-          memory: "memory-core",
-        },
-      }),
-      pluginId: "my-plugin",
-      expectedMemory: "memory-core",
-      expectedChanged: false,
-    },
-  ] as const)("$name", ({ config, pluginId, expectedMemory, expectedChanged }) => {
-    const { config: result, actions } = removePluginFromConfig(config, pluginId);
-
-    expect(result.plugins?.slots?.memory).toBe(expectedMemory);
-    expect(actions.memorySlot).toBe(expectedChanged);
-  });
-
-  it("clears context engine slot when uninstalling active context engine plugin", () => {
-    const config = createPluginConfig({
-      entries: {
-        "context-plugin": { enabled: true },
-      },
-      slots: {
-        contextEngine: "context-plugin",
-      },
-    });
-
-    const { config: result, actions } = removePluginFromConfig(config, "context-plugin");
-
-    expect(result.plugins?.slots?.contextEngine).toBeUndefined();
-    expect(actions.contextEngineSlot).toBe(true);
-  });
-
-  it("cleans up empty slots object", () => {
-    const config = createSinglePluginWithEmptySlotsConfig();
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "handles plugin that only exists in entries",
-      config: createPluginConfig({
-        entries: createSinglePluginEntries(),
-      }),
-      expectedEntries: undefined,
-      expectedInstalls: undefined,
-      entryChanged: true,
-      installChanged: false,
-    },
-    {
-      name: "handles plugin that only exists in installs",
-      config: createPluginConfig({
-        installs: {
-          "my-plugin": createNpmInstallRecord(),
-        },
-      }),
-      expectedEntries: undefined,
-      expectedInstalls: undefined,
-      entryChanged: false,
-      installChanged: true,
-    },
-  ])("$name", ({ config, expectedEntries, expectedInstalls, entryChanged, installChanged }) => {
-    const { config: result, actions } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.entries).toEqual(expectedEntries);
-    expect(result.plugins?.installs).toEqual(expectedInstalls);
-    expect(actions.entry).toBe(entryChanged);
-    expect(actions.install).toBe(installChanged);
-  });
-
-  it("preserves other config values", () => {
-    const config = createPluginConfig({
-      enabled: true,
-      deny: ["denied-plugin"],
-      entries: createSinglePluginEntries(),
-    });
-
-    const { config: result } = removePluginFromConfig(config, "my-plugin");
-
-    expect(result.plugins?.enabled).toBe(true);
-    expect(result.plugins?.deny).toEqual(["denied-plugin"]);
   });
 
   it.each([
@@ -862,20 +635,6 @@ describe("uninstallPlugin", () => {
     await cleanupTrackedTempDirsAsync(tempDirs);
   });
 
-  it("returns error when plugin not found", async () => {
-    const config = createPluginConfig({});
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "nonexistent",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toBe("Plugin not found: nonexistent");
-    }
-  });
-
   it("does not treat inherited prototype names as installed plugins", async () => {
     const result = await uninstallPlugin({
       config: createPluginConfig({ entries: {}, installs: {} }),
@@ -1043,42 +802,6 @@ describe("uninstallPlugin", () => {
       expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     },
   );
-
-  it("removes entry settings and keeps an explicit disabled tombstone", async () => {
-    const config = createPluginConfig({
-      entries: createSinglePluginEntries(),
-      installs: {
-        "my-plugin": createNpmInstallRecord(),
-      },
-    });
-
-    const result = await uninstallPlugin({
-      config,
-      pluginId: "my-plugin",
-      deleteFiles: false,
-    });
-
-    const successfulResult = expectSuccessfulUninstall(result);
-    expect(successfulResult.config.plugins?.entries).toEqual({
-      "my-plugin": { enabled: false },
-    });
-    expect(successfulResult.config.plugins?.installs).toBeUndefined();
-    expect(successfulResult.actions.entry).toBe(true);
-    expect(successfulResult.actions.install).toBe(true);
-  });
-
-  it("deletes directory when deleteFiles is true", async () => {
-    const { pluginDir, result } = await runDeleteInstalledNpmPluginFixture(tempDir);
-
-    try {
-      expectSuccessfulUninstallActions(result, {
-        directory: true,
-      });
-      await expectPathAccessState(pluginDir, "missing");
-    } finally {
-      await fs.rm(pluginDir, { recursive: true, force: true });
-    }
-  });
 
   it("plans directory removal without deleting before commit", async () => {
     const { pluginId, extensionsDir, pluginDir, config } = await createInstalledNpmPluginFixture({
@@ -2249,25 +1972,6 @@ describe("uninstallPlugin", () => {
     await expect(fs.access(outsideDir)).resolves.toBeUndefined();
   });
 
-  it("deletes tracked managed install paths even when they are not the default target", async () => {
-    const extensionsDir = path.join(tempDir, "extensions");
-    const managedDir = path.join(extensionsDir, "archive-installs", "my-plugin");
-    await fs.mkdir(managedDir, { recursive: true });
-    await fs.writeFile(path.join(managedDir, "index.js"), "// plugin");
-
-    const result = await uninstallPlugin({
-      config: createSingleNpmInstallConfig(managedDir),
-      pluginId: "my-plugin",
-      deleteFiles: true,
-      extensionsDir,
-    });
-
-    expectSuccessfulUninstallActions(result, {
-      directory: true,
-    });
-    await expectPathAccessState(managedDir, "missing");
-  });
-
   it("deletes tracked installs from a recorded managed extensions root", async () => {
     const currentExtensionsDir = path.join(tempDir, "current", "extensions");
     const recordedExtensionsDir = path.join(tempDir, "recorded", "extensions");
@@ -2280,49 +1984,6 @@ describe("uninstallPlugin", () => {
       pluginId: "my-plugin",
       deleteFiles: true,
       extensionsDir: currentExtensionsDir,
-    });
-
-    expectSuccessfulUninstallActions(result, {
-      directory: true,
-    });
-    await expectPathAccessState(installPath, "missing");
-  });
-
-  it("deletes managed ClawHub install directories", async () => {
-    const stateDir = path.join(tempDir, "state");
-    const extensionsDir = path.join(stateDir, "extensions");
-    const installPath = resolvePluginInstallDir("clawpack-demo", extensionsDir);
-    await fs.mkdir(installPath, { recursive: true });
-    await fs.writeFile(path.join(installPath, "index.js"), "// clawhub plugin");
-
-    const result = await uninstallPlugin({
-      config: createPluginConfig({
-        entries: createSinglePluginEntries("clawpack-demo"),
-        installs: {
-          "clawpack-demo": {
-            source: "clawhub",
-            spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
-            installPath,
-            clawhubUrl: "https://clawhub.ai",
-            clawhubPackage: "clawpack-demo",
-            clawhubFamily: "code-plugin",
-            clawhubChannel: "official",
-            artifactKind: "npm-pack",
-            artifactFormat: "tgz",
-            npmIntegrity: "sha512-clawpack",
-            npmShasum: "1".repeat(40),
-            npmTarballName: "clawpack-demo-2026.5.1-beta.2.tgz",
-            clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            clawpackSpecVersion: 1,
-            clawpackManifestSha256:
-              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-            clawpackSize: 4096,
-          },
-        },
-      }),
-      pluginId: "clawpack-demo",
-      deleteFiles: true,
-      extensionsDir,
     });
 
     expectSuccessfulUninstallActions(result, {

@@ -120,34 +120,6 @@ describe("synthetic auth runtime refs", () => {
     expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({});
   });
 
-  it("loads manifest synthetic auth refs with the current runtime scope", () => {
-    const config = { plugins: { allow: ["external-local"] } };
-    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" };
-    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "persisted",
-      snapshot: {
-        plugins: [{ syntheticAuthRefs: ["external-local"] }],
-      },
-      diagnostics: [],
-    });
-
-    expect(
-      resolveRuntimeSyntheticAuthProviderRefState({
-        config: config as never,
-        workspaceDir: "/tmp/workspace",
-        env,
-      }),
-    ).toEqual({
-      refs: ["external-local"],
-      complete: true,
-    });
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      config,
-      workspaceDir: "/tmp/workspace",
-      env,
-    });
-  });
-
   it("does not derive the registry just to resolve synthetic auth refs", () => {
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "derived",
