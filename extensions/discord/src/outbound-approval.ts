@@ -1,19 +1,4 @@
-// Discord plugin module implements outbound approval behavior.
-function hasApprovalChannelData(payload: { channelData?: unknown }): boolean {
-  const channelData = payload.channelData;
-  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
-    return false;
-  }
-  return Boolean((channelData as { execApproval?: unknown }).execApproval);
-}
-
-function neutralizeDiscordApprovalMentions(value: string): string {
-  return value
-    .replace(/@everyone/gi, "@\u200beveryone")
-    .replace(/@here/gi, "@\u200bhere")
-    .replace(/<@/g, "<@\u200b")
-    .replace(/<#/g, "<#\u200b");
-}
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function normalizeDiscordApprovalPayload<
   T extends {
@@ -21,10 +6,15 @@ export function normalizeDiscordApprovalPayload<
     channelData?: unknown;
   },
 >(payload: T): T {
-  return hasApprovalChannelData(payload) && payload.text
-    ? {
-        ...payload,
-        text: neutralizeDiscordApprovalMentions(payload.text),
-      }
-    : payload;
+  if (!asOptionalRecord(payload.channelData)?.execApproval || !payload.text) {
+    return payload;
+  }
+  return {
+    ...payload,
+    text: payload.text
+      .replace(/@everyone/gi, "@\u200beveryone")
+      .replace(/@here/gi, "@\u200bhere")
+      .replace(/<@/g, "<@\u200b")
+      .replace(/<#/g, "<#\u200b"),
+  };
 }

@@ -41,7 +41,7 @@ class RealtimePlayoutTest {
 
   private fun session(id: String) =
     RealtimePlayout.Session(
-      onState = { _, _, _ -> },
+      onState = { _, _ -> },
       onMark = { mark -> acknowledgements += "$id/$mark" },
       onFailure = { error -> failures += "$id/$error" },
     )
@@ -67,6 +67,73 @@ class RealtimePlayoutTest {
     val cleared = playout.clear(session)
     assertFalse(cleared.isCompleted)
     scheduler.runCurrent()
+    assertTrue(cleared.isCompleted)
+    assertFalse(cleared.isCancelled)
+    assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
+    assertFalse(playout.isPlaying)
+  }
+
+  @Test
+  fun relayFramedBacklogIsBoundedByBytesNotEntries() {
+    // Gateway relay output: 20 ms PCM frames at 24 kHz, each followed by a mark in the worst case.
+    val frame = ByteArray(960)
+    val frames = (RealtimePlayout.MAX_QUEUED_BYTES / frame.size).toInt()
+    repeat(frames) { index ->
+      assertEquals(null, playout.audio(session, frame, statusOwner))
+      assertEquals(null, playout.mark(session, "mark-$index"))
+    }
+    val tail = ByteArray((RealtimePlayout.MAX_QUEUED_BYTES % frame.size).toInt())
+    assertEquals(null, playout.audio(session, tail, statusOwner))
+    assertEquals(null, playout.mark(session, "tail"))
+    // Final transcript and audioDone refresh status without adding PCM.
+    repeat(2) { assertEquals(null, playout.refreshState(session, statusOwner)) }
+    assertTrue(failures.isEmpty())
+    assertTrue(session.active)
+
+    val overflow = checkNotNull(playout.audio(session, frame, statusOwner))
+    overflow()
+    assertEquals(listOf("session/audio playback queue overflow"), failures)
+    assertFalse(session.active)
+  }
+
+  @Test
+  fun pcmByteBudgetRemainsIndependentOfEntryCapacity() {
+    assertEquals(null, playout.audio(session, ByteArray(RealtimePlayout.MAX_QUEUED_BYTES.toInt()), statusOwner))
+    val overflow = checkNotNull(playout.audio(session, ByteArray(2), statusOwner))
+    overflow()
+    assertEquals(listOf("session/audio playback queue overflow"), failures)
+    assertFalse(session.active)
+  }
+
+  @Test
+  fun dequeuedRefreshesDoNotIncreaseMediaAllowance() {
+    repeat(2) { assertEquals(null, playout.refreshState(session, statusOwner)) }
+    scheduler.runCurrent()
+    repeat(RealtimePlayout.MAX_QUEUED_MEDIA) { assertEquals(null, playout.mark(session, "mark-$it")) }
+    val overflow = checkNotNull(playout.mark(session, "over-budget"))
+    overflow()
+    assertEquals(listOf("session/audio playback queue overflow"), failures)
+    assertFalse(session.active)
+  }
+
+  @Test
+  fun refreshOverflowPreservesClearHeadroomForAFullMediaBacklog() {
+    playout.audio(session, ByteArray(100), statusOwner)
+    scheduler.runCurrent()
+    val track = checkNotNull(PlayoutAudioTrack.track)
+    repeat(2) {
+      repeat(24) { assertEquals(null, playout.refreshState(session, statusOwner)) }
+      scheduler.runCurrent()
+    }
+    repeat(RealtimePlayout.MAX_QUEUED_MEDIA) { assertEquals(null, playout.mark(session, "mark-$it")) }
+    var overflow: (() -> Unit)? = null
+    repeat(64) {
+      if (overflow == null) overflow = playout.refreshState(session, statusOwner)
+    }
+    checkNotNull(overflow).invoke()
+    val cleared = playout.clear(session, acknowledge = false)
+    scheduler.runCurrent()
+    assertEquals(listOf("session/audio playback queue overflow"), failures)
     assertTrue(cleared.isCompleted)
     assertFalse(cleared.isCancelled)
     assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
@@ -135,7 +202,7 @@ class RealtimePlayoutTest {
     PlayoutAudioTrack.presentedFrames = 0
     var releasedAtAcknowledgement = false
     val owner =
-      RealtimePlayout.Session({ _, _, _ -> }, {
+      RealtimePlayout.Session({ _, _ -> }, {
         releasedAtAcknowledgement = PlayoutAudioTrack.track?.state == AudioTrack.STATE_UNINITIALIZED
       }, { error(it) })
     playout.audio(owner, ByteArray(100), statusOwner)
@@ -318,7 +385,7 @@ class RealtimePlayoutTest {
   fun cancellationStopsAlreadyQueuedAcknowledgements() {
     val acknowledged = mutableListOf<String>()
     val owner =
-      RealtimePlayout.Session({ _, _, _ -> }, { name ->
+      RealtimePlayout.Session({ _, _ -> }, { name ->
         acknowledged += name
         job.cancel()
       }, { error(it) })

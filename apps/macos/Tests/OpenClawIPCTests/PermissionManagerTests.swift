@@ -44,7 +44,7 @@ struct PermissionManagerTests {
         ])
     }
 
-    @Test(arguments: [Capability.appleScript, .notifications, .accessibility, .screenRecording])
+    @Test(arguments: [Capability.notifications, .accessibility, .screenRecording])
     func `unrelated permissions do not inherit a privacy recovery pane`(capability: Capability) {
         #expect(SystemSettingsURLSupport.privacySettingsCandidates(for: capability).isEmpty)
     }

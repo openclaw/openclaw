@@ -1,9 +1,8 @@
-import type { SessionRefreshOptions } from "./session-capability.ts";
+import type { SessionRefreshOptions, SessionRefreshOutcome } from "./session-capability.ts";
 import {
   sessionListAgentMatcher,
   sessionMutationRefreshOutcome,
   type SessionRefreshAttempt,
-  type SessionRefreshOutcome,
 } from "./session-list-query.ts";
 import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
 

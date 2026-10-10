@@ -45,10 +45,8 @@ flow:
                   senderName: QA Command Operator
                   text: /status
                   nativeCommand: { name: status }
-              - waitForOutbound:
-                  conversation: { id: telegram-command-room, kind: channel }
-                  textIncludes: You are not authorized to use this command.
-                  timeoutMs: 60000
+              - waitForNoOutbound:
+                  quietMs: 3000
             finally:
               - call: env.gateway.restartAfterStateMutation
                 args:

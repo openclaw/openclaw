@@ -206,59 +206,56 @@ describe("ClawRouter provider catalog", () => {
     expect(provider.models.map((model) => model.id)).not.toContain("cohere/command-a-plus-05-2026");
   });
 
-  it.each(["codex-latest", "synthetic-upstream-sentinel"])(
-    "preserves the catalog display name and Responses alias with upstream %s",
-    async (upstream) => {
-      const catalog = {
-        providers: [
-          {
-            ...CATALOG.providers[0],
-            models: [
-              {
-                id: "codex-latest",
-                displayName: "Codex (Latest)",
-                upstream,
-                capabilities: ["llm.responses"],
-              },
-            ],
-          },
-        ],
-      };
-      const provider = await buildClawRouterProviderConfig({
-        apiKey: "isolated-workload-test-key",
-        baseUrl: "https://clawrouter.example/private",
-        fetchGuard: buildFetchGuard(catalog).fetchGuard,
-      });
-      expect(provider.models).toHaveLength(1);
-      const model = expectDefined(provider.models[0], "catalog alias");
-      expect(model).toMatchObject({
-        id: "codex-latest",
-        name: "Codex (Latest)",
-        api: "openai-responses",
-        baseUrl: "https://clawrouter.example/private/v1",
-      });
-      const normalized = expectDefined(
-        normalizeClawRouterResolvedModel({
-          ...model,
-          provider: "clawrouter",
-        } as ProviderRuntimeModel),
-        "resolved catalog alias",
-      );
-      expect(prepareClawRouterRequestModel(normalized)).toMatchObject({
-        id: "codex-latest",
-        name: "Codex (Latest)",
-        params: undefined,
-      });
-      expect(JSON.stringify(provider)).not.toContain("synthetic-upstream-sentinel");
+  it("preserves the catalog display name and Responses alias instead of the upstream id", async () => {
+    const catalog = {
+      providers: [
+        {
+          ...CATALOG.providers[0],
+          models: [
+            {
+              id: "codex-latest",
+              displayName: "Codex (Latest)",
+              upstream: "synthetic-upstream-sentinel",
+              capabilities: ["llm.responses"],
+            },
+          ],
+        },
+      ],
+    };
+    const provider = await buildClawRouterProviderConfig({
+      apiKey: "isolated-workload-test-key",
+      baseUrl: "https://clawrouter.example/private",
+      fetchGuard: buildFetchGuard(catalog).fetchGuard,
+    });
+    expect(provider.models).toHaveLength(1);
+    const model = expectDefined(provider.models[0], "catalog alias");
+    expect(model).toMatchObject({
+      id: "codex-latest",
+      name: "Codex (Latest)",
+      api: "openai-responses",
+      baseUrl: "https://clawrouter.example/private/v1",
+    });
+    const normalized = expectDefined(
+      normalizeClawRouterResolvedModel({
+        ...model,
+        provider: "clawrouter",
+      } as ProviderRuntimeModel),
+      "resolved catalog alias",
+    );
+    expect(prepareClawRouterRequestModel(normalized)).toMatchObject({
+      id: "codex-latest",
+      name: "Codex (Latest)",
+      params: undefined,
+    });
+    expect(JSON.stringify(provider)).not.toContain("synthetic-upstream-sentinel");
 
-      const publicProvider = await buildClawRouterProviderConfig({
-        apiKey: "public-workload-test-key",
-        baseUrl: "https://clawrouter.example",
-        fetchGuard: buildFetchGuard().fetchGuard,
-      });
-      expect(publicProvider.models.map((entry) => entry.id)).not.toContain("codex-latest");
-    },
-  );
+    const publicProvider = await buildClawRouterProviderConfig({
+      apiKey: "public-workload-test-key",
+      baseUrl: "https://clawrouter.example",
+      fetchGuard: buildFetchGuard().fetchGuard,
+    });
+    expect(publicProvider.models.map((entry) => entry.id)).not.toContain("codex-latest");
+  });
 
   it("rewrites only native protocol model ids at the request boundary", async () => {
     const provider = await buildClawRouterProviderConfig({
@@ -347,21 +344,37 @@ describe("ClawRouter provider catalog", () => {
     expect(rejectedModel?.thinkingLevelMap).toBeUndefined();
   });
 
-  it("caches catalog rows per credential scope", async () => {
-    const { fetchGuard, fetchGuardMock } = buildFetchGuard();
+  it.each([
+    ["granted models", CATALOG],
+    ["no granted models", { providers: [] }],
+  ])("reuses %s for an hour without mixing credentials or endpoints", async (_label, catalog) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const { fetchGuard, fetchGuardMock } = buildFetchGuard(catalog);
     const params = {
-      apiKey: "clawrouter-test-key",
+      apiKey: "catalog-key-a",
       baseUrl: "https://clawrouter.example",
       fetchGuard,
     };
+    try {
+      const first = await buildClawRouterProviderConfig(params);
+      now.mockReturnValue(1_800_000_000_000 + 59 * 60_000);
+      expect(await buildClawRouterProviderConfig(params)).toEqual(first);
+      expect(fetchGuardMock).toHaveBeenCalledOnce();
 
-    await buildClawRouterProviderConfig(params);
-    await buildClawRouterProviderConfig(params);
+      await buildClawRouterProviderConfig({ ...params, discoveryApiKey: "catalog-key-b" });
+      await buildClawRouterProviderConfig({ ...params, baseUrl: "https://other.example" });
+      expect(fetchGuardMock).toHaveBeenCalledTimes(3);
+      const headers = fetchGuardMock.mock.calls[1]?.[0].init?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      expect((headers as Headers).get("authorization")).toBe("Bearer catalog-key-b");
 
-    expect(fetchGuardMock).toHaveBeenCalledOnce();
-    const headers = fetchGuardMock.mock.calls[0]?.[0].init?.headers;
-    expect(headers).toBeInstanceOf(Headers);
-    expect((headers as Headers).get("authorization")).toBe("Bearer clawrouter-test-key");
+      // A cache hit does not renew the original deadline indefinitely.
+      now.mockReturnValue(1_800_000_000_000 + 60 * 60_000);
+      await buildClawRouterProviderConfig(params);
+      expect(fetchGuardMock).toHaveBeenCalledTimes(4);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("does not advertise Gemini without a streaming route", async () => {

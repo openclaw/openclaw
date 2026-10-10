@@ -12,10 +12,11 @@ export async function execLaunchctl(args: string[], timeoutMs?: number): Promise
   const isWindows = process.platform === "win32";
   const file = isWindows ? getWindowsCmdExePath() : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
-  return await execFileUtf8(file, fileArgs, {
-    ...(isWindows ? { windowsHide: true } : {}),
-    ...(timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
-  });
+  return await execFileUtf8(
+    file,
+    fileArgs,
+    timeoutMs && timeoutMs > 0 ? { timeout: timeoutMs, killSignal: "SIGKILL" } : {},
+  );
 }
 
 export function launchctlInspectionReason(

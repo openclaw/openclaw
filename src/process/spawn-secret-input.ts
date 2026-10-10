@@ -78,6 +78,7 @@ export function prepareSecretInputStdio(
   const pipe = process.platform === "win32" ? undefined : createSecretPipe();
   let [readFd, writeFd] = pipe?.fds ?? [];
   stdio[secretInput.fd] = readFd ?? "overlapped";
+  // Numeric secret descriptors keep this launch in-process; IPC cannot transfer them.
   const closeRead = () => {
     if (readFd !== undefined) {
       pipe!.close(readFd);

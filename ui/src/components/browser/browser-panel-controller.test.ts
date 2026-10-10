@@ -44,7 +44,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     window.addEventListener(BROWSER_ANNOTATION_EVENT, reject);
 
     try {
-      await controller.sendAnnotation({});
+      await controller.input.sendAnnotation({});
     } finally {
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, reject);
     }

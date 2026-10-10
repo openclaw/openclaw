@@ -4,9 +4,6 @@
  * and LKG checkpoints (which is why JSONL is part of the universal
  * OcPath addressing scheme).
  *
- * **Per-kind discriminator**: every AST in this substrate carries a
- * `kind` field. The OcPath resolver dispatches on `kind`.
- *
  * **Byte-fidelity**: `raw` is preserved on the root for round-trip
  * emit. JSONL is line-oriented, so blank lines and per-line comments
  * (we don't strip them in render mode either — we preserve them as

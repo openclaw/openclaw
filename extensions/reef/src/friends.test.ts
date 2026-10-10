@@ -9,8 +9,10 @@ import {
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateIdentity } from "../protocol/index.js";
+import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefFriendManager } from "./friends.js";
+import { createReefRuntimeAuthority } from "./runtime.js";
 import type { ReefTransportClient } from "./transport.js";
 import { ReefRelayError } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
@@ -101,6 +103,14 @@ function transport(friend: RelayFriend) {
   };
 }
 
+function pairingFixture(friend: RelayFriend) {
+  const relay = transport(friend);
+  const store = trust();
+  const pairing = approvals();
+  const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
+  return { relay, store, pairing, manager };
+}
+
 describe("ReefFriendManager pairing", () => {
   beforeEach(() => {
     resetPluginStateStoreForTests();
@@ -114,10 +124,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("surfaces an inbound request and consumes pairing approval into durable peer trust", async () => {
     const pending = relayFriend("alice", "pending");
-    const relay = transport(pending);
-    const pairing = approvals();
-    const store = trust();
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
+    const { relay, store, pairing, manager } = pairingFixture(pending);
     const issue = vi.fn(async () => {});
 
     await manager.surfacePairingCandidates(issue);
@@ -145,12 +152,9 @@ describe("ReefFriendManager pairing", () => {
 
   it("consumes approval before accepting or pinning an inbound friendship", async () => {
     const pending = relayFriend("alice", "pending");
-    const relay = transport(pending);
-    const pairing = approvals();
+    const { relay, store, pairing, manager } = pairingFixture(pending);
     pairing.remove.mockRejectedValue(new Error("approval store unavailable"));
-    const store = trust();
     addApproval(store, pairing, pending);
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.reconcile()).rejects.toThrow("approval store unavailable");
     expect(relay.respondFriend).not.toHaveBeenCalled();
@@ -159,12 +163,9 @@ describe("ReefFriendManager pairing", () => {
 
   it("does not reuse an approval another reconciler already consumed", async () => {
     const pending = relayFriend("alice", "pending");
-    const relay = transport(pending);
-    const pairing = approvals();
+    const { relay, store, pairing, manager } = pairingFixture(pending);
     pairing.remove.mockResolvedValue(false);
-    const store = trust();
     addApproval(store, pairing, pending);
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(relay.respondFriend).not.toHaveBeenCalled();
@@ -173,13 +174,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("adopts a locally requested friendship once active and consumes its intent marker", async () => {
     const accepted = relayFriend("alice", "pending", generateIdentity(), 1, "me");
-    const relay = transport(accepted);
-    const store = trust();
-    const manager = new ReefFriendManager(
-      relay as unknown as ReefTransportClient,
-      store,
-      approvals(),
-    );
+    const { store, manager } = pairingFixture(accepted);
 
     await manager.request("alice");
     expect(store.hasOutboundRequest("alice")).toBe(true);
@@ -218,6 +213,67 @@ describe("ReefFriendManager pairing", () => {
 
     await expect(request).rejects.toBeInstanceOf(Error);
     expect(store.hasOutboundRequest("alice")).toBe(true);
+  });
+
+  it("rejects queued friendship commands after owner revocation and settles accepted intent", async () => {
+    const pending = relayFriend("alice", "pending", generateIdentity(), 1, "me");
+    const requestStarted = deferred<void>();
+    const relayResult = deferred<{ status: string }>();
+    const relay = {
+      ...transport(pending),
+      mintFriendCode: vi.fn(async () => ({ code: "unused", expires: 1 })),
+    };
+    relay.requestFriend.mockImplementation(async () => {
+      requestStarted.resolve(undefined);
+      return await relayResult.promise;
+    });
+    const store = trust();
+    const manager = new ReefFriendManager(
+      relay as unknown as ReefTransportClient,
+      store,
+      approvals(),
+    );
+    const authority = createReefRuntimeAuthority();
+    authority.activate({ friends: manager } as never);
+    let ownerCurrent = true;
+    const command = (args: string) =>
+      handleReefCommand({
+        args,
+        senderIsOwner: true,
+        assertOwnerCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("owner revoked");
+          }
+        },
+      });
+    try {
+      const accepted = command("friend request alice");
+      await requestStarted.promise;
+      const queued = Promise.allSettled([
+        command("friend code"),
+        command("friend request bob"),
+        command("friend remove alice"),
+        command("friend block alice"),
+        command("friend autonomy alice extended"),
+      ]);
+      ownerCurrent = false;
+      relayResult.resolve({ status: "pending" });
+      await expect(accepted).resolves.toEqual({ text: "Reef friend request submitted." });
+      for (const result of await queued) {
+        expect(result).toMatchObject({ status: "rejected", reason: new Error("owner revoked") });
+      }
+      expect(store.hasOutboundRequest("alice")).toBe(true);
+      expect(store.hasOutboundRequest("bob")).toBe(false);
+      expect(relay.requestFriend).toHaveBeenCalledOnce();
+      expect(relay.removeFriend).not.toHaveBeenCalled();
+      expect(relay.mintFriendCode).not.toHaveBeenCalled();
+      await expect(command("friend list")).resolves.toEqual({
+        text: expect.stringContaining("@alice pending"),
+      });
+    } finally {
+      relayResult.resolve({ status: "pending" });
+      authority.release();
+    }
   });
 
   it("removes a relay edge created after another process revoked the request", async () => {
@@ -315,12 +371,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("fails closed and requests approval for an active relay edge with no local intent", async () => {
     const accepted = relayFriend("alice", "active", generateIdentity(), 1, "me");
-    const relay = transport(accepted);
-    const manager = new ReefFriendManager(
-      relay as unknown as ReefTransportClient,
-      trust(),
-      approvals(),
-    );
+    const { manager } = pairingFixture(accepted);
     const issue = vi.fn(async () => {});
 
     await expect(manager.reconcile()).resolves.toEqual([]);
@@ -332,12 +383,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("surfaces a reapproval edge with no local pin and does not duplicate an existing approval", async () => {
     const changed = relayFriend("alice", "reapprove_required");
-    const pairing = approvals();
-    const manager = new ReefFriendManager(
-      transport(changed) as unknown as ReefTransportClient,
-      trust(),
-      pairing,
-    );
+    const { pairing, manager } = pairingFixture(changed);
     const issue = vi.fn(async () => {});
 
     await manager.surfacePairingCandidates(issue);
@@ -351,9 +397,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("accepts reapprove_required with unchanged keys after a fresh bound approval", async () => {
     const reapproval = relayFriend("alice", "reapprove_required");
-    const relay = transport(reapproval);
-    const pairing = approvals();
-    const store = trust();
+    const { relay, store, pairing, manager } = pairingFixture(reapproval);
     store.set("alice", {
       autonomy: "extended",
       ed25519PublicKey: reapproval.ed25519_pub,
@@ -362,7 +406,6 @@ describe("ReefFriendManager pairing", () => {
       safetyNumberChanged: false,
       approvedAt: 1,
     });
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
     const issue = vi.fn(async () => {});
 
     await manager.surfacePairingCandidates(issue);
@@ -380,9 +423,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("accepts an approved pending edge whose keys are already pinned", async () => {
     const pending = relayFriend("alice", "pending");
-    const relay = transport(pending);
-    const pairing = approvals();
-    const store = trust();
+    const { relay, store, pairing, manager } = pairingFixture(pending);
     store.set("alice", {
       autonomy: "extended",
       ed25519PublicKey: pending.ed25519_pub,
@@ -392,7 +433,6 @@ describe("ReefFriendManager pairing", () => {
       approvedAt: 1,
     });
     addApproval(store, pairing, pending);
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.reconcile()).resolves.toEqual(["alice"]);
 
@@ -403,16 +443,13 @@ describe("ReefFriendManager pairing", () => {
 
   it("does not recreate trust when local removal races an approved relay response", async () => {
     const pending = relayFriend("alice", "pending");
-    const pairing = approvals();
-    const store = trust();
+    const { relay, store, pairing, manager } = pairingFixture(pending);
     addApproval(store, pairing, pending);
-    const relay = transport(pending);
     relay.respondFriend.mockImplementation(async (friend: RelayFriend, accept: boolean) => {
       store.remove(friend.peer);
       pending.status = accept ? "active" : "blocked";
       return { peer: friend.peer, status: pending.status };
     });
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.reconcile()).resolves.toEqual([]);
 
@@ -426,9 +463,7 @@ describe("ReefFriendManager pairing", () => {
     const oldIdentity = generateIdentity();
     const nextIdentity = generateIdentity();
     const active = relayFriend("alice", "active", nextIdentity, 2);
-    const relay = transport(active);
-    const pairing = approvals();
-    const store = trust();
+    const { store, pairing, manager } = pairingFixture(active);
     store.set("alice", {
       autonomy: "extended",
       ed25519PublicKey: oldIdentity.signing.publicKey,
@@ -437,7 +472,6 @@ describe("ReefFriendManager pairing", () => {
       safetyNumberChanged: false,
       approvedAt: 1,
     });
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.reconcile()).resolves.toEqual(["alice"]);
     expect(store.get("alice")).toMatchObject({
@@ -506,18 +540,12 @@ describe("ReefFriendManager pairing", () => {
 
   it("rejects a bound approval after the relay keys change", async () => {
     const active = relayFriend("alice", "active");
-    const pairing = approvals();
-    const store = trust();
+    const { store, pairing, manager } = pairingFixture(active);
     addApproval(store, pairing, active);
     const nextIdentity = generateIdentity();
     active.ed25519_pub = nextIdentity.signing.publicKey;
     active.x25519_pub = nextIdentity.encryption.publicKey;
     active.key_epoch += 1;
-    const manager = new ReefFriendManager(
-      transport(active) as unknown as ReefTransportClient,
-      store,
-      pairing,
-    );
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(store.get("alice")).toBeUndefined();
@@ -526,15 +554,9 @@ describe("ReefFriendManager pairing", () => {
 
   it("rejects a bound approval minted before local revocation", async () => {
     const pending = relayFriend("alice", "pending");
-    const pairing = approvals();
-    const store = trust();
+    const { store, pairing, manager } = pairingFixture(pending);
     addApproval(store, pairing, pending);
     store.remove("alice");
-    const manager = new ReefFriendManager(
-      transport(pending) as unknown as ReefTransportClient,
-      store,
-      pairing,
-    );
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(store.get("alice")).toBeUndefined();
@@ -543,8 +565,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("rejects an approval when removal lands after validation but before snapshot", async () => {
     const pending = relayFriend("alice", "pending");
-    const pairing = approvals();
-    const store = trust();
+    const { relay, store, pairing, manager } = pairingFixture(pending);
     addApproval(store, pairing, pending);
     const matchesApproval = store.matchesPairingApproval.bind(store);
     vi.spyOn(store, "matchesPairingApproval").mockImplementation((raw, friend) => {
@@ -554,8 +575,6 @@ describe("ReefFriendManager pairing", () => {
       }
       return matches;
     });
-    const relay = transport(pending);
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.reconcile()).resolves.toEqual([]);
     expect(relay.respondFriend).not.toHaveBeenCalled();
@@ -565,9 +584,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("revokes every local authorization source even when relay removal fails", async () => {
     const active = relayFriend("alice", "active");
-    const relay = transport(active);
-    const store = trust();
-    const pairing = approvals();
+    const { relay, store, pairing, manager } = pairingFixture(active);
     addApproval(store, pairing, active);
     store.set("alice", {
       autonomy: "bounded",
@@ -583,7 +600,6 @@ describe("ReefFriendManager pairing", () => {
       expect(store.hasOutboundRequest("alice")).toBe(false);
       throw new ReefRelayError(503, "relay unavailable");
     });
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.remove("alice")).rejects.toThrow("relay unavailable");
     expect(store.get("alice")).toBeUndefined();
@@ -593,9 +609,7 @@ describe("ReefFriendManager pairing", () => {
 
   it("attempts relay removal when transient approval cleanup fails", async () => {
     const active = relayFriend("alice", "active");
-    const relay = transport(active);
-    const store = trust();
-    const pairing = approvals();
+    const { relay, store, pairing, manager } = pairingFixture(active);
     addApproval(store, pairing, active);
     store.set("alice", {
       autonomy: "bounded",
@@ -606,7 +620,6 @@ describe("ReefFriendManager pairing", () => {
       approvedAt: 1,
     });
     pairing.remove.mockRejectedValue(new Error("approval store unavailable"));
-    const manager = new ReefFriendManager(relay as unknown as ReefTransportClient, store, pairing);
 
     await expect(manager.remove("alice")).rejects.toThrow("approval store unavailable");
 

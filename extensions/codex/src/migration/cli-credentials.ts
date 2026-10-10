@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
+import { decodeOpenAICodexJwtPayload } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexAppServerClient } from "../app-server/client.js";
@@ -24,10 +25,15 @@ export type CodexCliCredential = {
   idToken?: string;
 };
 
-export type CodexCliApiKeyCredential = { type: "api_key"; provider: "openai"; key: string };
+type CodexCliApiKeyCredential = { type: "api_key"; provider: "openai"; key: string };
+export type CodexCliCredentials = {
+  oauth?: CodexCliCredential;
+  apiKey?: CodexCliApiKeyCredential;
+};
 export type CodexCredentialReadOptions = {
   codexHome: string;
   allowKeychainPrompt: boolean;
+  credentialKind?: "oauth" | "api_key";
   signal?: AbortSignal;
 };
 
@@ -60,11 +66,14 @@ async function readDirectKeyring(
   }
 }
 
-async function readSelectedCredentialStorage(
+export async function readCodexCliCredentialsAsync(
   options: CodexCredentialReadOptions,
-  requireApiKey: boolean,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<CodexCliCredentials | undefined> {
   options.signal?.throwIfAborted();
+  // Native startup loads auth before config/read can identify the selected storage.
+  if (!options.allowKeychainPrompt) {
+    return undefined;
+  }
   const home = await fs.realpath(options.codexHome).catch(() => path.resolve(options.codexHome));
   const { CodexAppServerClient } = await import("../app-server/client.js");
   const { resolveManagedCodexPackageEntrypoint, resolveManagedCodexNativeCommand } =
@@ -77,9 +86,7 @@ async function readSelectedCredentialStorage(
     return undefined;
   }
   const signal = AbortSignal.any([
-    AbortSignal.timeout(
-      options.allowKeychainPrompt && process.platform === "darwin" ? 60_000 : 5_000,
-    ),
+    AbortSignal.timeout(process.platform === "darwin" ? 60_000 : 5_000),
     ...(options.signal ? [options.signal] : []),
   ]);
   const client = await CodexAppServerClient.start(
@@ -103,9 +110,9 @@ async function readSelectedCredentialStorage(
   }
   const abort = () => client.close();
   signal.addEventListener("abort", abort, { once: true });
-  let credential: Record<string, unknown> | undefined;
+  let credential: CodexCliCredentials | undefined;
   try {
-    credential = await readNativeCredential(client, home, requireApiKey, options, signal);
+    credential = await readNativeCredential(client, home, options, signal);
   } catch {
     // Unsupported or unavailable native storage leaves interactive sign-in available.
   }
@@ -124,29 +131,15 @@ async function readSelectedCredentialStorage(
 async function readNativeCredential(
   client: CodexAppServerClient,
   home: string,
-  requireApiKey: boolean,
   options: CodexCredentialReadOptions,
   signal: AbortSignal,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<CodexCliCredentials | undefined> {
   signal.throwIfAborted();
   await client.initialize();
   if (client.getRuntimeIdentity()?.codexHome !== home) {
     return undefined;
   }
   const revision = client.getModelCatalogRevision();
-  if (requireApiKey) {
-    const account = await client.request<CodexGetAccountResponse>(
-      "account/read",
-      { refreshToken: false },
-      { signal },
-    );
-    if (
-      asOptionalRecord(account.account)?.type !== "apiKey" ||
-      account.requiresOpenaiAuth !== true
-    ) {
-      return undefined;
-    }
-  }
   const configured = await client.request<CodexConfigReadResponse>(
     "config/read",
     { includeLayers: false, cwd: home },
@@ -165,11 +158,7 @@ async function readNativeCredential(
   let record: Record<string, unknown> | undefined;
   if (mode === "file") {
     record = await readAuthFile(home);
-  } else if (
-    (mode === "keyring" || mode === "auto") &&
-    process.platform === "darwin" &&
-    options.allowKeychainPrompt
-  ) {
+  } else if ((mode === "keyring" || mode === "auto") && process.platform === "darwin") {
     let cursor: string | undefined;
     let encrypted: boolean | undefined;
     do {
@@ -191,29 +180,34 @@ async function readNativeCredential(
     record = await readDirectKeyring(home, signal);
   }
   signal.throwIfAborted();
+  if (!record) {
+    return undefined;
+  }
+  const oauth = options.credentialKind === "api_key" ? undefined : parseOAuthCredential(record);
+  let apiKey = options.credentialKind === "oauth" ? undefined : parseApiKeyCredential(record);
+  if (apiKey) {
+    // Account lookup gates the API key only; legacy OAuth remains independently importable.
+    const account = await client
+      .request<CodexGetAccountResponse>("account/read", { refreshToken: false }, { signal })
+      .catch(() => undefined);
+    if (account?.account?.type !== "apiKey" || !account.requiresOpenaiAuth) {
+      apiKey = undefined;
+    }
+  }
+  signal.throwIfAborted();
   return !client.getCloseError() && client.getModelCatalogRevision() === revision
-    ? record
+    ? { ...(oauth ? { oauth } : {}), ...(apiKey ? { apiKey } : {}) }
     : undefined;
 }
 
 function jwtExpiry(token: string): number | undefined {
-  try {
-    const data = asOptionalRecord(
-      JSON.parse(Buffer.from(token.split(".")[1] ?? "", "base64url").toString("utf8")),
-    );
-    const exp = data?.exp;
-    return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
-  } catch {
-    return undefined;
-  }
+  const exp = decodeOpenAICodexJwtPayload(token)?.exp;
+  return typeof exp === "number" && Number.isFinite(exp) && exp > 0 ? exp * 1000 : undefined;
 }
 
-export async function readCodexCliCredentialsAsync(
-  options: CodexCredentialReadOptions,
-): Promise<CodexCliCredential | undefined> {
-  const data = await readSelectedCredentialStorage(options, false);
-  const mode = typeof data?.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (!data || (mode !== undefined && mode !== "chatgpt" && mode !== "chatgptauthtokens")) {
+function parseOAuthCredential(data: Record<string, unknown>): CodexCliCredential | undefined {
+  const mode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (mode !== undefined && mode !== "chatgpt" && mode !== "chatgptauthtokens") {
     return undefined;
   }
   const tokens = asOptionalRecord(data.tokens);
@@ -240,12 +234,11 @@ export async function readCodexCliCredentialsAsync(
   };
 }
 
-export async function readCodexCliActiveApiKeyAsync(
-  options: CodexCredentialReadOptions,
-): Promise<CodexCliApiKeyCredential | undefined> {
-  const data = await readSelectedCredentialStorage(options, true);
-  const mode = typeof data?.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
-  if (!data || (mode !== undefined && mode !== "apikey" && mode !== "api_key")) {
+function parseApiKeyCredential(
+  data: Record<string, unknown>,
+): CodexCliApiKeyCredential | undefined {
+  const mode = typeof data.auth_mode === "string" ? data.auth_mode.toLowerCase() : undefined;
+  if (mode !== undefined && mode !== "apikey" && mode !== "api_key") {
     return undefined;
   }
   const key = typeof data.OPENAI_API_KEY === "string" ? data.OPENAI_API_KEY.trim() : "";

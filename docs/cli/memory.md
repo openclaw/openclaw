@@ -13,9 +13,23 @@ doc-schema-version: 1
 
 Manage semantic memory indexing, search, promotion into `MEMORY.md`, and
 provenance-based deletion.
-Provided by the bundled `memory-core` plugin, available when
-`plugins.slots.memory` selects `memory-core` (the default). Other memory
-plugins expose their own CLI namespaces.
+Provided by the bundled `memory-core` plugin. `plugins.slots.memory` selects
+`memory-core` by default. Other memory plugins expose their own CLI namespaces.
+
+When another plugin owns the memory slot and `memory-core` runs only as the
+dreaming consolidation sidecar:
+
+- `memory status` reports the selected provider's id and health (opened with
+  host status authority) and the dreaming state instead of Memory Core's own
+  index. `--json` returns
+  `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
+  `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
+  Memory Core's own index.
+- `memory search` exits with code 1 and names the slot owner instead of
+  searching the sidecar index.
+- `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
+  Memory Core's sidecar index and print a notice saying so (on stderr with
+  `--json`).
 
 Related: [Memory](/concepts/memory) concept, [Dreaming](/concepts/dreaming),
 [Memory config reference](/reference/memory-config), [Memory Wiki](/plugins/memory-wiki),
@@ -48,13 +62,13 @@ openclaw memory status [--agent <id>] [--deep] [--index] [--fix] [--json] [--ver
 Without `--agent`, runs for every agent in `agents.entries`; if no agent list is
 configured, falls back to the default agent.
 
-| Flag        | Effect                                                                                                                                                                                                                                                                           |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--deep`    | Probe vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not probed. |
-| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                 |
-| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                      |
-| `--json`    | Print JSON.                                                                                                                                                                                                                                                                      |
-| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                    |
+| Flag        | Effect                                                                                                                                                                                                                                                                            |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--deep`    | Check vector-store, embedding-provider, and semantic-search readiness (implies extra provider calls). Plain `memory status` stays fast and skips this; a complete persisted index is shown as `indexed (unprobed)`, while unknown vector/semantic state means it was not checked. |
+| `--index`   | Reindex if the store is dirty. Implies `--deep`.                                                                                                                                                                                                                                  |
+| `--fix`     | Repair stale recall locks and normalize promotion metadata.                                                                                                                                                                                                                       |
+| `--json`    | Print JSON.                                                                                                                                                                                                                                                                       |
+| `--verbose` | Emit detailed per-phase logs.                                                                                                                                                                                                                                                     |
 
 With local llama.cpp embeddings, `--deep` and `--index` also show available
 server, model, capability, and endpoint diagnostics.
@@ -76,6 +90,11 @@ memory searches.
 For providers that discover their default model at initialization, plain status
 defers model identity checks until that model is known. Use `--deep` to initialize
 the provider and verify the model and provider settings against the existing index.
+
+Session eligibility excludes unindexed transcripts whose parsed content is
+entirely system-generated, matching the indexer's admission rules. These
+transcripts do not keep status dirty; later user content makes them eligible
+for indexing again.
 
 ## `memory index`
 
@@ -105,6 +124,13 @@ up to five attempts. Retries honor valid provider cooldown hints, capped at
 60 seconds per wait. Other transient errors keep the shorter three-attempt
 budget. Permanent quota errors without a cooldown hint stop that operation.
 The verbose output shows each retry wait.
+
+For OpenAI and OpenAI-compatible embeddings, set
+`OPENCLAW_DEBUG_MEMORY_EMBEDDINGS=1` to log remote request counts, HTTP status,
+response sizes when provided, and vector shape. These diagnostics omit headers,
+URLs, input text, and vector contents. Validation errors identify the provider,
+model, batch size, and rejected condition. A rejected batch still aborts indexing;
+full rebuilds publish only a complete index.
 
 Interactive `memory_search` keeps three attempts and at most eight seconds of
 total retry sleep within the agent tool's 30-second deadline. A cancelled caller
@@ -279,7 +305,9 @@ and remain selected.
 
 Preview and apply use the same matching logic, but each reads current state;
 a preview is not an immutable plan or a lock on subsequent writes. Apply
-coordinates with the memory plugin's staging and file mutations. Indexing
+coordinates with the memory plugin's staging and file mutations. It rechecks
+selected lineage after preparation and refreshes the plan if it changed, while
+retaining entries already identified as belonging to the selected sessions. Indexing
 discards stale results instead of restoring purged chunks or cached embeddings;
 rerun an index command that reports a source change. Direct agent edits and
 external writers do not share that lock, so pause them during a sensitive

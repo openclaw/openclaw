@@ -35,61 +35,41 @@ export function reconcileSidebarZone(
       continue;
     }
     const canonicalKey = serializeSidebarEntry(entry);
-    if (seen.has(canonicalKey)) {
+    if (
+      seen.has(canonicalKey) ||
+      (entry.type === "route" && !validRouteSet.has(entry.route)) ||
+      (entry.type === "session" && !pinnedKeys.has(entry.key) && knownUnpinnedKeys.has(entry.key))
+    ) {
       continue;
     }
-    if (entry.type === "route") {
-      if (!validRouteSet.has(entry.route)) {
-        continue;
-      }
-      seen.add(canonicalKey);
-      entries.push(entry);
-      canonical.push(canonicalKey);
-      continue;
-    }
-    if (entry.type === "plugin") {
-      seen.add(canonicalKey);
-      canonical.push(canonicalKey);
-      // Registration can disappear on reload, disconnect, or permission loss;
-      // an unavailable plugin must not erase the operator's saved placement.
-      if (pluginNavigationKeys.has(entry.key)) {
-        entries.push(entry);
-      }
-      continue;
-    }
-    if (pinnedKeys.has(entry.key)) {
-      seen.add(canonicalKey);
-      entries.push(entry);
-      canonical.push(canonicalKey);
-      continue;
-    }
-    if (knownUnpinnedKeys.has(entry.key)) {
-      continue;
-    }
-    // Unknown state: keep the position, render nothing.
+    // Unavailable plugins and unknown sessions retain their saved position without rendering.
     seen.add(canonicalKey);
     canonical.push(canonicalKey);
+    if (
+      entry.type === "route" ||
+      (entry.type === "plugin" ? pluginNavigationKeys.has(entry.key) : pinnedKeys.has(entry.key))
+    ) {
+      entries.push(entry);
+    }
   }
 
-  for (const session of pinnedSessions) {
-    const entry = { type: "session", key: session.key } as const;
+  const append = (entry: SidebarZoneEntry) => {
     const serialized = serializeSidebarEntry(entry);
     if (!seen.has(serialized)) {
       seen.add(serialized);
       entries.push(entry);
       canonical.push(serialized);
     }
+  };
+  for (const session of pinnedSessions) {
+    append({ type: "session", key: session.key });
   }
 
   // Plugin defaults join the same ordered zone as explicit pins. Rendering and
   // drag writes must see the same complete order, including newly loaded plugins.
   for (const key of defaultPluginNavigationKeys) {
-    const entry = { type: "plugin", key } as const;
-    const serialized = serializeSidebarEntry(entry);
-    if (pluginNavigationKeys.has(key) && !seen.has(serialized)) {
-      seen.add(serialized);
-      entries.push(entry);
-      canonical.push(serialized);
+    if (pluginNavigationKeys.has(key)) {
+      append({ type: "plugin", key });
     }
   }
 

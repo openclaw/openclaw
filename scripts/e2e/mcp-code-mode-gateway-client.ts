@@ -1,4 +1,3 @@
-// Mcp Code Mode Gateway Client script supports OpenClaw repository automation.
 import path from "node:path";
 import { setTimeout as setNodeTimeout, clearTimeout as clearNodeTimeout } from "node:timers";
 import { pathToFileURL } from "node:url";
@@ -71,8 +70,8 @@ export async function fetchJson(
     }, timeoutMs);
     timeout.unref?.();
   });
-  let response: Response | undefined;
-  let text = "";
+  let response: Response;
+  let text: string;
   try {
     response = await Promise.race([
       (options.fetchImpl ?? fetch)(url, { ...init, signal: controller.signal }),
@@ -89,12 +88,7 @@ export async function fetchJson(
       timeoutPromise,
     });
   } finally {
-    if (timeout) {
-      clearNodeTimeout(timeout);
-    }
-  }
-  if (!response) {
-    throw new Error(`HTTP request to ${url} did not return a response`);
+    clearNodeTimeout(timeout);
   }
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} from ${url}: ${text}`);
@@ -147,7 +141,7 @@ async function main() {
               text: [
                 "mcp code mode api file qa check:",
                 "MCP and API are code-mode globals; they are defined only inside the exec tool, not in normal chat.",
-                "Call exec with language javascript and this exact code:",
+                "Call exec with this exact JavaScript code:",
                 'const files = await API.list("mcp");',
                 'const root = await API.read("mcp/index.d.ts");',
                 'const api = await API.read("mcp/fixture.d.ts");',

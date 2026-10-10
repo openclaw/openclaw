@@ -5,7 +5,10 @@ import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { assignProviderModelOrder } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -14,7 +17,7 @@ import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.ty
 import type { ModelRegistry } from "./sessions/model-registry.js";
 
 type ConfiguredCatalogAgentFacts = {
-  input: { config: OpenClawConfig };
+  input: { config: OpenClawConfig; env?: NodeJS.ProcessEnv };
   configuredModelRefs: readonly ModelCatalogRef[];
 };
 
@@ -23,12 +26,13 @@ type ConfiguredCatalogWorkspaceFacts = {
   inlineProviderModels: readonly InlineModelEntry[];
 };
 
-function createConfiguredModelCatalogSnapshot(params: {
+export function prepareConfiguredRuntimeFacts(params: {
   agentFacts: ConfiguredCatalogAgentFacts;
   workspaceFacts: ConfiguredCatalogWorkspaceFacts;
   templateModelRegistry: ModelRegistry;
   configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): ModelCatalogSnapshot {
+}): PreparedModelRuntimeCatalogFacts {
+  const templateModelRegistry = params.templateModelRegistry;
   const replace = params.agentFacts.input.config.models?.mode === "replace";
   const keyOf = createModelCatalogIdentityKeyResolver();
   const runtimeEntries = (replace ? [] : params.configuredRuntimeModels).map(({ model }) =>
@@ -81,22 +85,14 @@ function createConfiguredModelCatalogSnapshot(params: {
     ],
     keyOf,
   );
-  return {
+  const modelCatalog = {
     entries: configuredEntries,
     routeVariants: configuredEntries,
     ...(runtimeEntries.length > 0 ? { staticEntries: runtimeEntries } : {}),
   };
-}
-
-export function prepareConfiguredRuntimeFacts(params: {
-  agentFacts: ConfiguredCatalogAgentFacts;
-  workspaceFacts: ConfiguredCatalogWorkspaceFacts;
-  templateModelRegistry: ModelRegistry;
-  configuredRuntimeModels: readonly PreparedConfiguredRuntimeModel[];
-}): PreparedModelRuntimeCatalogFacts {
   return {
-    templateModelRegistry: params.templateModelRegistry,
-    modelCatalog: createConfiguredModelCatalogSnapshot(params),
+    templateModelRegistry,
+    modelCatalog,
     configuredRuntimeModels: params.configuredRuntimeModels,
     inlineProviderModels: params.workspaceFacts.inlineProviderModels,
   };
@@ -110,12 +106,33 @@ export function prepareCapturedRuntimeFacts(
   if (params.agentFacts.input.config.models?.mode === "replace") {
     return facts;
   }
+  const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+    params.workspaceFacts.pluginMetadataSnapshot,
+    params.agentFacts.input.config,
+    params.agentFacts.input.env,
+  );
   const entries = dedupeByKey(
     [
       ...facts.modelCatalog.entries,
-      ...params.templateModelRegistry.getAll().map(modelCatalogRowToEntry),
+      // Static hooks also answer runtime provider aliases; publish canonical rows once.
+      ...params.templateModelRegistry.getAll().map((model) => {
+        const entry = modelCatalogRowToEntry(model);
+        entry.provider = normalizeProvider(entry.provider);
+        return entry;
+      }),
     ],
     createModelCatalogIdentityKeyResolver(),
   );
-  return { ...facts, modelCatalog: { ...facts.modelCatalog, entries, routeVariants: entries } };
+  const orderedEntries = assignProviderModelOrder(
+    entries,
+    loadManifestModelCatalog({
+      config: params.agentFacts.input.config,
+      metadataSnapshot: params.workspaceFacts.pluginMetadataSnapshot,
+    }),
+    { appendUnknown: false },
+  );
+  return {
+    ...facts,
+    modelCatalog: { ...facts.modelCatalog, entries: orderedEntries, routeVariants: orderedEntries },
+  };
 }

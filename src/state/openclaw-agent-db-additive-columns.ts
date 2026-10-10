@@ -3,7 +3,7 @@ type BareNullableSqliteDatatype = "INTEGER" | "TEXT";
 type LazyAdditiveAgentColumnDefinition = {
   columnName: string;
   dataType: BareNullableSqliteDatatype;
-  tableName: "session_nodes";
+  tableName: "session_nodes" | "session_key_contract";
 };
 
 // Session responsibility is feature-local and remains absent until the first
@@ -22,7 +22,14 @@ export const LEGACY_ACP_MIGRATION_COLUMN_DEFINITION = {
   tableName: "session_nodes",
 } as const satisfies LazyAdditiveAgentColumnDefinition;
 
+export const CANONICAL_READY_COLUMN_DEFINITION = {
+  columnName: "canonical_ready",
+  dataType: "TEXT",
+  tableName: "session_key_contract",
+} as const satisfies LazyAdditiveAgentColumnDefinition;
+
 export const FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS = [
   ...SESSION_OWNER_COLUMN_DEFINITIONS,
   LEGACY_ACP_MIGRATION_COLUMN_DEFINITION,
+  CANONICAL_READY_COLUMN_DEFINITION,
 ] as const satisfies readonly LazyAdditiveAgentColumnDefinition[];

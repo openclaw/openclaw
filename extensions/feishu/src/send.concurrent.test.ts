@@ -1,6 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { sendMessageFeishu } from "./send.js";
 
 const {
   mockClientCreate,
@@ -33,18 +34,6 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
   return { ...actual, convertMarkdownTables: mockConvertMarkdownTables };
 });
-vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    channel: {
-      text: {
-        resolveMarkdownTableMode: vi.fn(() => "preserve"),
-        convertMarkdownTables: vi.fn((text: string) => text),
-      },
-    },
-  }),
-}));
-
-let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 const cfg = {} as ClawdbotConfig;
 
@@ -71,10 +60,6 @@ function rateLimitError() {
     },
   });
 }
-
-beforeAll(async () => {
-  ({ sendMessageFeishu } = await import("./send.js"));
-});
 
 afterAll(() => {
   vi.resetModules();

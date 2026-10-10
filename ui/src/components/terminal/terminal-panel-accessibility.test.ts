@@ -41,6 +41,7 @@ function createPickerClient() {
 
 describe("OpenClawTerminalPanel accessibility", () => {
   beforeEach(async () => {
+    vi.useFakeTimers();
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
     createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
@@ -53,7 +54,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
     // The occupied dock (bottom by default) has nowhere to move to, so its
     // button drops out of the cluster instead of rendering a pressed state.
-    const switcher = panel.renderRoot.querySelector('[role="group"]');
+    const switcher = panel.renderRoot.querySelector('.tp-actions [role="group"]');
     expect(switcher?.getAttribute("aria-label")).toBe("Terminal panel position");
     expect(
       ["Dock to right", "Fill main content area"].every((label) =>
@@ -73,8 +74,14 @@ describe("OpenClawTerminalPanel accessibility", () => {
     panel.embedded = true;
     document.body.append(panel);
     await panel.updateComplete;
-
-    panel.renderRoot.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]')?.click();
+    const dock = panel.renderRoot.querySelector<HTMLButtonElement>(
+      '[aria-label="Dock to bottom"]',
+    )!;
+    await waitForFast(() => {
+      expect(panel.hostedTabs[0]?.className).toBe("is-live");
+      expect(dock.disabled).toBe(false);
+    });
+    dock.click();
 
     expect(event).toHaveBeenCalledWith(
       expect.objectContaining({ detail: { agentId: "main", dock: "bottom", open: true } }),
@@ -109,11 +116,17 @@ describe("OpenClawTerminalPanel accessibility", () => {
   });
 
   afterEach(async () => {
+    for (const panel of document.querySelectorAll<OpenClawTerminalPanel>(
+      TERMINAL_PANEL_ELEMENT_NAME,
+    )) {
+      panel.closeTerminalPanel();
+    }
     document.body.replaceChildren();
     localStorage.clear();
     sessionStorage.clear();
     createGhosttyTerminalMock.mockReset();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
     await i18n.setLocale("en");
   });
 

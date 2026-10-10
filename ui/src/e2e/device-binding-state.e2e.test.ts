@@ -1,7 +1,7 @@
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect } from "playwright/test";
 import { it } from "vitest";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -24,8 +24,10 @@ const nodes = [
 const makeConfig = (defaultBinding: string, agentBinding: string) => ({
   tools: { exec: { node: defaultBinding } },
   agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
     entries: {
-      main: { default: true },
+      main: {},
       research: { name: "Research", tools: { exec: { node: agentBinding } } },
     },
   },
@@ -204,9 +206,16 @@ suite.define(() => {
           ...config,
           tools: { exec: {} },
         });
+        // Applied-state refresh must preserve the acknowledged binding removal.
+        // Hold that read so this verifies the same order on fast and loaded hosts.
+        const refreshReads = (await gateway.getRequests("config.get")).length;
+        await gateway.deferNext("config.get");
         await gateway.resolveDeferred("config.set");
         const indicator = page.locator("openclaw-settings-save-indicator");
         await expect(indicator).toContainText("Saved");
+        await gateway.waitForRequest("config.get", { after: refreshReads });
+        await gateway.resolveDeferred("config.get");
+        await page.screenshot({ path: path.join(artifacts, "after-clear-refresh.png") });
         await expect(defaultSelect).toHaveValue("");
         await expect(defaultSelect).toBeDisabled();
         await expect(researchSelect).toHaveValue("agent-node");
@@ -220,8 +229,10 @@ suite.define(() => {
         expect(JSON.parse(String(clearedAgent.raw))).toEqual({
           tools: { exec: {} },
           agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
             entries: {
-              main: { default: true },
+              main: {},
               research: { name: "Research", tools: { exec: {} } },
             },
           },

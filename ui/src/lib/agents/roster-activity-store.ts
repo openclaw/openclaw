@@ -1,30 +1,18 @@
-import { createDeferredCore } from "../../../../src/shared/deferred.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
+import { SESSIONS_LIST_TRANSCRIPT_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
-import {
-  createGatewayConnectionLifecycle,
-  type GatewayConnectionScope,
-} from "../gateway-connection-lifecycle.ts";
 import { createGatewaySetSyncLifecycle } from "../gateway-set-sync-lifecycle.ts";
-import { createSessionEventRefreshCoordinator } from "../sessions/event-refresh-coordinator.ts";
-import {
-  appendSessionResults,
-  readSessionChangedEvent,
-  reconcileSessionChanged,
-} from "../sessions/reconcile.ts";
-import { createSessionEventSubscriptionOwner } from "../sessions/session-event-subscription.ts";
-import { buildSessionListParams } from "../sessions/session-requests.ts";
+import type {
+  SessionCapability,
+  SessionConnectionScope,
+  SessionListSnapshot,
+} from "../sessions/session-capability.ts";
 import { selectableAgentsList } from "./display.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
-type RosterContext = Pick<ApplicationContext, "gateway" | "agents" | "agentIdentity">;
+type RosterContext = Pick<ApplicationContext, "gateway" | "agents" | "agentIdentity" | "sessions">;
 type RosterActivitySnapshot = {
   readonly cards: ReadonlyArray<Readonly<ReturnType<typeof agentRosterCards>[number]>>;
   readonly result: SessionsListResult | null;
@@ -33,11 +21,14 @@ type RosterActivitySnapshot = {
   readonly error: string | null;
   readonly subscriptionError: string | null;
 };
-type RosterRequest = {
-  scope: GatewayConnectionScope;
-  generation: number;
-  involvingMe: boolean;
-  completion: ReturnType<typeof createDeferredCore<void>>;
+type RosterBinding = {
+  connection: SessionConnectionScope;
+  observation?: ReturnType<SessionCapability["observeList"]>;
+  snapshot: SessionListSnapshot;
+  requested: boolean;
+  metadataLoading: boolean;
+  metadataError: string | null;
+  request?: Promise<void>;
 };
 
 const emptySnapshot: RosterActivitySnapshot = {
@@ -48,14 +39,14 @@ const emptySnapshot: RosterActivitySnapshot = {
   error: null,
   subscriptionError: null,
 };
-const stores = new WeakMap<ApplicationGateway, RosterActivityStore>();
+const stores = new WeakMap<SessionCapability, RosterActivityStore>();
 
-/** One activity window per Gateway, retained only by visible roster consumers. */
+/** Visible roster consumers share a capability-owned all-agent window and identity projection. */
 export function rosterActivityStore(context: RosterContext): RosterActivityStore {
-  let store = stores.get(context.gateway);
+  let store = stores.get(context.sessions);
   if (!store) {
     store = new RosterActivityStore(context);
-    stores.set(context.gateway, store);
+    stores.set(context.sessions, store);
   }
   return store;
 }
@@ -63,43 +54,31 @@ export function rosterActivityStore(context: RosterContext): RosterActivityStore
 class RosterActivityStore {
   private current = emptySnapshot;
   private readonly listeners = new Set<() => void>();
-  private readonly lifecycle = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
-  private readonly rawRequests = new WeakMap<GatewayBrowserClient, RosterRequest>();
-  private activeRequest: RosterRequest | null = null;
-  private queued: ReturnType<typeof createDeferredCore<void>> | null = null;
-  private generation = 0;
-  private pageActive = false;
   private readonly observation: ReturnType<typeof createGatewaySetSyncLifecycle>;
+  private binding: RosterBinding | null = null;
   private involvingMe = false;
-  private readonly events = createSessionEventSubscriptionOwner({
-    isCurrent: (scope) => this.lifecycle.isCurrent(scope),
-    onError: (_scope, subscriptionError) => this.publish({ ...this.current, subscriptionError }),
-    retryDelayMs: () => null,
-  });
-  private readonly refreshEvents = createSessionEventRefreshCoordinator({
-    active: false,
-    refresh: () => this.refresh(),
-  });
 
   constructor(private readonly context: RosterContext) {
-    let stopAgents: (() => void) | undefined;
-    let stopIdentities: (() => void) | undefined;
+    let cleanups: Array<() => void> = [];
     this.observation = createGatewaySetSyncLifecycle(context.gateway, {
-      sync: () => this.syncPageActivity(),
-      onSnapshot: (snapshot) => this.applyGateway(snapshot),
-      onEvent: (event) => this.applyEvent(event),
+      sync: () => this.synchronize(),
+      onSnapshot: () => this.synchronize(),
       onAttach: () => {
-        stopAgents = context.agents.subscribe(() => this.publishResult(this.current.result));
-        stopIdentities = context.agentIdentity.subscribe(() =>
-          this.publishResult(this.current.result),
-        );
+        cleanups = [
+          context.agents.subscribe(() => this.project()),
+          context.agentIdentity.subscribe(() => this.project()),
+          context.sessions.subscribe(() => {
+            if (this.current.subscriptionError !== context.sessions.eventSubscriptionError) {
+              this.project();
+            }
+          }),
+        ];
       },
       onDetach: () => {
-        stopAgents?.();
-        stopIdentities?.();
-        this.pageActive = false;
-        this.refreshEvents.setActive(false);
-        this.reset();
+        cleanups.forEach((stop) => stop());
+        cleanups = [];
+        this.retire();
+        this.publish({ ...emptySnapshot, involvingMe: this.involvingMe });
       },
     });
   }
@@ -109,21 +88,16 @@ class RosterActivityStore {
   }
 
   subscribe(listener: () => void): () => void {
-    // Each attachment owns a reference, even if two consumers reuse a callback.
     const notify = () => listener();
     this.listeners.add(notify);
     if (this.listeners.size === 1) {
       this.observation.attach();
-      this.syncPageActivity();
-      if (!this.applyGateway(this.context.gateway.snapshot)) {
-        void this.refresh();
-      }
+      this.synchronize();
     }
     return () => {
-      if (!this.listeners.delete(notify) || this.listeners.size > 0) {
-        return;
+      if (this.listeners.delete(notify) && this.listeners.size === 0) {
+        this.observation.detach();
       }
-      this.observation.detach();
     };
   }
 
@@ -137,10 +111,19 @@ class RosterActivityStore {
     }
   }
 
-  private publishResult(result: SessionsListResult | null) {
+  private project() {
+    const binding = this.binding;
+    if (!binding || !this.isCurrent(binding)) {
+      this.publish({ ...emptySnapshot, involvingMe: this.involvingMe });
+      return;
+    }
+    const { result, loading, error } = binding.snapshot;
     this.publish({
-      ...this.current,
       result,
+      involvingMe: this.involvingMe,
+      loading: binding.metadataLoading || loading,
+      error: binding.metadataError ?? error,
+      subscriptionError: this.context.sessions.eventSubscriptionError,
       cards: agentRosterCards(
         this.context.agents.state.agentsList ?? undefined,
         result?.sessions.filter((row) => row.archived !== true) ?? [],
@@ -149,204 +132,130 @@ class RosterActivityStore {
     });
   }
 
-  private applyEvent(event: GatewayEventFrame) {
-    if (
-      !this.lifecycle.capture() ||
-      (event.event !== "sessions.changed" && event.event !== "session.message")
-    ) {
-      return;
-    }
-    const info = readSessionChangedEvent(event.payload);
-    const reconciled = reconcileSessionChanged(this.current.result, event.payload, {
-      archivedFilter: "all",
-    });
-    if (reconciled.result !== this.current.result) {
-      this.publishResult(reconciled.result);
-    }
-    const ended =
-      info?.hasActiveRun === false || (info?.status != null && info.status !== "running");
-    // Streaming messages do not invalidate the roster. A terminal snapshot can
-    // replace a known member just as in the primary session catalog.
-    if (
-      event.event === "session.message" &&
-      (!ended || (reconciled.row && info?.archived !== true && !this.involvingMe))
-    ) {
-      return;
-    }
-    this.revokeRequest();
-    this.refreshEvents.schedule();
-  }
-
-  setInvolvingMe(involvingMe: boolean) {
-    if (this.involvingMe === involvingMe) {
-      return;
-    }
-    this.involvingMe = involvingMe;
-    this.publish({ ...this.current, result: null, involvingMe });
-    void this.refresh();
-  }
-
-  private reset() {
-    this.revokeRequest();
-    this.queued?.resolve();
-    this.queued = null;
-    this.events.reset();
-    this.refreshEvents.reset();
-    this.publish({ ...emptySnapshot, involvingMe: this.involvingMe });
-  }
-
-  private applyGateway(snapshot: ApplicationGatewaySnapshot): boolean {
-    const changed = this.lifecycle.transition(snapshot);
-    if (changed) {
-      this.reset();
-      void this.refresh();
-    }
-    // Also expose connection metadata changes to the views.
-    this.publish(this.current);
-    return changed;
-  }
-
-  private revokeRequest() {
-    this.generation += 1;
-    // Revocation retires publication; the raw read still owns completion.
-    this.activeRequest = null;
-  }
-
-  private canRead(): boolean {
+  private isCurrent(binding: RosterBinding): boolean {
     return (
-      this.listeners.size > 0 &&
-      (typeof document === "undefined" || document.visibilityState !== "hidden")
+      this.binding === binding && this.context.sessions.isConnectionScopeCurrent(binding.connection)
     );
   }
 
-  private syncPageActivity() {
-    const active = this.canRead();
-    if (!active && this.pageActive) {
-      this.revokeRequest();
-      if (this.listeners.size > 0 && this.lifecycle.capture()) {
-        this.queued ??= createDeferredCore();
+  private retire() {
+    const previous = this.binding;
+    this.binding = null;
+    previous?.observation?.dispose();
+  }
+
+  private synchronize() {
+    if (this.listeners.size === 0) {
+      return;
+    }
+    if (this.binding && !this.isCurrent(this.binding)) {
+      this.retire();
+    }
+    const connection = this.context.sessions.captureConnectionScope();
+    if (!connection) {
+      this.project();
+      return;
+    }
+    if (!this.binding) {
+      const binding: RosterBinding = {
+        connection,
+        snapshot: { result: null, agentId: null, loading: false, error: null },
+        requested: false,
+        metadataLoading: false,
+        metadataError: null,
+      };
+      this.binding = binding;
+      // The capability owns one bounded window, including its enriched pages,
+      // mutation receipts, event reconciliation, and refresh pacing.
+      binding.observation = this.context.sessions.observeList(
+        {
+          source: "agent-roster",
+          rowMode: "compact",
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+          archivedFilter: "all",
+          involvingMe: this.involvingMe,
+          excludeDock: true,
+          limit: 300,
+          pageSize: SESSIONS_LIST_TRANSCRIPT_LIMIT,
+        },
+        (snapshot) => {
+          if (this.isCurrent(binding)) {
+            binding.snapshot = snapshot;
+            this.project();
+          }
+        },
+      );
+      if (!this.isCurrent(binding)) {
+        binding.observation.dispose();
+        return;
       }
-      this.publish({ ...this.current, loading: false });
     }
-    this.pageActive = active;
-    this.refreshEvents.setActive(active);
-    if (active) {
-      this.startQueuedRefresh();
+    if (!this.binding.requested && this.visible()) {
+      void this.refreshBinding(this.binding);
     }
+  }
+
+  setInvolvingMe(involvingMe: boolean) {
+    if (this.involvingMe !== involvingMe) {
+      this.involvingMe = involvingMe;
+      this.retire();
+      this.project();
+      this.synchronize();
+    }
+  }
+
+  private visible() {
+    return typeof document === "undefined" || document.visibilityState !== "hidden";
   }
 
   refresh(): Promise<void> {
-    const scope = this.lifecycle.capture();
-    if (!scope || this.listeners.size === 0) {
-      return Promise.resolve();
-    }
-    this.refreshEvents.absorb();
-    this.revokeRequest();
-    const completion = (this.queued ??= createDeferredCore());
-    this.startQueuedRefresh();
-    return completion.promise;
+    this.synchronize();
+    return this.binding && this.visible() ? this.refreshBinding(this.binding) : Promise.resolve();
   }
 
-  private startQueuedRefresh() {
-    const scope = this.lifecycle.capture();
-    if (!scope || !this.queued || !this.canRead() || this.rawRequests.has(scope.client)) {
-      return;
+  private refreshBinding(binding: RosterBinding): Promise<void> {
+    if (binding.request) {
+      return binding.request;
     }
-    this.refreshEvents.absorb();
-    const request: RosterRequest = {
-      scope,
-      generation: this.generation,
-      involvingMe: this.involvingMe,
-      completion: this.queued,
-    };
-    this.queued = null;
-    this.activeRequest = request;
-    // Caller retirement cannot cancel Gateway work. Retain correlation until the
-    // raw chain settles, including through same-client reconnects and reattachments.
-    this.rawRequests.set(scope.client, request);
-    void this.load(request).finally(() => {
-      if (this.rawRequests.get(scope.client) === request) {
-        this.rawRequests.delete(scope.client);
-      }
-      if (this.activeRequest === request) {
-        this.activeRequest = null;
-      }
-      request.completion.resolve();
-      this.startQueuedRefresh();
-    });
-  }
-
-  private async load(request: RosterRequest): Promise<void> {
-    const { scope } = request;
-    const isCurrent = () =>
-      this.generation === request.generation &&
-      this.activeRequest === request &&
-      this.lifecycle.isCurrent(scope) &&
-      this.canRead();
-    void this.events.ensure(scope);
-    this.publish({ ...this.current, loading: true, error: null });
-    try {
-      const raw = await this.context.agents.ensureList();
-      if (!isCurrent()) {
-        return;
-      }
-      if (!raw) {
-        throw new Error(this.context.agents.state.agentsError ?? t("agentsHome.loadFailed"));
-      }
-      const agents = selectableAgentsList(raw);
-      await this.context.agentIdentity.ensure(agents.agents.map((agent) => agent.id));
-      if (!isCurrent()) {
-        return;
-      }
-      let result: SessionsListResult | null = null;
-      let offset = 0;
-      // One shared window: at most 300 rows, with Gateway-pinned rows first.
-      // Include archives so the sidebar's status filter needs no second loader.
-      for (let page = 0; page < 3; page += 1) {
-        if (!isCurrent()) {
+    binding.requested = true;
+    binding.metadataLoading = true;
+    binding.metadataError = null;
+    binding.request = Promise.resolve()
+      .then(async () => {
+        try {
+          const raw = await this.context.agents.ensureList();
+          if (!this.isCurrent(binding)) {
+            return;
+          }
+          if (!raw) {
+            throw new Error(this.context.agents.state.agentsError ?? t("agentsHome.loadFailed"));
+          }
+          await this.context.agentIdentity.ensure(
+            selectableAgentsList(raw).agents.map(({ id }) => id),
+          );
+        } catch (error) {
+          if (this.isCurrent(binding)) {
+            binding.metadataError = formatUiError(error, t("agentsHome.loadFailed"));
+          }
           return;
+        } finally {
+          binding.metadataLoading = false;
+          if (this.isCurrent(binding)) {
+            this.project();
+          }
         }
-        const next = await scope.client.request<SessionsListResult>(
-          "sessions.list",
-          buildSessionListParams({
-            includeDerivedTitles: true,
-            includeLastMessage: true,
-            archivedFilter: "all",
-            involvingMe: request.involvingMe,
-            limit: 100,
-            offset,
-          }),
-        );
-        if (!isCurrent()) {
-          return;
+        if (this.isCurrent(binding) && this.visible()) {
+          // The observation publishes list failures; retirement is not a new view error.
+          await binding.observation?.refresh().catch(() => undefined);
+        } else if (this.isCurrent(binding)) {
+          binding.requested = false;
         }
-        result = result ? appendSessionResults(result, next) : next;
-        if (!next.hasMore || next.sessions.length === 0) {
-          break;
-        }
-        offset = next.nextOffset ?? offset + next.sessions.length;
-      }
-      this.publishResult(result);
-      if (!isCurrent()) {
-        return;
-      }
-      this.publish({
-        ...this.current,
-        loading: false,
+      })
+      .finally(() => {
+        binding.request = undefined;
       });
-    } catch (error) {
-      if (isCurrent()) {
-        // Activity failure must not retire otherwise usable agent navigation.
-        this.publishResult(this.current.result);
-        if (!isCurrent()) {
-          return;
-        }
-        this.publish({
-          ...this.current,
-          loading: false,
-          error: formatUiError(error, t("agentsHome.loadFailed")),
-        });
-      }
-    }
+    this.project();
+    return binding.request;
   }
 }

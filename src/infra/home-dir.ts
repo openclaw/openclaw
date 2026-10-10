@@ -1,4 +1,5 @@
 // Resolves OpenClaw home and platform-specific config directories.
+import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -6,9 +7,20 @@ import {
   resolveEffectiveHomeDir,
   resolveOsHomeDir,
 } from "@openclaw/normalization-core/home-dir";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 
 export { resolveEffectiveHomeDir, resolveOsHomeDir };
+
+const userPathBaseDirectory = resolveGlobalSingleton(
+  Symbol.for("openclaw.userPathBaseDirectory"),
+  () => new AsyncLocalStorage<string>(),
+);
+
+/** Preserve invocation-relative paths while an updater parks its physical cwd. */
+export function withUserPathBaseDirectory<T>(cwd: string | undefined, operation: () => T): T {
+  return cwd === undefined ? operation() : userPathBaseDirectory.run(path.resolve(cwd), operation);
+}
 
 /** Resolves the effective home or falls back to cwd when no home source exists. */
 export function resolveRequiredHomeDir(
@@ -59,27 +71,34 @@ export function expandHomePrefix(
   return input.replace(/^~(?=$|[\\/])/, () => home);
 }
 
-/** Resolves a user-supplied path after trimming and expanding against the effective home. */
-export function resolveHomeRelativePath(
+type HomePathOptions = {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+};
+
+function resolvePathWithHome(
   input: string,
-  opts?: {
-    env?: NodeJS.ProcessEnv;
-    homedir?: () => string;
-  },
+  opts: HomePathOptions | undefined,
+  resolveHome: typeof resolveRequiredHomeDir,
 ): string {
   const trimmed = input.trim();
   if (!trimmed) {
     return trimmed;
   }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
-      homedir: opts?.homedir,
-    });
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+  const expanded = trimmed.startsWith("~")
+    ? expandHomePrefix(trimmed, {
+        home: resolveHome(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+        env: opts?.env,
+        homedir: opts?.homedir,
+      })
+    : trimmed;
+  const base = userPathBaseDirectory.getStore();
+  return base ? path.resolve(base, expanded) : path.resolve(expanded);
+}
+
+/** Resolves a user-supplied path after trimming and expanding against the effective home. */
+export function resolveHomeRelativePath(input: string, opts?: HomePathOptions): string {
+  return resolvePathWithHome(input, opts, resolveRequiredHomeDir);
 }
 
 /** Resolves a user path against the effective home, preserving an empty input. */
@@ -95,24 +114,6 @@ export function resolveUserPath(
 }
 
 /** Resolves a user-supplied path against the OS home, ignoring OPENCLAW_HOME. */
-export function resolveOsHomeRelativePath(
-  input: string,
-  opts?: {
-    env?: NodeJS.ProcessEnv;
-    homedir?: () => string;
-  },
-): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredOsHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
-      env: opts?.env,
-      homedir: opts?.homedir,
-    });
-    return path.resolve(expanded);
-  }
-  return path.resolve(trimmed);
+export function resolveOsHomeRelativePath(input: string, opts?: HomePathOptions): string {
+  return resolvePathWithHome(input, opts, resolveRequiredOsHomeDir);
 }

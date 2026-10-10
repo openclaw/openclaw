@@ -18,12 +18,12 @@ import {
   checkReleaseDocsMirrors,
   flattenReleaseDocs,
   parseReleaseDocsMirror,
+  releaseDocsNavigation,
   renderReleaseDocsMirror,
 } from "../../scripts/lib/release-docs-mirror.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const cli = fileURLToPath(new URL("../../scripts/release-changelog.mjs", import.meta.url));
 const current =
   "## 2026.9.4\n\n### Highlights\n\nText.\n\n```md\n## 2099.1.1\n```\n\n### Complete contribution record\n\nAudited range abc..def.\n- **PR #12** Thanks @human.\n\n";
 const old = "## 2026.8.1\n\nOld notes without a contribution record.\n";
@@ -199,25 +199,6 @@ test("Unreleased fallback and path classification preserve candidate boundaries"
   assert.equal(isReleaseChangelogPath("CHANGELOG/arbitrary.md"), false);
 });
 
-test("CLI reads and checks the same owner without runtime dependencies", () => {
-  const rootDir = fixture();
-  execFileSync(process.execPath, [cli, "split", "--root", rootDir]);
-  const output = execFileSync(
-    process.execPath,
-    [cli, "read", "--root", rootDir, "--version", "2026.9.4"],
-    { encoding: "utf8" },
-  );
-  assert.equal(output, current);
-  const records = execFileSync(
-    process.execPath,
-    [cli, "collection", "--root", rootDir, "--records-only"],
-    { encoding: "utf8" },
-  );
-  assert.match(records, /PR #12/u);
-  assert.doesNotMatch(records, /2026\.8\.1/u);
-  execFileSync(process.execPath, [cli, "check", "--root", rootDir]);
-});
-
 describe("release docs mirrors", () => {
   const mirrorCli = fileURLToPath(
     new URL("../../scripts/render-release-changelog.mjs", import.meta.url),
@@ -231,7 +212,7 @@ describe("release docs mirrors", () => {
     fs.mkdirSync(path.join(rootDir, "CHANGELOG/records"), { recursive: true });
     fs.writeFileSync(
       path.join(rootDir, source),
-      '---\ntitle: "Release title"\n---\n\nExact prose.\n',
+      `---\ntitle: "Release title"\n---\n\n# Release title\n\n${releaseDocsNavigation(version).docs}\n\nExact prose.\n`,
     );
     return { rootDir, version, sources: [source] };
   }
@@ -375,6 +356,11 @@ describe("release docs mirrors", () => {
       "--output",
     ];
     expect(spawnSync(process.execPath, [...args, output], { encoding: "utf8" }).status).toBe(0);
+    const rendered = fs.readFileSync(output, "utf8");
+    expect(rendered.slice(rendered.indexOf("\n\n") + 2)).toBe(
+      `## ${version}\n\n\n### Release title\n\nFor formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).\n\nExact prose.\n\n`,
+    );
+    expect(rendered).not.toContain("raw.githubusercontent.com");
     const check = spawnSync(process.execPath, [mirrorCli, "--root", options.rootDir, "--check"], {
       encoding: "utf8",
     });

@@ -9,8 +9,11 @@ parse_ios_release_args() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --build-number|--revision|--version|--team-id)
+      --build-number|--revision|--version|--team-id|--destination)
         if [[ "$1" == --team-id && "$mode" != prepare ]]; then
+          break
+        fi
+        if [[ "$1" == --destination && "$mode" != plan && "$mode" != upload ]]; then
           break
         fi
         if [[ -z "${2-}" || "${2-}" == --* ]]; then
@@ -23,6 +26,12 @@ parse_ios_release_args() {
           --revision) APP_STORE_REVISION="$2" ;;
           --version) RELEASE_VERSION="$2" ;;
           --team-id) TEAM_ID="$2" ;;
+          --destination)
+            case "$2" in
+              app-store|testflight) RELEASE_DESTINATION="$2" ;;
+              *) echo "Unsupported iOS release destination: $2" >&2; exit 1 ;;
+            esac
+            ;;
         esac
         shift 2
         ;;
@@ -57,7 +66,7 @@ run_ios_fastlane() {
   gemfile="${_OPENCLAW_IOS_FASTLANE_REPO_ROOT}/apps/ios/Gemfile"
 
   local setup_hint=""
-  setup_hint="Install Ruby 3.4.10, then run: cd apps/ios && gem install bundler -v 2.6.9 && bundle _2.6.9_ install"
+  setup_hint="Install Ruby 3.4.11, then run: cd apps/ios && gem install bundler -v 4.0.22 && bundle _4.0.22_ install"
   if [[ ! -f "$gemfile" ]]; then
     echo "The repository iOS Gemfile is missing at ${gemfile}. Restore it from the repository checkout." >&2
     echo "$setup_hint" >&2
@@ -68,10 +77,10 @@ run_ios_fastlane() {
     echo "$setup_hint" >&2
     return 127
   fi
-  if ! BUNDLE_GEMFILE="$gemfile" bundle _2.6.9_ check >/dev/null 2>&1; then
+  if ! BUNDLE_GEMFILE="$gemfile" bundle _4.0.22_ check >/dev/null 2>&1; then
     echo "The iOS Fastlane bundle is not installed for ${gemfile}." >&2
     echo "$setup_hint" >&2
     return 1
   fi
-  BUNDLE_GEMFILE="$gemfile" bundle _2.6.9_ exec fastlane "$@"
+  BUNDLE_GEMFILE="$gemfile" bundle _4.0.22_ exec fastlane "$@"
 }

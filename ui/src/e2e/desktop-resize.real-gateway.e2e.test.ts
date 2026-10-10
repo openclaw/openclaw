@@ -16,9 +16,12 @@ import {
   readDesktopProofNodeStreamCloses,
 } from "../../../scripts/lib/desktop-resize-proof.mts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
-import { startSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
+import { prepareSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
-import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
+import {
+  createOpenClawTestInstance,
+  type GatewayReadinessDiagnostic,
+} from "../../../test/helpers/openclaw-test-instance.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -44,6 +47,7 @@ declare module "vitest" {
   interface TaskMeta {
     desktopProofPhase?: DesktopProofPhase;
     desktopViewerResizeFailure?: DesktopViewerResizeFailure;
+    desktopGatewayReadiness?: GatewayReadinessDiagnostic[];
   }
 }
 
@@ -142,7 +146,7 @@ async function captureDesktopSockets(page: Page) {
   // No connection, RFB authentication, RPC, or bridge is replaced.
   await page.addInitScript(() => {
     localStorage.setItem(
-      "openclaw:control-ui:community-invite",
+      "openclaw:control-ui:community-invite:v2",
       JSON.stringify({ dismissedAtMs: 1770000000000 }),
     );
     const NativeSocket = window.WebSocket;
@@ -168,10 +172,10 @@ async function captureDesktopSockets(page: Page) {
                   : event.reason === "desktop stream closed"
                     ? "stream-close"
                     : [
-                          "desktop authentication failed",
+                          "desktop connection failed during authentication",
                           "desktop authentication timed out",
-                          "desktop ARD authentication failed",
-                          "desktop VNC authentication failed",
+                          "macOS denied desktop access; check credentials and Screen Sharing or Remote Management Observe/Control permissions",
+                          "desktop VNC authentication rejected",
                         ].includes(event.reason)
                       ? "authentication"
                       : event.reason
@@ -227,7 +231,7 @@ suite.define(() => {
       const gatewayLogFile = path.join(state.root, "desktop-gateway.log");
       state.applyEnv();
       let guest: Awaited<ReturnType<typeof createDesktopResizeGuest>> | undefined;
-      let node: Awaited<ReturnType<typeof startSkillLibraryNodeProcess>> | undefined;
+      let node: Awaited<ReturnType<typeof prepareSkillLibraryNodeProcess>> | undefined;
       let admin: SkillLibraryWireClient | undefined;
       let nodeDeviceId: string | undefined;
       let packetProbe: Awaited<ReturnType<typeof observeDesktopEndpointPackets>> | undefined;
@@ -275,6 +279,8 @@ suite.define(() => {
             },
             gateway: {
               auth: { mode: "trusted-proxy", password: gatewayToken, trustedProxy },
+              // The Gateway approves the local device; the fixture approves its command surface.
+              nodes: { pairing: { autoApproveLocal: true } },
               controlUi: {
                 enabled: true,
                 root: path.resolve(fixture.controlUiRoot ?? "dist/control-ui"),
@@ -284,6 +290,12 @@ suite.define(() => {
               trustedProxies: ["127.0.0.1", "::1"],
             },
           });
+          if (fixture.carrier === "node") {
+            node = await prepareSkillLibraryNodeProcess(gateway);
+            nodeDeviceId = node.nodeId;
+          }
+          // The child hydrates its inventory at startup; test-process writes cannot publish to it.
+          await seedDesktopResizeSources(tappedFixture, nodeDeviceId);
           // The hosted owner verified these exact build stamps before invoking the test.
           expect(await gateway.entrypoint()).toEqual(["dist/index.js"]);
           context.signal.throwIfAborted();
@@ -292,7 +304,12 @@ suite.define(() => {
           phase("gateway-start");
           // /readyz waits for the full worker/plugin sidecars. The unrelated
           // subagent-restoration tail is not a desktop readiness requirement.
-          await gateway.startGateway();
+          try {
+            await gateway.startGateway();
+          } finally {
+            // Keep the probe's outcome even when startup rollback also fails.
+            context.task.meta.desktopGatewayReadiness = [...gateway.readiness];
+          }
           context.signal.throwIfAborted();
           if (fixture.carrier === "node") {
             const endpoint = {
@@ -303,10 +320,8 @@ suite.define(() => {
             phase("admin-connect");
             ({ client: admin } = await SkillLibraryWireClient.connect(endpoint));
             phase("node-admission");
-            node = await startSkillLibraryNodeProcess(endpoint, admin);
-            nodeDeviceId = node.nodeId;
+            await node!.start(admin);
           }
-          seedDesktopResizeSources(tappedFixture, nodeDeviceId);
           phase("guest-ssh");
           guest = await createDesktopResizeGuest(fixture);
           phase("browser-context");
@@ -379,7 +394,9 @@ suite.define(() => {
           const assets = new Map<string, string>();
           const assetReads: Promise<unknown>[] = [];
           page.on("response", (response) => {
-            if (/\/assets\/(?:index|desktop)[^/]*\.js$/u.test(new URL(response.url()).pathname)) {
+            if (
+              /\/assets\/(?:index|desktop|novnc-)[^/]*\.js$/u.test(new URL(response.url()).pathname)
+            ) {
               assetReads.push(
                 response.body().then(
                   (bytes) =>
@@ -619,7 +636,12 @@ suite.define(() => {
             await verifyMatch(stage, observerCanvas);
             expect(
               await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
-            ).toBe(5);
+            ).toBe(6);
+            expect(
+              await observerPanel
+                .getByRole("button", { name: "Audio unavailable", exact: true })
+                .isDisabled(),
+            ).toBe(true);
           }
           const colorCount = await sampledFramebufferColors(observerCanvas);
           expect(colorCount).toBeGreaterThan(8);

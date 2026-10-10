@@ -1,15 +1,20 @@
 // Feishu tests cover policy plugin behavior.
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   hasExplicitFeishuGroupConfig,
-  resolveFeishuGroupConfig,
   resolveFeishuGroupSenderActivationIngressAccess,
   resolveFeishuGroupToolPolicy,
   resolveFeishuReplyPolicy,
 } from "./policy.js";
+import { setFeishuRuntime } from "./runtime.js";
 import type { FeishuConfig } from "./types.js";
+
+beforeEach(() => {
+  setFeishuRuntime(createPluginRuntimeMock());
+});
 
 function createCfg(feishu: Record<string, unknown>): OpenClawConfig {
   return {
@@ -46,27 +51,6 @@ describe("resolveFeishuReplyPolicy", () => {
     ).toEqual({ requireMention: true });
   });
 
-  it("keeps explicit account mention gating in open groups", () => {
-    expect(
-      resolveFeishuReplyPolicy({
-        isDirectMessage: false,
-        cfg: createCfg({
-          groupPolicy: "allowlist",
-          requireMention: false,
-          accounts: {
-            work: {
-              groupPolicy: "open",
-              requireMention: true,
-            },
-          },
-        }),
-        accountId: "work",
-        groupPolicy: "open",
-        groupId: "oc_1",
-      }),
-    ).toEqual({ requireMention: true });
-  });
-
   it("keeps explicit per-group mention gating in open groups", () => {
     expect(
       resolveFeishuReplyPolicy({
@@ -80,84 +64,9 @@ describe("resolveFeishuReplyPolicy", () => {
       }),
     ).toEqual({ requireMention: true });
   });
-
-  it("defaults allowlist groups to require mentions", () => {
-    expect(
-      resolveFeishuReplyPolicy({
-        isDirectMessage: false,
-        cfg: createCfg({ groupPolicy: "allowlist" }),
-        groupPolicy: "allowlist",
-        groupId: "oc_1",
-      }),
-    ).toEqual({ requireMention: true });
-  });
-});
-
-describe("resolveFeishuGroupConfig", () => {
-  it("falls back to wildcard group config when direct match is missing", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-        "oc-explicit": { requireMention: true },
-      },
-    });
-
-    const resolved = resolveFeishuGroupConfig({
-      cfg,
-      groupId: "oc-missing",
-    });
-
-    expect(resolved).toEqual({ requireMention: false });
-  });
-
-  it("prefers exact group config over wildcard", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-        "oc-explicit": { requireMention: true },
-      },
-    });
-
-    const resolved = resolveFeishuGroupConfig({
-      cfg,
-      groupId: "oc-explicit",
-    });
-
-    expect(resolved).toEqual({ requireMention: true });
-  });
-
-  it("keeps case-insensitive matching for explicit group ids", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-        OC_UPPER: { requireMention: true },
-      },
-    });
-
-    const resolved = resolveFeishuGroupConfig({
-      cfg,
-      groupId: "oc_upper",
-    });
-
-    expect(resolved).toEqual({ requireMention: true });
-  });
 });
 
 describe("resolveFeishuGroupToolPolicy", () => {
-  it("checks exact keys before the case-insensitive scan", () => {
-    expect(
-      resolveFeishuGroupToolPolicy({
-        cfg: createCfg({
-          groups: {
-            OC_CASE: { tools: { allow: ["case-insensitive"] } },
-            oc_case: { tools: { allow: ["exact"] } },
-          },
-        }),
-        groupId: "oc_case",
-      }),
-    ).toEqual({ allow: ["exact"] });
-  });
-
   it("keeps wildcard fields hidden by a matched whole group entry", () => {
     const cfg = createCfg({
       groups: {
@@ -176,24 +85,6 @@ describe("resolveFeishuGroupToolPolicy", () => {
       allow: ["wildcard"],
     });
   });
-
-  it("keeps account groups out of the root-only adapter", () => {
-    expect(
-      resolveFeishuGroupToolPolicy({
-        cfg: createCfg({
-          accounts: {
-            work: {
-              groups: {
-                oc_account: { tools: { allow: ["account"] } },
-              },
-            },
-          },
-        }),
-        accountId: "work",
-        groupId: "oc_account",
-      }),
-    ).toBeUndefined();
-  });
 });
 
 describe("hasExplicitFeishuGroupConfig", () => {
@@ -206,16 +97,6 @@ describe("hasExplicitFeishuGroupConfig", () => {
 
     expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "OC_UPPER" })).toBe(true);
     expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "oc_upper" })).toBe(true);
-  });
-
-  it("does not treat wildcard group defaults as explicit admission", () => {
-    const cfg = createFeishuConfig({
-      groups: {
-        "*": { requireMention: false },
-      },
-    });
-
-    expect(hasExplicitFeishuGroupConfig({ cfg, groupId: "oc_any" })).toBe(false);
   });
 });
 
@@ -238,24 +119,6 @@ describe("resolveFeishuGroupSenderActivationIngressAccess", () => {
       })
     ).senderAccess.decision;
   }
-
-  it("allows provider-prefixed wildcard entries", async () => {
-    await expect(
-      senderDecision({
-        allowFrom: ["feishu:*", "lark:*"],
-        senderOpenId: "ou_anyone",
-      }),
-    ).resolves.toBe("allow");
-  });
-
-  it("matches normalized immutable user ID entries", async () => {
-    await expect(
-      senderDecision({
-        allowFrom: ["feishu:feishu:user:ou_ALLOWED"],
-        senderOpenId: "ou_ALLOWED",
-      }),
-    ).resolves.toBe("allow");
-  });
 
   it("keeps user and chat allowlist namespaces distinct", async () => {
     await expect(

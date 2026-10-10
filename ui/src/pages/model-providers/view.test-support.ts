@@ -1,4 +1,5 @@
-import { render } from "lit";
+import { nothing, render } from "lit";
+import { onTestFinished } from "vitest";
 import type { ModelProviderCard } from "./data.ts";
 import { renderModelProviders } from "./view.ts";
 
@@ -33,10 +34,10 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     providerUsageFailed: false,
     supplementalLoading: false,
     updatedAt: 1,
-    costDays: 30,
     credentialAgentLabel: "Writer",
     cards: [card()],
     configuredModels: [{ id: "openai/gpt-5", provider: "openai", name: "GPT-5", available: true }],
+    decisionModels: [],
     defaultModels: { primary: "openai/gpt-5", fallbacks: [], utilityModel: null },
     thinkingLevel: "off",
     thinkingOverridden: true,
@@ -45,7 +46,6 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     catalogDiscovering: false,
     catalogDiscoveryError: null,
     configBusy: false,
-    quickAddSupported: true,
     unconfiguredProviders: [{ id: "anthropic", displayName: "Anthropic" }],
     canViewProfiles: true,
     canMutate: true,
@@ -62,6 +62,7 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     addProviderOpen: false,
     addProviderId: "",
     addProviderKey: "",
+    installedAgents: nothing,
     onRefresh: () => undefined,
     onOpenKeyEditor: () => undefined,
     onCloseKeyEditor: () => undefined,
@@ -72,18 +73,18 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
     onRequestLogout: () => undefined,
     onProfileOrderChange: () => undefined,
     onAddProviderToggle: () => undefined,
-    onAddProviderIdChange: () => undefined,
     onAddProviderKeyChange: () => undefined,
     onAddProvider: () => undefined,
     onPrimaryChange: () => undefined,
     onFallbackChange: () => undefined,
     onUtilityChange: () => undefined,
+    onDecisionChange: () => undefined,
     onThinkingChange: () => undefined,
     onThinkingReset: () => undefined,
     onFastModeChange: () => undefined,
     onFastModeReset: () => undefined,
     onCatalogRetry: () => undefined,
-    onOpenModelSetup: () => undefined,
+    onConnectProvider: () => undefined,
     onConnect: () => undefined,
     canConnect: () => false,
     loginBusy: false,
@@ -91,9 +92,14 @@ export function props(overrides: Partial<ModelProvidersViewProps> = {}): ModelPr
   };
 }
 
-export function mount(viewProps: ModelProvidersViewProps): HTMLDivElement {
-  const container = document.createElement("div");
-  document.body.append(container);
+export function mount(
+  viewProps: ModelProvidersViewProps,
+  container = document.body.appendChild(document.createElement("div")),
+): HTMLDivElement {
+  onTestFinished(() => {
+    render(nothing, container);
+    container.remove();
+  });
   render(renderModelProviders(viewProps), container);
   return container;
 }

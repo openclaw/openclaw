@@ -11,10 +11,16 @@ import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts
 type SwarmDotStatus = "queued" | "running" | "done" | "failed";
 
 type SwarmDot = {
-  key: string;
   label: string;
   status: SwarmDotStatus;
   duration: string;
+};
+
+const SWARM_STATUS_LABEL_KEYS: Record<SwarmDotStatus, string> = {
+  queued: "common.queued",
+  running: "common.running",
+  done: "common.completed",
+  failed: "labsPage.swarm.failedOrStopped",
 };
 
 function swarmDuration(row: GatewaySessionRow, status: SwarmDotStatus): string {
@@ -54,8 +60,7 @@ function collectSwarmTasks(
     entries.push({
       phaseRank: row.swarmPhaseRank ?? Number.MAX_SAFE_INTEGER,
       dot: {
-        key: row.key,
-        label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+        label: resolveSessionDisplayName(row.key, row),
         status,
         duration: swarmDuration(row, status),
       },
@@ -164,7 +169,11 @@ export function renderChatSwarmProgress({
             ${tasks.length === 0 ? html`<div class="chat-swarm__outcome">${t("labsPage.swarm.detailsUnavailable")}</div>` : nothing}
             ${tasks.map(
               (task) => html` <div class="chat-swarm__task" role="listitem">
-                <span class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}>
+                <span
+                  class=${`chat-swarm__task-icon chat-swarm__task-icon--${task.status}`}
+                  role="img"
+                  aria-label=${t(SWARM_STATUS_LABEL_KEYS[task.status])}
+                >
                   ${task.status === "done" ? icons.check : task.status === "failed" ? icons.alertTriangle : task.status === "running" ? icons.loader : icons.clock}
                 </span>
                 <span class="chat-swarm__task-name">${task.label}</span>

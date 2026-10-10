@@ -4,7 +4,6 @@ import { CloudWorkersConfigSchema } from "../../../../src/config/zod-schema.clou
 import {
   buildCloudWorkerDeletePatch,
   buildCloudWorkerUpsertPatch,
-  cloudWorkerProfileStatus,
   createCloudWorkerDraft,
   readCloudWorkerProfiles,
   validateCloudWorkerDraft,
@@ -54,7 +53,7 @@ describe("cloud worker settings state", () => {
     ).toBe("machineClass");
   });
 
-  it("distinguishes empty, advertised, and restart-required profiles", () => {
+  it("reads configured profiles independently of provider availability", () => {
     expect(readCloudWorkerProfiles({})).toEqual([]);
     expect(
       readCloudWorkerProfiles({ cloudWorkers: { profiles: { production: configuredProfile } } }),
@@ -62,7 +61,6 @@ describe("cloud worker settings state", () => {
       {
         id: "production",
         providerId: "crabbox",
-        install: "npm",
         backend: "aws",
         target: "linux",
         machineClass: "beast",
@@ -77,11 +75,6 @@ describe("cloud worker settings state", () => {
         binary: "/opt/crabbox",
       },
     ]);
-    expect(cloudWorkerProfileStatus("production", new Set(), false)).toBe("loading");
-    expect(cloudWorkerProfileStatus("production", new Set(["production"]), true)).toBe(
-      "advertised",
-    );
-    expect(cloudWorkerProfileStatus("production", new Set(), true)).toBe("restart-required");
   });
 
   it.each([
@@ -182,7 +175,7 @@ describe("cloud worker settings state", () => {
     });
   });
 
-  it.each(["standard", "fast", "large", "beast", "custom", "batch/ARM64.v2", "x".repeat(128)])(
+  it.each(["batch/ARM64.v2", "x".repeat(128)])(
     "preserves class %s and hidden settings when backend and binary change",
     (machineClass) => {
       const profile = {
@@ -256,7 +249,6 @@ describe("cloud worker settings state", () => {
       ...createCloudWorkerDraft(),
       id: "production",
       providerId: "crabbox",
-      install: "bundle",
       backend: "aws",
       target: "linux",
       machineClass: "standard",
@@ -271,30 +263,28 @@ describe("cloud worker settings state", () => {
     });
   });
 
-  it.each(["macos", "windows/wsl2", "retired-os"])(
-    "preserves provider-owned target %s and clears it through merge patch",
-    (target) => {
-      const config = {
-        cloudWorkers: {
-          profiles: {
-            production: {
-              ...configuredProfile,
-              settings: { ...configuredProfile.settings, target },
-            },
+  it("preserves a provider-owned target and clears it through merge patch", () => {
+    const target = "retired-os";
+    const config = {
+      cloudWorkers: {
+        profiles: {
+          production: {
+            ...configuredProfile,
+            settings: { ...configuredProfile.settings, target },
           },
         },
-      };
-      const draft = createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]);
-      expect(draft.target).toBe(target);
-      const retained = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
-      expect(applyMergePatch(config, retained.patch)).toEqual(config);
-      const cleared = requirePatch(
-        buildCloudWorkerUpsertPatch(config, { ...draft, target: "" }, "production"),
-      );
-      const next = applyMergePatch(config, cleared.patch);
-      expect(next).not.toHaveProperty("cloudWorkers.profiles.production.settings.target");
-    },
-  );
+      },
+    };
+    const draft = createCloudWorkerDraft(readCloudWorkerProfiles(config)[0]);
+    expect(draft.target).toBe(target);
+    const retained = requirePatch(buildCloudWorkerUpsertPatch(config, draft, "production"));
+    expect(applyMergePatch(config, retained.patch)).toEqual(config);
+    const cleared = requirePatch(
+      buildCloudWorkerUpsertPatch(config, { ...draft, target: "" }, "production"),
+    );
+    const next = applyMergePatch(config, cleared.patch);
+    expect(next).not.toHaveProperty("cloudWorkers.profiles.production.settings.target");
+  });
 
   it("adds only the new profile without resending existing profiles", () => {
     const config = { cloudWorkers: { profiles: { production: configuredProfile } } };

@@ -126,7 +126,27 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 3. Global ACP defaults (e.g. `acp.backend`)
 
 Configured bindings also forward the owning agent's explicit model and thinking
-policy. Thinking uses the agent's `thinkingDefault`, then per-model
+policy. For an agent with `runtime.type: "acp"`, `agents.entries.*.model.primary`
+selects the ACP harness model, even when its value also looks like a native
+`provider/model` reference. OpenClaw-side calls, such as `/btw` and internal
+utilities, use `agents.defaults.model` as their native default. Explicit native
+session overrides and dedicated utility or subagent model settings still apply.
+The selected native provider needs its own credentials; an ACP harness login
+does not authenticate OpenClaw's native calls.
+
+For existing configurations, this can change the native provider even when the
+ACP primary is a valid native reference. `openclaw doctor` describes each ACP
+agent's harness model and resolved native default without rewriting configuration.
+Choose the native default in `agents.defaults.model`; native session, utility,
+and subagent overrides remain available for their respective operations.
+
+For native calls that support model fallback, omitted agent `model.fallbacks`
+inherits `agents.defaults.model.fallbacks`. An explicit native fallback list
+replaces that list, and `fallbacks: []` disables it. These entries must be native
+OpenClaw model references, not harness-only IDs. `/btw` uses its selected native
+model without a model fallback chain.
+
+Thinking uses the agent's `thinkingDefault`, then per-model
 `agents.defaults.models["provider/model"].params.thinking`, then
 `agents.defaults.thinkingDefault`. Without configured policy, the external
 harness keeps its own defaults.

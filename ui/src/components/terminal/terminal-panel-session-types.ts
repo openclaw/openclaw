@@ -4,7 +4,7 @@ import type {
   GhosttyTerminalController,
 } from "@openclaw/libterminal/browser";
 import type { ReactiveControllerHost } from "lit";
-import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
+import { parseCatalogSessionKey, type CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import type { TerminalGatewayClient } from "./terminal-connection.ts";
 import type { TerminalPanelTab } from "./terminal-panel-tabs.ts";
 import type { TerminalPanelUploadController } from "./terminal-panel-upload.ts";
@@ -26,10 +26,7 @@ export type TerminalPanelSessionTab = TerminalPanelTab &
     cancelled?: "close" | "lifecycle";
   };
 
-export type TerminalRouteTarget =
-  | { sessionId: string }
-  | { catalog: TerminalPanelCatalogReference }
-  | null;
+export type TerminalRouteTarget = { sessionId: string } | { catalog: CatalogSessionKey } | null;
 
 export type TerminalOperation = {
   generation: number;
@@ -38,15 +35,9 @@ export type TerminalOperation = {
   cancelIntent?: () => void;
 };
 
-export type TerminalPanelCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
-};
-
 export function resolveTerminalPanelOwnerSessionKey(
   sessionKey: string | null,
-  catalog?: TerminalPanelCatalogReference,
+  catalog?: CatalogSessionKey,
 ): string | undefined {
   const key = sessionKey?.trim();
   return !catalog && key && !parseCatalogSessionKey(key) ? key : undefined;
@@ -56,7 +47,7 @@ export function resolveTerminalPanelOwnerSessionKey(
 export type TerminalPanelAction =
   | { kind: "restore"; agentId: string | null }
   | { kind: "open"; agentId: string | null }
-  | { kind: "catalog"; agentId: string | null; catalog: TerminalPanelCatalogReference }
+  | { kind: "catalog"; agentId: string | null; catalog: CatalogSessionKey }
   | { kind: "attach"; sessionId: string; agentOwned: boolean };
 
 export type TerminalPanelOpenAction = Extract<TerminalPanelAction, { kind: "catalog" | "open" }>;
@@ -77,6 +68,7 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   readonly sessionKey: string | null;
   readonly available: boolean;
   readonly themeMode: "dark" | "light";
+  readonly terminalFontFamily: string;
   readonly fullscreen: boolean;
   readonly page: boolean;
   readonly routeTarget: TerminalRouteTarget;
@@ -93,14 +85,10 @@ export interface TerminalPanelSessionControllerHost extends ReactiveControllerHo
   restoreTerminalPanelOpenState(): boolean;
 }
 
-export const TERMINAL_FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Symbols Nerd Font Mono", "MesloLGLDZ Nerd Font Mono", "JetBrainsMono Nerd Font Mono", "Liberation Mono", monospace';
 export const TERMINAL_OUTPUT_ENCODER = new TextEncoder();
 
-/** Reduces a shell path to a tab label, e.g. "/bin/zsh" -> "zsh". */
 export function shellBasename(shell: string): string {
-  const base = shell.split(/[\\/]/).pop()?.trim();
-  return base && base.length > 0 ? base : "shell";
+  return shell.split(/[\\/]/).pop()?.trim() || "shell";
 }
 
 export function forceTerminalRender(controller: GhosttyTerminalController): void {

@@ -9,6 +9,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI model setup same-client reconnect",
@@ -49,6 +50,67 @@ function detection(modelRef: string) {
 }
 
 suite.define(() => {
+  it("offers the saved model after a restart loses the provider wizard", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const modelRef = "fixture/saved-model";
+      const initialDetection = {
+        candidates: [],
+        manualProviders: [],
+        authOptions: [
+          { id: "custom-api-key", label: "Local endpoint", kind: "custom", featured: true },
+        ],
+        workspace: "/tmp/openclaw-e2e",
+        setupComplete: false,
+      };
+      const gateway = await installMockGateway(page, {
+        featureMethods: [
+          "openclaw.setup.detect",
+          "openclaw.setup.auth.start",
+          "openclaw.setup.verify",
+          "wizard.next",
+          "openclaw.chat",
+        ],
+        methodResponses: {
+          "openclaw.setup.detect": initialDetection,
+          "openclaw.setup.auth.start": { done: false, status: "running" },
+          "wizard.next": {
+            done: false,
+            status: "running",
+            step: { id: "endpoint", type: "text", message: "API Base URL" },
+          },
+          "openclaw.setup.verify": { ok: true, modelRef },
+          "openclaw.chat": onboardingWelcome,
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+      await page.locator('[data-auth-choice="custom-api-key"] button').click();
+      await page.getByLabel("API Base URL").waitFor();
+      await gateway.setMethodResponse("openclaw.setup.detect", {
+        ...initialDetection,
+        configuredModel: modelRef,
+        setupComplete: true,
+      });
+      await gateway.setMethodResponse("wizard.next", {
+        __mockError: {
+          code: "INVALID_REQUEST",
+          message: "wizard not found",
+          details: { code: "WIZARD_NOT_FOUND" },
+        },
+      });
+      await gateway.closeLatest(1012, "Gateway restarted during model setup");
+      const dialog = page.locator("openclaw-modal-dialog");
+      await dialog.getByRole("alert").waitFor();
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await page.getByText("saved-model", { exact: true }).waitFor();
+      expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
+      await page.getByRole("button", { name: "Verify & use selected model", exact: true }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
+      expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
+      expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(1);
+    });
+  });
+
   it.each(["reconnect", "reopen"])(
     "retains manual first-run activation through restart during config refresh (%s)",
     async (restart) => {
@@ -312,19 +374,32 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const pageErrors: string[] = [];
       page.on("pageerror", (error) => pageErrors.push(String(error)));
-      const gateway = await installMockGateway(page, {
+      const discoveredModel = (name: string) => ({
+        ...detection("provider/configured-model"),
+        candidates: [
+          {
+            kind: "provider-auto:provider",
+            label: name,
+            detail: "Available on this Gateway",
+            modelRef: `provider/${name}`,
+            credentials: true,
+            recommended: false,
+          },
+        ],
+      });
+      const gateway = await installSetupGateway(page, {
         featureMethods: ["openclaw.setup.detect"],
-        methodResponses: { "openclaw.setup.detect": detection("provider/original-model") },
+        methodResponses: { "openclaw.setup.detect": discoveredModel("original-model") },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}settings/model-setup`);
+      const response = await openModelSetup(page, suite.server.baseUrl);
       expect(response?.status()).toBe(200);
       await page.getByText("original-model", { exact: true }).waitFor();
       const initialDetections = (await gateway.getRequests("openclaw.setup.detect")).length;
       const initialConnections = (await gateway.getRequests("connect")).length;
       await gateway.setMethodResponse(
         "openclaw.setup.detect",
-        detection("provider/reconnected-model"),
+        discoveredModel("reconnected-model"),
       );
       await gateway.deferNext("connect");
       await gateway.closeLatest(1012, "model setup reconnect proof");
@@ -342,7 +417,7 @@ suite.define(() => {
       expect(pageErrors).toEqual([]);
 
       if (captureUiProofEnabled) {
-        await page.locator("openclaw-model-setup-page").screenshot({
+        await page.screenshot({
           animations: "disabled",
           path: path.join(artifactDir, "00-reconnected-model-visible.png"),
         });

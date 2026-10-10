@@ -1,16 +1,47 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForDead } from "../../test/helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../../test/helpers/process-wait.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 
 const execFileAsync = promisify(execFile);
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const TRANSPORT_CLEANUP_GUARD_MS = 5_000;
+let cleanupFixture: (() => Promise<void>) | undefined;
+const tempDirs = useAutoCleanupTempDirTracker((cleanupDirs) =>
+  afterEach(async () => {
+    try {
+      // afterEach precedes onTestFinished; transport cleanup still needs its files.
+      await cleanupFixture?.();
+    } finally {
+      cleanupFixture = undefined;
+      cleanupDirs();
+    }
+  }),
+);
+
+// The timed-out CLI owns these transports; their killed parents cannot relay close events.
+async function waitForTransportExit(pids: number[], signal: AbortSignal): Promise<void> {
+  await withinTest(
+    (async () => {
+      while (pids.some(isProcessAlive)) {
+        await delay(5, undefined, { signal });
+      }
+    })(),
+    signal,
+  ).catch((error: unknown) => {
+    throw new Error(`process still alive: ${pids.filter(isProcessAlive).join(", ")}`, {
+      cause: error,
+    });
+  });
+}
 
 async function writeHarnessPlugin(stateDir: string): Promise<void> {
   const pluginDir = path.join(stateDir, "extensions", "exec-proof");
@@ -171,7 +202,7 @@ function buildCliSource(args: string[]): string {
 describe("agent exec built runtime", () => {
   it.skipIf(process.platform === "win32")(
     "reclaims CLI transport descendants when the run times out",
-    async () => {
+    async ({ signal, onTestFinished }) => {
       const root = tempDirs.make("openclaw-agent-exec-auth-timeout-");
       const binDir = path.join(root, "bin");
       const processPath = path.join(root, "processes.jsonl");
@@ -223,47 +254,78 @@ if (process.argv[2] === "--version") {
           .filter(Boolean)
           .map((line) => JSON.parse(line) as ProcessReceipt);
 
+      const controller = new AbortController();
+      const operation = runNodeScript(
+        [
+          path.join(repoRoot, "openclaw.mjs"),
+          "agent",
+          "exec",
+          "probe",
+          "--config",
+          path.join(root, "openclaw.json"),
+          "--cwd",
+          root,
+          "--timeout",
+          "1",
+          "--json",
+        ],
+        {
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: root,
+          CLAUDE_CONFIG_DIR: path.join(root, ".claude"),
+          ANTHROPIC_API_KEY: "synthetic-proof-key",
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+        },
+        30_000,
+        { cwd: root, signal: controller.signal },
+      );
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          controller.abort();
+          await operation;
+          const pids = (await readProcesses()).flatMap((receipt) => receipt.pids);
+          try {
+            await fs.writeFile(stopPath, "");
+          } catch (error) {
+            // Even a failed stop marker must not strand fixture descendants.
+            await Promise.all(
+              pids.map(async (pid) => {
+                try {
+                  process.kill(pid, "SIGKILL");
+                } catch (killError) {
+                  if (!hasErrnoCode(killError, "ESRCH")) {
+                    throw killError;
+                  }
+                }
+              }),
+            );
+            throw error;
+          } finally {
+            // Cleanup hang guard after the owner signalled/killed transports, not a readiness race.
+            await Promise.all(
+              pids.map((pid) => waitForDead(pid, AbortSignal.timeout(TRANSPORT_CLEANUP_GUARD_MS))),
+            );
+          }
+        })());
+      cleanupFixture = cleanup;
+      onTestFinished(cleanup);
       try {
-        const result = await runNodeScript(
-          [
-            path.join(repoRoot, "openclaw.mjs"),
-            "agent",
-            "exec",
-            "probe",
-            "--config",
-            path.join(root, "openclaw.json"),
-            "--cwd",
-            root,
-            "--timeout",
-            "1",
-            "--json",
-          ],
-          {
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            HOME: root,
-            USERPROFILE: root,
-            OPENCLAW_STATE_DIR: root,
-            CLAUDE_CONFIG_DIR: path.join(root, ".claude"),
-            ANTHROPIC_API_KEY: "synthetic-proof-key",
-            OPENCLAW_SERVICE_MARKER: "openclaw",
-          },
-          30_000,
-          { cwd: root },
-        );
+        const result = await withinTest(operation, signal);
         expect(result.error, result.stderr).toBeUndefined();
         expect(result.status, result.stderr).toBe(2);
         expect(JSON.parse(result.stdout)).toMatchObject({ ok: false, status: "timeout" });
         const receipts = await readProcesses();
         expect(receipts.map(({ phase }) => phase)).toContain("agent");
-        await Promise.all(
-          receipts.flatMap(({ pids }) => pids.map((pid) => waitForDead(pid, 5_000))),
+        await waitForTransportExit(
+          receipts.flatMap(({ pids }) => pids),
+          signal,
         );
       } finally {
         // Assert extinction before asking any leaked fixture children to exit.
-        await fs.writeFile(stopPath, "");
-        await Promise.all(
-          (await readProcesses()).flatMap(({ pids }) => pids.map((pid) => waitForDead(pid, 5_000))),
-        );
+        await cleanup();
       }
     },
   );
@@ -326,7 +388,11 @@ if (process.argv[2] === "--version") {
     }
     expect(isolatedExitCode).toBe(1);
     expect(isolatedStdout).not.toContain("PLUGIN_HARNESS_OK");
-    await expect(fs.readdir(stateDir)).resolves.toEqual(["extensions", "openclaw.json", "state"]);
+    expect((await fs.readdir(stateDir)).toSorted()).toEqual([
+      "extensions",
+      "openclaw.json",
+      "state",
+    ]);
     const registryFiles = await fs.readdir(path.join(stateDir, "state"));
     expect(registryFiles).toContain("openclaw.sqlite");
     expect(registryFiles.every((file) => file.startsWith("openclaw.sqlite"))).toBe(true);

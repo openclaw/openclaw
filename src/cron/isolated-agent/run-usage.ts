@@ -15,9 +15,9 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronRunTelemetry } from "../types.js";
-import type { CronCompletedPromptRun } from "./run-executor.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
 import { DEFAULT_CONTEXT_TOKENS, hasNonzeroUsage } from "./run.runtime.js";
+import type { CronCompletedPromptRun } from "./run.types.js";
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
 

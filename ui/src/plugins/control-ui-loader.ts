@@ -1,6 +1,5 @@
 import { controlUiPluginAssetPrefix } from "../../../src/gateway/control-ui-plugin-assets-contract.js";
 import type { ControlUiDisposer, ControlUiPlugin } from "../../../src/plugin-sdk/control-ui.js";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
@@ -17,7 +16,7 @@ function assetUrl(path: string, prefix: string): string {
 }
 
 export async function initializeControlUiPlugin(
-  getContext: () => ApplicationContext<RouteId>,
+  getContext: () => ApplicationContext,
   runtime: ControlUiPluginRuntime,
   owner: Omit<ControlUiPluginOwner, "host">,
   styles: HTMLLinkElement[],

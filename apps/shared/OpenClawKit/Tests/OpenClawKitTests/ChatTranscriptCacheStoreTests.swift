@@ -301,6 +301,50 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #expect(!messageRows[0].payloadJSON.hasPrefix("["))
     }
 
+    @Test(arguments: [
+        "",
+        #","senderId":42"#,
+        #","senderName":[]"#,
+        #","senderUsername":false"#,
+        #","senderProfileAvatarUrl":{}"#,
+        #","media":42"#,
+        #","media":[false]"#,
+        #","media":[{"url":"media://inbound/report.pdf","sizeBytes":"old"}]"#,
+        #","mediaImageLayout":42"#,
+        #","mediaImageLayout":{"slots":[{"kind":"inline","factIndex":"old"}]}"#,
+    ])
+    func `legacy transcript rows survive reopening and retain their partition`(optionalFields: String) async throws {
+        await store.storeTestTranscript(
+            sessionKey: "main",
+            messages: [cacheMessage(role: "assistant", text: "cached reply", timestamp: 1000)])
+        // Older readers ignored this optional metadata; it must not invalidate the cached row.
+        let legacyPayload = """
+        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(optionalFields)}}
+        """
+        try await databases.cacheQueue.write { db in
+            try db.execute(
+                sql: "UPDATE cached_messages SET payload_json = ? WHERE gateway_id = 'gw-a'",
+                arguments: [legacyPayload])
+        }
+        try databases.close()
+
+        let reopened = try OpenClawClientDatabases(directoryURL: directory)
+        defer { try? reopened.close() }
+        let messages = await reopened.store(gatewayID: "gw-a").loadTranscript(sessionKey: "main")
+        #expect(messageTexts(messages) == ["cached reply"])
+        let message = try #require(messages.first)
+        #expect(message.timestamp == 1000)
+        #expect(message.transcriptRunID == "old-run")
+        #expect(message.model == nil)
+        let counts = try await reopened.cacheQueue.read { db in
+            try (
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_messages WHERE gateway_id = 'gw-a'"),
+                Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_transcripts WHERE gateway_id = 'gw-a'"))
+        }
+        #expect(counts.0 == 1)
+        #expect(counts.1 == 1)
+    }
+
     @Test func `agent session snapshots preserve another agents offline roster`() async throws {
         await store.storeSessions([
             cacheSessionEntry(key: "global", updatedAt: 1, agentID: "agent-a"),
@@ -596,21 +640,29 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
 
     @Test func `cache projection strips payloads and keeps bounded diffs`() throws {
         let oversizedDiff = "+1 " + String(repeating: "x", count: 64100)
+        let activity = try JSONDecoder().decode([OpenClawAgentActivityItem].self, from: Data(
+            #"[{"itemId":"live-tool","kind":"tool","phase":"start","title":"Editing"}]"#.utf8))
         let message = OpenClawChatMessage(
             role: "toolResult",
             content: [
                 OpenClawChatMessageContent(
                     type: "toolCall",
                     text: "done",
+                    thinkingSignature: "transient-signature",
                     mimeType: "image/jpeg",
                     fileName: "photo.jpg",
+                    playback: .transcode,
                     content: AnyCodable(String(repeating: "payload", count: 1000)),
+                    preview: OpenClawChatCanvasPreview(
+                        kind: "canvas", surface: "assistant_message", render: "url", title: "Live preview",
+                        preferredHeight: 320, url: "/__openclaw__/canvas/live", viewId: "live", sandbox: "scripts"),
                     name: "apply_patch",
                     arguments: AnyCodable([
                         "input": AnyCodable(oversizedDiff),
                         "ignored": AnyCodable("drop"),
                     ]),
-                    details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")])),
+                    details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
+                    runId: "transient-run"),
             ],
             timestamp: 1,
             details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
@@ -621,16 +673,52 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
                 kind: "compaction",
                 id: "compact-cache",
                 tokensBefore: 12000,
-                tokensAfter: 7000))
+                tokensAfter: 7000),
+            activity: activity)
 
         let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
         #expect(cached.content[0].content == nil)
         #expect(cached.content[0].thinkingSignature == nil)
+        #expect(cached.content[0].playback == nil)
+        #expect(cached.content[0].preview == nil)
+        #expect(cached.content[0].runId == nil)
+        #expect(cached.activity == nil)
         #expect(Set(cached.content[0].arguments?.dictionaryValue?.keys.map(\.self) ?? []) == ["input"])
         #expect(cached.content[0].arguments?.dictionaryValue?["input"]?.stringValue?.utf16.count == 64000)
         #expect(Set(cached.details?.dictionaryValue?.keys.map(\.self) ?? []) == ["diff"])
         #expect(cached.provenance == message.provenance)
         #expect(cached.historyMarker == message.historyMarker)
+    }
+
+    @Test func `cache projection preserves dispatcher IDs and only inner patch input`() throws {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [
+                OpenClawChatMessageContent(
+                    type: "toolCall", id: "search", name: "tool_call",
+                    arguments: AnyCodable(["id": " web_search ", "args": ["query": "drop"]])),
+                OpenClawChatMessageContent(
+                    type: "toolUse", id: "patch", name: "tool_call",
+                    arguments: AnyCodable([
+                        "id": "mcp:editor:apply_patch", "ignored": "drop",
+                        "args": ["input": "*** Begin Patch\n*** End Patch", "ignored": "drop"],
+                    ])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", name: "web_search", arguments: AnyCodable(["query": "drop"])),
+                OpenClawChatMessageContent(
+                    type: "toolCall", name: "tool_call", arguments: AnyCodable(["id": " "])),
+            ],
+            timestamp: 1)
+
+        let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
+        #expect(cached.content[0].id == "search")
+        #expect(cached.content[0].name == "tool_call")
+        #expect(cached.content[0].arguments == AnyCodable(["id": "web_search"]))
+        #expect(cached.content[1].arguments == AnyCodable([
+            "id": "mcp:editor:apply_patch", "args": ["input": "*** Begin Patch\n*** End Patch"],
+        ]))
+        #expect(cached.content[2].arguments == nil)
+        #expect(cached.content[3].arguments == nil)
     }
 
     @Test func `gateway removal deletes only that gateways cache and state`() async throws {

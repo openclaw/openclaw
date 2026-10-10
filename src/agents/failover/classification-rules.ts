@@ -17,6 +17,12 @@ const FAILOVER_TIMEOUT_ERROR_CODES = new Set([
 ]);
 const NO_BODY_HTTP_WRAPPER_RE =
   /^(?:no body(?: response)?|no response body|status code \(no body\))$/i;
+const PRESERVED_NOT_FOUND_OR_GONE_REASONS = new Set<FailoverReason | null>([
+  "session_expired",
+  "billing",
+  "auth_permanent",
+  "auth",
+]);
 function stripErrorPrefix(raw: string): string {
   return raw.replace(/^error:\s*/i, "").trim();
 }
@@ -124,7 +130,12 @@ function hasKnownBareLeading402Signal(text: string): boolean {
   );
 }
 function normalize402Message(raw: string): string {
-  return normalizeOptionalLowercaseString(raw)?.replace(LEADING_402_WRAPPER_RE, "").trim() ?? "";
+  return (
+    normalizeOptionalLowercaseString(raw)
+      ?.replace(LEADING_402_WRAPPER_RE, "")
+      .replace(/\bhttps?:\/\/[^\s<>"']+/g, " ")
+      .trim() ?? ""
+  );
 }
 function classify402Message(message: string): PaymentRequiredFailoverReason {
   const normalized = normalize402Message(message);
@@ -137,10 +148,7 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   if (hasExplicit402BillingSignal(normalized)) {
     return "billing";
   }
-  if (isRateLimitErrorMessage(normalized)) {
-    return "rate_limit";
-  }
-  if (hasRetryable402TransientSignal(normalized)) {
+  if (isRateLimitErrorMessage(normalized) || hasRetryable402TransientSignal(normalized)) {
     return "rate_limit";
   }
   return "billing";
@@ -205,6 +213,14 @@ export function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    // Only quota classifications refine HTTP 429. A generic provider fallback
+    // such as timeout must not erase its billing or rate-limit semantics.
+    if (
+      opts?.preserveProviderSignalClassification &&
+      (messageReason === "billing" || messageReason === "rate_limit")
+    ) {
+      return messageClassification;
+    }
     if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
@@ -233,10 +249,8 @@ export function classifyFailoverClassificationFromHttpStatus(
   if (status === 410) {
     // Generic 410/no-body responses behave like transport failures, not session expiry.
     if (
-      messageReason === "session_expired" ||
-      messageReason === "billing" ||
-      messageReason === "auth_permanent" ||
-      messageReason === "auth"
+      PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) ||
+      messageReason === "model_not_found"
     ) {
       return messageClassification;
     }
@@ -247,13 +261,7 @@ export function classifyFailoverClassificationFromHttpStatus(
     return messageClassification;
   }
   if (status === 404) {
-    if (
-      messageReason === "session_expired" ||
-      messageReason === "billing" ||
-      messageReason === "auth_permanent" ||
-      messageReason === "auth" ||
-      messageReason === "format"
-    ) {
+    if (PRESERVED_NOT_FOUND_OR_GONE_REASONS.has(messageReason) || messageReason === "format") {
       return messageClassification;
     }
     return toReasonClassification("model_not_found");
@@ -263,11 +271,18 @@ export function classifyFailoverClassificationFromHttpStatus(
   }
   if (status === 499 || (status >= 500 && status < 600)) {
     // Gateways can wrap a deterministic request rejection in a 5xx response.
-    return messageReason === "overloaded" ||
+    if (
+      messageReason === "overloaded" ||
       messageReason === "server_error" ||
       (status >= 500 && messageReason === "format")
-      ? messageClassification
-      : toReasonClassification("timeout");
+    ) {
+      return messageClassification;
+    }
+    return toReasonClassification(
+      status === 499 || status === 504 || status === 522 || status === 524
+        ? "timeout"
+        : "server_error",
+    );
   }
   if (status === 400 || status === 422) {
     // 400/422 are ambiguous: inspect the payload first so provider-specific
@@ -311,6 +326,8 @@ export function classifyFailoverReasonFromCode(raw: string | undefined): Failove
       return "rate_limit";
     case "DEACTIVATED_WORKSPACE":
       return "auth_permanent";
+    case "SELECTED_AUTH_PROFILE_UNAVAILABLE":
+      return "auth";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -337,21 +354,6 @@ export function classifyCoreFailoverReasonFromErrorType(
       return null;
   }
 }
-export function classifyFailoverClassificationFromErrorType(
-  raw: string | undefined,
-): FailoverClassification | null {
-  const reason = classifyCoreFailoverReasonFromErrorType(raw);
-  return reason ? toReasonClassification(reason) : null;
-}
-function isProvider(provider: string | undefined, match: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(provider);
-  return Boolean(normalized && normalized.includes(match));
-}
-function hasProviderBilling429Override(provider: string | undefined): boolean {
-  return (
-    isProvider(provider, "xai") || isProvider(provider, "moonshot") || isProvider(provider, "kimi")
-  );
-}
 function hasStructuredBilling429Signal(raw: string): boolean {
   if (hasBillingApiErrorType(raw)) {
     return true;
@@ -373,17 +375,21 @@ function isBilling429MessageForProvider(raw: string, provider: string | undefine
   if (!isBillingErrorMessage(raw)) {
     return false;
   }
-  return hasProviderBilling429Override(provider) || !isAmbiguousGeneric429BalanceMessage(raw);
+  const normalizedProvider = normalizeOptionalLowercaseString(provider) ?? "";
+  return (
+    ["xai", "moonshot", "kimi"].some((name) => normalizedProvider.includes(name)) ||
+    !isAmbiguousGeneric429BalanceMessage(raw)
+  );
 }
 const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const THINKING_SIGNATURE_ERROR_RE =
   /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
-function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
-  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
-}
 export function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
+  return (
+    REPLAY_INVALID_RE.test(raw) ||
+    (/\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw))
+  );
 }
 // shared model runtime providers throw `Error("An unknown error occurred")` provider-agnostically
 // (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a
@@ -394,14 +400,12 @@ export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 export function isExactUnknownNoDetailsError(raw: string): boolean {
-  return (
-    normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
-  );
+  return normalizeOptionalLowercaseString(raw) === "unknown error (no error details in response)";
 }
 export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
   // These upstream phrases overlap generic session/auth wording. Provider identity
   // must come from runner metadata so other CLIs cannot inherit Claude policy.
-  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+  if (normalizeOptionalLowercaseString(provider) !== "claude-cli") {
     return false;
   }
   return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(

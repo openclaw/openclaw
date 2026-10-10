@@ -1,7 +1,7 @@
 // Codex supervision MCP tests cover the retired Supervisor command bridge.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
   createCodexSupervisionToolsMcpServer,
@@ -63,6 +63,10 @@ function createTools(): AnyAgentTool[] {
 }
 
 describe("createCodexSupervisionToolsMcpServer", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     acquireStandalonePluginToolRegistryMock.mockReset().mockImplementation(async () => ({
       resolveTools: resolvePluginToolsMock,
@@ -106,8 +110,10 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     }
   });
 
-  it("preserves normalized Codex endpoint config while forcing bridge activation", async () => {
+  it("preserves endpoint config and translates legacy env policy at the standalone boundary", async () => {
     resolvePluginToolsMock.mockReturnValue(createTools());
+    vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
+    vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
 
     getRuntimeConfigMock.mockReturnValue({
       plugins: {
@@ -134,7 +140,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
           enabled: true,
           config: {
             appServer: { transport: "websocket", url: "ws://127.0.0.1:4500" },
-            supervision: { enabled: true },
+            supervision: { enabled: true, allowRawTranscripts: true, allowWriteControls: true },
           },
         },
       },

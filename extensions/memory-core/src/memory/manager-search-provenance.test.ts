@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -20,7 +21,7 @@ describe("memory search provenance enrichment", () => {
     { name: "keyword fallback", query: "violet absentphrase", vector: false },
     { name: "KNN", query: "semantic needle", vector: true },
     { name: "embedding scan", query: "semantic needle", vector: false },
-  ])("returns authoritative metadata through $name with bounded database work", async (entry) => {
+  ])("returns authoritative metadata through $name without main-thread SQL", async (entry) => {
     await fs.rm(path.join(fixture.paths.memory, "2026-01-12.md"));
     const paths = Array.from({ length: 32 }, (_, index) => `memory/orchid-${index}.md`);
     await Promise.all(
@@ -62,6 +63,7 @@ describe("memory search provenance enrichment", () => {
 
     const prepare = db.prepare.bind(db);
     const queries = vi.spyOn(db, "prepare").mockImplementation(prepare);
+    const knn = vi.spyOn(knnSubprocess, "runVectorKnnInSubprocess");
     try {
       const results = await manager.search(entry.query, {
         lexicalOnly: !semantic,
@@ -89,14 +91,17 @@ describe("memory search provenance enrichment", () => {
           });
         }
       }
-      // The public search budget permits multiple candidate probes, but not one
-      // database round trip per returned hit (including duplicate probe matches).
-      expect(queries.mock.calls.length).toBeLessThan(paths.length);
+      expect(queries).not.toHaveBeenCalled();
       if (entry.vector) {
+        expect(knn).toHaveBeenCalledOnce();
+        const result = await knn.mock.results[0]?.value;
+        expect(result?.fallbackScanRequired).toBe(false);
+        expect(result?.rows.length).toBeGreaterThan(0);
         expect(manager.status().vector?.storeAvailable).toBe(true);
       }
     } finally {
       queries.mockRestore();
+      knn.mockRestore();
       embed.mockRestore();
     }
   });

@@ -6,6 +6,8 @@
   "include": [
     "../../src/agents/command/**/*.test.ts",
     "../../src/agents/command/**/*.test.tsx",
+    "../../src/cli/program/**/*.test.ts",
+    "../../src/cli/program/**/*.test.tsx",
     "../../src/commands/**/*.test.ts",
     "../../src/commands/**/*.test.tsx",
     "../../src/tui/**/*.test.ts",

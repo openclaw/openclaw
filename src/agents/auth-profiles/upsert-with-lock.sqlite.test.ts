@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -20,12 +22,18 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store-runtime.js";
+import * as storeRuntime from "./store-runtime.js";
 import type { ApiKeyCredential, OAuthCredential } from "./types.js";
-import { persistAuthProfileBatch, upsertAuthProfileWithLockOrThrow } from "./upsert-with-lock.js";
+import {
+  persistAuthProfileBatch,
+  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
+} from "./upsert-with-lock.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const stateDir of tempDirs.dirs) {
     closeAuthProfileReadPool({ kind: "root", rootPath: stateDir });
     await cleanupSessionStateForTest({ stateDir });
@@ -51,6 +59,127 @@ async function withAgentDir(run: (agentDir: string) => Promise<void>): Promise<v
 }
 
 describe("auth profile batch persistence", () => {
+  it.each([
+    { owner: "local", initial: "missing", root: "selected" },
+    { owner: "local", initial: "existing", root: "selected" },
+    { owner: "shared", initial: "missing", root: "selected" },
+    { owner: "shared", initial: "existing", root: "selected" },
+    { owner: "shared", initial: "missing", root: "changed" },
+  ] as const)(
+    "refuses a stale OAuth upsert after $owner $initial authority changes during write admission ($root ambient root)",
+    async ({ owner, initial, root }) => {
+      await withAgentDir(async (agentDir) => {
+        const profileId = "openai:admission";
+        const incoming: OAuthCredential = {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-old-access",
+          refresh: "synthetic-old-refresh",
+          expires: Date.now() + 60_000,
+        };
+        const authoritative: OAuthCredential = {
+          ...incoming,
+          access: "synthetic-new-access",
+          refresh: "synthetic-new-refresh",
+        };
+        const ownerDir = owner === "local" ? agentDir : undefined;
+        const selectedStateDir = path.resolve(agentDir, "../../..");
+        const otherStateDir =
+          root === "changed" ? tempDirs.make("auth-upsert-other-root-") : undefined;
+        const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
+        saveAuthProfileStore(
+          { version: 1, profiles: initial === "existing" ? { [profileId]: incoming } : {} },
+          ownerDir,
+          saveOptions,
+        );
+        if (owner === "shared") {
+          saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
+        }
+        const release = createDeferredCore();
+        const entered = createDeferredCore();
+        const predecessor = runOpenClawAgentWriteAdmission(
+          { agentId: "work", path: resolveAuthProfileDatabasePath(agentDir) },
+          async () => {
+            await release.promise;
+            saveAuthProfileStore(
+              { version: 1, profiles: { [profileId]: authoritative } },
+              ownerDir,
+              saveOptions,
+            );
+            if (otherStateDir) {
+              process.env.OPENCLAW_STATE_DIR = otherStateDir;
+            }
+          },
+        );
+        const realUpdate = storeRuntime.updateAuthProfileStoreWithLock;
+        vi.spyOn(storeRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) => {
+          const updating = realUpdate(params);
+          entered.resolve();
+          return updating;
+        });
+        const upsert = upsertAuthProfileWithLock({ agentDir, profileId, credential: incoming });
+        void upsert.catch(() => {});
+        try {
+          await Promise.race([entered.promise, upsert]);
+        } finally {
+          release.resolve();
+          await Promise.allSettled([predecessor, upsert]);
+          process.env.OPENCLAW_STATE_DIR = selectedStateDir;
+        }
+        await predecessor;
+        await expect(upsert).resolves.toBeNull();
+        expect(loadPersistedAuthProfileStore(ownerDir)?.profiles[profileId]).toEqual(authoritative);
+        if (owner === "shared") {
+          expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
+        }
+      });
+    },
+  );
+
+  it("refuses inherited OAuth authority that changes during the worker callback handoff", async () => {
+    await withAgentDir(async (agentDir) => {
+      const profileId = "openai:handoff";
+      const incoming: OAuthCredential = {
+        type: "oauth",
+        provider: "openai",
+        access: "synthetic-old-access",
+        refresh: "synthetic-old-refresh",
+        expires: Date.now() + 60_000,
+      };
+      const authoritative: OAuthCredential = {
+        ...incoming,
+        access: "synthetic-new-access",
+        refresh: "synthetic-new-refresh",
+      };
+      const saveOptions = { filterExternalAuthProfiles: false, syncExternalCli: false };
+      saveAuthProfileStore({ version: 1, profiles: {} }, undefined, saveOptions);
+      saveAuthProfileStore({ version: 1, profiles: {} }, agentDir, saveOptions);
+      let callbacks = 0;
+      const realUpdate = storeRuntime.updateAuthProfileStoreWithLock;
+      vi.spyOn(storeRuntime, "updateAuthProfileStoreWithLock").mockImplementation((params) =>
+        realUpdate({
+          ...params,
+          updater(store, owner, sharedStore) {
+            callbacks += 1;
+            saveAuthProfileStore(
+              { version: 1, profiles: { [profileId]: authoritative } },
+              undefined,
+              saveOptions,
+            );
+            return params.updater(store, owner, sharedStore);
+          },
+        }),
+      );
+
+      await expect(
+        upsertAuthProfileWithLock({ agentDir, profileId, credential: incoming }),
+      ).resolves.toBeNull();
+      expect(callbacks).toBe(1);
+      expect(loadPersistedAuthProfileStore()?.profiles[profileId]).toEqual(authoritative);
+      expect(loadPersistedAuthProfileStore(agentDir)?.profiles[profileId]).toBeUndefined();
+    });
+  });
+
   it("does not restore a fenced OAuth refresh generation", async () => {
     await withAgentDir(async (agentDir) => {
       const profileId = "openai:default";
@@ -658,7 +787,9 @@ describe("auth profile batch persistence", () => {
         credential: apiKey("sk-new"),
       }).catch((error: unknown) => error);
 
-      expect(String(failure)).toContain("no column named updated_at");
+      expect(failure).toMatchObject({ name: "SqliteSchemaMismatchError" });
+      expect(String(failure)).toContain("column definitions differ for auth_profile_store");
+      expect(String(failure)).toContain("openclaw doctor --fix");
       expect(String(failure)).not.toContain("lock may be busy");
     });
   });

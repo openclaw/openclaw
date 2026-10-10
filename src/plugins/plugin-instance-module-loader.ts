@@ -1,19 +1,19 @@
+import fs from "node:fs";
 import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
-import { toSafeImportPath } from "../shared/import-specifier.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
-import { isJavaScriptModulePath, isPluginSourceModulePath } from "./native-module-require.js";
-import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import {
-  bindPluginCacheRoot,
-  getPluginCache,
-  withPluginCache,
-  type PluginCache,
-} from "./plugin-cache.js";
+  resolvePluginLoaderTryNative,
+  isPluginSourceModulePath,
+  supportsBunRuntimeOnResolveTargets,
+  useNodeModuleHooks,
+} from "./native-module-require.js";
+import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
+import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import type { PluginModuleLoaderRecovery } from "./plugin-instance.types.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
   preparePluginModuleLoaderRecovery,
@@ -21,46 +21,24 @@ import {
 } from "./plugin-module-loader-recovery.js";
 import { bindNativePluginInstanceModuleLoader } from "./plugin-native-module-loader.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
 import {
   buildPluginTypeScriptSource,
   PLUGIN_SOURCE_RESOLVE_PREFIX,
   type PluginSourceFile,
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
+import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
-
-// Compiled recovery shares process code identity without closing over the
-// binder's predecessor instance or source-graph state.
-function createSharedModuleLoader(cache: PluginCache, loader: PluginModuleLoader) {
-  const load = (source: string) => withPluginCache(cache, () => loader(toSafeImportPath(source)));
-  const captureRecovery = (): PluginModuleLoaderRecovery => {
-    let released = false;
-    return {
-      bind(target) {
-        if (released) {
-          throw new Error("Plugin module recovery has already been consumed or released");
-        }
-        released = true;
-        target.bindModuleLoader(load);
-        target.bindModuleLoaderRecovery(captureRecovery);
-      },
-      dispose() {
-        released = true;
-      },
-    };
-  };
-  return { load, captureRecovery };
-}
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
   const cache = getPluginCache();
-  if (params.origin === "bundled" && isJavaScriptModulePath(params.source)) {
+  if (params.origin === "bundled") {
     if (params.expectedSourceDigest !== undefined) {
       throw new Error("Source digest validation is not applicable to core-bundled runtime modules");
     }
-    // Core-shipped code keeps process identity. Recapturing it creates native ESM
-    // module jobs that Node retains after the inventory and its callbacks retire.
+    // Recaptured bundled code leaves native ESM jobs alive after its inventory retires.
     let loader: PluginModuleLoader;
     if (params.createHostModuleLoader) {
       loader = params.createHostModuleLoader();
@@ -78,12 +56,14 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         pluginSdkResolution: params.pluginSdkResolution,
       });
     }
-    const shared = createSharedModuleLoader(cache, loader);
-    params.instance.bindModuleLoader(shared.load);
-    params.instance.bindModuleLoaderRecovery(shared.captureRecovery);
+    bindSharedPluginModuleLoader({
+      instance: params.instance,
+      rootDir: params.rootDir,
+      cache,
+      loader,
+    });
     return;
   }
-  const nativeHooks = typeof Module.registerHooks === "function";
   const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
@@ -102,6 +82,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       const entry = sourceForOutput(filename);
       return entry.generated ? filename : entry.source;
     },
+    params.nativeRecovery,
   );
   if (
     params.expectedSourceDigest !== undefined &&
@@ -120,35 +101,61 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     artifact,
     bindPluginInstanceModuleLoader,
   );
-  const nativeAliases = nativeHooks
-    ? undefined
-    : preparePluginLoaderAliases({
-        modulePath: params.source,
-        argv1: process.argv[1],
-        moduleUrl: import.meta.url,
-        pluginSdkResolution: params.pluginSdkResolution,
-        devSourceRoot: params.devSourceRoot,
-      });
-  if (nativeAliases?.packageRoot) {
-    artifact.linkHost(nativeAliases.packageRoot);
-  }
-  if (nativeAliases) {
-    artifact.prepareNativeScopes();
+  const aliases = preparePluginLoaderAliases({
+    modulePath: params.source,
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    pluginSdkResolution: params.pluginSdkResolution,
+    devSourceRoot: params.devSourceRoot,
+  });
+  if (aliases.packageRoot) {
+    artifact.linkHost(aliases.packageRoot);
   }
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,
     devSourceRoot: params.devSourceRoot,
     allowedParentRoots: [artifact.boundaryRoot],
+    pluginSdkResolution: params.pluginSdkResolution,
   });
-  if (nativeAliases) {
+  if (!useNodeModuleHooks()) {
+    const capturedSource = artifact.resolve(params.source);
+    artifact.prepareModule(capturedSource);
+    const bunSourceFacts =
+      process.versions.bun && isPluginSourceModulePath(params.source)
+        ? inspectPluginTypeScriptExecutionFacts(
+            params.source,
+            fs.readFileSync(params.source, "utf8"),
+            createJiti(params.source, { fsCache: false, moduleCache: false, tryNative: false }),
+          )
+        : undefined;
+    for (const { specifier } of bunSourceFacts?.staticImports ?? []) {
+      if (path.isAbsolute(specifier) || specifier.startsWith("file:")) {
+        artifact.captureModule(capturedSource, specifier, ["node", "module-sync", "import"]);
+      }
+    }
+    const bunNeedsNativeSource =
+      Boolean(process.versions.bun) &&
+      supportsBunRuntimeOnResolveTargets() &&
+      (bunSourceFacts?.hasComputedImport === true ||
+        bunSourceFacts?.staticImports.some(
+          ({ specifier, sideEffect }) => sideEffect && /\.cjs(?:[?#].*)?$/u.test(specifier),
+        ) === true);
+    const tryNative =
+      process.env.JITI_JSX === "1" || process.env.JITI_JSX === "true"
+        ? false
+        : bunNeedsNativeSource
+          ? true
+          : undefined;
+    const effectiveTryNative = tryNative ?? resolvePluginLoaderTryNative(params.source);
     const loader = getCachedPluginModuleLoader({
       modulePath: params.source,
       importerUrl: import.meta.url,
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
+      tryNative,
       aliasMap: {
-        ...nativeAliases.getAliasMap(),
+        ...aliases.getAliasMap(),
         ...artifact.sourceAliases,
       },
     });
@@ -157,7 +164,8 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       cache,
       artifact,
       loader,
-      nativeAliases.sdkRoots,
+      aliases.sdkRoots,
+      !effectiveTryNative,
     );
     return;
   }
@@ -177,7 +185,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const tsconfigPaths = entryPaths.resolver.options.tsconfigPaths;
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
-  params.instance.lifecycle.onDispose(() => {
+  params.instance.onModuleDispose(() => {
     for (const build of sourceBuilds.values()) {
       build.dispose();
     }
@@ -329,7 +337,9 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
                   if (
                     !(specifier.startsWith("file:") || path.isAbsolute(specifier)) ||
                     !native.url.startsWith("file:") ||
-                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source)
+                    artifact.moduleRoot(sourceForOutput(fileURLToPath(native.url)).source) ||
+                    // Resolved SDK URLs keep host identity just like their public specifiers.
+                    aliases.sdkRoots.some((root) => isPathInside(root, fileURLToPath(native.url)))
                   ) {
                     return native;
                   }
@@ -421,7 +431,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       return resolved;
     },
   });
-  params.instance.lifecycle.onDispose(() => hooks.deregister());
+  params.instance.onModuleDispose(() => hooks.deregister());
   const results = new Map<string, { value: unknown } | { error: unknown }>();
   bindModuleLoader(
     (source) =>

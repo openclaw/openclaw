@@ -9,12 +9,14 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { renderUpdateGitRevisions } from "../components/update-git-revisions.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
-import { formatUiError } from "../lib/format-error.ts";
 import "../components/modal-dialog.ts";
 import "../components/update-run-view.ts";
+import { formatUiError } from "../lib/format-error.ts";
 import { postNativeUpdate } from "./native-link-routing.ts";
 import type { ConfirmAndStartUpdateParams, UpdateProgress } from "./update-confirmation.ts";
 import { formatUpdateTargetLabel } from "./update-schedule-projection.ts";
@@ -155,7 +157,7 @@ export async function confirmAndStartUpdateRuntime(
       const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
       const finished = run !== null && run.status !== "running";
-      const failed = current.kind === "failed" || (finished && run.status !== "succeeded");
+      const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
       const checkingStatus = statusCheck === "pending";
       const statusCheckError = typeof statusCheck === "object" ? statusCheck.error : null;
       const showRecovery = failed || Boolean(readError) || statusCheck !== "idle";
@@ -190,7 +192,10 @@ export async function confirmAndStartUpdateRuntime(
               ${statusCheckError ? html`<div role="alert" class="exec-approval-sub">${statusCheckError}</div>` : nothing}
               ${
                 details && current.kind === "confirm"
-                  ? html`<div class="exec-approval-command mono">${details}</div>`
+                  ? html`<div class="exec-approval-command mono update-confirmation-details">
+                      <div>${details}</div>
+                      ${renderUpdateGitRevisions(params.updateSchedule, params.updateAvailable)}
+                    </div>`
                   : nothing
               }
               ${

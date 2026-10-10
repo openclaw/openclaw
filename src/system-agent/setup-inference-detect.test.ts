@@ -5,6 +5,7 @@ import type { InferenceBackendCandidate } from "../commands/onboard-inference-am
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { ProviderAppGuidedSetupCandidate, ProviderPlugin } from "../plugins/types.js";
+import type { DetectSetupInferenceDeps, SetupInferenceDetection } from "./setup-inference-core.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
 
 const fixture = vi.hoisted(() => ({
@@ -20,7 +21,7 @@ vi.mock("../config/config.js", async (importOriginal) => ({
       valid: true,
       config: {
         agents: {
-          entries: { main: { default: true } },
+          entries: { main: {} },
           defaults: { workspace: "/fixture/workspace" },
         },
       },
@@ -31,7 +32,7 @@ vi.mock("../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles/store-runtime.js")>()),
   loadAuthProfileStoreWithoutExternalProfiles: fixture.loadAuthProfileStore,
 }));
-vi.mock("./setup-inference-credentials.js", () => ({
+vi.mock("./setup-provider-method.js", () => ({
   withSetupProviderAuthMethod: fixture.withSetupProviderAuthMethod,
 }));
 vi.mock("./setup-native-session-catalogs.js", () => ({
@@ -65,6 +66,9 @@ const choice: ProviderAuthChoiceMetadata = {
 function detectWithProvider(
   detect: NonNullable<ProviderPlugin["auth"][number]["appGuidedSetup"]>["detect"],
   nativeCandidates: InferenceBackendCandidate[] = [],
+  options: Pick<DetectSetupInferenceDeps, "onPartial" | "enablePluginInConfig"> & {
+    choices?: ProviderAuthChoiceMetadata[];
+  } = {},
 ) {
   const provider: ProviderPlugin = {
     id: "fixture",
@@ -82,10 +86,10 @@ function detectWithProvider(
   };
   return detectSetupInference(
     {
-      resolveManifestProviderAuthChoices: () => [choice],
+      ...options,
+      resolveManifestProviderAuthChoices: () => options.choices ?? [choice],
       resolvePluginProviders: () => [provider],
       detectInferenceBackends: async () => nativeCandidates,
-      probeLocalCommand: async (command) => ({ command, found: false }),
     },
     "main",
   );
@@ -119,6 +123,91 @@ afterEach(() => {
 });
 
 describe("setup inference discovery deadline", () => {
+  it.each<{
+    name: string;
+    modelRef?: string;
+    eligible: boolean;
+    unavailable?: "disabled" | "platform";
+    ordinarySibling?: boolean;
+  }>([
+    { name: "unavailable", modelRef: undefined, eligible: false },
+    { name: "another model available", modelRef: "fixture/other-model", eligible: false },
+    { name: "same model available", modelRef: "fixture/saved-model", eligible: true },
+    { name: "disabled", modelRef: "fixture/saved-model", eligible: false, unavailable: "disabled" },
+    {
+      name: "unsupported platform",
+      modelRef: "fixture/saved-model",
+      eligible: false,
+      unavailable: "platform",
+    },
+    { name: "ordinary sibling", eligible: true, ordinarySibling: true },
+  ])(
+    "gates saved and configured detected-only routes while $name",
+    async ({ modelRef, eligible, unavailable, ordinarySibling }) => {
+      const partials: SetupInferenceDetection[] = [];
+      const detect = vi.fn(async () => (modelRef ? { modelRef } : null));
+      const result = await detectWithProvider(
+        detect,
+        [
+          {
+            kind: "existing-model",
+            modelRef: "fixture/saved-model",
+            label: "Configured model",
+            detail: "Configured",
+            credentials: true,
+          },
+        ],
+        {
+          choices: [
+            {
+              ...choice,
+              assistantVisibility: "detected-only",
+              ...(unavailable === "platform" ? { platforms: [] } : {}),
+            },
+            ...(ordinarySibling
+              ? [
+                  {
+                    ...choice,
+                    methodId: "remote",
+                    choiceId: "fixture-remote",
+                    appGuidedDiscovery: false,
+                  },
+                ]
+              : []),
+          ],
+          onPartial: (partial) => partials.push(partial),
+          ...(unavailable === "disabled"
+            ? {
+                enablePluginInConfig: (config: OpenClawConfig) => ({
+                  config,
+                  pluginId: "fixture",
+                  enabled: false,
+                  reason: "disabled",
+                }),
+              }
+            : {}),
+        },
+      );
+      if (!ordinarySibling) {
+        expect(partials.every((partial) => partial.candidates.length === 0)).toBe(true);
+        expect(result.manualProviders).toEqual([]);
+        expect(result.prepareOptions).toEqual([]);
+      }
+      expect(result.candidates.some((candidate) => candidate.kind === "existing-model")).toBe(
+        eligible,
+      );
+      expect(result.candidates.some((candidate) => candidate.kind.startsWith("saved-auth:"))).toBe(
+        eligible,
+      );
+      expect(result).toMatchObject({ configuredModel: "fixture/saved-model", setupComplete: true });
+      if (unavailable) {
+        expect(result.candidates).toEqual([]);
+        expect(result.authOptions.map((option) => option.id)).toEqual(["custom-api-key"]);
+        expect(detect).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("returns saved choices and aborts a stalled hook without accepting its late result", async () => {
     const hookStarted = createDeferred<AbortSignal | undefined>();
     const hookResult = createDeferred<ProviderAppGuidedSetupCandidate | null>();
@@ -173,28 +262,23 @@ describe("setup inference discovery deadline", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("returns completed discovery immediately and releases its deadline", async () => {
-    const result = await detectWithProvider(async () => ({ modelRef: "fixture/available-model" }));
-    expect(result.candidates).toContainEqual(
-      expect.objectContaining({ modelRef: "fixture/available-model" }),
-    );
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it("retains a valid choice that needs more than ten seconds to discover", async () => {
-    const started = createDeferred();
-    const available = createDeferred<ProviderAppGuidedSetupCandidate | null>();
-    const detection = detectWithProvider(() => {
-      started.resolve();
-      return available.promise;
-    });
-    await started.promise;
-    await vi.advanceTimersByTimeAsync(20_000);
-    available.resolve({ modelRef: "fixture/slow-model" });
-    const result = await detection;
-    expect(result.candidates).toContainEqual(
-      expect.objectContaining({ modelRef: "fixture/slow-model" }),
-    );
-    expect(vi.getTimerCount()).toBe(0);
-  });
+  it.each([0, 20_000])(
+    "returns discovery completed after %i ms and releases its deadline",
+    async (delay) => {
+      const started = createDeferred();
+      const available = createDeferred<ProviderAppGuidedSetupCandidate | null>();
+      const detection = detectWithProvider(() => {
+        started.resolve();
+        return available.promise;
+      });
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(delay);
+      available.resolve({ modelRef: "fixture/slow-model" });
+      const result = await detection;
+      expect(result.candidates).toContainEqual(
+        expect.objectContaining({ modelRef: "fixture/slow-model" }),
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 });

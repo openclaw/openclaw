@@ -80,32 +80,27 @@ export function createTelegramUpdateOffsetPersistence(
     activeDrain = run;
   };
 
-  const persistUpdateId = (updateId: number) => {
-    if (retrySignal.aborted) {
-      return;
-    }
-    const normalizedUpdateId = normalizeTelegramUpdateId(updateId);
-    if (normalizedUpdateId === null) {
-      options.onInvalidUpdateId(updateId);
-      return;
-    }
-    if (acceptedUpdateId !== null && normalizedUpdateId <= acceptedUpdateId) {
-      return;
-    }
-    acceptedUpdateId = normalizedUpdateId;
-    pendingUpdateId = normalizedUpdateId;
-    startDrain();
-  };
-
-  const stop = async () => {
-    stopController.abort(new Error("Telegram update-offset persistence stopped."));
-    await activeDrain?.catch(() => undefined);
-  };
-
   return {
-    getAcceptedUpdateId: () => acceptedUpdateId,
     getCommittedUpdateId: () => committedUpdateId,
-    persistUpdateId,
-    stop,
+    persistUpdateId: (updateId: number) => {
+      if (retrySignal.aborted) {
+        return;
+      }
+      const normalizedUpdateId = normalizeTelegramUpdateId(updateId);
+      if (normalizedUpdateId === null) {
+        options.onInvalidUpdateId(updateId);
+        return;
+      }
+      if (acceptedUpdateId !== null && normalizedUpdateId <= acceptedUpdateId) {
+        return;
+      }
+      acceptedUpdateId = normalizedUpdateId;
+      pendingUpdateId = normalizedUpdateId;
+      startDrain();
+    },
+    async stop() {
+      stopController.abort(new Error("Telegram update-offset persistence stopped."));
+      await activeDrain?.catch(() => undefined);
+    },
   };
 }

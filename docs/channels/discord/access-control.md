@@ -177,6 +177,32 @@ Who may reach the bot, which guild channels it answers in, and which Discord act
     When writing outbound Discord messages, use canonical mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
+
+    <a id="bot-created-threads" />
+    Set `requireMentionInBotThreads: false` on a guild or channel to accept unmentioned follow-ups in threads created by this bot, including threads created through message tools. Channel values override the guild setting. Set it to `true` to require a mention in those threads, including when `autoThread` is enabled; conversational reply-to-bot signals alone do not bypass that requirement. Omitted preserves existing behavior: bot-owned threads bypass mentions only when `autoThread` is enabled. Thread-bound sessions retain their own route activation rules.
+
+    Merge this into the existing guild entry, preserving its channel and sender allowlists:
+
+    ```json5
+    {
+      channels: {
+        discord: {
+          intents: { messageContent: true },
+          guilds: {
+            "123456789012345678": {
+              requireMention: true,
+              requireMentionInBotThreads: false,
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    For a named account, use `channels.discord.accounts.<accountId>.intents` and `.guilds`. To limit the override to one parent channel, add `requireMentionInBotThreads: false` to its existing guild `channels.<channelId>` entry. Adding a new channel map also changes the [guild allowlist](/channels/discord/access-control#guild-channel-maps-are-allowlists).
+
+    Guild/channel and sender allowlists still apply. Parent channels and threads created by other users keep their configured mention requirements; unknown thread ownership does not enable the override. Enable **Message Content Intent** in the [Discord Developer Portal](/channels/discord/setup#quick-setup) as well as `intents.messageContent` in OpenClaw. Without it, Discord omits ordinary unmentioned guild-message content. Verify by having the bot create a thread and sending an unmentioned follow-up there from an allowed account. See [bot-created thread policy](/channels/groups#bot-created-threads) for other channels.
+
     `ignoreOtherMentions` optionally drops messages addressed to another identity but not the bot. This covers explicit user/role mentions (excluding @everyone/@here) and replies to another non-webhook bot. An explicit mention of the current bot still wins.
 
     Group DMs:

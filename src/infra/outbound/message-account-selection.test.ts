@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
@@ -24,9 +25,9 @@ describe("validateExplicitMessageAccountSelection", () => {
     },
   } as unknown as ChannelPlugin;
 
-  it("accepts the plugin-resolved default when it is intentionally unlisted", () => {
+  it("accepts the plugin-resolved default when it is intentionally unlisted", async () => {
     expect(
-      validateExplicitMessageAccountSelection({
+      await validateExplicitMessageAccountSelection({
         cfg,
         channel: "feishu",
         accountId: "OPS",
@@ -35,18 +36,40 @@ describe("validateExplicitMessageAccountSelection", () => {
     ).toBe("ops");
   });
 
-  it("still rejects a non-default unlisted account", () => {
-    expect(() =>
+  it("still rejects a non-default unlisted account", async () => {
+    await expect(
       validateExplicitMessageAccountSelection({
         cfg,
         channel: "feishu",
         accountId: "missing",
         plugin,
       }),
-    ).toThrow('Unknown account "missing"');
+    ).rejects.toThrow('Unknown account "missing"');
   });
 
-  it("rejects only an unavailable active account before resolving its credentials", () => {
+  it("uses awaited account state and rejects accounts disabled during resolution", async () => {
+    const pending = createDeferred<{ enabled: boolean }>();
+    const asyncPlugin: ChannelPlugin = {
+      ...plugin,
+      config: {
+        ...plugin.config,
+        resolveAccount: () => {
+          throw new Error("Synchronous account access");
+        },
+        resolveAccountAsync: () => pending.promise,
+      },
+    };
+    const selected = validateExplicitMessageAccountSelection({
+      cfg,
+      channel: "feishu",
+      accountId: "OPS",
+      plugin: asyncPlugin,
+    });
+    pending.resolve({ enabled: false });
+    await expect(selected).rejects.toThrow('Account "ops" for channel feishu is disabled');
+  });
+
+  it("rejects only an unavailable active account before resolving its credentials", async () => {
     setActiveDegradedSecretOwners([
       {
         ownerKind: "account",
@@ -59,18 +82,18 @@ describe("validateExplicitMessageAccountSelection", () => {
     ]);
     const resolveAccount = vi.spyOn(plugin.config, "resolveAccount");
 
-    expect(() =>
+    await expect(
       validateExplicitMessageAccountSelection({
         cfg,
         channel: "feishu",
         accountId: "OPS",
         plugin,
       }),
-    ).toThrowError(expect.objectContaining({ code: "SECRET_SURFACE_UNAVAILABLE" }));
+    ).rejects.toThrowError(expect.objectContaining({ code: "SECRET_SURFACE_UNAVAILABLE" }));
     expect(resolveAccount).not.toHaveBeenCalled();
 
     expect(
-      validateExplicitMessageAccountSelection({
+      await validateExplicitMessageAccountSelection({
         cfg,
         channel: "feishu",
         accountId: "OPS",
@@ -79,7 +102,7 @@ describe("validateExplicitMessageAccountSelection", () => {
       }),
     ).toBe("ops");
     expect(
-      validateExplicitMessageAccountSelection({
+      await validateExplicitMessageAccountSelection({
         cfg,
         channel: "feishu",
         accountId: "default",
@@ -123,7 +146,7 @@ describe("resolveMessageBroadcastAccountPlan (registry-scoped channel plugins)",
       await import("../../plugins/runtime/gateway-request-scope.js");
     const { resolveMessageBroadcastAccountPlan } = await import("./message-account-selection.js");
 
-    const plan = withPluginRuntimeRegistryScope(
+    const plan = await withPluginRuntimeRegistryScope(
       { channels: [{ plugin: scopedPlugin }, { plugin: unavailablePlugin }] } as never,
       () => resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" }),
     );
@@ -134,7 +157,7 @@ describe("resolveMessageBroadcastAccountPlan (registry-scoped channel plugins)",
   it("does not see the scoped channel outside the scope", async () => {
     const { resolveMessageBroadcastAccountPlan } = await import("./message-account-selection.js");
 
-    const plan = resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
+    const plan = await resolveMessageBroadcastAccountPlan({ cfg: scopedCfg, accountId: "ops" });
     expect(plan?.candidateChannels).not.toContain("scopex");
     expect(plan?.secretChannels).toEqual([]);
   });

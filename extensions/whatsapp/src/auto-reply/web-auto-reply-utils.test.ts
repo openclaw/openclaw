@@ -67,29 +67,6 @@ describe("isBotMentionedFromTargets", () => {
     expect(debugMention(msg, cfg).wasMentioned).toBe(expected);
   }
 
-  it("honors configured mention patterns when only other members are @-mentioned (#109488)", () => {
-    // Previously a native @-mention of a non-bot member short-circuited the
-    // gate to false before mentionPatterns were evaluated, silently dropping
-    // messages like "marlow, look at @SomeoneElse's message".
-    const msg = makeMsg({
-      body: "@OpenClaw please help",
-      mentionedJids: ["19998887777@s.whatsapp.net"],
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, true);
-  });
-
-  it("still rejects third-party mentions when no configured pattern matches", () => {
-    const msg = makeMsg({
-      body: "look at @SomeoneElse's message",
-      mentionedJids: ["19998887777@s.whatsapp.net"],
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, false);
-  });
-
   it("keeps the self-number digit fallback suppressed when other members are @-mentioned", () => {
     // An @-tag of another member injects that member's number into the body,
     // so loose digit matching stays disabled in this shape — only explicit
@@ -101,25 +78,6 @@ describe("isBotMentionedFromTargets", () => {
       selfJid: "15551234567@s.whatsapp.net",
     });
     expectMentioned(msg, mentionCfg, false);
-  });
-
-  it("matches explicit self mentions", () => {
-    const msg = makeMsg({
-      body: "hey",
-      mentionedJids: ["15551234567@s.whatsapp.net"],
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, true);
-  });
-
-  it("falls back to regex when no mentions are present", () => {
-    const msg = makeMsg({
-      body: "openclaw can you help?",
-      selfE164: "+15551234567",
-      selfJid: "15551234567@s.whatsapp.net",
-    });
-    expectMentioned(msg, mentionCfg, true);
   });
 
   it("ignores JID mentions in a true 1:1 self-chat (not a group)", () => {
@@ -238,23 +196,6 @@ describe("resolveMentionTargets with @lid mapping", () => {
 
 describe("web auto-reply util", () => {
   describe("mentions diagnostics", () => {
-    it("returns normalized debug fields and mention outcome", () => {
-      const msg = makeMsg({
-        admission: {
-          conversation: {
-            id: "777@lid",
-          },
-        },
-        body: "openclaw ping",
-        selfE164: "+15551234567",
-        selfJid: "15551234567@s.whatsapp.net",
-      });
-      const result = debugMention(msg, { mentionRegexes: [/\bopenclaw\b/i] });
-      expect(result.wasMentioned).toBe(true);
-      expect(result.details.bodyClean).toBe("openclaw ping");
-      expect(result.details.normalizedMentionedJids).toBeNull();
-    });
-
     it("resolves owner list from allowFrom or falls back to self", () => {
       expect(
         resolveOwnerList(

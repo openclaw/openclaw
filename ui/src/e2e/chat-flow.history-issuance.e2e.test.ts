@@ -219,8 +219,11 @@ suite.define(() => {
         },
       });
       const referencePath = `chat/main/${reference === "named" ? "canonical-history" : "old-name-12345678"}`;
-      const canonicalPath = new URL("chat/main/canonical-history-12345678", suite.server.baseUrl)
-        .pathname;
+      const canonicalId = reference === "named" ? "1234567890abcdef1234567890abcdef" : "12345678";
+      const canonicalPath = new URL(
+        `chat/main/canonical-history-${canonicalId}`,
+        suite.server.baseUrl,
+      ).pathname;
       try {
         await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
         await page

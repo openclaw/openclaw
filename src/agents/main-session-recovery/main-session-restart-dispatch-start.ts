@@ -1,6 +1,10 @@
 import type { AgentTurnStartOwner } from "../../gateway/agent-turn/internal-facade.types.js";
-import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
+import type {
+  GatewayInstanceAgentDispatchOptions,
+  GatewayRecoveryRuntime,
+} from "../../gateway/server-instance-runtime.types.js";
 import type { AgentRunRequest } from "../../gateway/server-methods/agent-request-types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 
 const RESTART_RECOVERY_START_OBSERVATION_MS = 10_000;
 
@@ -35,6 +39,8 @@ export type RestartRecoveryDispatchStartOutcome =
 export async function dispatchRestartRecoveryUntilStarted(params: {
   agentParams: AgentRunRequest;
   gatewayRuntime: GatewayRecoveryRuntime;
+  restartRecoveryOperatorTarget?: GatewayInstanceAgentDispatchOptions["restartRecoveryOperatorTarget"];
+  assertAdmissionCurrent?: () => void;
   onSettled?: () => void;
 }): Promise<RestartRecoveryDispatchStartOutcome> {
   let dispatchAccepted = false;
@@ -49,10 +55,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     preStartAbortAttempted,
     preStartAbortConfirmed,
   });
-  let resolveExecutionStarted!: () => void;
-  const executionStartedPromise = new Promise<void>((resolve) => {
-    resolveExecutionStarted = resolve;
-  });
+  const executionStart = createDeferredCore();
   const executionStartAbort = new AbortController();
   const abortBeforeStart = () => {
     if (!startOwner || executionStarted || preStartAbortAttempted) {
@@ -61,12 +64,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     preStartAbortAttempted = true;
     preStartAbortConfirmed = startOwner.abort();
   };
-  let resolveExecutionStartTimeout!: (outcome: RestartRecoveryDispatchStartOutcome) => void;
-  const executionStartTimeoutPromise = new Promise<RestartRecoveryDispatchStartOutcome>(
-    (resolve) => {
-      resolveExecutionStartTimeout = resolve;
-    },
-  );
+  const executionStartTimeout = createDeferredCore<RestartRecoveryDispatchStartOutcome>();
   let executionStartTimer: ReturnType<typeof setTimeout> | undefined;
   const clearExecutionStartTimer = () => {
     if (executionStartTimer) {
@@ -80,7 +78,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     }
     executionStarted = true;
     clearExecutionStartTimer();
-    resolveExecutionStarted();
+    executionStart.resolve();
   };
   const observeExecutionStart = () => {
     const ownerState = startOwner?.observe();
@@ -100,7 +98,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     const error = new Error("restart recovery execution start timeout");
     abortBeforeStart();
     executionStartAbort.abort(error);
-    resolveExecutionStartTimeout({ kind: "failed", error, observation: observe() });
+    executionStartTimeout.resolve({ kind: "failed", error, observation: observe() });
   };
   const scheduleObservation = (delayMs: number) => {
     executionStartTimer = setTimeout(observeExecutionStart, delayMs);
@@ -114,6 +112,8 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       undefined,
       {
         expectFinal: true,
+        restartRecoveryOperatorTarget: params.restartRecoveryOperatorTarget,
+        assertAdmissionCurrent: params.assertAdmissionCurrent,
         onAccepted: () => {
           dispatchAccepted = true;
         },
@@ -141,7 +141,7 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
       if (result.status === "in_flight") {
         // Cached acceptance retains the same captured owner and its start budget.
         dispatchAccepted = true;
-        return executionStartTimeoutPromise;
+        return executionStartTimeout.promise;
       }
       clearExecutionStartTimer();
       params.onSettled?.();
@@ -155,10 +155,35 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   );
   return await Promise.race([
     terminalDispatchOutcome,
-    executionStartTimeoutPromise,
-    executionStartedPromise.then((): RestartRecoveryDispatchStartOutcome => ({
+    executionStartTimeout.promise,
+    executionStart.promise.then((): RestartRecoveryDispatchStartOutcome => ({
       kind: "started",
       observation: observe(),
     })),
   ]);
+}
+
+export type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
+
+export function normalizeRestartRecoveryTerminalStatus(
+  value: unknown,
+): RestartRecoveryTerminalStatus | undefined {
+  return value === "error" || value === "ok" || value === "timeout" ? value : undefined;
+}
+
+export async function probeRestartRecoveryTerminalStatus(
+  runId: string,
+  gatewayRuntime: GatewayRecoveryRuntime,
+): Promise<RestartRecoveryTerminalStatus | undefined> {
+  try {
+    const result = await gatewayRuntime.waitForAgent<{ endedAt?: unknown; status?: unknown }>(
+      { runId, timeoutMs: 0 },
+      2_000,
+    );
+    const status = normalizeRestartRecoveryTerminalStatus(result.status);
+    // A zero-time wait also reports timeout for active or unknown work.
+    return status === "timeout" && typeof result.endedAt !== "number" ? undefined : status;
+  } catch {
+    return undefined;
+  }
 }

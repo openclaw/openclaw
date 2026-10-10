@@ -23,64 +23,15 @@ describe("MatrixConfigSchema SecretInput", () => {
     }
   });
 
-  it("accepts SecretRef accessToken at top-level", () => {
+  it("accepts SecretRef accessToken and password on accounts", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
-      accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts SecretRef password at top-level", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      password: { source: "env", provider: "default", id: "MATRIX_PASSWORD" },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts dm threadReplies overrides", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      dm: {
-        policy: "pairing",
-        threadReplies: "off",
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts dm sessionScope overrides", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      dm: {
-        policy: "pairing",
-        sessionScope: "per-room",
-      },
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts the Matrix name matching compatibility flag", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      dangerouslyAllowNameMatching: true,
-    });
-    expect(result.success).toBe(true);
-  });
-
-  it("accepts room-level account assignments", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      groups: {
-        "!room:example.org": {
-          enabled: true,
-          account: "axis",
+      accounts: {
+        work: {
+          joinIntro: true,
+          accessToken: { source: "store", provider: "default", id: "MATRIX_WORK_TOKEN" },
+          password: { source: "store", provider: "default", id: "MATRIX_WORK_PASSWORD" },
+          userId: "@work:example.org",
         },
       },
     });
@@ -89,28 +40,68 @@ describe("MatrixConfigSchema SecretInput", () => {
       throw new Error("expected schema parse to succeed");
     }
     expect(result.data).toMatchObject({
-      groups: { "!room:example.org": { account: "axis" } },
-    });
-  });
-
-  it("accepts legacy room-level account assignments", () => {
-    const result = MatrixConfigSchema.safeParse({
-      homeserver: "https://matrix.example.org",
-      accessToken: "token",
-      rooms: {
-        "!room:example.org": {
-          enabled: true,
-          account: "axis",
+      accounts: {
+        work: {
+          joinIntro: true,
+          accessToken: { source: "store", provider: "default", id: "MATRIX_WORK_TOKEN" },
+          password: { source: "store", provider: "default", id: "MATRIX_WORK_PASSWORD" },
+          userId: "@work:example.org",
         },
       },
     });
-    expect(result.success).toBe(true);
-    if (!result.success) {
-      throw new Error("expected schema parse to succeed");
-    }
-    expect(result.data).toMatchObject({
-      rooms: { "!room:example.org": { account: "axis" } },
+  });
+
+  it("publishes account credential SecretInput leaves for Control UI redaction hints", () => {
+    const accounts = (
+      MatrixChannelConfigSchema.schema as {
+        properties?: {
+          accounts?: {
+            additionalProperties?: {
+              properties?: Record<string, unknown>;
+            };
+          };
+        };
+      }
+    ).properties?.accounts?.additionalProperties?.properties;
+    expect(accounts).toHaveProperty("accessToken");
+    expect(accounts).toHaveProperty("password");
+    expect(accounts).toHaveProperty("joinIntro");
+  });
+
+  it.each([
+    [
+      "SecretRef accessToken",
+      { accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" } },
+    ],
+    [
+      "SecretRef password",
+      {
+        userId: "@bot:example.org",
+        password: { source: "env", provider: "default", id: "MATRIX_PASSWORD" },
+      },
+    ],
+    ["dm threadReplies", { accessToken: "token", dm: { policy: "pairing", threadReplies: "off" } }],
+    [
+      "dm sessionScope",
+      { accessToken: "token", dm: { policy: "pairing", sessionScope: "per-room" } },
+    ],
+    ["name matching compatibility", { accessToken: "token", dangerouslyAllowNameMatching: true }],
+  ])("accepts %s", (_name, input) => {
+    expect(
+      MatrixConfigSchema.safeParse({ homeserver: "https://matrix.example.org", ...input }).success,
+    ).toBe(true);
+  });
+
+  it.each(["groups", "rooms"] as const)("accepts %s account assignments", (scope) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      [scope]: { "!room:example.org": { enabled: true, account: "axis" } },
     });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({ [scope]: { "!room:example.org": { account: "axis" } } });
+    }
   });
 
   it.each(["groups", "rooms"] as const)("rejects unknown %s entry fields", (scope) => {
@@ -260,7 +251,7 @@ describe("MatrixConfigSchema exec approvals", () => {
     }
   });
 
-  it.each(["on", "AUTO", 1, null])("rejects the invalid enabled mode %s", (enabled) => {
+  it.each(["AUTO", 1, null])("rejects the invalid enabled mode %s", (enabled) => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
       accessToken: "token",

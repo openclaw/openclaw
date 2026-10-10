@@ -2,6 +2,12 @@ import { vi } from "vitest";
 import type { writeQaSuiteArtifacts } from "./suite-artifacts.js";
 
 const mocks = vi.hoisted(() => ({
+  captureTransportArtifacts: vi.fn(async () => ({
+    artifacts: [
+      { kind: "channel-capability-matrix" as const, path: "capabilities.json" },
+      { kind: "channel-driver-smoke" as const, path: "readiness.json" },
+    ],
+  })),
   disposeRegisteredAgentHarnesses: vi.fn(async () => {}),
   fetchWithSsrFGuard: vi.fn(async () => ({
     response: new Response(null, { status: 204 }),
@@ -15,8 +21,8 @@ const mocks = vi.hoisted(() => ({
     getProcessRssBytes: () => null,
     stop: vi.fn(async () => {}),
   })),
-  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async () => ({
-    evidence: undefined,
+  writeQaSuiteArtifacts: vi.fn<typeof writeQaSuiteArtifacts>(async (params) => ({
+    evidence: params.recordedEvidence,
     evidencePath: "/qa-output/qa-evidence.json",
     report: "",
     reportPath: "/qa-output/qa-suite-report.md",
@@ -54,6 +60,7 @@ vi.mock("./crabline-transport.js", () => {
     }),
     handleAction: vi.fn(async () => {}),
     createReportNotes: () => [],
+    captureArtifacts: mocks.captureTransportArtifacts,
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   }));
   return {

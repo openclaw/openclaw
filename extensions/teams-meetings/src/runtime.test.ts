@@ -1,12 +1,14 @@
 import {
   createMeetingBrowserFixture,
   defineMeetingSessionFlowTests,
+  useMeetingTestState,
 } from "openclaw/plugin-sdk/test-fixtures";
+import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, vi } from "vitest";
-import { teamsMeetingsConfig } from "./config.js";
-import { TeamsMeetingsRuntime } from "./runtime.js";
+import { teamsMeetingsPlugin } from "../index.js";
 
-const resolveTeamsMeetingsConfig = teamsMeetingsConfig.resolveConfig;
+const resolveTeamsMeetingsConfig = teamsMeetingsPlugin.config.resolveConfig;
+const testState = useMeetingTestState(createOpenClawTestState);
 
 const URL =
   "https://teams.microsoft.com/l/meetup-join/19%3ameeting_runtime%40thread.v2/0?context=%7b%22Tid%22%3a%22one%22%7d";
@@ -48,11 +50,11 @@ function runtimeFixture(
   options: {
     config?: Parameters<typeof resolveTeamsMeetingsConfig>[0];
     harness?: { tabOpen?: boolean };
-    fullConfig?: ConstructorParameters<typeof TeamsMeetingsRuntime>[0]["fullConfig"];
+    fullConfig?: ConstructorParameters<typeof teamsMeetingsPlugin.Runtime>[0]["fullConfig"];
   } = {},
 ) {
   const harness = runtimeHarness(options.harness);
-  const runtime = new TeamsMeetingsRuntime({
+  const runtime = new teamsMeetingsPlugin.Runtime({
     config: resolveTeamsMeetingsConfig(
       options.config ?? {
         defaultMode: "transcribe",
@@ -63,6 +65,7 @@ function runtimeFixture(
     runtime: harness.runtime,
     logger,
   });
+  testState.track(runtime, { readWarnings: () => logger.warn.mock.calls });
   return { harness, runtime };
 }
 

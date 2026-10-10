@@ -1,13 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,
   findInlineSlashCompletion,
   getRemoteCommandEntries,
+  getSlashCommandDescription,
   getSkillCommandCompletions,
   getSlashCommandCompletions,
   isModelIndependentChatCommand,
@@ -50,7 +51,6 @@ describe("model-independent commands", () => {
     "/agents",
     "/tools verbose",
     "/commands",
-    "/tasks",
     "/context detail",
     "/diagnostics",
     "/openclaw status",
@@ -275,6 +275,31 @@ function slashCommand(
 }
 
 describe("getSlashCommandCompletions", () => {
+  it.each([false, true])(
+    "describes browser exports without workspace arguments (discovered: %s)",
+    (discovered) => {
+      if (discovered) {
+        applyRemoteEntries([
+          {
+            name: "export-session",
+            textAliases: ["/export-session", "/export"],
+            description: "Export current session to an owner-only HTML file in the workspace.",
+            source: "native",
+            scope: "both",
+            acceptsArgs: true,
+            args: [{ name: "path", description: "Output path", type: "string" }],
+          },
+        ]);
+      }
+      for (const alias of ["export", "export-session"]) {
+        const command = expectDefined(getSlashCommandCompletions(alias)[0], "export completion");
+        expect(command.key).toBe("export-session");
+        expect(getSlashCommandDescription(command)).toBe("Download this conversation as Markdown");
+        expect(command.args).toBeUndefined();
+      }
+    },
+  );
+
   it("presents the first-class dashboard command with the dashboard icon", () => {
     const dashboard = SLASH_COMMANDS.find((entry) => entry.name === "dashboard");
 
@@ -621,6 +646,23 @@ describe("parseSlashCommand", () => {
       executeLocal: true,
       description: "Abort and restart with a new message",
     });
+  });
+
+  it("keeps remote descriptions when a command name matches an object prototype property", () => {
+    applyRemoteEntries([
+      {
+        name: "constructor",
+        textAliases: ["/constructor"],
+        description: "Construct a sample project.",
+        source: "plugin",
+        scope: "both",
+        acceptsArgs: false,
+      },
+    ]);
+
+    const command = expectDefined(getSlashCommandCompletions("constructor")[0], "completion");
+    expect(command.name).toBe("constructor");
+    expect(getSlashCommandDescription(command)).toBe("Construct a sample project.");
   });
 
   it("drops remote commands with unsafe identifiers before they reach the palette/parser", () => {

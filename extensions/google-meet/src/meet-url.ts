@@ -1,4 +1,3 @@
-// Google Meet plugin module implements shared Meet URL contracts.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function normalizeMeetUrl(input: unknown): string {
@@ -6,10 +5,8 @@ export function normalizeMeetUrl(input: unknown): string {
   if (!raw) {
     throw new Error("url required");
   }
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
+  const url = URL.parse(raw);
+  if (!url) {
     throw new Error("url must be a valid Google Meet URL");
   }
   if (

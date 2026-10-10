@@ -18,10 +18,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { runBtwSideQuestion } from "./btw.js";
-import {
-  acquirePublishedPreparedModelRuntime,
-  acquireReadOnlyPreparedModelRuntime,
-} from "./prepared-model-runtime.js";
+import { acquireReadOnlyPreparedModelRuntime } from "./prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
@@ -55,8 +52,6 @@ vi.mock("./prepared-model-runtime.js", async (importOriginal) => {
 });
 
 const publishedRuntimeResourceModes = [
-  "published borrow",
-  "BTW harness cleanup",
   "BTW parent close",
   "BTW parent close during acquisition",
 ] as const;
@@ -206,9 +201,6 @@ module.exports = {
           await resetPreparedModelRuntimeSnapshotsForTest();
           clearPluginMetadataLifecycleCaches();
           let first: Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>> | undefined;
-          let borrower:
-            | Awaited<ReturnType<typeof acquirePublishedPreparedModelRuntime>>
-            | undefined;
           let replacement:
             | Awaited<ReturnType<typeof acquireReadOnlyPreparedModelRuntime>>
             | undefined;
@@ -221,64 +213,55 @@ module.exports = {
             first = await acquireReadOnlyPreparedModelRuntime(input, { catalogMode: "static" });
             expect(connections).toHaveLength(1);
             const original = expectDefined(connections[0], "original provider registration");
-            if (mode === "published borrow") {
-              const pending = acquirePublishedPreparedModelRuntime(input);
-              await first[Symbol.asyncDispose]();
-              borrower = await pending;
-              expect(borrower.snapshot).toBe(first.snapshot);
-            } else {
-              selectedSource.input = input;
-              if (mode === "BTW parent close during acquisition") {
-                selectedSource.acquisition = {
-                  entered: acquisitionEntered.resolve,
-                  completion: acquisitionFinish.promise,
-                };
-              }
-              sideQuestion = owner.track(() =>
-                runBtwSideQuestion({
-                  cfg: config,
-                  agentId: "main",
-                  agentDir: input.agentDir,
-                  provider: pluginId,
-                  model: "model",
-                  question: "What is the answer?",
-                  sessionEntry: {
-                    sessionId: "btw-native-fixture",
-                    updatedAt: 1,
-                    agentHarnessId: pluginId,
-                  },
-                  sessionKey: "agent:main:btw-native-fixture",
-                  isNewSession: false,
-                  resolvedThinkLevel: "off",
-                  resolvedReasoningLevel: "off",
-                }),
-              );
-              if (mode === "BTW parent close during acquisition") {
-                await Promise.race([
-                  acquisitionEntered.promise,
-                  sideQuestion.then(() => {
-                    throw new Error("BTW did not enter acquisition");
-                  }),
-                ]);
-                owner.beginClose(cancellationReason);
-                expect(original.disposals).toBe(0);
-                acquisitionFinish.resolve();
-              }
+            selectedSource.input = input;
+            if (mode === "BTW parent close during acquisition") {
+              selectedSource.acquisition = {
+                entered: acquisitionEntered.resolve,
+                completion: acquisitionFinish.promise,
+              };
+            }
+            sideQuestion = owner.track(() =>
+              runBtwSideQuestion({
+                cfg: config,
+                agentId: "main",
+                agentDir: input.agentDir,
+                provider: pluginId,
+                model: "model",
+                question: "What is the answer?",
+                sessionEntry: {
+                  sessionId: "btw-native-fixture",
+                  updatedAt: 1,
+                  agentHarnessId: pluginId,
+                },
+                sessionKey: "agent:main:btw-native-fixture",
+                isNewSession: false,
+                resolvedThinkLevel: "off",
+                resolvedReasoningLevel: "off",
+              }),
+            );
+            if (mode === "BTW parent close during acquisition") {
               await Promise.race([
-                bridge.entered.promise,
+                acquisitionEntered.promise,
                 sideQuestion.then(() => {
-                  throw new Error("BTW did not enter the acquired harness");
+                  throw new Error("BTW did not enter acquisition");
                 }),
               ]);
-              if (mode === "BTW parent close") {
-                owner.beginClose(cancellationReason);
-              }
-              if (mode.startsWith("BTW parent close")) {
-                expect(bridge.requestSignal.current?.aborted).toBe(true);
-                expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
-              }
-              await first[Symbol.asyncDispose]();
+              owner.beginClose(cancellationReason);
+              expect(original.disposals).toBe(0);
+              acquisitionFinish.resolve();
             }
+            await Promise.race([
+              bridge.entered.promise,
+              sideQuestion.then(() => {
+                throw new Error("BTW did not enter the acquired harness");
+              }),
+            ]);
+            if (mode === "BTW parent close") {
+              owner.beginClose(cancellationReason);
+            }
+            expect(bridge.requestSignal.current?.aborted).toBe(true);
+            expect(bridge.requestSignal.current?.reason).toBe(cancellationReason);
+            await first[Symbol.asyncDispose]();
             expect(original.database.isOpen).toBe(true);
             replacement = await acquireReadOnlyPreparedModelRuntime(input, {
               catalogMode: "static",
@@ -286,18 +269,14 @@ module.exports = {
             expect(connections).toHaveLength(2);
             const successor = expectDefined(connections[1], "replacement provider registration");
             expect(original.database.prepare("SELECT value FROM answer").get()?.value).toBe(42);
-            if (mode !== "published borrow") {
-              bridge.finish.resolve();
-              await bridge.cleanupEntered.promise;
-              expect(original.database.isOpen).toBe(true);
-              bridge.cleanupFinish.resolve();
-              expect(await sideQuestion).toEqual({ text: "42" });
-              await bridge.abortObserved.promise;
-              expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
-              await owner.drain();
-            } else {
-              await borrower?.[Symbol.asyncDispose]();
-            }
+            bridge.finish.resolve();
+            await bridge.cleanupEntered.promise;
+            expect(original.database.isOpen).toBe(true);
+            bridge.cleanupFinish.resolve();
+            expect(await sideQuestion).toEqual({ text: "42" });
+            await bridge.abortObserved.promise;
+            expect(bridge.abortRegistry.current === first.snapshot.pluginRegistry).toBe(true);
+            await owner.drain();
             await expect.poll(() => original.disposals).toBe(1);
             expect(original.database.isOpen).toBe(false);
             expect(successor.database.isOpen).toBe(true);
@@ -318,7 +297,6 @@ module.exports = {
             selectedSource.acquisition = undefined;
             await Promise.allSettled([
               first?.[Symbol.asyncDispose](),
-              borrower?.[Symbol.asyncDispose](),
               replacement?.[Symbol.asyncDispose](),
             ]);
             await resetPreparedModelRuntimeSnapshotsForTest();

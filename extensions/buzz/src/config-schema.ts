@@ -11,6 +11,7 @@ const BuzzGroupConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   })
@@ -34,7 +35,7 @@ const BuzzAccountConfigSchema = z
     relayUrl: z
       .string()
       .url()
-      .and(z.string().regex(/^[wW][sS][sS]?:\/\//, "Buzz relay URL must use ws:// or wss://"))
+      .and(z.string().regex(/^[wW][sS][sS]?:\/\/.+/, "Buzz relay URL must use ws:// or wss://"))
       .optional(),
     privateKey: buildSecretInputSchema().optional(),
     authTag: buildSecretInputSchema().optional(),
@@ -57,6 +58,16 @@ const RawBuzzConfigSchema = BuzzAccountConfigSchema.extend({
   defaultAccount: BuzzAccountIdSchema.optional(),
 });
 
-export const BuzzConfigSchema = buildChannelConfigSchema(RawBuzzConfigSchema);
+const botThreadMentionHint = {
+  label: "Require Mention in Bot Threads",
+  help: "Override mention gating in threads whose root message was signed by this bot in the same room. False allows unmentioned replies; true requires a mention. Omit to preserve the room's mention policy. Sender restrictions still apply.",
+};
+
+export const BuzzConfigSchema = buildChannelConfigSchema(RawBuzzConfigSchema, {
+  uiHints: {
+    "groups.*.requireMentionInBotThreads": botThreadMentionHint,
+    "accounts.*.groups.*.requireMentionInBotThreads": botThreadMentionHint,
+  },
+});
 export type BuzzConfigInput = z.input<typeof RawBuzzConfigSchema>;
 export type BuzzConfig = z.output<typeof RawBuzzConfigSchema>;

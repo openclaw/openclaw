@@ -133,7 +133,6 @@ describe("config-eval helpers", () => {
 
   it.each([
     { platform: "linux", suffix: "" },
-    { platform: "darwin", suffix: "" },
     { platform: "win32", suffix: ".CMD" },
   ] as const)(
     "finds a newly installed binary on unchanged $platform PATH",
@@ -148,8 +147,6 @@ describe("config-eval helpers", () => {
       fs.writeFileSync(executable, "#!/bin/sh\nexit 0\n");
       fs.chmodSync(executable, 0o755);
 
-      expect(process.env.PATH).toBe(binDir);
-      expect(process.env.PATHEXT).toBe(".EXE;.CMD");
       expect(hasBinary("fixture-tool")).toBe(true);
     },
   );

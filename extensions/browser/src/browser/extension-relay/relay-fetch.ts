@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
 type PhysicalSender = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type EventSender = (method: string, params: unknown) => void;
@@ -29,14 +30,14 @@ type OwnedStream = {
 };
 
 const STREAM_PREFIX = "openclaw-fetch-stream:";
-const REQUEST_COMMANDS = new Set([
-  "Fetch.continueRequest",
-  "Fetch.continueResponse",
-  "Fetch.continueWithAuth",
-  "Fetch.failRequest",
-  "Fetch.fulfillRequest",
-  "Fetch.getResponseBody",
-  "Fetch.takeResponseBodyAsStream",
+const REQUEST_STAGES = new Map<string, readonly PauseKind[]>([
+  ["Fetch.continueRequest", ["request", "response", "buffered"]],
+  ["Fetch.continueResponse", ["response", "buffered"]],
+  ["Fetch.continueWithAuth", ["auth"]],
+  ["Fetch.failRequest", ["request", "response", "buffered", "stream"]],
+  ["Fetch.fulfillRequest", ["request", "response", "buffered", "stream"]],
+  ["Fetch.getResponseBody", ["response", "buffered"]],
+  ["Fetch.takeResponseBodyAsStream", ["response"]],
 ]);
 
 /** One physical Fetch domain; exact logical-session objects own its exclusive lease. */
@@ -89,7 +90,8 @@ export class RelayFetch {
         }
         return this.release(this.state.lease, "disable").then(() => ({}));
       }
-      if (!REQUEST_COMMANDS.has(method)) {
+      const stages = REQUEST_STAGES.get(method);
+      if (!stages) {
         throw new Error(`Unsupported Fetch command: ${method}`);
       }
       const lease = this.ownedLease(owner);
@@ -102,7 +104,17 @@ export class RelayFetch {
       if (!pause) {
         throw new Error("Invalid Fetch requestId for this session");
       }
-      this.validatePause(pause, method, input);
+      if (pause.pending) {
+        throw new Error("Fetch request already has a command in flight");
+      }
+      if (
+        !stages.includes(pause.kind) ||
+        (pause.kind === "stream" &&
+          method === "Fetch.fulfillRequest" &&
+          typeof input?.body !== "string")
+      ) {
+        throw new Error(`Invalid Fetch request stage for ${method}`);
+      }
       return this.runPause(lease, pause, method, input);
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
@@ -151,8 +163,13 @@ export class RelayFetch {
     if (lease?.owner === owner) {
       await this.release(lease, "close");
     }
-    const errors = await this.closeStreamSnapshot(
-      [...this.streams].filter(([, stream]) => stream.owner === owner),
+    const results = await Promise.allSettled(
+      [...this.streams]
+        .filter(([, stream]) => stream.owner === owner)
+        .map(([handle, stream]) => this.closeStream(handle, stream)),
+    );
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
       throw new AggregateError(errors, "Fetch stream cleanup failed");
@@ -191,17 +208,12 @@ export class RelayFetch {
           }
         }),
       );
-      let timer: NodeJS.Timeout | undefined;
-      const timedOut = await Promise.race([
+      const timedOut = await raceWithTimeout(
         settled.then(() => false),
-        new Promise<true>((resolve) => {
-          timer = setTimeout(() => resolve(true), timeoutMs);
-          timer.unref?.();
-        }),
-      ]);
-      if (timer) {
-        clearTimeout(timer);
-      }
+        timeoutMs,
+        () => true,
+        { ref: false },
+      );
       return {
         errors: [
           ...errors,
@@ -309,25 +321,6 @@ export class RelayFetch {
     return operation;
   }
 
-  private validatePause(pause: Pause, method: string, params?: Record<string, unknown>): void {
-    if (pause.pending) {
-      throw new Error("Fetch request already has a command in flight");
-    }
-    const auth = method === "Fetch.continueWithAuth";
-    const body = method === "Fetch.getResponseBody" || method === "Fetch.takeResponseBodyAsStream";
-    const response = pause.kind === "response" || pause.kind === "buffered";
-    if (
-      auth !== (pause.kind === "auth") ||
-      ((body || method === "Fetch.continueResponse") && !response) ||
-      (method === "Fetch.takeResponseBodyAsStream" && pause.kind !== "response") ||
-      (pause.kind === "stream" &&
-        method !== "Fetch.failRequest" &&
-        !(method === "Fetch.fulfillRequest" && typeof params?.body === "string"))
-    ) {
-      throw new Error(`Invalid Fetch request stage for ${method}`);
-    }
-  }
-
   private runPause(
     lease: Lease,
     pause: Pause,
@@ -425,9 +418,6 @@ export class RelayFetch {
           this.fence(lease, error);
           throw error;
         }
-        await this.nativeFetch(lease, "Fetch.disable");
-        this.state = { kind: "idle" };
-        return;
       }
       await this.nativeFetch(lease, "Fetch.disable");
       lease.pauses.clear();
@@ -493,12 +483,5 @@ export class RelayFetch {
         return result;
       },
     ));
-  }
-
-  private async closeStreamSnapshot(streams: Array<[string, OwnedStream]>): Promise<unknown[]> {
-    const results = await Promise.allSettled(
-      streams.map(([handle, stream]) => this.closeStream(handle, stream)),
-    );
-    return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
   }
 }

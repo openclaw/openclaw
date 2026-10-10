@@ -1,13 +1,11 @@
-/**
- * Shared web tool cache, timeout, and response helpers.
- *
- * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
- */
 import { consumeResponseBytes, decodeTextPrefix } from "@openclaw/normalization-core";
 import {
   asDateTimestampMs,
+  asFiniteNumber,
+  asPositiveFiniteNumber,
   MAX_TIMER_TIMEOUT_SECONDS,
   resolveExpiresAtMsFromDurationMs,
+  resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 export type CacheEntry<T> = {
@@ -21,20 +19,16 @@ export const DEFAULT_CACHE_TTL_MINUTES = 15;
 const DEFAULT_CACHE_MAX_ENTRIES = 100;
 
 export function resolveTimeoutSeconds(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" && Number.isFinite(value) ? value : fallback;
-  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
+  return resolveIntegerOption(value, fallback, { min: 1, max: MAX_TIMER_TIMEOUT_SECONDS });
 }
 
 export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
-  const parsed =
-    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
-  return Math.min(MAX_TIMER_TIMEOUT_SECONDS, Math.max(1, Math.floor(parsed)));
+  return resolveTimeoutSeconds(asPositiveFiniteNumber(value), fallback);
 }
 
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
-  const minutes =
-    typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallbackMinutes;
-  return Math.round(minutes * 60_000);
+  const minutes = asFiniteNumber(value);
+  return Math.round((minutes === undefined ? fallbackMinutes : Math.max(0, minutes)) * 60_000);
 }
 
 export function normalizeCacheKey(value: string): string {
@@ -169,26 +163,9 @@ function sniffCharset(contentType: string | null, bytes: Uint8Array): string | u
   return undefined;
 }
 
-function concatBytes(parts: Uint8Array[], totalBytes: number): Uint8Array {
-  if (parts.length === 1 && parts[0]?.byteLength === totalBytes) {
-    return parts[0];
-  }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const part of parts) {
-    bytes.set(part, offset);
-    offset += part.byteLength;
-  }
-  return bytes;
-}
-
-function responseContentType(res: Response): string | null {
-  const headers = (res as { headers?: { get?: (name: string) => string | null } }).headers;
-  return typeof headers?.get === "function" ? headers.get("content-type") : null;
-}
-
 function decodeResponseBytes(res: Response, bytes: Uint8Array, truncated = false): string {
-  const contentType = responseContentType(res);
+  const headers = res.headers;
+  const contentType = typeof headers?.get === "function" ? headers.get("content-type") : null;
   const charset = sniffCharset(contentType, bytes);
   try {
     return decodeTextPrefix(bytes, { encoding: charset ?? "utf-8", truncated });
@@ -201,21 +178,12 @@ export async function readResponseText(
   res: Response,
   options?: { maxBytes?: number },
 ): Promise<ReadResponseTextResult> {
-  const maxBytesRaw = options?.maxBytes;
-  const maxBytes =
-    typeof maxBytesRaw === "number" && Number.isFinite(maxBytesRaw) && maxBytesRaw > 0
-      ? Math.floor(maxBytesRaw)
-      : undefined;
+  const maxBytesRaw = asPositiveFiniteNumber(options?.maxBytes);
+  const maxBytes = maxBytesRaw === undefined ? undefined : Math.floor(maxBytesRaw);
 
   const body = res.body;
-  if (
-    maxBytes &&
-    body &&
-    typeof body === "object" &&
-    "getReader" in body &&
-    typeof (body as { getReader: () => unknown }).getReader === "function"
-  ) {
-    const reader = (body as ReadableStream<Uint8Array>).getReader();
+  if (maxBytes && body && typeof body === "object" && typeof body.getReader === "function") {
+    const reader = body.getReader();
     let bytesRead = 0;
     let truncated = false;
     const parts: Uint8Array[] = [];
@@ -249,23 +217,22 @@ export async function readResponseText(
       }
     }
 
-    const bytes = concatBytes(parts, bytesRead);
+    const bytes =
+      parts.length === 1 && parts[0]?.byteLength === bytesRead
+        ? parts[0]
+        : Buffer.concat(parts, bytesRead);
     return { text: decodeResponseBytes(res, bytes, truncated), truncated, bytesRead };
   }
 
   if (maxBytes) {
-    if (res instanceof Response && res.body === null) {
-      return { text: "", truncated: false, bytesRead: 0 };
-    }
-    // Whole-body fallbacks allocate before returning, so they cannot honor a byte cap.
-    // Fail closed instead of making maxBytes a returned-text limit only.
-    return { text: "", truncated: true, bytesRead: 0 };
+    // Whole-body fallbacks cannot honor a byte cap. Only a native bodyless
+    // response is known complete without reading; other fallbacks fail closed.
+    return { text: "", truncated: !(res instanceof Response && res.body === null), bytesRead: 0 };
   }
 
-  const readBytes = (res as { arrayBuffer?: () => Promise<ArrayBuffer> }).arrayBuffer;
-  if (typeof readBytes === "function") {
+  if (typeof res.arrayBuffer === "function") {
     try {
-      const bytes = new Uint8Array(await readBytes.call(res));
+      const bytes = new Uint8Array(await res.arrayBuffer());
       return {
         text: decodeResponseBytes(res, bytes),
         truncated: false,
