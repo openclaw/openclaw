@@ -456,7 +456,8 @@
     "!dist/plugin-sdk/secret-egress-runtime.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.js",
-    "!dist/plugin-sdk/memory-host-search.d.ts"
+    "!dist/plugin-sdk/memory-host-search.d.ts",
+    "!dist/plugin-sdk/codex-client-version-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -898,6 +899,9 @@
     },
     "./plugin-sdk/claude-model-runtime": {
       "default": "./dist/plugin-sdk/claude-model-runtime.js"
+    },
+    "./plugin-sdk/codex-client-version-runtime": {
+      "default": "./dist/plugin-sdk/codex-client-version-runtime.js"
     },
     "./plugin-sdk/codex-mcp-projection": {
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
