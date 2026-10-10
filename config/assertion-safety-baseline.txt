@@ -431,7 +431,7 @@ extensions/logbook/src/analyze.ts	5
 extensions/logbook/src/service.ts	6
 extensions/matrix/src/actions.ts	2
 extensions/matrix/src/approval-handler.runtime.ts	3
-extensions/matrix/src/approval-native.ts	6
+extensions/matrix/src/approval-native.ts	5
 extensions/matrix/src/approval-reactions.ts	1
 extensions/matrix/src/auth-precedence.ts	1
 extensions/matrix/src/channel.ts	4
@@ -699,7 +699,7 @@ extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-sta
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
-extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	8
+extensions/qa-lab/src/live-transports/matrix/substrate/e2ee-client.ts	4
 extensions/qa-lab/src/live-transports/matrix/substrate/fault-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/recording-proxy.ts	1
 extensions/qa-lab/src/live-transports/matrix/substrate/request.ts	3
@@ -2103,7 +2103,7 @@ src/infra/agent-event-lifecycle.ts	1
 src/infra/agent-events.ts	2
 src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
-src/infra/approval-handler-runtime.ts	10
+src/infra/approval-handler-runtime.ts	9
 src/infra/approval-presentation.ts	3
 src/infra/backup-archive-publication.ts	5
 src/infra/backup-create-stream.ts	3
