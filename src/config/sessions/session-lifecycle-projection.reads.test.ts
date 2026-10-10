@@ -78,7 +78,7 @@ it("rechecks durable maintenance authority in one statement after an owning-proc
         )
         .run("new-child", "agent:main:subagent:child", "agent:main:parent", 1, "{}");
       expect(() => assertSessionSubagentRunsCurrent(params, state.env)).toThrow(
-        "Session subagent facts changed before commit",
+        "SQLite session state changed while preparing session maintenance",
       );
     } finally {
       observed.restore();
