@@ -3002,6 +3002,7 @@ ${functions}
           PATH: process.env.PATH,
           GITHUB_WORKSPACE: root,
           RUNNER_TEMP: root,
+          TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
           GITHUB_OUTPUT: outputPath,
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           GITHUB_REPOSITORY: "openclaw/openclaw",

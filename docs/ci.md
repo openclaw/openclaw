@@ -43,9 +43,9 @@ budget, based on hosted 4-vCPU measurements with a slow-host margin. The release
 self-upgrade job gives first-hop lanes weight two at npm limit five, admitting at
 most two concurrently. It allows 210 minutes for three waves of six source versions,
 the survivor, and setup.
-Authenticated update restart uses a 2,280-second container budget, a 43-minute lane
+Authenticated update restart uses a 3,420-second container budget, a 62-minute lane
 budget, and a lane-specific 1,500-second command timeout. Its dedicated recovery
-chunk allows 55 minutes; the remaining OpenAI package chunk allows 60 minutes. See
+chunk allows 75 minutes; the remaining OpenAI package chunk allows 60 minutes. See
 [release-path chunks](/ci/release-validation/install-smoke-and-docker-e2e#release-path-chunks).
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
