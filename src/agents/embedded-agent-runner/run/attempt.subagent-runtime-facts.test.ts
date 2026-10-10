@@ -121,10 +121,10 @@ describe("subagent facts through full attempt history preparation", () => {
     expect(queued.systemPrompt).not.toContain("run-worker");
     expectSubagentCarrier(queued.messages, "status=queued");
     expectSubagentCarrier(running.messages, "status=running");
-    expectSubagentCarrier(empty.messages, "## Active Subagents\nnone");
+    expectSubagentCarrier(empty.messages, "## Temporal Context\n");
     expect(empty.messages.at(-1)).toMatchObject({
       content: expect.stringMatching(
-        /^## Active Subagents\nnone\n\n## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
+        /^## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
       ),
     });
   });
