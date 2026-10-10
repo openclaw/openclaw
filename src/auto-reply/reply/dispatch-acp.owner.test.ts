@@ -1,13 +1,21 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { getAcpSessionManager, testing } from "../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../acp/control-plane/manager.lifecycle.js";
 import {
   registerAcpRuntimeBackend,
   unregisterAcpRuntimeBackend,
 } from "../../acp/runtime/registry.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  type AdmittedRunContext,
+} from "../../agents/admitted-run-context.js";
 import * as embeddedAgent from "../../agents/embedded-agent.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
+import type { ChannelIngressDispatchLifecycle } from "../../channels/message/ingress-drain-lifecycle.js";
+import { createChannelIngressDrain } from "../../channels/message/ingress-drain.js";
+import { createTestIngressQueue } from "../../channels/message/ingress-drain.test-helpers.js";
 import {
   listSessionPendingInputs,
   loadSessionEntryReadOnly,
@@ -56,8 +64,20 @@ type AcpOwnerScenario = {
 
 const free = "agent:free-harness:acp:bound";
 const ordinarySessionKey = "agent:free-harness:ordinary-bound";
+type AdoptionScenario =
+  | "retired-input"
+  | "claimed-ingress"
+  | "reclaimed-ingress"
+  | "revoked-before"
+  | "revoked-during";
 const scenarios: Array<
-  [string, AcpOwnerScenario["question"], AcpOwnerScenario["bindingChange"], string?, boolean?]
+  [
+    string,
+    AcpOwnerScenario["question"],
+    AcpOwnerScenario["bindingChange"],
+    string?,
+    AdoptionScenario?,
+  ]
 > = [
   [free, "none", "direct"],
   ["global", "unconfirmed", "direct"],
@@ -70,12 +90,16 @@ const scenarios: Array<
   ["global", "none", "owner-changed", "main"],
   ["global", "confirmed", "hint-removed", "main"],
   ["global", "none", "hint-removed", "work"],
-  [free, "none", "direct", undefined, true],
+  [free, "none", "direct", undefined, "retired-input"],
+  [free, "none", "direct", undefined, "claimed-ingress"],
+  [free, "none", "direct", undefined, "reclaimed-ingress"],
+  [free, "none", "direct", undefined, "revoked-before"],
+  [free, "none", "direct", undefined, "revoked-during"],
 ];
 
 it.each(scenarios)(
-  "preserves ACP target %s and input ownership (question=%s, binding=%s, fallback=%s, retired during adoption=%s)",
-  async (sessionKey, question, bindingChange, fallbackAgentId, retireDuringAdoption = false) => {
+  "preserves ACP target %s and input ownership (question=%s, binding=%s, fallback=%s, adoption=%s)",
+  async (sessionKey, question, bindingChange, fallbackAgentId, adoptionScenario) => {
     await withOpenClawTestState({ label: "acp-dispatch-owner" }, async (state) => {
       const cfg = {
         agents: {
@@ -103,15 +127,46 @@ it.each(scenarios)(
         bindingChange === "owner-changed" ||
         (bindingChange === "hint-removed" && fallbackAgentId !== agentId);
       let turns = 0;
+      const retireDuringAdoption = adoptionScenario === "retired-input";
+      const adoptionRefused =
+        retireDuringAdoption ||
+        adoptionScenario === "reclaimed-ingress" ||
+        adoptionScenario === "revoked-before" ||
+        adoptionScenario === "revoked-during";
+      let admittedRunContext: AdmittedRunContext | undefined;
+      let authorityClosed: boolean | undefined;
+      const drainStarted = createDeferred<ChannelIngressDispatchLifecycle>();
+      const releaseDrain = createDeferred();
+      const queue = createTestIngressQueue(state.stateDir);
+      const ingressScenario =
+        adoptionScenario === "claimed-ingress" || adoptionScenario === "reclaimed-ingress";
+      const drain = ingressScenario
+        ? createChannelIngressDrain({
+            queue,
+            dispatchClaimedEvent: async (_event, lifecycle) => {
+              drainStarted.resolve(lifecycle);
+              await releaseDrain.promise;
+              return { kind: "deferred" };
+            },
+          })
+        : undefined;
+      let ingressLifecycle: ChannelIngressDispatchLifecycle | undefined;
       let recorder: UserTurnTranscriptRecorder | undefined;
       let sourceCommittedBeforeEffect = false;
       const recordProcessed = vi.fn();
       const markIdle = vi.fn();
       const onTurnAdopted = vi.fn(async () => {
         expect(recorder?.hasPersisted()).toBe(true);
+        await ingressLifecycle?.onAdopted();
         if (retireDuringAdoption) {
           recorder?.finishPendingInput?.("interrupted");
           await recorder?.waitForPendingInputSettlement?.();
+        }
+        if (adoptionScenario === "revoked-during") {
+          if (!admittedRunContext) {
+            throw new Error("Expected the production manager's admitted run context");
+          }
+          authorityClosed = closeAdmittedRunDelegatedAuthority(admittedRunContext);
         }
       });
       const binding: SessionBindingRecord = {
@@ -181,6 +236,14 @@ it.each(scenarios)(
       });
       testing.resetAcpSessionManagerForTests();
       const manager = getAcpSessionManager();
+      const runTurn = manager.runTurn.bind(manager);
+      const observeTurn = vi.spyOn(manager, "runTurn").mockImplementation(async (input) => {
+        admittedRunContext = input.admittedRunContext;
+        if (adoptionScenario === "revoked-before") {
+          authorityClosed = closeAdmittedRunDelegatedAuthority(input.admittedRunContext);
+        }
+        return await runTurn(input);
+      });
       const delivered: string[] = [];
       const dispatcher = createReplyDispatcher({
         deliver: async (payload) => {
@@ -190,6 +253,20 @@ it.each(scenarios)(
         },
       });
       try {
+        if (drain) {
+          await queue.enqueue("authority-review", { text: "hello" }, { laneKey: sessionKey });
+          await drain.drainOnce();
+          ingressLifecycle = await drainStarted.promise;
+          if (adoptionScenario === "reclaimed-ingress") {
+            const [original] = await queue.listClaims();
+            if (!original) {
+              throw new Error("Expected the original ingress claim");
+            }
+            expect(await queue.release(original)).toBe(true);
+            const successor = await queue.claim("authority-review", { ownerId: "replacement" });
+            expect(successor?.claim.token).not.toBe(original.claim.token);
+          }
+        }
         await manager.initializeSession({
           cfg,
           sessionKey,
@@ -277,9 +354,34 @@ it.each(scenarios)(
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
         expect(result).not.toBeNull();
-        expect(turns).toBe(pendingQuestion || bindingRefused || retireDuringAdoption ? 0 : 1);
-        expect(onTurnAdopted).toHaveBeenCalledTimes(pendingQuestion || bindingRefused ? 0 : 1);
-        expect(sourceCommittedBeforeEffect).toBe(!bindingRefused && !retireDuringAdoption);
+        expect(turns).toBe(pendingQuestion || bindingRefused || adoptionRefused ? 0 : 1);
+        expect(onTurnAdopted).toHaveBeenCalledTimes(
+          pendingQuestion || bindingRefused || adoptionScenario === "revoked-before" ? 0 : 1,
+        );
+        expect(sourceCommittedBeforeEffect).toBe(!bindingRefused && !adoptionRefused);
+        if (adoptionScenario === "revoked-before" || adoptionScenario === "revoked-during") {
+          expect(authorityClosed).toBe(true);
+          expect(delivered.join("")).toMatch(/authority.*(?:ended|active)|admission ended/);
+        }
+        if (adoptionScenario === "reclaimed-ingress") {
+          expect(delivered.join("")).toContain("ingress adoption lost: reclaimed");
+        }
+        if (ingressScenario) {
+          expect(await queue.listClaims()).toEqual(
+            adoptionScenario === "reclaimed-ingress"
+              ? [
+                  expect.objectContaining({
+                    claim: expect.objectContaining({ ownerId: "replacement" }),
+                  }),
+                ]
+              : [],
+          );
+          if (adoptionScenario === "claimed-ingress") {
+            expect((await queue.enqueue("authority-review", { text: "redelivery" })).kind).toBe(
+              "completed",
+            );
+          }
+        }
         expect(persistApproved).toHaveBeenCalledOnce();
         expect(recordProcessed).toHaveBeenCalledOnce();
         expect(markIdle).toHaveBeenCalledOnce();
@@ -314,6 +416,8 @@ it.each(scenarios)(
         } else if (retireDuringAdoption) {
           expect(delivered.join("")).toContain("Pending input ownership ended");
           expect(result?.queuedFinal).toBe(true);
+        } else if (adoptionRefused) {
+          expect(delivered.join("")).not.toContain(`${agentId} reply`);
         } else if (confirmedQuestion) {
           expect(resolveQuestion).toHaveBeenCalledOnce();
           expect(delivered).toEqual([]);
@@ -333,6 +437,10 @@ it.each(scenarios)(
         }
         expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toBeUndefined();
       } finally {
+        observeTurn.mockRestore();
+        releaseDrain.resolve();
+        await drain?.waitForIdle();
+        drain?.dispose();
         recorder?.finishPendingInput?.("interrupted");
         claim?.dispose();
         if (bound) {
