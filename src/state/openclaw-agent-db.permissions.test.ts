@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { MessagePort } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   createSqliteWorkerOperationAdmission,
-  type SqliteWorkerAdmissionRequest,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
 
@@ -13,11 +13,27 @@ const chmodFailHook = vi.hoisted(() => ({
   calls: [] as unknown[],
   removeTarget: undefined as string | undefined,
 }));
-const workerAdmission = vi.hoisted(() => vi.fn<(request: SqliteWorkerAdmissionRequest) => void>());
+const workerAdmission = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../infra/sqlite-worker-operation-admission.js").requestSqliteWorkerOperationAdmission
+  >(),
+);
 
 vi.mock("../infra/sqlite-worker-operation-admission.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/sqlite-worker-operation-admission.js")>()),
-  requestSqliteWorkerOperationAdmission: workerAdmission,
+  requestSqliteWorkerOperationAdmission: (...args: Parameters<typeof workerAdmission>) => {
+    const [request] = args;
+    const facts = request.facts;
+    if (
+      facts &&
+      typeof facts === "object" &&
+      "validationPort" in facts &&
+      facts.validationPort instanceof MessagePort
+    ) {
+      facts.validationPort.postMessage({ deferUnverifiedIntegrity: false }, []);
+    }
+    workerAdmission(...args);
+  },
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
