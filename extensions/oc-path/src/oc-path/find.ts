@@ -68,8 +68,16 @@ export function findOcPaths(ast: OcAst, pattern: OcPath): readonly OcPathMatch[]
   }
 
   const concretePaths: OcPath[] = [];
+  // The recursive wildcard reaches the same node through both its
+  // consumed and retained recursion; keep each concrete path once.
+  const seen = new Set<string>();
   const onMatch: OnMatch = (slotSubs) => {
-    concretePaths.push(repackSlotSubs(pattern, slotSubs));
+    const path = repackSlotSubs(pattern, slotSubs);
+    const key = [path.section, path.item, path.field].join("\n");
+    if (!seen.has(key)) {
+      seen.add(key);
+      concretePaths.push(path);
+    }
   };
   switch (ast.kind) {
     case "jsonc":
@@ -116,15 +124,24 @@ function patternSubs(pattern: OcPath): readonly SlotSub[] {
 }
 
 function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
-  const values: Record<Slot, string[]> = { section: [], item: [], field: [] };
+  // Subs arrive in slot order, but a mid-path `**` matching zero
+  // segments skips a slot boundary; compact sub-runs into the first
+  // available slots so emitted paths keep the nesting contract.
+  const runs: string[][] = [];
+  let runSlot: Slot | undefined;
   for (const { slot, value } of slotSubs) {
-    values[slot].push(value);
+    if (slot !== runSlot) {
+      runs.push([]);
+      runSlot = slot;
+    }
+    runs[runs.length - 1]?.push(value);
   }
+  const [section, item, field] = runs;
   return {
     file: pattern.file,
-    ...(values.section.length > 0 ? { section: values.section.join(".") } : {}),
-    ...(values.item.length > 0 ? { item: values.item.join(".") } : {}),
-    ...(values.field.length > 0 ? { field: values.field.join(".") } : {}),
+    ...(section !== undefined ? { section: section.join(".") } : {}),
+    ...(item !== undefined ? { item: item.join(".") } : {}),
+    ...(field !== undefined ? { field: field.join(".") } : {}),
     ...(pattern.session !== undefined ? { session: pattern.session } : {}),
   };
 }
@@ -193,11 +210,10 @@ function dispatchSeg<T, Child>(
   }
 
   if (cur.value === WILDCARD_RECURSIVE) {
-    // `**` — descend with `**` consumed (i+1) AND retained (i) so
-    // deeper structures still match. Emit if no subs remain.
-    if (i + 1 >= subs.length) {
-      onMatch(walked);
-    }
+    // `**` matches zero or more sub-segments: try the remainder against
+    // this node first (zero-width), then against every descendant —
+    // consumed (i+1) at each depth, retained (i) to keep descending.
+    ops.walk(node, subs, i + 1, walked, onMatch);
     for (const m of ops.enumerate(node)) {
       const nextWalked: readonly SlotSub[] = [...walked, { slot: cur.slot, value: m.keySub }];
       ops.walk(m.child, subs, i + 1, nextWalked, onMatch);

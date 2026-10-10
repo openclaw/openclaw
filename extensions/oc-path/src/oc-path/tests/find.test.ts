@@ -92,6 +92,33 @@ describe("findOcPaths — JSONC", () => {
     expect(leafValues(out)).toEqual(["gh-token", "gl-token"]);
   });
 
+  it("expands a trailing recursive wildcard into each node exactly once", () => {
+    const ast = parseJsonc('{"alpha":{"inner":1},"beta":2}').ast;
+    const out = findOcPaths(ast, parseOcPath("oc://f.json/**"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://f.json",
+      "oc://f.json/alpha",
+      "oc://f.json/alpha.inner",
+      "oc://f.json/beta",
+    ]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, path)).toEqual(match);
+    }
+  });
+
+  it("matches zero sub-segments for a mid-path recursive wildcard", () => {
+    const ast = parseJsonc('{"mcp":{"GITHUB_TOKEN":"t","nest":{"GITHUB_TOKEN":"u"}}}').ast;
+    const out = findOcPaths(ast, parseOcPath("oc://f.json/mcp/**/GITHUB_TOKEN"));
+    expect(out.map(({ path }) => formatOcPath(path))).toEqual([
+      "oc://f.json/mcp/GITHUB_TOKEN",
+      "oc://f.json/mcp/nest/GITHUB_TOKEN",
+    ]);
+    expect(leafValues(out)).toEqual(["t", "u"]);
+    for (const { path, match } of out) {
+      expect(resolveOcPath(ast, path)).toEqual(match);
+    }
+  });
+
   it("filters object members by boolean values and preserves leaf types", () => {
     const ast = parseJsonc(
       '{"plugins":{"github":{"enabled":true},"slack":{"enabled":false},"jira":{"enabled":true}}}',
