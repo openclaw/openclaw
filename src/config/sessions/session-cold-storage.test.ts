@@ -9,6 +9,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -33,8 +34,8 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-delete-snapshot.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
-import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
@@ -694,28 +695,29 @@ describe("cold transcript storage workers", () => {
       }
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
-      const changes = vi.fn(() =>
-        Boolean(readSessionColdTranscript(fixture.database(), historicalId)),
-      );
+      let inspection: ReturnType<typeof openNodeSqliteDatabase> | undefined;
+      // The committed notification must not re-register a writable database while observing it.
+      const readOnly = () =>
+        (inspection ??= openNodeSqliteDatabase(fixture.options.path, { readOnly: true }));
+      const changes = vi.fn(() => Boolean(readSessionColdTranscript(readOnly(), historicalId)));
       const unsubscribe = sessionChanges.subscribe(changes);
       try {
         await restoreSessionColdTranscript(fixture.scope);
-        expect(fixture.snapshot()).toEqual(fixture.original);
+        expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
         expect(
-          fixture
-            .database()
+          readOnly()
             .prepare(`SELECT f.message_id FROM session_transcript_fts_rows m
             JOIN session_transcript_fts f ON f.rowid=m.id AND f.session_id=m.session_id
             WHERE m.session_id=? ORDER BY f.message_id`)
             .all(historicalId),
         ).toEqual([{ message_id: "history-assistant" }, { message_id: "history-user" }]);
-        expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
-        expect(fixture.database().prepare("PRAGMA quick_check").get()).toEqual({
+        expect(readSessionColdTranscript(readOnly(), historicalId)).toBeUndefined();
+        expect(readOnly().prepare("PRAGMA quick_check").get()).toEqual({
           quick_check: "ok",
         });
-        expect(fixture.database().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        expect(readOnly().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
         await restoreSessionColdTranscript(fixture.scope);
-        expect(fixture.snapshot()).toEqual(fixture.original);
+        expect(fixture.snapshot(readOnly())).toEqual(fixture.original);
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: fixture.scope.storePath,
           sessionKey: fixture.scope.sessionKey,
@@ -723,6 +725,7 @@ describe("cold transcript storage workers", () => {
         expect(changes.mock.results[0]?.value).toBe(false);
       } finally {
         unsubscribe();
+        inspection?.close();
       }
     },
   );

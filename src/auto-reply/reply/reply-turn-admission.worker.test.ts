@@ -13,6 +13,7 @@ import { createAgentRunRestartAbortError } from "../../agents/run-termination.js
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
@@ -42,22 +43,17 @@ type Admission = Awaited<ReturnType<typeof admitReplyTurn>>;
 
 function observeNativeOpen(databasePath: string, agentId: string) {
   const entered = createDeferred();
-  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-  const observed = vi
-    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-    .mockImplementation((admit, attachment) =>
-      createAdmission((request, grant) => {
-        admit(request, grant);
-        if (
-          request.stage === "open" &&
-          isRecord(request.facts) &&
-          request.facts.databasePath === databasePath &&
-          request.facts.agentId === agentId
-        ) {
-          entered.resolve();
-        }
-      }, attachment),
-    );
+  const observed = probe.admission(workerAdmission, (request, grant, admit) => {
+    admit(request, grant);
+    if (
+      request.stage === "open" &&
+      isRecord(request.facts) &&
+      request.facts.databasePath === databasePath &&
+      request.facts.agentId === agentId
+    ) {
+      entered.resolve();
+    }
+  });
   return { entered: entered.promise, restore: () => observed.mockRestore() };
 }
 

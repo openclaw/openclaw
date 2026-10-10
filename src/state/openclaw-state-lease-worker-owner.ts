@@ -24,7 +24,10 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 export type OpenClawStateLeaseWorkerPurpose = "write" | "acquire" | "verify" | "renew" | "release";
 
 export type OpenClawStateLeaseWorkerAuthority = {
+  signal?: AbortSignal;
   assertCurrent(this: void): void;
+  /** Live authority for the first transaction grant, separate from transport preparation. */
+  beforeTransaction?(this: void): void;
   beforeCommit?(this: void): void;
 };
 
@@ -116,7 +119,11 @@ function createLeaseAdmissionFactory(
   purpose: OpenClawStateLeaseWorkerPurpose,
   assertCurrent: () => void,
   beforeCommit?: () => void,
-  options: { plural?: boolean; expiryObservation?: SharedArrayBuffer } = {},
+  options: {
+    plural?: boolean;
+    expiryObservation?: SharedArrayBuffer;
+    beforeTransaction?: () => void;
+  } = {},
 ): SqliteWorkerAdmissionFactory {
   const firstScope = scopes[0];
   if (!firstScope) {
@@ -184,9 +191,19 @@ function createLeaseAdmissionFactory(
             }
           };
           assertFacts();
+          if (
+            purpose === "write" &&
+            request.stage === "transaction" &&
+            writeStage === "waiting" &&
+            options.beforeTransaction
+          ) {
+            assertSynchronousAuthority(options.beforeTransaction);
+            assertCurrent();
+            assertFacts();
+          }
           if (purpose === "write" && request.stage === "commit") {
             writeStage = "commit";
-            beforeCommit?.();
+            assertSynchronousAuthority(beforeCommit);
             assertCurrent();
             // Synchronous host work can consume the worker's remaining lease lifetime.
             assertFacts();
@@ -353,6 +370,7 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
       };
     },
     run(databasePath, operation, purpose, authority) {
+      const beforeTransaction = authority?.beforeTransaction;
       const beforeCommit = authority?.beforeCommit;
       const scope = owner.retain(databasePath, purpose, authority);
       return runRetainedLeaseScopes([scope], () =>
@@ -364,7 +382,10 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
             purpose,
             scope.assertCurrent,
             beforeCommit,
-            { expiryObservation: params.expiryObservation },
+            {
+              expiryObservation: params.expiryObservation,
+              beforeTransaction,
+            },
           ),
         }),
       );
@@ -423,7 +444,10 @@ export function withOpenClawStateLeaseWorkerAdmission<T>(
 ): Promise<T> {
   const owner = owners.get(lease);
   if (!owner) {
-    throw new Error("State lease worker operation requires its original live lease context");
+    throw new OpenClawStateLeaseError(
+      "State lease worker operation requires its original live lease context",
+      { code: "OPENCLAW_STATE_LEASE_LOST" },
+    );
   }
   return owner.run(databasePath, operation, "write", authority);
 }
@@ -494,6 +518,7 @@ export function withOpenClawStateLeasesWorkerAdmission<T>(
     throw new Error("State lease worker operation requires at least one live lease");
   }
   const assertCaller = authority?.assertCurrent;
+  const beforeTransaction = authority?.beforeTransaction;
   const beforeCommit = authority?.beforeCommit;
   const selected = leases.map((lease) => {
     const owner = owners.get(lease);
@@ -538,7 +563,7 @@ export function withOpenClawStateLeasesWorkerAdmission<T>(
         "write",
         assertCurrent,
         () => assertSynchronousAuthority(beforeCommit),
-        { plural: true },
+        { plural: true, beforeTransaction },
       ),
     }),
   );

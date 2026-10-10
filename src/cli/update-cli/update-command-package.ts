@@ -9,6 +9,7 @@ import type {
 } from "../../infra/package-update-swap-contract.js";
 import { PackageUpdateActivationError } from "../../infra/package-update-swap-contract.js";
 import {
+  deferPackageStateVerification,
   failedPackageVerificationStep,
   markPackagePostInstallDoctorAdvisory,
 } from "../../infra/package-update-verification-step.js";
@@ -89,6 +90,7 @@ type PackageDoctorContext = {
 
 type PackageDoctorOptions = {
   root: string;
+  restart?: boolean;
   timeoutMs?: number;
   /** Null leaves forward work unbounded; omission retains the caller's timeout. */
   workTimeoutMs?: number | null;
@@ -147,11 +149,17 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     index: 0,
     total: 0,
   };
+  let configSnapshot: UpdateConfigSnapshot | undefined;
+  try {
+    configSnapshot = params.onConfigSnapshot
+      ? await captureUpdateConfigSnapshot(resolveConfigPath(doctorEnv), doctorEnv)
+      : undefined;
+  } catch (error) {
+    assertCurrent();
+    return await deferPackageStateVerification({ ...params, assertCurrent }, error);
+  }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
-  const configSnapshot = params.onConfigSnapshot
-    ? await captureUpdateConfigSnapshot(resolveConfigPath(doctorEnv), doctorEnv)
-    : undefined;
   const completeDoctorStep = async (
     doctorStep: UpdateStepResult,
     doctorResult: UpdatePostInstallDoctorResult | null,

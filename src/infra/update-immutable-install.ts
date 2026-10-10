@@ -5,7 +5,11 @@ import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
-import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
+import {
+  packageActivationRuntimeIdentity,
+  resolveImmutableRecoveryCommand,
+} from "./package-update-activation-paths.js";
+import type { ImmutableUpdateCoverage } from "./update-immutable-inspection.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableInstallDescriptor,
@@ -23,6 +27,20 @@ import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const SHA = /^[a-f0-9]{40}$/u;
+// Only owner-authored reason codes belong in broadly visible status, never stored error text.
+const PUBLIC_ACTIVATION_FAILURES = new Set([
+  "activation-interrupted",
+  "candidate-start-failed",
+  "candidate-still-starting",
+  "candidate-verification-failed",
+  "candidate-verification-pending",
+  "post-start-canary-unverified",
+  "post-start-generation-unverified",
+  "predecessor-verification-failed",
+  "recovery-verification-pending",
+  "rollback-verification-pending",
+  "verification-pending",
+]);
 const SOURCE = "https://github.com/openclaw/openclaw.git";
 
 function inspectEntry(file: string, allowNotDirectory = false) {
@@ -36,42 +54,57 @@ function inspectEntry(file: string, allowNotDirectory = false) {
 
 export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateImmutableInstall {
   const { descriptor, prepared } = record;
-  return {
+  const result: UpdateImmutableInstall = {
     root: descriptor.root,
     currentSha: descriptor.current.sha,
     currentPath: descriptor.current.path,
     ...(descriptor.activationEnabled ? { activationEnabled: true } : {}),
-    ...(record.activation?.operation
-      ? {
-          activation: {
-            operationId: record.activation.operation.operationId,
-            phase: record.activation.operation.phase,
-            previousSha: record.activation.operation.previous.sha,
-            candidateSha: record.activation.operation.candidate.sha,
-          },
-        }
-      : {}),
-    ...(record.activation?.lastResult
-      ? {
-          lastActivation: {
-            operationId: record.activation.lastResult.operationId,
-            outcome: record.activation.lastResult.outcome,
-            selectedSha: record.activation.lastResult.selectedSha,
-            verifiedAtMs: record.activation.lastResult.verifiedAtMs,
-          },
-        }
-      : {}),
-    ...(prepared
-      ? {
-          prepared: {
-            sha: prepared.sha,
-            path: prepared.path,
-            buildDigest: prepared.buildDigest,
-            preparedAtMs: prepared.preparedAtMs,
-          },
-        }
-      : {}),
   };
+  const operation = record.activation?.operation;
+  if (operation) {
+    result.activation = {
+      operationId: operation.operationId,
+      phase: operation.phase,
+      previousSha: operation.previous.sha,
+      candidateSha: operation.candidate.sha,
+      ...(operation.failure !== undefined
+        ? {
+            failure: PUBLIC_ACTIVATION_FAILURES.has(operation.failure)
+              ? operation.failure
+              : "details-withheld",
+          }
+        : {}),
+      recoveryCommand: resolveImmutableRecoveryCommand(operation.recovery, descriptor),
+    };
+  }
+  const lastResult = record.activation?.lastResult;
+  if (lastResult) {
+    result.lastActivation = {
+      operationId: lastResult.operationId,
+      outcome: lastResult.outcome,
+      selectedSha: lastResult.selectedSha,
+      verifiedAtMs: lastResult.verifiedAtMs,
+      ...(lastResult.gateway
+        ? {
+            gateway: {
+              pid: lastResult.gateway.pid,
+              bootId: lastResult.gateway.bootId,
+              version: lastResult.gateway.version,
+              buildId: lastResult.gateway.buildId,
+            },
+          }
+        : {}),
+    };
+  }
+  if (prepared) {
+    result.prepared = {
+      sha: prepared.sha,
+      path: prepared.path,
+      buildDigest: prepared.buildDigest,
+      preparedAtMs: prepared.preparedAtMs,
+    };
+  }
+  return result;
 }
 
 async function installationRoot(input: string): Promise<string | null> {
@@ -145,6 +178,7 @@ export async function adoptImmutableInstall(params: {
   root: string;
   service: ImmutableInstallDescriptor["service"];
   runtime: string;
+  build?: ImmutableInstallDescriptor["build"];
   previousUpdaterStopped: true;
   enableActivation?: boolean;
 }): Promise<UpdateImmutableInstall> {
@@ -186,6 +220,7 @@ export async function adoptImmutableInstall(params: {
       service: params.service,
       runtime: { path: runtime, identity: packageActivationRuntimeIdentity(runtime) },
       source: SOURCE,
+      ...(params.build ? { build: params.build } : {}),
     };
     ImmutableInstallDescriptorSchema.parse(descriptor);
     const assertCurrent = () => {
@@ -313,9 +348,10 @@ export type ImmutableUpdateResult = {
   targetSha?: string;
   steps: UpdateStepResult[];
   warnings: string[];
+  coverage?: ImmutableUpdateCoverage;
 };
 
-/** Prepare only. Pointer publication, Doctor, drain, and service activation belong to slice 2. */
+/** Build and record a sealed generation without stopping or selecting it. */
 export async function prepareImmutableUpdate(params: {
   root: string;
   sha?: string;
@@ -333,20 +369,50 @@ export async function prepareImmutableUpdate(params: {
     status: ImmutableUpdateResult["status"],
     reason?: string,
   ): ImmutableUpdateResult => ({ status, reason, installation, targetSha, steps, warnings });
+  const preparedResult = (record: ImmutableInstallRecord): ImmutableUpdateResult => ({
+    ...result("prepared", "activation unavailable"),
+    installation: projectImmutableInstall(record),
+  });
   try {
     if (params.sha !== undefined && !SHA.test(params.sha)) {
       throw new Error("--sha requires a full lowercase 40-hex commit SHA.");
     }
     const { buildUpdateCommandRunner, runStep } = await import("./update-runner-command.js");
-    const { resolveImmutableGenerationEnv, sealImmutableGeneration, verifyImmutableGeneration } =
-      await import("./update-immutable-generation.js");
+    const {
+      copyImmutableGeneration,
+      resolveImmutableGenerationEnv,
+      sealImmutableGeneration,
+      verifyImmutableGeneration,
+    } = await import("./update-immutable-generation.js");
     const runner = await buildUpdateCommandRunner();
-    const defaultCommandEnv = resolveImmutableGenerationEnv(runner.defaultCommandEnv);
+    const defaultCommandEnv = resolveImmutableGenerationEnv({
+      PATH: "/usr/bin:/bin",
+      LANG: "C.UTF-8",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_NO_REPLACE_OBJECTS: "1",
+    });
     const runCommand: CommandRunner = (argv, options) =>
-      runner.runCommand(argv, {
-        ...options,
-        env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
-      });
+      runner.runCommand(
+        argv[0] === "git"
+          ? [
+              "git",
+              "--no-lazy-fetch",
+              "-c",
+              "core.fsmonitor=false",
+              "-c",
+              "core.hooksPath=/dev/null",
+              "-c",
+              "submodule.recurse=false",
+              ...argv.slice(1),
+            ]
+          : argv,
+        {
+          ...options,
+          baseEnv: {},
+          env: resolveImmutableGenerationEnv({ ...defaultCommandEnv, ...options.env }),
+        },
+      );
     const timeoutMs = params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS;
     const step: StepFactory = (name, argv, cwd, env) => ({
       name,
@@ -380,12 +446,15 @@ export async function prepareImmutableUpdate(params: {
       targetSha = match[1];
     }
     if (params.dryRun) {
-      return result("dry-run", "preparation-only; activation unavailable");
+      const { inspectImmutableUpdateCoverage } = await import("./update-immutable-inspection.js");
+      return {
+        ...result("dry-run", "inspection-only; no preparation or activation"),
+        coverage: await inspectImmutableUpdateCoverage({ root: installation.root, targetSha }),
+      };
     }
     requireUpdater();
-    const { collectGitRuntimeErrors } = await import("./update-git-runtime.js");
     const { verifyImmutableService } = await import("./update-immutable-service.js");
-    const { runGitCandidatePreflight } = await import("./update-runner-git-preflight.js");
+    const { runImmutableBuild } = await import("./update-immutable-build.js");
     const { readGitTargetSchemaVersions } = await import("./update-runner-git-target.js");
     const selectedSha = targetSha;
     return await withImmutableUpdateOwner(installation.root, async (assertOwner) => {
@@ -444,131 +513,63 @@ export async function prepareImmutableUpdate(params: {
           );
         }
         assertCurrent();
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(record),
-        };
+        return preparedResult(record);
       }
       assertCurrent();
       const stage = await fs.mkdtemp(path.join(descriptor.root, ".openclaw-immutable-"));
       let cleanupUncertain = false;
       try {
-        const source = path.join(stage, "source");
-        await command(
-          "immutable-clone",
-          ["git", "clone", "--no-checkout", "--single-branch", "--branch", "main", SOURCE, source],
-          stage,
-        );
-        await command(
-          "immutable-official-ancestry",
-          [
-            "git",
-            "-C",
-            source,
-            "merge-base",
-            "--is-ancestor",
-            selectedSha,
-            "refs/remotes/origin/main",
-          ],
-          source,
-        );
+        // The builder can populate its child, never pre-create the privileged copy target.
+        await fs.chmod(stage, 0o755);
+        const buildStage = path.join(stage, "build");
+        await fs.mkdir(buildStage, { mode: 0o700 });
+        await runImmutableBuild({
+          descriptor,
+          stage: buildStage,
+          sha: selectedSha,
+          timeoutMs,
+          workTimeoutMs: params.timeoutMs,
+          assertCurrent,
+          steps,
+        });
+        assertCurrent();
+        await fs.chmod(stage, 0o700);
+        // Copy only after the build cgroup is extinct. Root owns the materialized release,
+        // including files that pnpm linked to its unprivileged package store.
+        const candidate = path.join(stage, "sealed");
+        await copyImmutableGeneration(path.join(buildStage, "generation"), candidate);
+        await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
         const metadata = await readGitTargetSchemaVersions({
           runCommand,
-          root: source,
+          root: candidate,
           revision: selectedSha,
           timeoutMs,
         });
         if (metadata.status !== "ok" || !metadata.schemaVersions) {
           throw new Error("Candidate schema metadata is unreadable.");
         }
-        let prepared: ImmutableInstallRecord["prepared"] = null;
-        const preflight = await runGitCandidatePreflight({
-          gitRoot: source,
-          artifactRoot: stage,
-          targetRevision: selectedSha,
-          refreshedRemotes: ["origin"],
-          beforeRuntimeVerified: false,
-          frozenLockfile: true,
-          needsCheckoutMain: false,
-          runCommand,
-          timeoutMs,
-          defaultCommandEnv: {
-            ...defaultCommandEnv,
-            PATH: `${path.dirname(descriptor.runtime.path)}${path.delimiter}${defaultCommandEnv?.PATH ?? process.env.PATH ?? ""}`,
-          },
-          steps,
-          step,
-          workStep: step,
-          workTimeoutMs: params.timeoutMs,
-          beforeCandidate: async (sha) => {
-            assertCurrent();
-            if (sha !== selectedSha) {
-              throw new Error("Immutable preparation cannot fall back to another commit.");
-            }
-          },
-          validateCandidate: async (root) => {
-            const errors = await collectGitRuntimeErrors({ root, sha: selectedSha });
-            if (errors.length) {
-              throw new Error(errors.join("; "));
-            }
-          },
-          prepareCandidate: async (built) => {
-            const candidate = path.join(stage, "generation");
-            await command(
-              "immutable-independent-git",
-              ["git", "clone", "--no-hardlinks", "--no-checkout", source, candidate],
-              stage,
-            );
-            await command(
-              "immutable-exact-checkout",
-              ["git", "-C", candidate, "checkout", "--detach", selectedSha],
-              candidate,
-            );
-            // Materialize pnpm hardlinks before sealing, preserving its shared store.
-            await fs.cp(built, candidate, {
-              recursive: true,
-              verbatimSymlinks: true,
-              filter: (file) => file !== path.join(built, ".git"),
-            });
-            await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
-            await sealImmutableGeneration(candidate);
-            const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyService();
-            assertCurrent();
-            // Native publishers hold this lock; preexisting generations are never rebuilt.
-            if (fsSync.existsSync(destination)) {
-              throw new Error("Generation publication conflict; existing generation preserved.");
-            }
-            await fs.rename(candidate, destination);
-            requireDirectorySync(
-              await syncDirectory(path.dirname(destination)),
-              "Immutable releases",
-            );
-            assertCurrent();
-            prepared = {
-              sha: selectedSha,
-              path: destination,
-              ...verified,
-              preparedAtMs: Date.now(),
-              schemaVersions: metadata.schemaVersions,
-            };
-          },
-        });
-        if (preflight.status !== "ok" || !prepared) {
-          throw new Error(
-            preflight.status === "ok"
-              ? "Candidate preparation did not produce a generation."
-              : preflight.reason,
-          );
+        assertCurrent();
+        await sealImmutableGeneration(candidate);
+        const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
+        await verifyService();
+        assertCurrent();
+        if (fsSync.existsSync(destination)) {
+          throw new Error("Generation publication conflict; existing generation preserved.");
         }
+        await fs.rename(candidate, destination);
+        requireDirectorySync(await syncDirectory(path.dirname(destination)), "Immutable releases");
+        const prepared = {
+          sha: selectedSha,
+          path: destination,
+          ...verified,
+          preparedAtMs: Date.now(),
+          schemaVersions: metadata.schemaVersions,
+        };
         assertCurrent();
         const { recordImmutablePreparedGeneration } =
           await import("./package-update-activation-immutable.js");
         const recorded = recordImmutablePreparedGeneration(record, prepared, assertCurrent);
-        return {
-          ...result("prepared", "activation unavailable"),
-          installation: projectImmutableInstall(recorded),
-        };
+        return preparedResult(recorded);
       } catch (error) {
         cleanupUncertain = hasCommandProcessCleanupError(error);
         throw error;

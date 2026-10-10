@@ -110,6 +110,11 @@ export function createSessionHistoryWorkerReaders(
     },
     readCleanup: reader("session-cleanup", "a cleanup snapshot", (value) => value),
     readRawDelta: reader("transcript-raw-delta", "raw transcript delta", (value) => value.result),
+    readLatestAssistant: reader(
+      "transcript-latest-assistant",
+      "latest assistant text",
+      (value) => value.result,
+    ),
     readVisibleDelta: reader(
       "transcript-visible-delta",
       "visible transcript delta",
@@ -140,6 +145,11 @@ export function createSessionHistoryWorkerReaders(
     ),
     readConversations: reader("conversation-rows", "conversations", (value) => value.rows),
     prewarm: reader("prewarm", "prewarm acknowledgement", () => undefined),
+    readRetirement: reader(
+      "session-retirement-read",
+      "session retirement facts",
+      (value) => value.result,
+    ),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",
@@ -465,18 +475,19 @@ export function createSessionHistoryWorkerReaders(
       "a Goal operation receipt",
       (value) => value.result,
     ),
-    readEntryResult: reader("session-entry-read", "an entry", (value) =>
-      value.readError
+    readEntryResult: reader("session-entry-read", "an entry", (value) => ({
+      ...(value.readError
         ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-        : ok(value.entry),
-    ),
+        : ok(value.entry)),
+      source: value.source,
+    })),
     readEntryCurrent: reader(
       "session-entry-current",
       "entry currency facts",
       (value) => value.entry,
     ),
     readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
-    readEntries: async (scope, continuation, expectedIdentity) => {
+    readEntries: async (scope, continuation, expectedIdentity, ifRevision) => {
       const captured = expectedIdentity && { ...expectedIdentity };
       const assertIdentity = () => {
         if (
@@ -490,13 +501,19 @@ export function createSessionHistoryWorkerReaders(
       return runRequest(
         () => {
           assertIdentity();
-          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
+          return {
+            kind: "session-entry-list",
+            scope,
+            continuation,
+            expectedIdentity: captured,
+            ifRevision,
+          };
         },
-        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
+        JSON.stringify({ scope, continuation, expectedIdentity: captured, ifRevision }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
           assertIdentity();
-          return value.entries;
+          return value;
         },
       );
     },

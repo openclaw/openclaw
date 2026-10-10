@@ -332,13 +332,6 @@ export async function refreshSessionEntryFromStore(params: {
   }
 }
 
-export function resolveAdmittedRunSessionFile(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): string | undefined {
-  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
-}
-
 export async function handleReplyAgentRunError(
   error: unknown,
   context: {

@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { KeyedAsyncQueue, type KeyedAsyncQueueHooks } from "../../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -154,18 +155,13 @@ it.each(
     const params = await prepare(stage);
     const before = snapshot();
     let reached = false;
-    const createAdmission = admission.createSqliteWorkerOperationAdmission;
-    using fence = vi
-      .spyOn(admission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (request.stage === boundary) {
-            reached = true;
-            setEnabled(false);
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    using fence = probe.admission(admission, (request, grant, admit) => {
+      if (request.stage === boundary) {
+        reached = true;
+        setEnabled(false);
+      }
+      admit(request, grant);
+    });
     expect
       .soft(await call(stage, params))
       .toHaveBeenCalledWith(

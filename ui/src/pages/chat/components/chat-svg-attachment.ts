@@ -69,10 +69,13 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
     });
   }
 
-  private retireSource(source: SvgRenderSource): void {
-    source.retired = true;
-    if (source.retainCount === 0) {
-      URL.revokeObjectURL(source.url);
+  private retireSource(): void {
+    if (this.renderSource) {
+      this.renderSource.retired = true;
+      if (this.renderSource.retainCount === 0) {
+        URL.revokeObjectURL(this.renderSource.url);
+      }
+      this.renderSource = undefined;
     }
   }
 
@@ -80,10 +83,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
     this.loadVersion += 1;
     this.abortController?.abort();
     this.abortController = undefined;
-    if (this.renderSource) {
-      this.retireSource(this.renderSource);
-      this.renderSource = undefined;
-    }
+    this.retireSource();
   }
 
   private retainSource(source: SvgRenderSource): () => void {
@@ -169,10 +169,7 @@ class ChatSvgAttachment extends OpenClawLightDomContentsElement {
   }
 
   private handleImageError = () => {
-    if (this.renderSource) {
-      this.retireSource(this.renderSource);
-      this.renderSource = undefined;
-    }
+    this.retireSource();
     this.showFallback();
   };
 

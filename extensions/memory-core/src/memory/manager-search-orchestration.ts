@@ -18,7 +18,6 @@ import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
-import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
@@ -34,7 +33,7 @@ import { searchVector } from "./manager-search-vector.js";
 import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
-import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
+import { applyRetrievalRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
@@ -324,24 +323,21 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       ) {
         repairedIndexIdentity = refreshSearchIdentity();
       }
-      // A pending OpenClaw chunking upgrade keeps the stored keyword rows
-      // readable: the resolver only marks chunkingVersionOnly when every
-      // corpus constraint still matches, so source or scope changes
-      // still fail closed here.
-      const chunkingUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
+      // Format upgrades retain keyword rows only when the identity owner confirms
+      // that every corpus constraint still matches; source/scope changes fail closed.
+      const formatUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
         state.status === "mismatched" &&
         state.owner === "openclaw" &&
-        state.code === "chunking_version" &&
         state.versionOrder === "older" &&
-        state.chunkingVersionOnly === true &&
+        (state.chunkingVersionOnly === true || state.lexicalCompatible === true) &&
         this.fts.enabled &&
         this.fts.available;
       if (repairedIndexIdentity.status !== "valid") {
-        if (!chunkingUpgradePendingKeywordOnly(repairedIndexIdentity)) {
+        if (!formatUpgradePendingKeywordOnly(repairedIndexIdentity)) {
           return [];
         }
         log.warn(
-          "memory search: chunking upgrade rebuild is pending; serving the existing keyword index",
+          "memory search: format upgrade rebuild is pending; serving the existing keyword index",
         );
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
@@ -356,7 +352,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       if (
         searchSyncEnabled &&
         !capacitySyncInFlight &&
-        !chunkingUpgradePendingKeywordOnly(repairedIndexIdentity) &&
+        !formatUpgradePendingKeywordOnly(repairedIndexIdentity) &&
         (this.dirty || this.sessionsDirty)
       ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
@@ -377,10 +373,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         }
         const leasedIdentity = refreshSearchIdentity();
         effectiveIdentity = leasedIdentity;
-        if (
-          leasedIdentity.status === "valid" ||
-          chunkingUpgradePendingKeywordOnly(leasedIdentity)
-        ) {
+        if (leasedIdentity.status === "valid" || formatUpgradePendingKeywordOnly(leasedIdentity)) {
           break;
         }
         await releaseReadGeneration();
@@ -407,10 +400,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
 
       const keywordOnly =
         embeddingBootstrapKeywordOnly ||
-        chunkingUpgradePendingKeywordOnly(effectiveIdentity) ||
+        formatUpgradePendingKeywordOnly(effectiveIdentity) ||
         !this.provider ||
         opts?.lexicalOnly;
-      if (chunkingUpgradePendingKeywordOnly(effectiveIdentity)) {
+      if (formatUpgradePendingKeywordOnly(effectiveIdentity)) {
         opts?.onDebug?.({ backend: "builtin", effectiveMode: "keyword-only" });
       }
       const handleRetrievalError = (kind: "FTS keyword" | "vector", error: unknown): [] => {
@@ -537,7 +530,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         });
         // Decay and importance can reverse the order returned by vector retrieval.
         const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
-        return applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects)
+        return applyRetrievalRanking(decayed, activeProjects)
           .filter((entry) => entry.score >= minScore)
           .toSorted(
             (left, right) =>
@@ -611,13 +604,16 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     indexState: MemoryRetrievalIndexState,
     signal?: AbortSignal,
   ): Promise<Array<MemoryRetrievalResult & { id: string }>> {
-    const results = await searchVector({
-      vectorTable: VECTOR_TABLE,
+    const query = {
       providerModel: providerIdentity.model,
       providerModelAliases: providerIdentity.aliases,
       queryVec,
       limit,
       snippetMaxChars: SNIPPET_MAX_CHARS,
+    };
+    const results = await searchVector({
+      vectorTable: VECTOR_TABLE,
+      ...query,
       signal,
       ensureVectorReady: async (dimensions) => {
         if (!this.vector.enabled) {
@@ -642,11 +638,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             databasePath: resolveUserPath(this.settings.store.databasePath),
           },
           {
-            providerModel: providerIdentity.model,
-            providerModelAliases: providerIdentity.aliases,
-            queryVec,
-            limit,
-            snippetMaxChars: SNIPPET_MAX_CHARS,
+            ...query,
             sourceFilter: this.buildSourceFilter(undefined, sourceFilterList),
           },
           signal,

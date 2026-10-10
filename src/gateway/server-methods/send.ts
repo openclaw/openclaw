@@ -646,17 +646,11 @@ export const sendHandlers: GatewayRequestHandlers = {
             normalizeOptionalLowercaseString(derivedRoute?.baseSessionKey) ===
               normalizeOptionalLowercaseString(providedSessionBaseKey) &&
             normalizeOptionalLowercaseString(derivedRoute?.sessionKey) !== providedSessionKey;
-          // Message-scoped threads can refine an existing base session only after target lookup.
-          const outboundRoute =
-            derivedRoute && providedSessionKey
-              ? {
-                  ...derivedRoute,
-                  ...(shouldUseDerivedThreadSessionKey
-                    ? { baseSessionKey: derivedRoute.baseSessionKey ?? providedSessionKey }
-                    : { sessionKey: providedSessionKey, baseSessionKey: providedSessionKey }),
-                }
-              : (derivedRoute ?? null);
-          const outboundSessionKey = outboundRoute?.sessionKey ?? providedSessionKey;
+          // sessionKey selects the transcript mirror, not the saved delivery route.
+          // Message-scoped threads may refine that mirror within the same base session.
+          const outboundSessionKey = shouldUseDerivedThreadSessionKey
+            ? derivedRoute?.sessionKey
+            : (providedSessionKey ?? derivedRoute?.sessionKey);
           if (outboundSessionKey) {
             const agentAccessError = authorizeGatewaySessionCreation({
               cfg,
@@ -687,7 +681,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           // the in-delivery transcript mirror so first contacts have a row.
           let outboundRoutePersisted = false;
           const commitOutboundSessionRoute = async () => {
-            if (outboundRoutePersisted || !outboundRoute) {
+            if (outboundRoutePersisted || !derivedRoute) {
               return;
             }
             outboundRoutePersisted = true;
@@ -695,7 +689,9 @@ export const sendHandlers: GatewayRequestHandlers = {
               cfg,
               channel,
               accountId,
-              route: outboundRoute,
+              route: derivedRoute,
+              mirrorSessionKey: outboundSessionKey,
+              workerGuard: { assertCurrent: commitAgentRuntimeAuthority },
               creation: resolveSandboxedSessionCreation(client, cfg),
               sourceSessionKey: client?.internal?.agentRuntimeIdentity?.sessionKey,
             });
@@ -704,7 +700,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             agentId: effectiveAgentId,
             sessionKey: outboundSessionKey,
-            conversationType: outboundRoute?.chatType,
+            conversationType: derivedRoute?.chatType,
           });
           // Target, attachment, route, and session preparation may all yield.
           // The durable provider handoff is the final authority commit point.
@@ -724,7 +720,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               session: outboundSession,
               gifPlayback: request.gifPlayback,
               forceDocument: request.forceDocument,
-              threadId: outboundRoute?.threadId ?? threadId ?? null,
+              threadId: derivedRoute?.threadId ?? threadId ?? null,
               deps: outboundDeps,
               gatewayClientScopes: client?.connect?.scopes ?? [],
               silent: request.silent,

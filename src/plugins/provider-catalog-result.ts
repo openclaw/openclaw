@@ -104,6 +104,16 @@ function copyModelServiceTiers(
   });
 }
 
+function copyModelIds(value: unknown): string[] {
+  return [
+    ...new Set(
+      copyArrayEntries(value).flatMap((id) =>
+        typeof id === "string" && id.trim() ? [id.trim()] : [],
+      ),
+    ),
+  ];
+}
+
 /** Copies valid, secret-free provider outcomes out of a catalog hook result. */
 export function copyProviderCatalogOutcomes(
   result: { outcomes?: readonly ProviderCatalogOutcome[] } | null | undefined,
@@ -117,6 +127,7 @@ export function copyProviderCatalogOutcomes(
     const rejectionScope = readRecordValue(entry, "rejectionScope");
     const status = readRecordValue(entry, "status");
     const rawModelOrder = readRecordValue(entry, "modelOrder");
+    const rawListedModelIds = readRecordValue(entry, "listedModelIds");
     if (
       typeof provider !== "string" ||
       provider.trim().length === 0 ||
@@ -128,16 +139,8 @@ export function copyProviderCatalogOutcomes(
     ) {
       return [];
     }
-    const modelOrder =
-      status === "ready" && rawModelOrder !== undefined
-        ? [
-            ...new Set(
-              copyArrayEntries(rawModelOrder).flatMap((value) =>
-                typeof value === "string" && value.trim() ? [value.trim()] : [],
-              ),
-            ),
-          ]
-        : [];
+    const ready = status === "ready";
+    const modelOrder = ready && rawModelOrder !== undefined ? copyModelIds(rawModelOrder) : [];
     return [
       {
         provider: provider.trim(),
@@ -150,6 +153,10 @@ export function copyProviderCatalogOutcomes(
             }
           : {}),
         ...(modelOrder.length > 0 ? { modelOrder } : {}),
+        // An empty successful listing remains authoritative.
+        ...(ready && Array.isArray(rawListedModelIds)
+          ? { listedModelIds: copyModelIds(rawListedModelIds) }
+          : {}),
       },
     ];
   });

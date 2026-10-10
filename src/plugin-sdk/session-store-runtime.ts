@@ -7,7 +7,10 @@ import {
 } from "../config/sessions/ambient-transcript-watermark.js";
 import { buildConversationIdentity } from "../config/sessions/conversation-identity.js";
 import { resolveCurrentConversationSession } from "../config/sessions/conversation-registry.js";
-import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  resolveExplicitSessionStorePathForScope,
+  resolveSessionStorePathCore,
+} from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifactsCore as cleanupAccessorSessionLifecycleArtifacts,
   deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
@@ -21,6 +24,11 @@ import {
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { readSessionUpdatedAtInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
+import {
+  captureExternalSessionCommitGuard,
+  sessionEntryCommitGuardOptions,
+} from "../config/sessions/session-source-authority.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
@@ -35,11 +43,17 @@ import {
   generationValidPrivateFieldsForSameSession,
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
+  type SessionStoreEntrySummary,
   type SessionStoreReadParams,
   toSessionAccessScope,
 } from "./session-store-runtime-internal.js";
 import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
+export {
+  getSessionEntryAsync,
+  getSessionEntryByIdAsync,
+} from "./session-store-runtime-internal.js";
 export { SessionStoreAgentIdRequiredError } from "../config/sessions/paths.js";
+export { rethrowIncognitoSessionError } from "../state/incognito-session-error.js";
 
 export {
   deliveryContextFromSession,
@@ -54,11 +68,6 @@ export {
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 type SessionStoreListParams = Partial<Omit<SessionStoreReadParams, "sessionKey">>;
-
-type SessionStoreEntrySummary = {
-  sessionKey: string;
-  entry: SessionEntry;
-};
 
 export type SessionStoreTranscriptEvent = SessionTranscriptEvent;
 
@@ -152,7 +161,7 @@ function preserveGenerationPrivateFields(
 /** Resolves the configured session store path without selecting a row-operation agent. */
 export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 
-/** Loads one session entry by agent/session identity. */
+/** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
   const entry = loadSessionEntryReadOnly(toSessionAccessScope(params));
   return entry ? projectPluginSessionEntry(entry) : undefined;
@@ -235,9 +244,9 @@ export async function patchSessionEntry(
       return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
-      // Planning stays on the host; snapshots and commits use the existing worker FIFO.
-      workerGuard: {},
-      assertCommitAllowed: params.assertCommitAllowed,
+      ...sessionEntryCommitGuardOptions(
+        captureExternalSessionCommitGuard(params.assertCommitAllowed),
+      ),
       fallbackEntry: params.fallbackEntry
         ? projectPluginSessionEntry(params.fallbackEntry)
         : undefined,
@@ -254,7 +263,7 @@ export async function patchSessionEntry(
   return entry ? projectPluginSessionEntry(entry) : null;
 }
 
-/** @deprecated Use readSessionUpdatedAtAsync. Retained until the next Plugin SDK major. */
+/** @deprecated Use readSessionUpdatedAtAsync. Removed at the next Plugin SDK major. */
 export function readSessionUpdatedAt(params: SessionStoreReadParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
 }
@@ -359,7 +368,11 @@ export function resolveSessionStoreBackupPaths(params: {
   return [...backupPaths];
 }
 
-/** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
+/**
+ * Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store.
+ * Joins pending startup preparation before capturing the database identity; failed preparation
+ * still surfaces through normal admission checks. Prepared agents do not wait.
+ */
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactsCleanupParams,
 ): Promise<SessionLifecycleArtifactsCleanupResult> {
@@ -369,8 +382,41 @@ export async function cleanupSessionLifecycleArtifacts(
       agentId: params.agentId,
       env: params.env,
     });
-  return await cleanupAccessorSessionLifecycleArtifacts({
+  const selection = {
+    agentId: params.agentId,
+    env: params.env,
     storePath,
+    sessionKey: params.agentId
+      ? `agent:${params.agentId}:${params.sessionKeySegmentPrefix.trim()}`
+      : undefined,
+  };
+  const source = captureIncognitoSessionSource(selection);
+  if (source && "kind" in source) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
+  if (source) {
+    const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
+    if (!sessionKeySegmentPrefix || !params.transcriptContentMarker) {
+      return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+    }
+    return cleanupAccessorSessionLifecycleArtifacts({
+      kind: "incognito",
+      actor: source.actor,
+      authority: { assertCurrent: () => source.actor.assertCurrent() },
+      admissionSignal: source.admissionSignal,
+      env: params.env ?? { OPENCLAW_STATE_DIR: path.resolve(source.actor.path, "../../../..") },
+      ownerStorePath: storePath,
+      input: {
+        sessionKeySegmentPrefix,
+        transcriptContentMarker: params.transcriptContentMarker,
+        pluginOwnerId: params.pluginOwnerId?.trim(),
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+        nowMs: params.nowMs ?? Date.now(),
+      },
+    });
+  }
+  return await cleanupAccessorSessionLifecycleArtifacts({
+    storePath: resolveExplicitSessionStorePathForScope(selection) ?? storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
     ...(params.env !== undefined ? { env: params.env } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,

@@ -45,11 +45,14 @@ import type {
   SessionTranscriptWriteScope,
 } from "./session-accessor.types.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
+import { trimIncognitoTranscript } from "./session-incognito-manual-compact.js";
 import type {
   CompactionBoundaryOperations,
   InitialSessionEntryCommit,
 } from "./session-manager-write-contract.js";
 import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
+import type { PreparedSessionSourceAuthority } from "./session-source-authority.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -217,6 +220,7 @@ export async function trimTranscriptForManualCompact(
     nowMs?: number;
     preparation?: {
       snapshot?: SqliteLifecycleTargetSnapshot;
+      source?: PreparedSessionSourceAuthority;
       assertEntryCurrent: (
         entry: SqliteLifecycleTargetSnapshot[number]["entry"] | undefined,
       ) => void;
@@ -226,6 +230,10 @@ export async function trimTranscriptForManualCompact(
     };
   } = {},
 ): Promise<{ trimmed: false } | { kept: number; trimmed: true }> {
+  const binding = captureIncognitoSessionOperation(scope);
+  if (binding) {
+    return trimIncognitoTranscript(binding, scope, selectRetainedLines, options);
+  }
   const resolved = resolveSqliteTranscriptScope(scope);
   if (options.preparation) {
     options.preparation.assertCurrent();

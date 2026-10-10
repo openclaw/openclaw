@@ -20,6 +20,7 @@ import {
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import { managedImageRecordOperations } from "../../gateway/managed-image-record-store.kernel.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
@@ -433,21 +434,16 @@ describe("current-session completion media", () => {
           }
         },
       };
-      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              request.facts.type === "managedImages.insert"
-            ) {
-              current = false;
-            }
-            admit(request, grant);
-          }, attachment),
-        );
+      const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          request.facts.type === "managedImages.insert"
+        ) {
+          current = false;
+        }
+        admit(request, grant);
+      });
       try {
         const [completion] = await Promise.allSettled([fixture.commit()]);
         expect(current).toBe(false);
@@ -474,21 +470,16 @@ describe("current-session completion media", () => {
         let restorePromotionAdmission: (() => void) | undefined;
         try {
           if (mode === "promotion-failure") {
-            const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-            const spy = vi
-              .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-              .mockImplementation((admit, attachment) =>
-                createAdmission((request, grant) => {
-                  if (
-                    request.stage === "commit" &&
-                    isRecord(request.facts) &&
-                    request.facts.type === "managedImages.attach"
-                  ) {
-                    throw new Error("report promotion failed");
-                  }
-                  admit(request, grant);
-                }, attachment),
-              );
+            const spy = probe.admission(operationAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                request.facts.type === "managedImages.attach"
+              ) {
+                throw new Error("report promotion failed");
+              }
+              admit(request, grant);
+            });
             restorePromotionAdmission = () => spy.mockRestore();
             await expect(fixture.commit()).rejects.toThrow("report promotion failed");
             expect(fixture.updates()).toBe(0);

@@ -2,7 +2,6 @@ import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/ch
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
-import type { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -162,14 +161,6 @@ export function confirmQueuedMessageCustody(
         : {}),
     })) !== null
   );
-}
-
-export function admitQueuedMessageForSession(
-  host: ChatQueueScopedSessionHost,
-  captured: ReturnType<typeof captureChatOutboxAdmission>,
-  item: ChatQueueItem,
-): boolean {
-  return chatOutboxOwner(host).admit(host, captured, item) === "admitted";
 }
 
 export function excludeComposerAttachments(

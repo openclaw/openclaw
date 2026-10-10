@@ -7,6 +7,7 @@ export type SessionTranscriptAnchorFacts = {
   session?: { sessionId: string; lifecycleRevision?: string };
   header?: unknown;
   watermark?: SessionTranscriptWatermark;
+  messagePresence?: boolean;
   contextValidated?: true;
   contextAuthority?: {
     entry?: Pick<
@@ -27,6 +28,7 @@ export type SessionTranscriptAnchorFacts = {
       role: "user" | "assistant";
       runId?: string;
       anchor?: TranscriptEntryAnchor;
+      message?: unknown;
     }[];
   };
 };

@@ -52,6 +52,8 @@ struct GatewayOperatorFleetTests {
                 ingressAuthorization: authorization)
             fleet.reconcile(desiredStableIDs: [ordinary.stableID, managed.stableID], configs: [ordinary, managed])
             try await self.waitUntil { fixture.activeConnectionCount == 2 }
+            // TCP acceptance can precede the WebSocket upgrade and Gateway connect frame.
+            try await self.waitUntil { fixture.capturedAuth(at: 1) != nil }
             // Retirement follows captured ownership after the old grant becomes invalid.
             await fleet.retire(origin: origin)
             try await self.waitUntil { fixture.activeConnectionCount == 1 }

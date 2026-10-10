@@ -3,7 +3,6 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { prepareSessionHistorySubagentFacts } from "../../gateway/session-history-delta-visibility.js";
 import { createBoundSessionHistorySubagentProjection } from "../../gateway/session-history-readonly-reader.js";
 import { selectSessionTranscriptProjection } from "../../gateway/session-transcript-read-kernel.js";
-import type { SessionTranscriptProjectionSelection } from "../../gateway/session-transcript-read.types.js";
 import {
   SOURCE_PAGE_MAX_BYTES,
   SOURCE_PAGE_MAX_MESSAGES,
@@ -27,7 +26,6 @@ import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-h
 import { readCurrentProjectionSnapshot } from "./session-accessor.sqlite-projection-read.js";
 import {
   loadTranscriptReadSnapshotSync,
-  hasSessionTranscriptMessageInDatabase,
   readTranscriptExportSnapshotReadOnlySync,
 } from "./session-accessor.sqlite-read.js";
 import {
@@ -35,6 +33,10 @@ import {
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
+import {
+  hasSessionTranscriptMessageInDatabase,
+  readLatestAssistantTextFromDatabase,
+} from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readTranscriptStatsFromDatabase } from "./session-accessor.sqlite-transcript-stats.js";
 import { readHarnessCompletionSourceInDatabase } from "./session-harness-completion-source.kernel.js";
 import {
@@ -46,9 +48,13 @@ import type {
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
+import { resolveIncognitoHistoryProjectionSelection } from "./session-incognito-history-selection.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
-import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
+import {
+  prepareSessionTranscriptAnchorMessageReader,
+  readSessionTranscriptAnchorFactsInDatabase,
+} from "./session-transcript-anchor-read.kernel.js";
 import { isSessionTranscriptIndexStatusClean } from "./session-transcript-index-status.worker.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
@@ -211,7 +217,7 @@ export function createIncognitoHistoryWorker(
       });
       return;
     }
-    const selection = historySelection(command);
+    const selection = resolveIncognitoHistoryProjectionSelection(command);
     if (selection) {
       prepared = prepareHistoryRead(command.type, () =>
         runWithSessionTranscriptReadFence(admission, () => {
@@ -293,11 +299,18 @@ export function createIncognitoHistoryWorker(
           return { channel, accountId, target: address, threadId, nativeChannelId };
         });
         return;
-      case "session.history.anchors":
+      case "session.history.anchors": {
+        const readMessage = await prepareSessionTranscriptAnchorMessageReader(command.input);
         prepared = prepareHistoryRead(command.type, () =>
-          readSessionTranscriptAnchorFactsInDatabase(database, resolvedScope, command.input),
+          readSessionTranscriptAnchorFactsInDatabase(
+            database,
+            resolvedScope,
+            command.input,
+            readMessage,
+          ),
         );
         return;
+      }
       case "session.history.accounting":
       case "session.history.bounded-tail":
         prepared = prepareHistoryRead(command.type, () =>
@@ -353,6 +366,13 @@ export function createIncognitoHistoryWorker(
               readOnly: true,
               resolvedScope,
             }),
+          ),
+        );
+        return;
+      case "session.history.latest-assistant":
+        prepared = prepareHistoryRead(command.type, () =>
+          runWithSessionTranscriptReadFence(admission, () =>
+            readLatestAssistantTextFromDatabase(database, resolvedScope),
           ),
         );
         return;
@@ -658,7 +678,13 @@ export function createIncognitoHistoryWorker(
             (command.type !== "session.history.context" &&
               command.type !== "session.history.native-context" &&
               command.type !== "session.history.native-context-current" &&
-              command.type !== "session.history.anchors")
+              command.type !== "session.history.anchors" &&
+              command.type !== "session.history.raw-delta" &&
+              command.type !== "session.history.visible-delta" &&
+              command.type !== "session.history.latest-assistant" &&
+              command.type !== "session.history.hydrate" &&
+              command.type !== "session.history.stats" &&
+              command.type !== "session.history.watermark")
           ) {
             throw new Error("Incognito missing context no longer matches its captured session");
           }
@@ -689,27 +715,4 @@ export function createIncognitoHistoryWorker(
       completionSources.clear();
     },
   };
-}
-
-function historySelection(command: Command): SessionTranscriptProjectionSelection | undefined {
-  switch (command.type) {
-    case "session.history.delta":
-      return { kind: "delta", options: command.input.options };
-    case "session.history.count":
-      return { kind: "count" };
-    case "session.history.recent":
-      return { kind: "recent", options: command.input.options };
-    case "session.history.page":
-      return { kind: "page", options: command.input.options };
-    case "session.history.around-id":
-      return { kind: "around-id", options: command.input.options };
-    case "session.history.source":
-      return { kind: "source", options: command.input.options };
-    case "session.history.by-id":
-      return { kind: "by-id", messageId: command.input.messageId, options: command.input.options };
-    case "session.history.lookup":
-      return { kind: "lookup", messageId: command.input.messageId };
-    default:
-      return undefined;
-  }
 }

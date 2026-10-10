@@ -123,6 +123,7 @@ export function resolveSessionSharingTarget(params: {
   exactRead?: boolean;
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  onReadSource?: (source: CapturedSessionEntryReadSource) => void;
 }): SessionSharingTarget | null {
   const captured = captureSessionSharingIncognitoTarget(params);
   if (captured) {
@@ -146,6 +147,9 @@ export function resolveSessionSharingTarget(params: {
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });
+  if (target.capturedReadSource) {
+    params.onReadSource?.(target.capturedReadSource);
+  }
   return toSessionSharingTarget(target);
 }
 
@@ -156,7 +160,7 @@ export async function withSessionSharingTarget<T>(
     selection?: GatewaySessionStoreSelection;
     target: SessionSharingTarget | null;
     storageTarget: Pick<SessionSharingTarget, "agentId" | "canonicalKey" | "storePath">;
-    members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
+    members: readonly import("../config/sessions/session-membership-facts.types.js").SessionMember[];
     assertCurrent: () => void;
   }) => T,
   retainedSelection?: GatewaySessionStoreSelection,

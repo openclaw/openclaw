@@ -64,7 +64,6 @@ export {
   resolveModelDirectiveSelection,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-export { resolveContextTokens } from "./model-selection-context.js";
 
 type ModelCatalog = ModelCatalogEntry[];
 
@@ -339,12 +338,12 @@ export async function createModelSelectionState(params: {
             sessionKey,
             initialEntry: initialSessionEntry,
             entry: nextSessionEntry,
-            validateCommit: () => {
-              operatorAuthority?.assertCurrent();
-              return undefined;
-            },
+            commitGuard: operatorAuthority?.assertCurrent,
           });
-          if (persistence.status === "lifecycle-invalidated") {
+          if (
+            persistence.status === "lifecycle-invalidated" ||
+            persistence.status === "commit-rejected"
+          ) {
             throw new SessionWorkStartInvalidatedError(persistence.error);
           }
           const persistedEntry = persistence.entry;

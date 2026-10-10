@@ -98,17 +98,18 @@ describe("isRetryableAssistantError", () => {
     ).toBe(false);
   });
 
-  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
-    "does not retry replay-unsafe provider outcome %s",
-    (errorCode) => {
-      expect(
-        isRetryableAssistantError({
-          ...errorMessage("The WebSocket closed after dispatch"),
-          errorCode,
-        }),
-      ).toBe(false);
-    },
-  );
+  it.each([
+    PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+    PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+    "openclaw_repeated_tool_error",
+  ])("does not retry terminal outcome %s", (errorCode) => {
+    const message = {
+      ...errorMessage("The WebSocket closed after dispatch"),
+      errorCode,
+    };
+    expect(isTerminalAssistantError(message)).toBe(true);
+    expect(isRetryableAssistantError(message)).toBe(false);
+  });
 
   it("does not retry a structured provider refusal with transient-looking text", () => {
     expect(

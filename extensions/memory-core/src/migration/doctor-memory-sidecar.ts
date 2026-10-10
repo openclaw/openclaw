@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 // This doctor closure must stay dependency-light while accepting legacy array-backed objects.
 import { asOptionalObjectRecord as readLegacyObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { readDoctorAgentEntries } from "../doctor-agent-config.js";
 import type { LegacyMemorySidecarSource } from "./doctor-memory-sidecar-import.js";
 
 const LEGACY_MEMORY_SIDECAR_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -34,20 +35,8 @@ function formatLegacyVectorRows(count: number | undefined): string {
 
 type MemoryFtsTokenizer = "unicode61" | "trigram";
 
-function readLegacyAgentEntries(config: unknown) {
-  const agents = readLegacyObjectRecord(readLegacyObjectRecord(config)?.agents);
-  const listed: unknown[] =
-    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
-      ? agents.list
-      : [];
-  return {
-    keyed: readLegacyObjectRecord(agents?.entries),
-    listed,
-  };
-}
-
 function resolveConfiguredAgentIds(config: unknown): string[] {
-  const { keyed, listed } = readLegacyAgentEntries(config);
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const listedIds = listed.flatMap((value) => {
     const id = readLegacyObjectRecord(value)?.id;
     return typeof id === "string" ? [id] : [];
@@ -60,7 +49,7 @@ function readAgentMemorySearch(
   config: unknown,
   agentId: string,
 ): Record<string, unknown> | undefined {
-  const { keyed, listed } = readLegacyAgentEntries(config);
+  const { keyed, listed } = readDoctorAgentEntries(config);
   const keyedEntry = Object.entries(keyed ?? {}).find(
     ([id]) => normalizeAgentId(id) === agentId,
   )?.[1];
@@ -121,8 +110,7 @@ function readMemorySearchMigrationOptions(
   return {
     ftsTokenizer: tokenizer === "unicode61" || tokenizer === "trigram" ? tokenizer : undefined,
     vectorEnabled:
-      !(typeof provider === "string" && provider.trim() === "none") &&
-      (typeof enabled === "boolean" ? enabled : true),
+      !(typeof provider === "string" && provider.trim() === "none") && enabled !== false,
     vectorExtensionPath:
       typeof extensionPath === "string" && extensionPath.trim() ? extensionPath.trim() : undefined,
   };
@@ -393,7 +381,7 @@ async function migrateLegacyMemorySidecarSource(params: {
   env: NodeJS.ProcessEnv;
   changes: string[];
   warnings: string[];
-}): Promise<{ archiveReady: boolean }> {
+}): Promise<boolean> {
   // OpenClaw itself can leave a zero-byte placeholder at the legacy sidecar
   // path while the live index is the per-agent SQLite database. An empty file
   // holds no legacy rows, so remove it quietly instead of emitting a permanent
@@ -412,7 +400,7 @@ async function migrateLegacyMemorySidecarSource(params: {
       params.changes.push(
         `Removed empty Memory Core legacy memory index sidecar placeholder: ${params.source.legacyPath}`,
       );
-      return { archiveReady: false };
+      return false;
     }
     // Fall through to the regular import path when cleanup fails so the file
     // is still diagnosed instead of silently ignored.
@@ -464,24 +452,22 @@ async function migrateLegacyMemorySidecarSource(params: {
         params.changes.push(
           `Resolved Memory Core legacy memory index conflict for agent ${params.source.agentId} by keeping canonical per-agent SQLite rows`,
         );
-        return { archiveReady: true };
+        return true;
       }
       await preserveLegacyMemorySidecarRetryPath(params);
       params.warnings.push(
         `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because legacy rows could not be imported: ${String(err)}`,
       );
-      return { archiveReady: false };
-    }
-    if (result.reason === "legacy-schema-missing") {
-      await preserveLegacyMemorySidecarRetryPath(params);
-      params.warnings.push(
-        `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
-      );
-      return { archiveReady: false };
+      return false;
     }
     if (!result.imported) {
       await preserveLegacyMemorySidecarRetryPath(params);
-      return { archiveReady: false };
+      if (result.reason === "legacy-schema-missing") {
+        params.warnings.push(
+          `Skipped Memory Core legacy memory index import for agent ${params.source.agentId} because the sidecar schema is not a legacy memory index`,
+        );
+      }
+      return false;
     }
     ensureMemoryIndexSchema({ db, cacheEnabled: true, ftsEnabled: true, ftsTokenizer });
     params.changes.push(
@@ -495,9 +481,9 @@ async function migrateLegacyMemorySidecarSource(params: {
       params.warnings.push(
         `Left Memory Core legacy memory index sidecar in place for agent ${params.source.agentId} because ${formatLegacyVectorRows(result.vectorEntries)} still require sqlite-vec: ${vectorReason}`,
       );
-      return { archiveReady: false };
+      return false;
     }
-    return { archiveReady: true };
+    return true;
   } finally {
     db.close();
   }
@@ -531,14 +517,14 @@ export const memorySidecarStateMigration: PluginDoctorStateMigration = {
       let archiveReady = true;
       for (const source of sources) {
         try {
-          const result = await migrateLegacyMemorySidecarSource({
+          const sourceArchiveReady = await migrateLegacyMemorySidecarSource({
             source,
             config: params.config,
             env: params.env,
             changes,
             warnings,
           });
-          archiveReady &&= result.archiveReady;
+          archiveReady &&= sourceArchiveReady;
         } catch (err) {
           archiveReady = false;
           await preserveLegacyMemorySidecarRetryPath({ source, changes, warnings });
@@ -600,77 +586,62 @@ async function collectRetiredQmdWorkspaceHomes(stateDir: string): Promise<string
   return homes.toSorted((left, right) => left.localeCompare(right));
 }
 
-export const qmdWorkspaceStateMigration: PluginDoctorStateMigration = {
-  id: "memory-core-qmd-workspace-retired",
-  label: "Memory Core retired QMD workspaces",
-  doctorOnly: true,
-  async detectLegacyState(params) {
-    const homes = await collectRetiredQmdWorkspaceHomes(params.stateDir);
-    if (homes.length === 0) {
-      return null;
-    }
-    return {
-      preview: homes.map(
-        (home) => `- Empty retired Memory Core QMD workspace: ${home} -> remove empty directory`,
-      ),
-    };
-  },
-  async migrateLegacyState(params) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    for (const home of await collectRetiredQmdWorkspaceHomes(params.stateDir)) {
-      try {
-        // Do not remove files added after detection by a standalone QMD process.
-        await fs.rmdir(home);
-        changes.push(`Removed empty retired Memory Core QMD workspace: ${home}`);
-      } catch (err) {
-        warnings.push(
-          `Skipped retired Memory Core QMD workspace cleanup. Run openclaw doctor --fix to retry. ${home}: ${String(err)}`,
-        );
-      }
-    }
-    return {
-      changes,
-      warnings,
-      ...(warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
-    };
-  },
-};
-
-export const qmdLocksStateMigration: PluginDoctorStateMigration = {
-  id: "memory-core-qmd-file-locks-to-sqlite-leases",
-  label: "Memory Core retired QMD file locks",
-  async detectLegacyState(params) {
-    const lockPaths = await collectRetiredQmdFileLocks(params.stateDir);
-    if (lockPaths.length === 0) {
-      return null;
-    }
-    return {
-      preview: lockPaths.map(
-        (lockPath) =>
-          `- Retired Memory Core QMD file lock: ${lockPath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
-      ),
-    };
-  },
-  async migrateLegacyState(params) {
-    const changes: string[] = [];
-    const warnings: string[] = [];
-    for (const lockPath of await collectRetiredQmdFileLocks(params.stateDir)) {
-      try {
-        const result = await reclaimDefinitelyStaleFileLock(lockPath);
-        if (result === "removed") {
-          changes.push(`Removed retired Memory Core QMD file lock: ${lockPath}`);
-        } else if (result === "retained") {
+function createQmdRetirementMigration(kind: "workspace" | "locks"): PluginDoctorStateMigration {
+  const workspace = kind === "workspace";
+  const collect = workspace ? collectRetiredQmdWorkspaceHomes : collectRetiredQmdFileLocks;
+  return {
+    id: workspace
+      ? "memory-core-qmd-workspace-retired"
+      : "memory-core-qmd-file-locks-to-sqlite-leases",
+    label: workspace ? "Memory Core retired QMD workspaces" : "Memory Core retired QMD file locks",
+    ...(workspace ? { doctorOnly: true } : {}),
+    async detectLegacyState(params) {
+      const paths = await collect(params.stateDir);
+      return paths.length > 0
+        ? {
+            preview: paths.map((filePath) =>
+              workspace
+                ? `- Empty retired Memory Core QMD workspace: ${filePath} -> remove empty directory`
+                : `- Retired Memory Core QMD file lock: ${filePath} -> remove only if definitely stale (coordination now uses SQLite leases)`,
+            ),
+          }
+        : null;
+    },
+    async migrateLegacyState(params) {
+      const changes: string[] = [];
+      const warnings: string[] = [];
+      for (const filePath of await collect(params.stateDir)) {
+        try {
+          if (workspace) {
+            // Do not remove files added after detection by a standalone QMD process.
+            await fs.rmdir(filePath);
+            changes.push(`Removed empty retired Memory Core QMD workspace: ${filePath}`);
+          } else {
+            const result = await reclaimDefinitelyStaleFileLock(filePath);
+            if (result === "removed") {
+              changes.push(`Removed retired Memory Core QMD file lock: ${filePath}`);
+            } else if (result === "retained") {
+              warnings.push(
+                `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${filePath}`,
+              );
+            }
+          }
+        } catch (err) {
           warnings.push(
-            `Retained retired Memory Core QMD file lock because its owner is live or ambiguous: ${lockPath}`,
+            workspace
+              ? `Skipped retired Memory Core QMD workspace cleanup. Run openclaw doctor --fix to retry. ${filePath}: ${String(err)}`
+              : `Failed removing retired Memory Core QMD file lock ${filePath}: ${String(err)}`,
           );
         }
-      } catch (err) {
-        warnings.push(
-          `Failed removing retired Memory Core QMD file lock ${lockPath}: ${String(err)}`,
-        );
       }
-    }
-    return { changes, warnings };
-  },
-};
+      return {
+        changes,
+        warnings,
+        ...(workspace && warnings.length > 0 ? { warningDisposition: "recoverable" as const } : {}),
+      };
+    },
+  };
+}
+
+export const qmdWorkspaceStateMigration = createQmdRetirementMigration("workspace");
+export const qmdLocksStateMigration = createQmdRetirementMigration("locks");

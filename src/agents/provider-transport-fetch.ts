@@ -310,37 +310,6 @@ function normalizeProviderOriginHostname(value: unknown): string | undefined {
   return parsed.hostname.trim().toLowerCase().replace(/\.+$/, "") || undefined;
 }
 
-function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) &&
-    !isLinkLocalIpAddress(hostname) &&
-    !isCloudMetadataIpAddress(hostname) &&
-    !isRfc8215LocalUseNat64Ipv6Address(hostname)
-  );
-}
-
-function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
-  const hostname = normalizeProviderOriginHostname(value);
-  if (!hostname) {
-    return false;
-  }
-  const labels = hostname.split(".").filter(Boolean);
-  return (
-    !labels.some(
-      (label) =>
-        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
-    ) && !parseCanonicalIpAddress(hostname)
-  );
-}
-
 export function resolveProviderTransportSsrFPolicy(params: {
   baseUrl?: string;
   url: string;
@@ -352,16 +321,29 @@ export function resolveProviderTransportSsrFPolicy(params: {
   const requestOrigin = resolveHttpOrigin(params.url);
   const requestMatchesBaseOrigin =
     typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
+  const hostname = requestMatchesBaseOrigin ? normalizeProviderOriginHostname(baseUrl) : undefined;
+  const eligibleHostname =
+    hostname &&
+    !hostname
+      .split(".")
+      .filter(Boolean)
+      .some(
+        (label) =>
+          label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+      );
   const baseUrlOriginPolicy =
     requestMatchesBaseOrigin &&
     params.trustConfiguredBaseUrlOrigin &&
-    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
+    eligibleHostname &&
+    !isLinkLocalIpAddress(hostname) &&
+    !isCloudMetadataIpAddress(hostname) &&
+    !isRfc8215LocalUseNat64Ipv6Address(hostname)
       ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
       : undefined;
   // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
   // It is for DNS hostnames only and does not allow literal private IPs by itself.
   const fakeIpPolicy =
-    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
+    requestMatchesBaseOrigin && eligibleHostname && !parseCanonicalIpAddress(hostname)
       ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
       : undefined;
   return mergeSsrFPolicies(

@@ -385,10 +385,7 @@ async function gatherDaemonStatusImpl(
     portStatus &&
     (portStatus.status !== "busy" || rpc?.ok === false)
   ) {
-    lastError =
-      (await readLastGatewayErrorLine(mergedDaemonEnv, {
-        requirePatternMatch: portStatus.status === "busy",
-      })) ?? undefined;
+    lastError = (await readLastGatewayErrorLine(mergedDaemonEnv)) ?? undefined;
   }
 
   // Plugin version drift detection. Status compares with the running Gateway;

@@ -3,18 +3,14 @@ import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
-import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
-import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import {
-  UsageCostWorkerReplyError,
-  type UsageCostWorkerDatabase,
-  type UsageCostWorkerInput,
-  type UsageCostWorkerReply,
+import type {
+  UsageCostWorkerDatabase,
+  UsageCostWorkerInput,
+  UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
-import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { WorkerTaskError, type WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -42,42 +38,13 @@ import type {
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
-import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
+import {
+  createSessionTranscriptWorkerLanes,
+  type createSessionTranscriptHistoryPool,
+  type SessionDatabaseWorkerLane,
+} from "./session-transcript-read-pools.js";
 import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
-
-const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
-
-function createUsageCostPool(kind: "read" | "refresh") {
-  return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
-    workerUrl,
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    // A retired task releases lane-wide database custody, which requires one native worker.
-    workerClass: kind === "refresh" ? "writer" : "singleton",
-    // Foreground reads must remain available while refresh awaits a host writer.
-    sharedCompute: kind === "refresh",
-    idleTimeoutMs: 0,
-    prepareWorker: () => {
-      ensureSqliteLibrarySelected();
-      return { options: {} };
-    },
-    validateResult(reply) {
-      if (!reply.ok) {
-        throw new UsageCostWorkerReplyError(reply.error);
-      }
-    },
-  });
-}
-
-type SessionDatabaseWorkerLane = {
-  name: string;
-  pool: { rotate: () => Promise<void> };
-  nativeSequence: number;
-  retiredSequence: number;
-  pending: number;
-  idleTimer?: NodeJS.Timeout;
-  rotation?: Promise<void>;
-};
 
 export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
   pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
@@ -112,47 +79,15 @@ const historyDatabases = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
 export const historyClearTimeout = clearTimeout;
 let historyGeneration = 0;
-function createDatabaseWorkerLane<Pool extends SessionDatabaseWorkerLane["pool"]>(
-  name: string,
-  pool: Pool,
-): SessionDatabaseWorkerLane & { pool: Pool } {
-  return { name, pool, nativeSequence: 0, retiredSequence: 0, pending: 0 };
-}
-
-export const historyLane = createDatabaseWorkerLane(
-  "Session history",
-  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS),
-);
-// Search retains its reader while the host checks writable index readiness.
-// It must never occupy the workers serving committed history and metadata.
-export const transcriptSearchLane = createDatabaseWorkerLane(
-  "Session transcript search",
-  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS),
-);
-// Keep list materialization independent of large history pages, with one extra reader per store.
-export const projectionLane = createDatabaseWorkerLane(
-  "Session projection",
-  createSessionTranscriptHistoryPool(),
-);
-// Full-store validation cannot yield its snapshot to a foreground history read.
-export const maintenanceLane = createDatabaseWorkerLane(
-  "Session maintenance",
-  createSessionTranscriptHistoryPool(),
-);
-// Writers retain FIFO admission through target discovery and cleanup. These reads
-// cannot share a worker with history tasks that await a host-side database write.
-export const targetDiscoveryLane = createDatabaseWorkerLane(
-  "Session target discovery",
-  createSessionTranscriptHistoryPool(),
-);
-export const costReadLane = createDatabaseWorkerLane(
-  "Session usage read",
-  createUsageCostPool("read"),
-);
-export const costRefreshLane = createDatabaseWorkerLane(
-  "Session usage refresh",
-  createUsageCostPool("refresh"),
-);
+export const {
+  historyLane,
+  transcriptSearchLane,
+  projectionLane,
+  maintenanceLane,
+  targetDiscoveryLane,
+  costReadLane,
+  costRefreshLane,
+} = createSessionTranscriptWorkerLanes();
 
 const historyWorkerLanes = [
   historyLane,
@@ -162,6 +97,7 @@ const historyWorkerLanes = [
   targetDiscoveryLane,
 ];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
+
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;
 
@@ -462,6 +398,12 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
     path: physicalPath,
     ...(scope ? { scope } : {}),
   }));
+  const admissionPaths = capturedCandidates
+    .filter((candidate) => !candidate.scope)
+    .map((candidate) => candidate.physicalPath);
+  const admissionFamilies = capturedCandidates
+    .filter((candidate) => candidate.scope === "sibling-family")
+    .map((candidate) => path.dirname(candidate.physicalPath));
   historyClearTimeout(lane.idleTimer);
   lane.pending++;
   refreshDatabaseWorkerPressureSubscription();
@@ -613,14 +555,19 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           env: captureSessionTranscriptStorageEnvironment(request.env),
           candidates: capturedCandidates,
         };
-        const reply = await lane.pool.run(
-          () => {
-            assertCurrent();
-            dispatched = true;
-            lane.nativeSequence++;
-            return { kind: "session-store-target", request: preparedRequest };
-          },
-          { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+        const reply = await runWithSqliteDatabaseAdmissionTurn(
+          admissionPaths,
+          () =>
+            lane.pool.run(
+              () => {
+                assertCurrent();
+                dispatched = true;
+                lane.nativeSequence++;
+                return { kind: "session-store-target", request: preparedRequest };
+              },
+              { inputBytes: JSON.stringify(preparedRequest).length * 2, timeoutMs: 60_000 },
+            ),
+          admissionFamilies,
         );
         const result = unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);
         if (
@@ -653,17 +600,22 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
             env: captureSessionTranscriptStorageEnvironment(request.env),
             candidates: capturedCandidates,
           };
-          const reply = await lane.pool.run(
-            () => {
-              assertCurrent();
-              dispatched = true;
-              lane.nativeSequence++;
-              return { kind: "session-target-inventory", request: preparedRequest };
-            },
-            {
-              inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
-              timeoutMs: 60_000,
-            },
+          const reply = await runWithSqliteDatabaseAdmissionTurn(
+            admissionPaths,
+            () =>
+              lane.pool.run(
+                () => {
+                  assertCurrent();
+                  dispatched = true;
+                  lane.nativeSequence++;
+                  return { kind: "session-target-inventory", request: preparedRequest };
+                },
+                {
+                  inputBytes: measureSessionStoreTargetInventoryInputBytes(preparedRequest),
+                  timeoutMs: 60_000,
+                },
+              ),
+            admissionFamilies,
           );
           const result =
             unwrapSessionTranscriptWorkerReply<SessionHistoryWorkerInput["kind"]>(reply);

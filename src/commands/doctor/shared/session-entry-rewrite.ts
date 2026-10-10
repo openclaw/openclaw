@@ -11,6 +11,7 @@ import {
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { normalizeStatus } from "../../../config/sessions/session-accessor.sqlite-status.js";
+import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import { parseSqliteSessionEntryRecord } from "../../../config/sessions/session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
@@ -261,6 +262,7 @@ export function rewriteDoctorSessionEntries(
           }
           assertRepairCurrent();
           invalidateSessionEntryMaintenanceAgeFact(database.db);
+          markCanonicalSessionValidationPending(database, [sessionKey]);
           const runProjection = runOutcome
             ? {
                 status: normalizeStatus(runOutcome.status),
@@ -273,6 +275,7 @@ export function rewriteDoctorSessionEntries(
               .updateTable("session_nodes")
               .set({
                 entry_json: entryJson,
+                entry_valid: entryValid,
                 ...(runProjection ? { status: runProjection.status } : {}),
               })
               .where("session_key", "=", sessionKey),
@@ -280,13 +283,6 @@ export function rewriteDoctorSessionEntries(
           if (snapshots) {
             writeSessionEntrySnapshots(database, sessionKey, snapshots);
           }
-          executeSqliteQuerySync(
-            database.db,
-            db
-              .updateTable("session_nodes")
-              .set({ entry_valid: entryValid })
-              .where("session_key", "=", sessionKey),
-          );
           const projected = deliveryProjectionEntry ?? nextEntry;
           const deliveryProjection =
             projected && params.updateDeliveryProjection

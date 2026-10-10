@@ -153,7 +153,30 @@ describe("selected plugin runtime assets", () => {
       execFileSync("git", ["add", "extensions/other/package.json"], { cwd: fixture.repoRoot });
     }
 
+    fs.writeFileSync(
+      path.join(fixture.packageDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "demo",
+        themes: [
+          {
+            id: "mission",
+            name: "Mission",
+            description: "Mission theme",
+            source: "theme.json",
+            icons: { rocket: "assets/rocket.svg" },
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(path.join(fixture.packageDir, "theme.json"), "{}");
+    fs.writeFileSync(
+      path.join(fixture.packageDir, "assets/rocket.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"/>',
+    );
     const result = await buildPluginNpmRuntime({ ...fixture, logLevel: "silent" });
+    expect(result?.packageFiles).toEqual(
+      expect.arrayContaining(["theme.json", "assets/rocket.svg"]),
+    );
     expect(result?.copiedStaticAssets).toEqual(["dist/assets/message.txt"]);
     const entry = pathToFileURL(path.join(fixture.packageDir, "dist", "index.js")).href;
     expect(

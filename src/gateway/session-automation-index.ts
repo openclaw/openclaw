@@ -82,6 +82,7 @@ function publishAutomationKeys(current: ReadonlySet<string>) {
     const separator = identity.indexOf("\0");
     sessionChanges.emit({
       scope: "automation",
+      facts: { kind: "unchanged" },
       sessionKey: separator < 0 ? identity : identity.slice(separator + 1),
       ...(separator < 0 ? {} : { agentId: identity.slice(0, separator) }),
     });

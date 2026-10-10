@@ -116,16 +116,6 @@ function providerLabel(provider: MemoryMigrationProviderPlan): string {
   return provider.providerId === "claude" ? t("memoryImport.claudeCode") : provider.label;
 }
 
-function providerDescription(provider: MemoryMigrationProviderPlan): string {
-  return t(
-    provider.providerId === "codex"
-      ? "memoryImport.codexDescription"
-      : provider.providerId === "claude"
-        ? "memoryImport.claudeDescription"
-        : "memoryImport.providerFallback",
-  );
-}
-
 function fileCount(count: number): string {
   return t(count === 1 ? "memoryImport.fileCountOne" : "memoryImport.fileCount", {
     count: String(count),
@@ -312,24 +302,19 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
     : !provider.found
       ? renderSettingsEmpty(provider.message ?? t("memoryImport.noMemoryFound"))
       : html`
-          ${
-            provider.source
+          ${(
+            [
+              ["memoryImport.source", provider.source],
+              ["memoryImport.destination", provider.target && `${provider.target}/memory/imports/`],
+            ] as const
+          ).map(([title, path]) =>
+            path
               ? renderSettingsRow({
-                  title: t("memoryImport.source"),
-                  control: renderSettingsValue(provider.source, { mono: true }),
+                  title: t(title),
+                  control: renderSettingsValue(path, { mono: true }),
                 })
-              : nothing
-          }
-          ${
-            provider.target
-              ? renderSettingsRow({
-                  title: t("memoryImport.destination"),
-                  control: renderSettingsValue(`${provider.target}/memory/imports/`, {
-                    mono: true,
-                  }),
-                })
-              : nothing
-          }
+              : nothing,
+          )}
           ${groups.map((group) =>
             renderCollection(provider, group, selectedIds, props.onToggleCollection, disabled),
           )}
@@ -360,7 +345,13 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
             })}
             ${providerLabel(provider)}
           </span>`,
-          description: providerDescription(provider),
+          description: t(
+            provider.providerId === "codex"
+              ? "memoryImport.codexDescription"
+              : provider.providerId === "claude"
+                ? "memoryImport.claudeDescription"
+                : "memoryImport.providerFallback",
+          ),
           actions: renderSettingsStatus({
             kind: provider.found ? "ok" : "muted",
             label: provider.found ? fileCount(provider.items.length) : t("memoryImport.notFound"),
