@@ -639,6 +639,93 @@ describe("dispatchAgentHook trust handling", () => {
     expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not start queued hook work after the caller disconnects", async () => {
+    const firstRunStarted = createDeferred();
+    const releaseFirstRun = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        firstRunStarted.resolve();
+        await releaseFirstRun.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
+    const firstAdmission = dispatchAgentHook({
+      ...buildAgentPayload("First"),
+      message: "first",
+      sessionKey: "shared-session",
+    });
+    await firstRunStarted.promise;
+
+    let disconnectedRunStarted = false;
+    runCronIsolatedAgentTurnMock.mockImplementation(
+      async (params: { onExecutionStarted?: () => void }) => {
+        if (runCronIsolatedAgentTurnMock.mock.calls.length > 1) {
+          disconnectedRunStarted = true;
+          params.onExecutionStarted?.();
+          return { status: "ok", summary: "should not start", delivered: false };
+        }
+        params.onExecutionStarted?.();
+        firstRunStarted.resolve();
+        await releaseFirstRun.promise;
+        return { status: "ok", summary: "first done", delivered: false };
+      },
+    );
+    const disconnect = new AbortController();
+    const disconnectedAdmission = resolveDispatchAgentHook()(
+      {
+        ...buildAgentPayload("Second"),
+        message: "second",
+        sessionKey: "shared-session",
+      },
+      { abortSignal: disconnect.signal },
+    );
+    disconnect.abort();
+    releaseFirstRun.resolve();
+
+    try {
+      await expect(disconnectedAdmission).resolves.toMatchObject({
+        ok: false,
+        statusCode: 503,
+        error: "hook request disconnected before agent run started",
+      });
+      await firstAdmission;
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledTimes(1);
+      expect(disconnectedRunStarted).toBe(false);
+    } finally {
+      releaseFirstRun.resolve();
+      runCronIsolatedAgentTurnMock.mockReset();
+    }
+  });
+
+  it("keeps an accepted hook run alive after the caller disconnects", async () => {
+    const disconnect = new AbortController();
+    const releaseRun = createDeferred();
+    runCronIsolatedAgentTurnMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal; onExecutionStarted?: () => void }) => {
+        params.onExecutionStarted?.();
+        disconnect.abort();
+        await releaseRun.promise;
+        return { status: "ok", summary: "accepted", delivered: false };
+      },
+    );
+
+    try {
+      const admission = resolveDispatchAgentHook()(buildAgentPayload("Accepted"), {
+        abortSignal: disconnect.signal,
+      });
+      await expect(admission).resolves.toMatchObject({ ok: true });
+      const runnerParams = runCronIsolatedAgentTurnMock.mock.calls[0]?.[0] as
+        | { abortSignal?: AbortSignal }
+        | undefined;
+      expect(runnerParams?.abortSignal?.aborted).toBe(false);
+    } finally {
+      releaseRun.resolve();
+    }
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
   it("prefers cron diagnostics for returned hook errors", async () => {
     const diagnosticSummary =
       "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6";
