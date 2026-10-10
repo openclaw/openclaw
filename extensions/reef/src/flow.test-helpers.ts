@@ -154,7 +154,10 @@ export function trust(initial: Record<string, ReefPeerTrust>) {
     deliveries,
     rejectionNotices,
     store: {
-      withAuthority(assertCurrent: () => void): ReefTrustStore {
+      withAuthority(
+        this: Pick<ReefTrustStore, "recordOutboundDelivery">,
+        assertCurrent: () => void,
+      ): ReefTrustStore {
         assertCurrent();
         return {
           ...this,
