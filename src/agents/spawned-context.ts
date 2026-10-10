@@ -8,7 +8,6 @@ import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
-import type { DelegatedToolPolicyContext } from "./delegated-tool-policy.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import type { PreparedSessionPermissionPolicy } from "./tool-fs-policy.types.js";
 
@@ -20,7 +19,11 @@ export type SpawnedRunMetadata = {
   workspaceDir?: string | null;
 };
 
-export type SpawnedToolContext = DelegatedToolPolicyContext & {
+export type SpawnedToolContext = {
+  inheritedToolAllowlist?: string[];
+  inheritedToolDenylist?: string[];
+  /** Restrictive requester policy originated at trusted sender/channel ingress. */
+  inheritedToolPolicySource?: "sender";
   agentGroupId?: string | null;
   agentGroupChannel?: string | null;
   agentGroupSpace?: string | null;

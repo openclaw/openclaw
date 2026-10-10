@@ -56,9 +56,13 @@ Ordinary global, agent, and profile tool policies alone do not impose this rule.
 Owner-authorized automations retain their own scheduling policy and workspace;
 ordinary guests cannot gain that authority through a tool allowlist.
 
-Children created before this rule was introduced lack sender-policy provenance.
-Their existing tool allow/deny snapshots still apply, but start fresh helpers to
-apply the inherited spawn limit.
+Cross-agent spawns allowed by `subagents.allowAgents` use the target agent's own
+tool policy when the requester is not sender-restricted. The requesting agent's
+tool lockdown stays local to that agent; same-agent helpers still inherit its
+effective tool surface. Existing cross-agent sessions also ignore old non-sender
+tool snapshots when their recorded parent identifies a different agent. Sender
+snapshots always remain enforced, as do snapshots whose requester agent cannot
+be determined.
 
 **Defaults:**
 

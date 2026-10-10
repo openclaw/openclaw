@@ -20,6 +20,7 @@ function decodeSessionEntryCurrentFacts(
     return {
       sessionId: value.sessionId,
       spawnedBy: value.spawnedBy,
+      parentSessionKey: value.parentSessionKey,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
       subagentRole: value.subagentRole,
@@ -28,7 +29,6 @@ function decodeSessionEntryCurrentFacts(
       inheritedToolPolicySource: value.inheritedToolPolicySource,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
-      delegatedToolPolicy: value.delegatedToolPolicy,
     };
   }
   const recovery = value.subagentRecovery;

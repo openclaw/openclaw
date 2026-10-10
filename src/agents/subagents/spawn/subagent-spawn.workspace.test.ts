@@ -163,6 +163,34 @@ describe("spawnSubagentDirect child session preparation", () => {
     expect(request("agent")?.params).not.toHaveProperty("cwd");
   });
 
+  it.each(["main", "ops"])(
+    "inherits agent-local tools only for same-agent helpers (%s)",
+    async (agentId) => {
+      const result = await spawnSubagentDirect(
+        { task: "Implement the change", agentId },
+        {
+          ...context,
+          inheritedToolAllowlist: ["read", "sessions_spawn"],
+          inheritedToolDenylist: ["write", "edit", "apply_patch", "exec"],
+        },
+      );
+      expect(result.status).toBe("accepted");
+      const entry = store[result.childSessionKey!];
+      expect(entry).toMatchObject({ spawnedBy: context.agentSessionKey });
+      if (agentId === "main") {
+        expect(entry).toMatchObject({
+          inheritedToolPolicyVersion: 1,
+          inheritedToolAllow: ["read", "sessions_spawn"],
+          inheritedToolDeny: ["write", "edit", "apply_patch", "exec"],
+        });
+      } else {
+        expect(entry).toHaveProperty("inheritedToolPolicyVersion", 1);
+        expect(entry).not.toHaveProperty("inheritedToolAllow");
+        expect(entry).not.toHaveProperty("inheritedToolDeny");
+      }
+    },
+  );
+
   it.each([false, true])(
     "keeps a restricted same-agent helper's tools and root (sandboxed=%s)",
     async (sandboxed) => {

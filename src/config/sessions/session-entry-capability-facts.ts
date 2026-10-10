@@ -24,13 +24,13 @@ export function projectSessionEntryCapabilityFacts(entry: SessionEntryCurrentFac
     model: entry.model,
     modelProvider: entry.modelProvider,
     spawnedBy: entry.spawnedBy,
+    parentSessionKey: entry.parentSessionKey,
     spawnDepth: entry.spawnDepth,
     completionOwnerSessionKey: entry.completionOwnerSessionKey,
     subagentRole: entry.subagentRole,
     subagentControlScope: entry.subagentControlScope,
     inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion,
     inheritedToolPolicySource: entry.inheritedToolPolicySource,
-    delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy),
     inheritedToolAllow: Array.isArray(entry.inheritedToolAllow)
       ? [...entry.inheritedToolAllow]
       : entry.inheritedToolAllow,

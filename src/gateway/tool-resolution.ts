@@ -303,7 +303,7 @@ export async function resolveGatewayScopedTools(
   ]);
   const inheritedToolDenylist = [
     ...explicitDenylist,
-    ...(requesterPolicies.inheritedToolPolicyForSpawn?.deny ?? []),
+    ...(requesterPolicies.inheritedToolPolicy?.deny ?? []),
   ];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
@@ -430,7 +430,6 @@ export async function resolveGatewayScopedTools(
     inheritedToolAllowlist,
     inheritedToolDenylist,
     inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
-    delegatedToolPolicyUnavailable: Boolean(requesterPolicies.delegatedToolPolicy),
   };
   const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
   assertCurrent();

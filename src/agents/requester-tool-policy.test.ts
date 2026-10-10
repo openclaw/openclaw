@@ -47,7 +47,7 @@ describe("resolveRequesterToolPolicies", () => {
     };
   }
 
-  it("retains dashboard delegation and revocation fallback without an injected capability store", async () => {
+  it("repairs a legacy cross-agent dashboard and preserves its own helper's completion policy", async () => {
     const root = "agent:front:main";
     const visible = "agent:worker:dashboard:coding";
     const helper = "agent:worker:subagent:helper";
@@ -55,7 +55,7 @@ describe("resolveRequesterToolPolicies", () => {
       tools: { toolsBySender: { "*": {} } },
       agents: {
         entries: {
-          front: { subagents: { allowAgents: ["worker"], delegateToolsTo: ["worker"] } },
+          front: { subagents: { allowAgents: ["worker"] } },
           worker: {},
         },
       },
@@ -67,25 +67,16 @@ describe("resolveRequesterToolPolicies", () => {
       spawnedBy: root,
       inheritedToolPolicyVersion: 1,
       inheritedToolDeny: ["exec"],
-      delegatedToolPolicy: {
-        requesterSessionKey: root,
-        targetAgentId: "worker",
-        deny: [],
-        requesterDeny: ["exec"],
-      },
     };
     await writeSession(visible, visibleEntry);
+    expect(
+      resolveRequesterToolPolicies({ config: cfg, sessionKey: visible }).inheritedToolPolicy,
+    ).toBeUndefined();
     await writeSession(helper, {
       spawnDepth: 2,
       spawnedBy: visible,
       inheritedToolPolicyVersion: 1,
-      inheritedToolDeny: ["exec"],
-      delegatedToolPolicy: {
-        requesterSessionKey: root,
-        targetAgentId: "worker",
-        deny: [],
-        requesterDeny: [],
-      },
+      inheritedToolDeny: ["write"],
     });
     const resolve = () =>
       resolveRequesterToolPolicies({
@@ -99,10 +90,7 @@ describe("resolveRequesterToolPolicies", () => {
           sourceTool: "subagent_announce",
         },
       });
-    expect(resolve().delegatedToolPolicy).toMatchObject({
-      requesterSessionKey: root,
-      targetAgentId: "worker",
-    });
+    expect(resolve().inheritedToolPolicy).toEqual({ deny: ["write"] });
     expect(resolve().inheritedToolPolicy?.deny ?? []).not.toContain("exec");
     expect(
       resolvePluginHarnessToolPolicies(
@@ -115,9 +103,7 @@ describe("resolveRequesterToolPolicies", () => {
         },
         resolve().subagentPolicy?.deny,
       ).toolPolicyRestricted,
-    ).toBe(true);
-    cfg.agents!.entries!.front!.subagents!.delegateToolsTo = [];
-    expect(resolve().inheritedToolPolicy?.deny).toContain("exec");
+    ).toBe(false);
   });
 
   function completionHandoffFacts(sourceSessionKey: string, targetSessionKey: string) {

@@ -1,6 +1,5 @@
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
-import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import type { PluginHookToolRequesterContext } from "../plugins/hook-types.js";
@@ -34,10 +33,7 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { listChannelAgentTools } from "./channel-tools.js";
-import {
-  prepareDelegatedToolDenyFloor,
-  resolveConversationCapabilityProfile,
-} from "./conversation-capability-profile.js";
+import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { isConversationToolAllowed } from "./conversation-tool-policy-pipeline.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
 import {
@@ -91,7 +87,7 @@ import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
-// Both SDK paths assemble the same options; only compatibility resolves delegate policy synchronously.
+// Both SDK paths assemble the same options.
 function* assembleOpenClawCodingTools(
   options?: OpenClawCodingToolsOptions,
   skillReadResources?: SkillSnapshot["resolvedSkills"],
@@ -342,12 +338,8 @@ function* assembleOpenClawCodingTools(
   ];
   const inheritedToolDenylist = [
     ...pluginToolDenylist,
-    ...(capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? []),
+    ...(capabilityProfile.policy.inheritedToolPolicy?.deny ?? []),
   ];
-  const delegatedToolDenyFloor = prepareDelegatedToolDenyFloor(
-    capabilityProfile,
-    ownerOnlyCoreToolDenylist,
-  );
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
@@ -495,11 +487,6 @@ function* assembleOpenClawCodingTools(
             ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
             inheritedToolAllowlist,
             inheritedToolDenylist,
-            delegatedToolDenyFloor,
-            requesterToolDenylist: pluginToolDenylist,
-            readDelegationConfig: options?.config
-              ? createRuntimeConfigReader(options.config)
-              : undefined,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             processScopeKey: scopeKey,
           },

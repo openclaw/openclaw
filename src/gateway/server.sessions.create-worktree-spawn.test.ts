@@ -7,8 +7,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { createOpenClawCodingToolsInternal } from "../agents/agent-tools.js";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { persistSubagentSessionTiming } from "../agents/subagents/registry/subagent-registry-helpers.js";
+import { collectExplicitDenylist } from "../agents/tool-policy.js";
 import { createSessionsSpawnTool } from "../agents/tools/sessions-spawn-tool.js";
 import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import {
@@ -155,7 +158,7 @@ async function createManagedProjectParent(required = false) {
   return created.payload!;
 }
 
-async function createVisibleSpawnTool() {
+async function createVisibleSpawnTool(inheritedToolDenylist?: string[]) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const context = createDirectChatContext({
     getRuntimeConfig,
@@ -167,6 +170,7 @@ async function createVisibleSpawnTool() {
     config: getRuntimeConfig(),
     registerRun,
     countActiveRuns: () => 0,
+    inheritedToolDenylist,
   });
   const spawn = (options: Record<string, unknown>) =>
     withPluginRuntimeGatewayContextResolver(
@@ -507,18 +511,72 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
   expect(await managedWorktrees.findLiveByOwner("session", parentKey)).toEqual(recorded);
 });
 
-test("trusted cross-agent worktree spawns select the target agent's workspace", async () => {
+test("a read-only front door spawns a coding session with the target agent's tools and workspace", async () => {
   await createManagedProjectParent();
   const otherRepository = await createRepository(state.root, "other-project");
   testState.agentsConfig = {
-    entries: { main: {}, other: { workspace: otherRepository } },
+    entries: {
+      main: {
+        tools: {
+          deny: [
+            "write",
+            "edit",
+            "apply_patch",
+            "exec",
+            "bash",
+            "shell",
+            "process",
+            "sessions_history",
+            "sessions_list",
+            "sessions_search",
+            "sessions_send",
+          ],
+        },
+        subagents: { allowAgents: ["other"] },
+      },
+      other: { workspace: otherRepository },
+    },
   };
   const config = await getGatewayConfigModule();
   config.clearRuntimeConfigSnapshot();
   config.clearConfigCache();
-  const created = await createChild({ agentId: "other" });
-  expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  expect(created.payload?.entry.worktree?.repoRoot).toBe(otherRepository);
+  const cfg = config.getRuntimeConfig();
+  const requester = resolveConversationCapabilityProfile({ config: cfg, sessionKey: parentKey });
+  const { context, spawn } = await createVisibleSpawnTool(
+    collectExplicitDenylist(requester.policy.inheritancePolicies),
+  );
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  let childKey: string | undefined;
+  try {
+    const result = await spawn({ agentId: "other", worktree: true });
+    expect(result.details).toMatchObject({ status: "accepted" });
+    if (!isRecord(result.details) || typeof result.details.childSessionKey !== "string") {
+      throw new Error("Missing child session key");
+    }
+    childKey = result.details.childSessionKey;
+    await settleWorkspaceRuns(context, storePath, childKey);
+    const child = loadSessionEntry({ agentId: "other", sessionKey: childKey, storePath });
+    expect(child?.worktree?.repoRoot).toBe(otherRepository);
+    const tools = createOpenClawCodingToolsInternal({
+      config: cfg,
+      agentId: "other",
+      sessionKey: childKey,
+      sessionId: child?.sessionId,
+      workspaceDir: otherRepository,
+      messageProvider: "webchat",
+      senderIsOwner: true,
+    }).map((tool) => tool.name);
+    expect(tools).toContain("write");
+    expect(tools).toContain("exec");
+    expect(tools).not.toContain("sessions_send");
+    expect(child?.inheritedToolDeny ?? []).toEqual([]);
+  } finally {
+    await settleWorkspaceRuns(context, storePath, childKey, true);
+    dispatchInboundMessageMock.mockReset();
+  }
 });
 
 test("parent linkage does not authorize an operator's out-of-workspace source", async () => {

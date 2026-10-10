@@ -20,6 +20,8 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { projectConversationToolNames } from "../../conversation-tool-policy-pipeline.js";
 import { resolveRequesterToolPolicies } from "../../requester-tool-policy.js";
 import {
   isSubagentEnvelopeSession,
@@ -43,6 +45,94 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("persisted subagent capability lookups", () => {
+  it.each([
+    {
+      name: "legacy cross-agent helper",
+      key: "agent:coder:subagent:child",
+      spawnedBy: "agent:intake:main",
+      allowed: true,
+    },
+    {
+      name: "legacy visible child",
+      key: "agent:coder:dashboard:child",
+      spawnedBy: "agent:intake:main",
+      allowed: true,
+    },
+    {
+      name: "legacy ACP child",
+      key: "agent:coder:acp:child",
+      spawnedBy: "agent:intake:main",
+      allowed: true,
+    },
+    {
+      name: "navigation parent fallback",
+      key: "agent:coder:subagent:child",
+      parentSessionKey: "agent:intake:main",
+      allowed: true,
+    },
+    {
+      name: "sender-restricted child",
+      key: "agent:coder:subagent:child",
+      spawnedBy: "agent:intake:main",
+      source: "sender" as const,
+      allowed: false,
+    },
+    {
+      name: "same-agent helper",
+      key: "agent:coder:subagent:child",
+      spawnedBy: "agent:coder:main",
+      allowed: false,
+    },
+    {
+      name: "unknown requester",
+      key: "agent:coder:subagent:child",
+      spawnedBy: "global",
+      allowed: false,
+    },
+    { name: "missing requester", key: "agent:coder:subagent:child", allowed: false },
+  ])(
+    "repairs inherited tool policy at read time: $name",
+    ({ key, spawnedBy, parentSessionKey, source, allowed }) => {
+      const entry = {
+        sessionId: "child",
+        spawnDepth: 1,
+        subagentRole: "orchestrator",
+        spawnedBy,
+        parentSessionKey,
+        inheritedToolPolicySource: source,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read"],
+        inheritedToolDeny: ["write", "exec"],
+      };
+      const store = { [key]: entry };
+      const original = structuredClone(store);
+      const profile = resolveConversationCapabilityProfile({
+        config: {
+          agents: { entries: { intake: { tools: { deny: ["write", "exec"] } }, coder: {} } },
+        },
+        agentId: "coder",
+        sessionKey: key,
+        senderIsOwner: true,
+        messageProvider: "webchat",
+        preparedSessionCapabilityStore: store,
+      });
+      expect(
+        projectConversationToolNames({
+          capabilityProfile: profile,
+          toolNames: ["read", "write", "exec", "sessions_send"],
+          warn: () => {},
+        }),
+      ).toEqual(allowed ? ["read", "write", "exec"] : ["read"]);
+      expect(resolveStoredSubagentInheritedToolAllowlist(key, { store })).toEqual(
+        allowed ? [] : ["read"],
+      );
+      expect(resolveStoredSubagentInheritedToolDenylist(key, { store })).toEqual(
+        allowed ? [] : ["write", "exec"],
+      );
+      expect(store).toEqual(original);
+    },
+  );
+
   it.each([false, true])(
     "resolves current requester policy without session SQL (default store: %s)",
     async (useDefault) => {

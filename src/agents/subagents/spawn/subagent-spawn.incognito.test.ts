@@ -74,8 +74,8 @@ it("resolves bound capability envelopes and cross-agent depth from the actor own
     expect(resolveStoredSubagentCapabilities(childKey, { cfg: {}, store }).depth).toBe(3);
     expect(resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store })).toMatchObject({
       spawnedBy: parentKey,
-      inheritedToolAllow: ["read"],
-      inheritedToolDeny: ["exec"],
+      inheritedToolAllow: [],
+      inheritedToolDeny: [],
     });
     await patchSessionEntryCore({ storePath: sibling.path, sessionKey: childKey }, () => ({
       spawnDepth: undefined,
@@ -155,9 +155,9 @@ it.each([
           spawnedBySessionId: name,
           parentSessionLifecycleRevision: "original",
           skillLibrarySelections,
-          inheritedToolAllow: ["read"],
-          inheritedToolDeny: ["exec"],
         });
+        expect(child?.inheritedToolAllow ?? []).toEqual(crossAgent ? [] : ["read"]);
+        expect(child?.inheritedToolDeny ?? []).toEqual(crossAgent ? [] : ["exec"]);
       }
     } finally {
       intercepted.mockRestore();

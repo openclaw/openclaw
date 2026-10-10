@@ -26,8 +26,8 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../child-admission.js";
-import { prepareNativeDelegatedToolPolicy } from "../delegated-tool-policy.js";
 import { resolveAgentIdentity } from "../identity.js";
+import { shouldInheritSubagentToolPolicy } from "../inherited-tool-deny.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
@@ -239,11 +239,9 @@ export async function maybeSpawnVisibleSession(params: {
     agentSessionKey: params.options?.agentSessionKey,
     completionOwnerKey: params.options?.completionOwnerKey,
   });
-  let assertDelegationCurrent: (() => void) | undefined = undefined;
   const assertActive = () => {
     params.options?.assertActive?.();
     params.options?.signal?.throwIfAborted();
-    assertDelegationCurrent?.();
   };
   const requesterTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg,
@@ -301,23 +299,12 @@ export async function maybeSpawnVisibleSession(params: {
   if (!admission.ok) {
     return { status: "forbidden", error: admission.error };
   }
-  const delegation = prepareNativeDelegatedToolPolicy({
-    config: cfg,
+  const inheritToolPolicy = shouldInheritSubagentToolPolicy({
     requesterAgentId,
     targetAgentId,
-    requesterSessionKey: requesterKey,
-    context: params.options,
+    inheritedToolPolicySource: params.options?.inheritedToolPolicySource,
   });
-  const delegatedToolPolicy = delegation.policy;
-  assertDelegationCurrent = delegation.assertCurrent;
   assertActive();
-  if (placement && delegatedToolPolicy) {
-    return {
-      status: "forbidden",
-      error:
-        "Delegated tool targets require Gateway-side native execution; cloud placement cannot enforce the live grant.",
-    };
-  }
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -440,9 +427,8 @@ export async function maybeSpawnVisibleSession(params: {
             ...(spawnModelAutoSelection ? { spawnModelAutoSelection } : {}),
             inheritedToolPolicy: {
               version: 1,
-              allow: [...(params.options?.inheritedToolAllowlist ?? [])],
-              deny: [...(params.options?.inheritedToolDenylist ?? [])],
-              ...(delegatedToolPolicy ? { delegatedToolPolicy } : {}),
+              allow: inheritToolPolicy ? [...(params.options?.inheritedToolAllowlist ?? [])] : [],
+              deny: inheritToolPolicy ? [...(params.options?.inheritedToolDenylist ?? [])] : [],
             },
             ...(inheritedModel ? { resolvedModel: inheritedModel } : {}),
           },

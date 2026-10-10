@@ -6,7 +6,7 @@ import {
   getAgentToolExecutionLocation,
 } from "../../agents/agent-tool-metadata.js";
 import { buildBlockedToolResult } from "../../agents/agent-tools.before-tool-call.wrapper.js";
-import { selectDelegatedToolPolicy } from "../../agents/delegated-tool-policy.js";
+import { shouldInheritSubagentToolPolicy } from "../../agents/inherited-tool-deny.js";
 import { resolveSenderRestrictedSpawnError } from "../../agents/spawn-requester-policy.js";
 import { buildSubagentExecutionSessionSpawnContext } from "../../agents/subagents/spawn/subagent-spawn-execution-identity.js";
 import { jsonResult, type AnyAgentTool } from "../../agents/tools/common.js";
@@ -78,7 +78,6 @@ type WorkerGatewayToolsDependencies = {
   portalAvailable?: boolean;
   inheritedToolPolicySource?: "sender";
   inheritedToolDenylist?: string[];
-  delegatedToolPolicyActive?: boolean;
   prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
 };
 
@@ -142,13 +141,6 @@ export function createWorkerSessionToolExecutor(
     },
     { assertSource, callGateway, collectExecutionIdentity }: WorkerSessionToolAuthority,
   ) => {
-    if (params.delegatedToolPolicyActive) {
-      return jsonResult({
-        status: "forbidden",
-        error:
-          "Worker-originated child spawning cannot preserve this delegated execution grant. Start the helper from a Gateway-side native session.",
-      });
-    }
     const restrictedError = resolveSenderRestrictedSpawnError({
       inheritedToolPolicySource: params.inheritedToolPolicySource,
       visible: true,
@@ -157,15 +149,6 @@ export function createWorkerSessionToolExecutor(
       return jsonResult({ status: "forbidden", error: restrictedError });
     }
     const targetAgentId = normalizeAgentId(operation.request.agentId ?? operation.source.agentId);
-    // Workers export their final catalog, not a separated requester-local deny floor.
-    // Apply the same explicit-grant refusal as other unsupported native producers.
-    selectDelegatedToolPolicy({
-      config: getRuntimeConfig(),
-      requesterSessionKey: operation.source.sessionKey,
-      requesterAgentId: operation.source.agentId,
-      targetAgentId,
-      inheritedToolPolicySource: params.inheritedToolPolicySource,
-    });
     const sourceEnvironment = params.environments.get(operation.identity.environmentId);
     if (
       !sourceEnvironment ||
@@ -187,6 +170,13 @@ export function createWorkerSessionToolExecutor(
       .filter((name) =>
         params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
       );
+    const inheritToolPolicy = shouldInheritSubagentToolPolicy({
+      requesterAgentId: operation.source.agentId,
+      targetAgentId,
+      inheritedToolPolicySource: params.inheritedToolPolicySource,
+    });
+    const inheritedToolAllowlist = inheritToolPolicy ? authorizedTools : [];
+    const inheritedToolDenylist = inheritToolPolicy ? (params.inheritedToolDenylist ?? []) : [];
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,
@@ -232,8 +222,8 @@ export function createWorkerSessionToolExecutor(
               requesterSessionKey: source.sessionKey,
               inheritedToolPolicy: {
                 version: 1,
-                allow: authorizedTools,
-                deny: [...(params.inheritedToolDenylist ?? [])],
+                allow: inheritedToolAllowlist,
+                deny: [...inheritedToolDenylist],
               },
             },
             {
@@ -349,8 +339,8 @@ export function createWorkerSessionToolExecutor(
                     DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
                   targetAgentId,
                   sandbox: "inherit",
-                  inheritedToolAllowlist: authorizedTools,
-                  inheritedToolDenylist: params.inheritedToolDenylist,
+                  inheritedToolAllowlist,
+                  inheritedToolDenylist,
                 })
               : undefined;
             const run = await executeWorkerSessionToolWithReplay(async () => {
@@ -401,8 +391,8 @@ export function createWorkerSessionToolExecutor(
       agentSessionKey: operation.source.sessionKey,
       requesterTurnRunId: operation.identity.runId ?? undefined,
       requesterAgentIdOverride: operation.source.agentId,
-      inheritedToolAllowlist: authorizedTools,
-      inheritedToolDenylist: params.inheritedToolDenylist,
+      inheritedToolAllowlist,
+      inheritedToolDenylist,
       inheritedToolPolicySource: params.inheritedToolPolicySource,
       callGateway: gatewayCall,
       expectedParentSessionId: operation.source.sessionId,

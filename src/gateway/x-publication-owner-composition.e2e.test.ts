@@ -71,7 +71,7 @@ import {
   setTestPluginRegistry,
 } from "./test-helpers.js";
 
-type Case = "allowed" | "guest" | "delegation-revoked" | "revoked";
+type Case = "allowed" | "guest" | "revoked";
 type Post = {
   id: string;
   author_id: string;
@@ -197,7 +197,7 @@ function post(id: string, root: string, author: string, text: string): Post {
 describe("X publication production-owner composition", () => {
   installGatewayTestHooks();
 
-  it("commits and anonymously reads maintainer work; denies guest and revoked creation", async ({
+  it("runs and anonymously reads delegated maintainer work; denies guest and revoked creation", async ({
     signal,
   }) => {
     const channels: OpenClawConfig["channels"] = {
@@ -228,7 +228,7 @@ describe("X publication production-owner composition", () => {
           main: {
             skills: [],
             tools: { fs: { workspaceOnly: true }, deny: ["exec", "write", "edit", "apply_patch"] },
-            subagents: { allowAgents: ["coder"], delegateToolsTo: ["coder"] },
+            subagents: { allowAgents: ["coder"] },
           },
           coder: { skills: [], tools: { fs: { workspaceOnly: true } } },
         },
@@ -323,7 +323,6 @@ describe("X publication production-owner composition", () => {
     let activeCase: Case = "allowed";
     let creating = false;
     let revokedInCatalogWait = false;
-    let delegationRevokedInCatalogWait = false;
     const creationRequests: Array<{ kind: Case; parent: unknown }> = [];
     const catalog = gateway.loadGatewayModelCatalogSnapshot;
     gateway.loadGatewayModelCatalogSnapshot = async (request) => {
@@ -334,12 +333,6 @@ describe("X publication production-owner composition", () => {
         revokedInCatalogWait = true;
         const next = structuredClone(cfg());
         next.channels!.x!.autoPublishWorkSessions = false;
-        setRuntimeConfigSnapshot(next);
-      }
-      if (creating && activeCase === "delegation-revoked" && !delegationRevokedInCatalogWait) {
-        delegationRevokedInCatalogWait = true;
-        const next = structuredClone(cfg());
-        next.agents!.entries!.main!.subagents!.delegateToolsTo = [];
         setRuntimeConfigSnapshot(next);
       }
       return snapshot;
@@ -578,17 +571,7 @@ describe("X publication production-owner composition", () => {
     };
     const rows = () => listSessionEntriesCore({ agentId: "coder", storePath: childStore });
     try {
-      for (const [index, kind] of (
-        ["allowed", "guest", "delegation-revoked", "revoked"] as const
-      ).entries()) {
-        if (kind === "delegation-revoked" || kind === "revoked") {
-          const restored = structuredClone(cfg());
-          restored.agents!.entries!.main!.subagents!.delegateToolsTo = ["coder"];
-          // The public grant deliberately retires on any config change. Use a
-          // private handoff to prove delegation itself rejects the deferred commit.
-          restored.channels!.x!.autoPublishWorkSessions = kind !== "delegation-revoked";
-          setRuntimeConfigSnapshot(restored);
-        }
+      for (const [index, kind] of (["allowed", "guest", "revoked"] as const).entries()) {
         activeCase = kind;
         dispatched = Promise.withResolvers<void>();
         rejectMonitor = dispatched.reject;
@@ -656,14 +639,6 @@ describe("X publication production-owner composition", () => {
             error: expect.stringContaining("hidden helpers"),
           });
           expect(creationRequests.filter((request) => request.kind === kind)).toEqual([]);
-        } else if (kind === "delegation-revoked") {
-          expect(publicReads).toEqual([]);
-          expect(publications.get(kind)).toBe(false);
-          expect(creationRequests.filter((request) => request.kind === kind)).toHaveLength(1);
-          expect(delegationRevokedInCatalogWait).toBe(true);
-          expect(outcomes.get(kind)).toMatchObject({
-            error: expect.stringContaining("authorization changed"),
-          });
         } else {
           expect(publicReads).toEqual([
             { path: "/2/tweets", appOnly: true, ids: expect.arrayContaining([rootId, mention.id]) },

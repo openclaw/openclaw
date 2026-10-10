@@ -28,6 +28,7 @@ export type SessionEntryCurrentFacts = {
   lifecycleRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
+  parentSessionKey?: unknown;
   spawnDepth?: unknown;
   completionOwnerSessionKey?: unknown;
   subagentRole?: unknown;
@@ -36,7 +37,6 @@ export type SessionEntryCurrentFacts = {
   inheritedToolPolicySource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
-  delegatedToolPolicy?: unknown;
   subagentRecovery?: {
     lastRunId?: unknown;
     sessionLifecycleRunId?: unknown;

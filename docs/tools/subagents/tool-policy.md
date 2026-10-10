@@ -47,8 +47,8 @@ By default, sub-agents below depth `5` receive `sessions_spawn`, `subagents`,
 ### Delegate tools to a coding agent
 
 A front-door agent can remain unable to execute commands or edit files while
-handing implementation to a separately configured coding agent. Opt in for each
-target on the requesting agent:
+handing implementation to a separately configured coding agent. Allow the target
+on the requesting agent:
 
 ```json5
 {
@@ -58,7 +58,6 @@ target on the requesting agent:
         tools: { deny: ["exec", "process", "write", "edit", "apply_patch"] },
         subagents: {
           allowAgents: ["coder"],
-          delegateToolsTo: ["coder"],
         },
       },
       coder: {},
@@ -67,36 +66,24 @@ target on the requesting agent:
 }
 ```
 
-`delegateToolsTo` is an operator-owned permission, not a `sessions_spawn`
-argument. It names exact configured target agents; it does not replace
-`allowAgents` or permit arbitrary targets. Without this grant, the existing
-caller tool ceiling is unchanged. The intake agent remains locally restricted.
+Cross-agent spawns allowed by `subagents.allowAgents` use the target agent's own
+configured tools. The requester's agent-level allow/deny policy is not copied
+onto the child, including visible sessions and configured ACP agent targets.
+The target still applies global policy, its own policy, sandbox restrictions,
+and the sub-agent restriction layer. Existing cross-agent children also ignore
+an older requester-agent tool snapshot when their stored lineage identifies
+the requester. External ACP harnesses that run under the requester agent keep
+that agent's tool ceiling.
 
-The grant applies to native cross-agent handoffs and relaxes only the requesting
-agent's own `tools.deny` layer. Global, provider, sender, conversation, sandbox,
-and inherited restrictions are not delegation grants. Duplicate denials at
-those layers remain denied, and the target still applies its own current tool
-policy and the hard sub-agent restrictions. A restrictive inherited allowlist
-cannot be discarded to make a handoff work. An explicit grant that cannot be
-projected safely fails before creation instead of starting an unusable child.
-ACP retains its original inheritance and admission checks.
+`openclaw doctor --fix` removes the retired `subagents.delegateToolsTo` setting
+while preserving `allowAgents` and each agent's tool policy. Updates apply the
+same repair through Doctor's normal config backup and write flow.
 
-The initial handoff requires a Gateway-side native tool surface and local
-placement. Cloud-worker and CLI-mediated spawn surfaces cannot originate or
-propagate the exception. Supported CLI and plugin harness targets use
-OpenClaw-mediated tools, not an ambient native command surface, so grant
-revocation can be checked before effects. Backends that cannot enforce that
-projection refuse the run.
-
-Same-agent native helpers of the coding target retain the grant and any
-additional restrictions. They cannot transfer it to a third agent. Completion
-back to the intake agent preserves the intake agent’s original tool snapshot.
-Removing the target grant or its `allowAgents` admission restores the original
-ceiling on subsequent preparation and rejects retained actions that depended on
-the grant before their effects. Already-started effects are not rolled back.
-
-Existing sessions keep their recorded policy; adding this setting does not
-retroactively upgrade a previously created child.
+Same-agent hidden helpers keep the parent's effective tool ceiling. Restrictions
+from `toolsBySender` or group/channel tool policy follow every descendant and
+remain enforced on later turns, including owner resumes. Those requesters may
+spawn only hidden helpers of the same agent; visible and cross-agent requests
+remain forbidden.
 
 ### Override via config
 

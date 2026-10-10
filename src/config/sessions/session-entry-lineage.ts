@@ -28,7 +28,6 @@ type InheritedSessionToolPolicy = Pick<
   | "inheritedToolPolicySource"
   | "inheritedToolAllow"
   | "inheritedToolDeny"
-  | "delegatedToolPolicy"
 >;
 
 /** Keep the frozen requester policy and its provenance together across session generations. */
@@ -36,9 +35,6 @@ export function preserveSessionInheritedToolPolicy(
   entry: InheritedSessionToolPolicy | undefined,
 ): InheritedSessionToolPolicy {
   return {
-    ...(entry?.delegatedToolPolicy
-      ? { delegatedToolPolicy: structuredClone(entry.delegatedToolPolicy) }
-      : {}),
     ...(entry?.inheritedToolPolicyVersion
       ? { inheritedToolPolicyVersion: entry.inheritedToolPolicyVersion }
       : {}),
