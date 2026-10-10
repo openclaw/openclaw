@@ -39,7 +39,8 @@ describe("ClickClack discussion registration lifecycle", () => {
           openSyncKeyedStore,
           openKeyedStoreV2: <T>(
             options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
-          ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, options),
+            authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+          ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, options, authority),
         },
       });
       const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
