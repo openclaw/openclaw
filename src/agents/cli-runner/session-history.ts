@@ -519,7 +519,7 @@ function renderClaudeSessionGap(
     .join(", ");
   const readHint =
     options.historyToolAvailable && options.sessionKey
-      ? ` Read them with sessions_history(${JSON.stringify({ sessionKey: options.sessionKey, limit: 100 })}); page older messages with offset if needed.`
+      ? ` Read them with mcp__openclaw__sessions_history(${JSON.stringify({ sessionKey: options.sessionKey, limit: 100 })}); page older messages with offset if needed.`
       : "";
   return `[OpenClaw: ${gap.length} messages occurred outside this Claude session from ${first.timestamp} to ${last.timestamp}, using ${modelSummary}${modelNames.length > 4 ? ` (+${modelNames.length - 4} more models)` : ""}. Their contents are not included here.${readHint}]`;
 }
