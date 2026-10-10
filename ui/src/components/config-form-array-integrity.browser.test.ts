@@ -1,6 +1,6 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
 import { renderArray } from "./config-form.node.collection.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
@@ -357,6 +357,8 @@ describe("config form array integrity", () => {
   it("restores boolean rows when uniqueItems rejects a toggle", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     renderArrayFixture(container, {
       schema: {
         type: "array",

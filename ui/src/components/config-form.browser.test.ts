@@ -47,6 +47,8 @@ let container: HTMLDivElement;
 let onPatch: ReturnType<typeof vi.fn<Parameters<typeof renderConfigFormBase>[0]["onPatch"]>>;
 beforeEach(() => {
   container = document.createElement("div");
+  document.body.append(container);
+  onTestFinished(() => container.remove());
   onPatch = vi.fn();
 });
 
@@ -114,7 +116,7 @@ describe("config form renderer", () => {
       const props = { value: {}, onPatch, uiHints: { [key]: { label, help } } };
       const heading = () =>
         field
-          ? container.querySelector("input")?.getAttribute("aria-label")
+          ? container.querySelector("input.settings-input")?.getAttribute("aria-label")
           : container.querySelector("h2.settings-section__heading")?.textContent?.trim();
       const expectHelp = (text: string) => {
         if (field) {
@@ -222,8 +224,6 @@ describe("config form renderer", () => {
     ["string or SecretRef", { type: ["string", "object"] }],
   ])("keeps a masked sensitive %s field editable across keystrokes", async (_name, tokenSchema) => {
     const { userEvent } = await import("vitest/browser");
-    document.body.append(container);
-    onTestFinished(() => container.remove());
     const analysis = analyzeConfigSchema(object({ token: tokenSchema }));
     const revealed = new Set<string>();
     let value: Record<string, unknown> = {};
@@ -344,8 +344,6 @@ describe("config form renderer", () => {
         },
       }),
     );
-    document.body.append(container);
-    onTestFinished(() => container.remove());
     const draw = (fromNumber: string) =>
       renderAnalyzedFormFixture(container, analysis, {
         uiHints: {

@@ -1,6 +1,6 @@
 // Control UI tests cover config behavior.
 import { render } from "lit";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
 import "../../styles.css";
@@ -81,6 +81,8 @@ describe("config view", () => {
       settingsLayout: "accordion",
       onFormPatch,
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const setup = required(container, "#config-section-wizard", HTMLDetailsElement);
     expect(setup.open).toBe(false);
     setup.open = true;
@@ -1305,6 +1307,8 @@ describe("config view", () => {
       textScale: 110,
       textScaleOverridden: true,
     });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const row = (title: string) => settingsRow(container, title);
 
     expect(findButtonByText(container, "Knot").getAttribute("aria-pressed")).toBe("true");
@@ -1444,6 +1448,8 @@ describe("config view", () => {
     },
   ] as const)("changes the browser-local $title toggle", ({ title, preference, checked }) => {
     const { container, props } = renderAppearance();
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const row = settingsRow(container, title);
     expect(row.querySelector<HTMLInputElement>(".settings-toggle__input")?.checked).toBe(checked);
     row.click();
@@ -1585,6 +1591,8 @@ describe("config view", () => {
       return control;
     };
     const { container, props } = renderAppearance();
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const disabledSwitch = soundSwitch(container);
 
     expect(audioContextCtor).not.toHaveBeenCalled();

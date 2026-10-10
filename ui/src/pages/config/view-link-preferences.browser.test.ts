@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { renderConfigView } from "./config-view.test-support.ts";
 
 it("renders the external-link preference off by default and applies a personal change", () => {
@@ -8,6 +8,8 @@ it("renders the external-link preference off by default and applies a personal c
     includeSections: ["__appearance__"],
     onAppearanceChange,
   });
+  document.body.append(container);
+  onTestFinished(() => container.remove());
   const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
     (candidate) =>
       candidate.querySelector(".settings-row__title")?.textContent?.trim() ===

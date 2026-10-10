@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SkillsLibraryListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -113,6 +113,11 @@ function createAddServerHarness(
   sessions.patch = patch;
   state.sessions = sessions;
   const container = document.createElement("div");
+  document.body.append(container);
+  onTestFinished(() => {
+    container.remove();
+    sessions.dispose();
+  });
   const settled = deferred();
   let submitted = false;
   const host = new ChatComposerCapabilityHost(() => {

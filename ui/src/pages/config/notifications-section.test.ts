@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderNotificationsSection } from "./notifications-section.ts";
 
 const userPreferences = {
@@ -76,6 +76,8 @@ describe("native notification test outcome", () => {
 describe("Web Push preference saves", () => {
   it("lets recipients opt in to mentions and override them for one browser", () => {
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const onUserPreferences = vi.fn();
     const onDevicePreferences = vi.fn();
     render(
@@ -272,6 +274,8 @@ describe("Web Push preference controls", () => {
   it("patches device preferences from the toggle row and select row", () => {
     const onDevice = vi.fn<DevicePreferencesListener>();
     const container = renderPreferences({ onDevice });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     const deviceGroup = expectDefined(
       container.querySelectorAll(".settings-page .settings-stack .settings-group")[1],
       "device preference group",

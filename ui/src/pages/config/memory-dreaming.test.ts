@@ -177,7 +177,7 @@ describe("renderDreamingSettings", () => {
     ).toBe(true);
     expect(
       [...container.querySelectorAll<HTMLInputElement>(".settings-toggle__input")].every(
-        (toggle) => toggle.disabled === true,
+        (toggle) => toggle.disabled,
       ),
     ).toBe(true);
     expect(

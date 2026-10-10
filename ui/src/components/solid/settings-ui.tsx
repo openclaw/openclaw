@@ -17,7 +17,6 @@ import {
 } from "../settings-controls.ts";
 import { Icon } from "./icon.tsx";
 import "../tooltip.ts";
-import "../../styles/settings-native-controls.css";
 
 type SettingsStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 const CARAPACE_STATUS_CLASS: Record<SettingsStatusKind, string> = {
@@ -280,7 +279,7 @@ function ToggleControl(
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
-        prop:checked={props.checked}
+        checked={props.checked}
         disabled={props.disabled}
         aria-labelledby={props.labelledBy ?? labelId}
         onClick={(event) => settingsSwitchClick(event, props)}
@@ -373,7 +372,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                   type="radio"
                   name={name}
                   value={option().value}
-                  prop:checked={option().value === props.value}
+                  checked={option().value === props.value}
                   disabled={props.disabled || option().disabled}
                   aria-label={option().ariaLabel}
                   onClick={(event) => settingsRadioClick(event, option().value, props)}
@@ -418,7 +417,9 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
             aria-pressed={
               props.mode === "buttons" && props.ariaPressed === false
                 ? undefined
-                : String(option().value === props.value)
+                : option().value === props.value
+                  ? "true"
+                  : "false"
             }
             aria-label={option().ariaLabel}
             data-compact-label={option().compactLabel}
@@ -561,7 +562,7 @@ export function SettingsSecretInput(props: {
         aria-label={props.ariaLabel}
         autocomplete="off"
         spellcheck="false"
-        prop:value={props.value}
+        value={props.value}
         placeholder={props.placeholder ?? ""}
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}
@@ -571,7 +572,7 @@ export function SettingsSecretInput(props: {
           type="button"
           class="settings-secret__toggle"
           aria-label={props.toggleLabel}
-          aria-pressed={String(props.visible)}
+          aria-pressed={props.visible ? "true" : "false"}
           disabled={props.disabled}
           onClick={() => props.onToggle()}
         >

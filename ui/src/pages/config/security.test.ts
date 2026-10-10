@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { html, render } from "lit";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { renderSecurity } from "./security.ts";
 
 type SecurityViewProps = Parameters<typeof renderSecurity>[0];
@@ -57,6 +57,8 @@ describe("renderSecurity", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
     render(
       renderSecurity(
@@ -201,6 +203,8 @@ describe("renderSecurity", () => {
       const props = createProps();
       const onToolProfileChange = vi.fn();
       const container = document.createElement("div");
+      document.body.append(container);
+      onTestFinished(() => container.remove());
       render(
         renderSecurity({
           ...props,

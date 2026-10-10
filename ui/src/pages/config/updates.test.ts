@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { render } from "lit";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { projectUpdateSentinel } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
@@ -24,6 +24,8 @@ let automaticUpdatesControl: ReturnType<typeof createUpdatesViewDom>["automaticU
 beforeEach(async () => {
   await i18n.setLocale("en");
   ({ container, row, automaticUpdatesControl } = createUpdatesViewDom());
+  document.body.append(container);
+  onTestFinished(() => container.remove());
 });
 
 describe("renderUpdates", () => {

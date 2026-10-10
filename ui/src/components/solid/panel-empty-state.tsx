@@ -17,7 +17,7 @@ export function PanelEmptyStateContent(props: PanelEmptyStateProps & { children?
   // Keep the caller's Lit range intact; only its direct unnamed elements are decorative.
   onSettled(() => {
     if (!outlet) {
-      return;
+      return undefined;
     }
     const content = outlet;
     const hidden = new Map<Element, string | null>();
