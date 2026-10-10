@@ -10,6 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { resolvePluginNpmProjectDir } from "./install-paths.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import {
@@ -60,6 +61,7 @@ afterEach(async () => {
       process.env[key] = original;
     }
   }
+  await closeStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
