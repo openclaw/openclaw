@@ -264,7 +264,7 @@ it("keeps derived parents confined to their selections after a catalog publicati
   const selected = {
     ...input,
     workspaceDir: configured.snapshot.workspaceDir,
-    runtimePluginSelections: [{ provider: "custom", modelId: "remote-200", runtime: "openclaw" }],
+    runtimePluginSelections: [{ provider: "custom", modelId: "selected", runtime: "first" }],
   };
   // Each selection resolves its own harness owner; the parent registry holds only "first".
   const ownersSpy = vi
