@@ -173,7 +173,7 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
             expect(result.result.appendedMessages).toMatchObject([
               { appended: true, messageId: "assistant", effectiveParentId: "user" },
             ]);
-            expect(result.result.sessionEntry?.activeWriterRunId).toBe("run");
+            expect(result.result.sessionEntry).toMatchObject({ activeWriterRunId: "run" });
             expect(readSessionPendingInputByKey(db, scope, pending.idempotencyKey)?.input_id).toBe(
               "accepted-input",
             );

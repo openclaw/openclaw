@@ -167,6 +167,7 @@ it("shares committed facts across released handles and retires them for writes a
         expect(sibling.read()?.version.sequence).toBe(1);
         assignSessionOwner(fixture.scope, {
           owner: { type: "agent", id: "new-owner" },
+          assignedBy: { type: "agent", id: "main" },
           assignedAt: 2,
         });
         expect(sibling.read()).toBeUndefined();
@@ -317,7 +318,11 @@ it("invalidates for native owner, replacement, transcript and deletion writers",
   await withReplica((fixture) => {
     const { replica, scope, database } = fixture;
     hydrate(fixture);
-    assignSessionOwner(scope, { owner: { type: "agent", id: "assigned" }, assignedAt: 10 });
+    assignSessionOwner(scope, {
+      owner: { type: "agent", id: "assigned" },
+      assignedBy: { type: "agent", id: "main" },
+      assignedAt: 10,
+    });
     expect(replica.read()).toBeUndefined();
     expect(hydrate(fixture).entry?.owner?.actor.id).toBe("assigned");
 
