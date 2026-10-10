@@ -9,8 +9,9 @@ import {
   withIncognitoSessionActor,
   withIncognitoSessionBinding,
 } from "../../config/sessions/session-incognito-binding.js";
+import { appendTranscriptMessage } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { createDeferred } from "../../shared/deferred.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { IncognitoSessionEndedError } from "../../state/incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { openIncognitoTestActor } from "../../state/openclaw-agent-execution-incognito.test-support.js";
@@ -21,6 +22,7 @@ import { createShouldEmitToolResult } from "./agent-runner-helpers.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
 import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
 const exportPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ systemPrompt: "synthetic", tools: [] })),
@@ -81,6 +83,33 @@ it("uses live actor preferences for a retained progress callback without host SQ
   }
 });
 
+it("retains actor classification authority and refuses a changed generation without native reads", async () => {
+  const { scope, entry } = await create("tool-authority");
+  const sql = observeHostDataSql();
+  try {
+    const prepared = await withIncognitoSessionActor(actor, async () =>
+      prepareNativeReplyToolAuthorityRead(
+        {
+          ...scope,
+          canonicalKey: scope.sessionKey,
+          source: undefined,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+        () => {},
+      ),
+    );
+    prepared.assertPrepared([]);
+    await withIncognitoSessionActor(actor, () =>
+      updateSessionEntry(scope, () => ({ lifecycleRevision: "replacement" })),
+    );
+    expect(() => prepared.assertPrepared([])).toThrow("generation is no longer current");
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+});
+
 it("renames and reads the selected actor session without trusting a stale command entry", async () => {
   const { scope, entry } = await create("name", { label: "Before" });
   const params = {
@@ -120,22 +149,21 @@ it("reads the completed fallback model from the actor transcript", async () => {
       reason: "rate_limit",
     },
   });
-  await actor.sessions.transcript(authority, {
-    type: "session.message.append",
-    input: {
-      sessionKey: scope.sessionKey,
-      sessionId: entry.sessionId,
-      fence: { expectedLifecycleRevision: entry.lifecycleRevision },
-      message: {
-        role: "assistant",
-        content: "Synthetic answer",
-        stopReason: "stop",
-        provider: "openai",
-        model: "fallback",
-        __openclaw: { runId: "fallback-run" },
+  await withIncognitoSessionActor(actor, () =>
+    appendTranscriptMessage(
+      { ...scope, sessionId: entry.sessionId },
+      {
+        message: {
+          role: "assistant",
+          content: "Synthetic answer",
+          stopReason: "stop",
+          provider: "openai",
+          model: "fallback",
+          __openclaw: { runId: "fallback-run" },
+        },
       },
-    },
-  });
+    ),
+  );
   const sql = observeHostDataSql();
   try {
     await withIncognitoSessionActor(actor, async () => {
@@ -157,8 +185,8 @@ it("reads the completed fallback model from the actor transcript", async () => {
 it("refuses an export whose source changes during prompt preparation without writing an artifact", async () => {
   const { scope, entry } = await create("export");
   const workspaceDir = tempDirs.make("incognito-export-output-");
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
+  const entered = createDeferredCore<void>();
+  const release = createDeferredCore<void>();
   exportPrompt.mockImplementationOnce(async () => {
     entered.resolve();
     await release.promise;
