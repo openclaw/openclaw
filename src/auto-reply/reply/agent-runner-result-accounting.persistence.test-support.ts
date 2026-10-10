@@ -281,7 +281,7 @@ export async function createAgentAccountingPersistenceFixture({
       return accountQueued({ kind: "aborted", reason, compaction });
     },
     read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
+    replace: (next: InternalSessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
     account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
       context.execution.result.meta.agentMeta = {
         sessionId: entry.sessionId,

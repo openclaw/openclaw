@@ -1028,6 +1028,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/commands/doctor-device-pairing.worker.test.ts",
   "src/commands/doctor-device-pairing.test.ts",
   "src/cli/proxy-cli.runtime.test.ts",
+  "src/cli/workboard-owner.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/commands/doctor-maintenance.session-workers.test.ts",
   "src/commands/doctor-session-canonical-keys.completions.test.ts",
