@@ -1,6 +1,5 @@
 // Owns the published index state and the isolated lifetime of shadow reindex work.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -39,7 +38,6 @@ import {
   openMemoryDatabaseAtPath,
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
-import { publishMemoryEmbeddingCache } from "./manager-embedding-cache-publication.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import type {
   MemoryEmbeddingCacheMutation,
@@ -48,12 +46,8 @@ import type {
   MemoryPublicationResult,
   MemoryPublicationState,
 } from "./manager-publication-task.js";
-import {
-  memoryPublicationBatches,
-  memoryPublicationHeader,
-  memoryPublicationInline,
-  memoryEmbeddingCacheFitsInline,
-} from "./manager-publication-transfer.js";
+import { memoryEmbeddingCacheFitsInline } from "./manager-publication-transfer.js";
+import { publishMemoryEmbeddingCache, publishMemorySource } from "./manager-publication.js";
 import {
   assertMemoryShadowIdentity,
   readMemoryShadowIdentity,
@@ -503,29 +497,18 @@ export class MemoryIndexDatabase {
     prepareRevision: () => number | undefined,
     invalidate: () => void,
   ): Promise<boolean | undefined> {
-    if (
-      mutation.kind === "clear" ||
-      memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
-    ) {
-      return publishMemoryEmbeddingCache({
-        scope: { execute: (command) => this.executePublication(command, assertCurrent) },
+    const publish = (scope: PublicationScope) =>
+      publishMemoryEmbeddingCache({
+        scope,
         mutation,
         prepareRevision,
         invalidate,
         retry: (run, prepare) => this.retryPublication(run, prepare),
       });
-    }
-    return this.runPublication(
-      (scope) =>
-        publishMemoryEmbeddingCache({
-          scope,
-          mutation,
-          prepareRevision,
-          invalidate,
-          retry: (run, prepare) => this.retryPublication(run, prepare),
-        }),
-      assertCurrent,
-    );
+    return mutation.kind === "clear" ||
+      memoryEmbeddingCacheFitsInline(mutation.header, mutation.entries)
+      ? publish({ execute: (command) => this.executePublication(command, assertCurrent) })
+      : this.runPublication(publish, assertCurrent);
   }
 
   async replaceSource(
@@ -533,52 +516,17 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
     prepare: () => Promise<boolean>,
   ) {
-    const inline = memoryPublicationInline(replacement);
-    if (inline) {
-      return this.withSourceMutation(() =>
-        this.retryPublication(
-          () =>
-            this.executePublication(
-              {
-                type: "source.replace.inline",
-                input: { ...inline, state: this.publicationState() },
-              },
-              assertCurrent,
-            ),
-          prepare,
-        ),
-      );
-    }
-    const run = () =>
-      this.runPublication(async (scope) => {
-        const operation = randomUUID();
-        const { header, rows } = memoryPublicationHeader(replacement);
-        await scope.execute({
-          type: "stage.start",
-          input: { operation, header, rows },
-        });
-        for (const fragments of memoryPublicationBatches(replacement)) {
-          await scope.execute({ type: "stage.append", input: { operation, fragments } });
-        }
-        const result = await this.retryPublication(
-          () =>
-            scope.execute({
-              type: "source.replace",
-              input: { operation, state: this.publicationState() },
-            }),
-          prepare,
-        );
-        if (this.isShadow) {
-          assertCurrent();
-        }
-        // Thrown failures close the Worker through runPublication. A further
-        // command on that failed scope could hide the original write outcome.
-        if (result === undefined) {
-          await scope.execute({ type: "stage.discard", input: { operation } });
-        }
-        return result;
-      }, assertCurrent);
-    return this.withSourceMutation(run);
+    return this.withSourceMutation(() =>
+      publishMemorySource({
+        replacement,
+        state: () => this.publicationState(),
+        execute: (command) => this.executePublication(command, assertCurrent),
+        run: (operation) => this.runPublication(operation, assertCurrent),
+        retry: (run, prepare) => this.retryPublication(run, prepare),
+        prepare,
+        assertPublished: this.isShadow ? assertCurrent : undefined,
+      }),
+    );
   }
 
   async deleteSource(
