@@ -256,12 +256,23 @@ export async function detectUnsafeExecControlShellCommand(
   const rawCommand = command.trim();
   const explanations: CommandExplanation[] = [];
   try {
-    const explanation = await explainShellCommand(rawCommand);
-    explanations.push(explanation);
-    if (!explanation.ok && /[\v\f\r]/u.test(rawCommand)) {
-      explanations.push(
-        await explainShellCommand(withVerticalWhitespaceAsWordCharacters(rawCommand)),
-      );
+    const sources = [rawCommand];
+    for (const source of sources) {
+      const explanation = await explainShellCommand(source);
+      explanations.push(explanation);
+      if (explanation.ok) {
+        continue;
+      }
+      const steps = [...explanation.topLevelCommands, ...explanation.nestedCommands];
+      for (const text of [source, ...steps.flatMap((step) => step.argv)]) {
+        if (!/[\v\f\r]/u.test(text)) {
+          continue;
+        }
+        const recovered = withVerticalWhitespaceAsWordCharacters(text);
+        if (!sources.includes(recovered)) {
+          sources.push(recovered);
+        }
+      }
     }
   } catch (error) {
     if (error instanceof CommandExplanationWorkLimitError) {

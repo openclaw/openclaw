@@ -276,4 +276,55 @@ describeNonWin("exec live OpenClaw state SQLite guard", () => {
       });
     },
   );
+
+  it.each(["\\v", "\\f", "\\r"])(
+    "rejects a live target hidden after a %s comment in a decoded wrapper payload before spawn",
+    async (escape) => {
+      await withTempDir("openclaw-exec-live-sqlite-decoded-", async (root) => {
+        const stateDir = path.join(root, "state");
+        const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+        const markerPath = path.join(root, "sqlite-spawned");
+        const sqlitePath = path.join(root, "sqlite3");
+        await fs.mkdir(path.dirname(databasePath), { recursive: true });
+        await fs.writeFile(sqlitePath, `#!/bin/sh\nprintf spawned > ${quote(markerPath)}\n`, {
+          mode: 0o755,
+        });
+        const context = { stateDir, workdir: root };
+
+        await expect(
+          detectUnsafeExecControlShellCommand(
+            `bash -c $'ls ${escape}#;sqlite3 ${path.join(root, "copy.sqlite")} .schema'`,
+            context,
+          ),
+        ).resolves.toBeNull();
+
+        await withEnvAsync(
+          {
+            HOME: root,
+            USERPROFILE: root,
+            OPENCLAW_HOME: root,
+            OPENCLAW_STATE_DIR: stateDir,
+          },
+          async () => {
+            const tool = createExecTool({
+              host: "gateway",
+              security: "full",
+              ask: "off",
+              allowBackground: false,
+            });
+            await expect(
+              tool.execute("call-live-sqlite-decoded", {
+                command: `bash -c $'ls ${escape}#;${sqlitePath} ${databasePath} .schema'`,
+                workdir: root,
+              }),
+            ).rejects.toThrow(
+              /external sqlite3 cannot open databases under the active OpenClaw state directory/,
+            );
+          },
+        );
+
+        await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      });
+    },
+  );
 });
