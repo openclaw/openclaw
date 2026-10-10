@@ -34,7 +34,7 @@ export function createNativeSessionBindingNativeSettlement(params: {
       if (removed) {
         return;
       }
-      const result = runWriteTransaction(
+      const outcome = runWriteTransaction(
         "delete",
         (database) => {
           assertPrepared();
@@ -47,7 +47,7 @@ export function createNativeSessionBindingNativeSettlement(params: {
         },
         { env: params.env },
       );
-      removed = result.status === "deleted" ? result.value : undefined;
+      removed = outcome.status === "deleted" ? outcome.value : undefined;
       params.settle("committed");
     },
     rollback() {
