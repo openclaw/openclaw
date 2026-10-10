@@ -224,6 +224,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-fable-5": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -320,6 +321,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -371,6 +373,7 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-fable-5-1": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -488,6 +491,7 @@ describe("anthropic cli migration", () => {
               alias: "Sonnet",
               agentRuntime: { id: "auto" },
             },
+            "anthropic/*": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
@@ -506,6 +510,7 @@ describe("anthropic cli migration", () => {
       alias: "Sonnet",
       agentRuntime: { id: "claude-cli" },
     });
+    expect(defaults.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "openclaw" } });
   });
 
   it("registered cli auth tells users to run claude auth login when local auth is missing", async () => {
@@ -663,6 +668,8 @@ describe("anthropic cli migration", () => {
     expect(defaults?.models?.["anthropic/claude-opus-4-8"]).toEqual({
       agentRuntime: { id: "claude-cli" },
     });
+    // Claude IDs outside the sign-in seed: catalog rows published later and typed IDs.
+    expect(defaults?.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "claude-cli" } });
     expect(defaults?.models?.["openai/gpt-5.2"]).toEqual({});
   });
 

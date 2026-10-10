@@ -128,6 +128,7 @@ This compatibility path does not grant managed Tailscale semantics. `gateway.aut
 ## Notes
 
 - Tailscale Serve/Funnel requires the `tailscale` CLI installed and logged in.
+- Ordinary `openclaw doctor` checks the configured local Serve/Funnel backend before maintenance and repair prompts. It names stopped, logged-out, approval-pending, starting, or unavailable backends and prints the next action. This prerequisite check does not enable Tailscale, change routes, or modify exposure/authentication settings. Update-driven Doctor defers this advisory until ordinary Doctor runs after the update, because shipped updaters restrict candidate config reads; repairs remain best effort. A running backend alone does not prove the Serve/Funnel route or Gateway is ready.
 - `tailscale.mode: "funnel"` refuses to start unless auth mode is `password`, to avoid public exposure.
 - OpenClaw holds Serve/Funnel as a foreground Tailscale claim. Gateway startup succeeds only after the claim is active, and stopping or losing the Gateway releases it automatically.
 - Stopping during startup also releases the claim before readiness. If Tailscale requires `sudo -n`, cleanup uses `sudo -n /bin/kill` for the process group OpenClaw started. Give the Gateway user Tailscale operator access with `sudo tailscale set --operator=$USER` to avoid requiring privileged startup and cleanup.

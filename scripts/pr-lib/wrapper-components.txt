@@ -1063,6 +1063,8 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-snapshot.ts
+src/infra/sqlite-source-fence-contract.ts
+src/infra/sqlite-source-fence.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-source-revision.ts
 src/infra/sqlite-source-revision.worker.ts
@@ -1615,6 +1617,7 @@ src/skills/runtime/refresh-watch-targets.types.ts
 src/state/agent-creation-claim.ts
 src/state/agent-database-admission-error.ts
 src/state/agent-database-admission.ts
+src/state/agent-database-preparation-context.ts
 src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup-admission.ts
 src/state/agent-deletion-cleanup.ts

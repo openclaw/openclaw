@@ -457,12 +457,13 @@ describe("memory manager FTS-only reindex", () => {
       nowSpy.mockReturnValue(now + 31_000);
       await expect(memoryManager.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
       providerEmbeddingError = new Error("embedding request failed during rebuild");
+      const queryCallsAfterProbe = providerQueryCalls;
       const debug: unknown[] = [];
 
       await expect(
         memoryManager.search("Alpha topic", { onDebug: (entry) => debug.push(entry) }),
       ).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
       expect(debug).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -482,7 +483,7 @@ describe("memory manager FTS-only reindex", () => {
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
       nowSpy.mockReturnValue(now + 62_000);
       await fs.writeFile(
@@ -491,13 +492,13 @@ describe("memory manager FTS-only reindex", () => {
       );
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBe(0);
+      expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
       providerEmbeddingError = null;
       nowSpy.mockReturnValue(now + 93_000);
       await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
       await expect(memoryManager.search("Delta fallback refresh")).resolves.toHaveLength(1);
-      expect(providerQueryCalls).toBeGreaterThan(0);
+      expect(providerQueryCalls).toBeGreaterThan(queryCallsAfterProbe);
       const recoveredStatus = memoryManager.status();
       expect(recoveredStatus.custom?.providerState).toEqual({
         mode: "active",

@@ -3317,6 +3317,7 @@ function runReleaseChecksInputValidation(
   const workdir = tempDirs.make("release-checks-input-validation-");
   const fixture = frozenToolingFixture(workdir, [
     "scripts/full-release-validation-policy.mjs",
+    "scripts/pr-lib/gh-api-preflight.mjs",
     "scripts/lib/full-release-manifest.mjs",
     "scripts/release-qualification-coverage.mjs",
     ...PUBLICATION_CONTRACT_FILES,
@@ -14785,7 +14786,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/lib/release-evidence-identity.mjs",
@@ -14794,6 +14794,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "scripts/release-qualification-coverage.mjs",
       "scripts/lib/full-release-manifest.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/pr-lib/gh-api-preflight.mjs",
+      "scripts/lib/direct-run.mjs",
       ...PUBLICATION_CONTRACT_FILES,
       "scripts/lib/release-changelog.mjs",
       "scripts/full-release-candidate-contract.mjs",
@@ -14812,7 +14814,9 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "scripts/lib/upgrade-survivor-policy.mjs",
       "scripts/lib/upgrade-survivor-scenarios.json",
     ]) {
-      copyFileSync(source, join(root, source.replace(/^scripts\//u, "")));
+      const destination = join(root, source.replace(/^scripts\//u, ""));
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(source, destination);
     }
     const result = spawnSync(
       process.execPath,

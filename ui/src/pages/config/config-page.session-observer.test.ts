@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveThemeBranding } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
@@ -126,7 +127,7 @@ describe("ConfigPage navigation", () => {
         ensureSchemaLoaded: async () => undefined,
         subscribe,
       },
-      theme: { serverSelection: null, subscribe },
+      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
       overlays: { snapshot: {}, subscribe },
       webPush: { snapshot: undefined, subscribe },
     } as unknown as ApplicationContext;
@@ -344,7 +345,7 @@ describe("ConfigPage model catalog lifecycle", () => {
       agents: { state: { agentsList: null }, subscribe },
       agentIdentity: { ensure: async () => undefined, subscribe },
       runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
-      theme: { serverSelection: null, subscribe },
+      theme: { branding: resolveThemeBranding(undefined), serverSelection: null, subscribe },
       overlays: { snapshot: {}, subscribe },
       config: { subscribe },
       webPush: { subscribe },
@@ -634,6 +635,7 @@ describe("ConfigPage meeting capture", () => {
         runtimeConfig,
         agentSelection: { state: { selectedId: "main" } },
         agents: { state: { agentsList: null } },
+        theme: { branding: resolveThemeBranding(undefined) },
         navigate: vi.fn(),
         config: { current: { assistantIdentity: { name: "OpenClaw" } } },
         overlays: { snapshot: { updateRunning: false, updateReconciliationPending: false } },

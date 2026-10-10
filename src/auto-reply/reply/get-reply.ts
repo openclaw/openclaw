@@ -799,7 +799,6 @@ export async function getReplyFromConfig(
     requestedRouteResolution,
     modelState,
     resolveModelLevels,
-    contextTokens,
     inlineStatusRequested,
     directiveAck,
   } = directiveResult.result;
@@ -883,7 +882,8 @@ export async function getReplyFromConfig(
       resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
       provider,
       model,
-      contextTokens,
+      contextTokens: directiveResult.result.contextTokens,
+      contextTokenProjection: directiveResult.result.contextTokenProjection,
       directiveAck,
       abortedLastRun,
       skillFilter: mergedSkillFilter,

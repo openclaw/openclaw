@@ -161,7 +161,7 @@ suite.define(() => {
               content: [
                 {
                   type: "text",
-                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.`,
+                  text: `${direction === "rtl" ? "راجع الملاحظات. " : ""}Conversation checkpoint ${index + 1}: review the notes and confirm the next step.${count <= 8 && index === count - 1 ? "\n\nSupporting context keeps this small set of turns scrollable while testing the rail anchor.".repeat(16) : ""}`,
                 },
               ],
             })),
@@ -189,6 +189,10 @@ suite.define(() => {
           }
           await page.goto(`${suite.server.baseUrl}chat`);
           await page.locator(`.chat-text[dir="${direction}"]`).first().waitFor();
+          if (count === 1) {
+            // A single folded user bubble still fits; expand it before testing its rail.
+            await page.getByRole("button", { name: "Show more", exact: true }).click();
+          }
           const card = page.locator(".session-progress-card--composer");
           await card.waitFor();
           // Let the transcript settle before measuring the rail and toggling the card.

@@ -3489,6 +3489,10 @@ describe("loadPageAssistantIdentity", () => {
     now.mockReturnValue(61_001);
     state.sessionKey = "agent:main:third";
     await state.loadAssistantIdentity();
+    expect(request).toHaveBeenCalledTimes(2);
+
+    identities.invalidate(["main"]);
+    await state.loadAssistantIdentity();
     expect(request).toHaveBeenCalledTimes(3);
 
     const staleIdentity = createDeferred<{ name: string; agentId: string }>();

@@ -229,7 +229,7 @@ describe("incomplete-turn payload resolution", () => {
         lastAssistant: assistant({ stopReason: "length", content: [{ type: "text", text: "" }] }),
       },
       0,
-      "couldn't generate a response",
+      "⚠️ The model reached its output token limit before generating an answer. Please try again.",
     ],
   ];
   it.each(payloadCases)("resolves warning for %s", (_name, attempt, payloadCount, expected) => {

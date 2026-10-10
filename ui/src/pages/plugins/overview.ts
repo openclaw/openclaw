@@ -4,6 +4,7 @@ import {
   type PluginUiCapability,
 } from "../../../../packages/gateway-protocol/src/plugin-ui-capabilities.ts";
 import { icons } from "../../components/icons.ts";
+import { askBrandLabel } from "../../components/theme-brand-label.ts";
 import { t } from "../../i18n/index.ts";
 import { formatDateMs } from "../../lib/format.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
@@ -285,7 +286,7 @@ export function renderPluginAskAction(onAsk?: () => void, primary = true) {
         class="btn oc-action ${primary ? "primary oc-action-primary" : "oc-action-secondary"}"
         @click=${onAsk}
       >
-        ${t("nav.askOpenClaw")}
+        ${askBrandLabel()}
       </button>`
     : nothing;
 }
