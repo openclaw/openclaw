@@ -479,6 +479,7 @@ describe("openclaw-tooltip", () => {
     await expectOpenCount(1);
 
     trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true, composed: true }));
+    await settleTooltip(tooltip);
     hoverTrigger(trigger);
     vi.advanceTimersByTime(0);
     await expectOpenCount(0);
@@ -805,7 +806,7 @@ describe("title tooltips", () => {
       trigger.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
       expect(trigger.title).toBe(trigger.href);
       activate();
-      await commitTooltip(tooltip);
+      await settleTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
       vi.advanceTimersByTime(150);
       await expectOpenCount(1);
     },
@@ -1014,7 +1015,7 @@ describe("title tooltips", () => {
     dispatchMousePointer(trigger, "pointerleave");
     expect(trigger.getAttribute("title")).toBe("Action available");
     dispatchMousePointer(trigger, "pointerover");
-    await commitTooltip(tooltip);
+    await settleTooltip(document.querySelector<TooltipElement>("openclaw-tooltip")!);
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
   });

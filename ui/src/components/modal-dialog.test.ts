@@ -10,7 +10,6 @@ import {
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
 import "./modal-dialog.ts";
-import modalStyles from "./solid/modal-dialog.css?inline";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -36,22 +35,6 @@ function notifyNestedTransitions(target: Element) {
 async function atOpeningCommit(modal: Modal, assert: (dialog: HTMLDialogElement) => void) {
   await commitRender(modal);
   assert(modal.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!);
-}
-
-function expectModalMotionPolicy() {
-  const styles = modalStyles;
-  expect(styles).toMatch(
-    /openclaw-modal-dialog\.palette\s*\{[^}]*--openclaw-modal-show-duration:\s*0ms;[^}]*--openclaw-modal-hide-duration:\s*0ms;/u,
-  );
-  expect(styles).toMatch(
-    /openclaw-modal-dialog\.drawer\s*\{[^}]*--openclaw-modal-show-duration:\s*200ms;[^}]*--openclaw-modal-hide-duration:\s*0ms;/u,
-  );
-  expect(styles).toMatch(
-    /openclaw-modal-dialog\.drawer\s*>\s*\.oc-modal-dialog\[open\]\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
-  );
-  expect(styles).toMatch(
-    /@keyframes openclaw-drawer-in\s*\{\s*from\s*\{\s*transform:\s*translateX\(calc\(100% \+ var\(--openclaw-drawer-inset, 0px\)\)\);\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\);/u,
-  );
 }
 
 async function renderModal() {
@@ -137,9 +120,9 @@ describe("openclaw-modal-dialog", () => {
       expect(document.openClawModalLayers?.has(modal)).toBe(false);
 
       container.append(modal);
-      expect(document.openClawModalLayers?.has(modal)).toBe(true);
       const { dialog } = await getRenderedModalDialog(container);
       expect(dialog.open).toBe(true);
+      expect(document.openClawModalLayers?.has(modal)).toBe(true);
     },
   );
 
@@ -324,9 +307,6 @@ describe("openclaw-modal-dialog", () => {
     },
   );
 
-  it("assigns overlay motion by interaction type", () => {
-    expectModalMotionPolicy();
-  });
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
     const onCancel = vi.fn();

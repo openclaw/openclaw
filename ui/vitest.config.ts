@@ -135,6 +135,7 @@ const webkitTestFiles = [
   "src/components/panel-tab-strip.browser.test.ts",
   "src/components/sessions-hub-header.browser.test.ts",
   "src/components/tooltip-title.browser.test.ts",
+  "src/components/transient-container.browser.test.ts",
   "src/pages/chat/chat-composer-context.browser.test.ts",
   "src/pages/chat/chat-composer-context.palette.browser.test.ts",
   "src/pages/chat/chat-composer-overflow.browser.test.ts",

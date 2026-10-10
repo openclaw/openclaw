@@ -18,7 +18,6 @@ export function ModalDialogContent(props: ModalDialogContentProps) {
       aria-modal="true"
       aria-label={props.label || undefined}
       aria-description={props.description || undefined}
-      tabindex={-1}
     >
       <div class="oc-modal-dialog__body">{props.children}</div>
       <div ref={props.bindOverlayContainer} class="oc-modal-dialog__overlay-content" />

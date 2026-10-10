@@ -37,7 +37,8 @@ export function Popover(props: PopoverProps): JSX.Element {
   const id = untrack(() => props.id);
   const overlay = createOverlay(id, undefined, {
     acquireOcclusion: acquireNativeOverlaySurface,
-    onRootChange: (root) => retainShadowStyles(root, [overlayStyles]),
+    onRootChange: (root) =>
+      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
   });
   const syncOpen = (open: boolean) => {
     if (open === overlay.open) {

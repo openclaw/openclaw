@@ -33,6 +33,8 @@ export function installDialogPolyfill(): () => void {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value(this: HTMLDialogElement) {
+      // jsdom lacks the native dialog's intrinsic focusability.
+      this.tabIndex = -1;
       this.setAttribute("open", "");
     },
   });

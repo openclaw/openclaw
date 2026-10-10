@@ -107,7 +107,7 @@ export const Tooltip = defineSolidBridge<TooltipProps, TooltipMethods>(
     );
     onCleanup(dispose);
     // The caller's Lit parts retain one intact range, including all slot attributes.
-    return props.children;
+    return () => props.children;
   },
   {
     properties: {

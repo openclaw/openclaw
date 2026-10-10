@@ -77,7 +77,8 @@ export function Menu(props: BranchProps): JSX.Element {
     isValid: (panel) =>
       Boolean(panel.querySelector('[role^="menuitem"], [data-form-control], [data-search]')),
     acquireOcclusion: acquireNativeOverlaySurface,
-    onRootChange: (root) => retainShadowStyles(root, [overlayStyles]),
+    onRootChange: (root) =>
+      root instanceof ShadowRoot ? retainShadowStyles(root, [overlayStyles]) : undefined,
     onInitialFocus(intent) {
       const items = ownItems(overlay.surface);
       const initial = [

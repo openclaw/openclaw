@@ -2,12 +2,11 @@ import { createComponent, createEffect, onSettled, untrack } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
+import { containsComposed } from "./overlay-registry.ts";
 import { ModalDialogContent } from "./solid/modal-dialog.tsx";
 import { retainShadowStyles } from "./solid/shadow-styles.ts";
 import modalStyles from "./solid/modal-dialog.css?inline";
 import overlayStyles from "./solid/overlay.css?inline";
-import "./solid/modal-dialog.css";
-import "./solid/overlay.css";
 
 export type ModalDialogProperties = {
   open: boolean;
@@ -83,7 +82,11 @@ function acquirePresentation(host: HTMLElement): () => void {
 
 function activeElement(host: HTMLElement): HTMLElement | null {
   const root = host.getRootNode();
-  const active = root instanceof ShadowRoot ? root.activeElement : host.ownerDocument.activeElement;
+  let active =
+    (root instanceof ShadowRoot ? root.activeElement : null) ?? host.ownerDocument.activeElement;
+  while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement;
+  }
   return active instanceof HTMLElement ? active : null;
 }
 
@@ -127,13 +130,13 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     if (
       active &&
       active !== dialog &&
-      dialog.contains(active) &&
+      containsComposed(dialog, active) &&
       (!initial || !autofocus || active === autofocus)
     ) {
       return;
     }
     const target =
-      focusBeforeChrome?.isConnected && dialog.contains(focusBeforeChrome)
+      focusBeforeChrome?.isConnected && containsComposed(dialog, focusBeforeChrome)
         ? focusBeforeChrome
         : (autofocus ?? dialog);
     target.focus({ preventScroll: true });
@@ -150,6 +153,13 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     returnOverride = undefined;
   };
 
+  const finishInitialFocus = () => {
+    if (initialFocusPending) {
+      focusInitialContent(!openingInteraction);
+      initialFocusPending = false;
+    }
+  };
+
   const overlay = createOverlay("modal-dialog", undefined, {
     onRootChange: (root) => retainShadowStyles(root, [overlayStyles, modalStyles]),
     native: {
@@ -163,16 +173,17 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
         initialFocusPending = true;
         focusBeforeChrome = null;
         dialog.showModal();
+        // Native focus can reconcile this opening before request() resumes.
+        if (overlay.open) {
+          finishInitialFocus();
+        }
       },
       hide: () => dialog.close(),
     },
     dismissOutsidePointer: false,
     dismissOutsideFocus: false,
     dismissEscape: false,
-    onInitialFocus: () => {
-      focusInitialContent(!openingInteraction);
-      initialFocusPending = false;
-    },
+    onInitialFocus: finishInitialFocus,
     acquireOcclusion: () => acquirePresentation(host),
   });
 
@@ -317,7 +328,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   const focusin = (event: FocusEvent) => {
     if (event.target === dialog) {
       focusBeforeChrome =
-        event.relatedTarget instanceof HTMLElement && dialog.contains(event.relatedTarget)
+        event.relatedTarget instanceof HTMLElement && containsComposed(dialog, event.relatedTarget)
           ? event.relatedTarget
           : null;
       focusInitialContent();

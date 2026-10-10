@@ -283,18 +283,16 @@ export class TooltipController {
 
   previewForAnchor(anchor: HTMLElement | SVGElement, content: string, input: "pointer" | "focus") {
     this.options.preview(anchor, content);
-    queueMicrotask(() => {
-      if (this.anchor !== anchor || !anchor.isConnected || !this.host.isConnected) {
-        return;
-      }
-      this.refresh();
-      if (input === "focus") {
-        this.handleFocusIn();
-      } else {
-        this.#triggerHovered = true;
-        this.#scheduleOpen();
-      }
-    });
+    if (this.anchor !== anchor || !anchor.isConnected || !this.host.isConnected) {
+      return;
+    }
+    this.refresh();
+    if (input === "focus") {
+      this.handleFocusIn();
+    } else {
+      this.#triggerHovered = true;
+      this.#scheduleOpen();
+    }
   }
 
   readonly #handlePointerEnter = (event: Event) => {

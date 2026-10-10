@@ -150,7 +150,7 @@ describe("Solid tooltip policy", () => {
     flush();
     const anchor = view.container.querySelector("button")!;
     controller.previewForAnchor(anchor, "External details", "focus");
-    await Promise.resolve();
+    await controller.updateComplete;
     flush();
     const host = view.container.querySelector("openclaw-tooltip")!;
     expect(host.hasAttribute("open")).toBe(true);
@@ -188,7 +188,7 @@ describe("Solid tooltip policy", () => {
       try {
         flush();
         controller.previewForAnchor(anchor, "External details", "focus");
-        await Promise.resolve();
+        await controller.updateComplete;
         flush();
         const id = anchor.getAttribute("aria-describedby")!;
         expect(anchorRoot.getElementById(id)?.textContent).toBe("External details");
@@ -225,7 +225,7 @@ describe("Solid tooltip policy", () => {
     try {
       flush();
       controller.previewForAnchor(anchor, "Request details", "pointer");
-      await Promise.resolve();
+      await controller.updateComplete;
       vi.advanceTimersByTime(150);
       flush();
       const host = view.container.querySelector("openclaw-tooltip")!;

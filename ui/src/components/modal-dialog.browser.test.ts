@@ -16,11 +16,6 @@ const modalEvents = {
   closed: "wa-after-hide",
 } as const;
 
-function useAnimatedModal(modal: Modal) {
-  modal.style.setProperty("--openclaw-modal-show-duration", "150ms");
-  modal.style.setProperty("--openclaw-modal-hide-duration", "150ms");
-}
-
 function modalSurface(modal: Modal) {
   return modal;
 }
@@ -72,7 +67,6 @@ async function mountModal(host = container, variant = "", autofocus = true) {
   const modal = document.createElement("openclaw-modal-dialog");
   modal.label = "Edit details";
   modal.className = variant;
-  useAnimatedModal(modal);
   const name = document.createElement("input");
   name.autofocus = autofocus;
   name.value = "Original name";
@@ -92,6 +86,55 @@ async function mountModal(host = container, variant = "", autofocus = true) {
 }
 
 describe.runIf(browserMode)("modal native focus ownership", () => {
+  it.each(["palette", "drawer", "drawer drawer--floating"])(
+    "assigns motion to the rendered interaction (%s)",
+    async (variant) => {
+      const modal = document.createElement("openclaw-modal-dialog");
+      modal.manual = true;
+      modal.className = variant;
+      modal.textContent = "Motion policy";
+      container.append(modal);
+      await modal.updateComplete;
+      modal.show();
+      const dialog = modalDialog(modal);
+      const style = getComputedStyle(dialog);
+      if (variant === "palette") {
+        expect(style.getPropertyValue("--openclaw-modal-show-duration").trim()).toBe("0ms");
+        expect(style.getPropertyValue("--openclaw-modal-hide-duration").trim()).toBe("0ms");
+        expect(
+          dialog
+            .getAnimations()
+            .filter(
+              (animation) => Number(animation.effect?.getComputedTiming().activeDuration ?? 0) > 0,
+            ),
+        ).toHaveLength(0);
+        return;
+      }
+      expect(style.getPropertyValue("--openclaw-modal-show-duration").trim()).toBe("200ms");
+      expect(style.getPropertyValue("--openclaw-modal-hide-duration").trim()).toBe("0ms");
+      expect(style.animationName).toBe("openclaw-drawer-in");
+      expect(style.animationDuration).toBe("0.2s");
+      expect(style.animationTimingFunction).toBe("cubic-bezier(0.32, 0.72, 0, 1)");
+      const animation = dialog
+        .getAnimations()
+        .find(
+          (candidate) =>
+            candidate instanceof CSSAnimation && candidate.animationName === "openclaw-drawer-in",
+        );
+      expect(animation).toBeDefined();
+      animation!.pause();
+      animation!.currentTime = 0;
+      const inset = Number.parseFloat(style.getPropertyValue("--openclaw-drawer-inset")) || 0;
+      expect(new DOMMatrixReadOnly(getComputedStyle(dialog).transform).m41).toBeCloseTo(
+        dialog.getBoundingClientRect().width + inset,
+        0,
+      );
+      animation!.currentTime = 200;
+      expect(new DOMMatrixReadOnly(getComputedStyle(dialog).transform).m41).toBeCloseTo(0, 0);
+      animation!.finish();
+    },
+  );
+
   it.each(["standard", "drawer"])(
     "honors reduced motion when opening and closing (%s)",
     async (variant) => {
@@ -102,7 +145,6 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
         modal.manual = true;
         modal.className = variant === "drawer" ? "drawer" : "";
         modal.label = "Motion preference";
-        useAnimatedModal(modal);
         modal.textContent = "Settings";
         container.append(modal);
         const { dialog } = await getRenderedModalDialog(container);
@@ -259,6 +301,26 @@ describe.runIf(browserMode)("modal native focus ownership", () => {
     await userEvent.keyboard("Shadow draft");
     expect(notes.value).toBe("Shadow draft");
     expect(name.value).toBe("Original name");
+  });
+
+  it("returns to an external shadow-root trigger when the modal owner is removed", async () => {
+    const triggerHost = document.createElement("div");
+    const triggerRoot = triggerHost.attachShadow({ mode: "open" });
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open image preview";
+    triggerRoot.append(trigger);
+    container.append(triggerHost);
+    trigger.focus();
+    const previewHost = document.createElement("div");
+    const previewRoot = previewHost.attachShadow({ mode: "open" });
+    const preview = document.createElement("div");
+    previewRoot.append(preview);
+    container.append(previewHost);
+    const { dialog } = await mountModal(preview);
+    expect(dialog.open).toBe(true);
+    previewHost.remove();
+    expect(dialog.open).toBe(false);
+    expect(triggerRoot.activeElement).toBe(trigger);
   });
 
   it("leaves native chrome focused when there is no autofocus target or displaced field", async () => {

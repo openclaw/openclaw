@@ -196,6 +196,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
+    this.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")?.hide();
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);

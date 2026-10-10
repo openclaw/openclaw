@@ -89,9 +89,11 @@ export function Tabs(props: TabsProps) {
             data-tab-value={item().value}
             data-test-id={item().testId}
             aria-controls={item().panelId}
-            aria-selected={String(
-              item().value === (props.active === undefined ? props.defaultActive : props.active),
-            )}
+            aria-selected={
+              item().value === (props.active === undefined ? props.defaultActive : props.active)
+                ? "true"
+                : "false"
+            }
             disabled={item().disabled}
             tabindex={
               item().value === (props.active === undefined ? props.defaultActive : props.active)

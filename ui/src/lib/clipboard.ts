@@ -1,3 +1,5 @@
+import { resolveTransientContainer } from "../components/transient-container.ts";
+
 // The async Clipboard API is only exposed in secure contexts (HTTPS or
 // localhost). On plain-HTTP deployments (e.g. LAN access) `navigator.clipboard`
 // is undefined, so calling it throws synchronously rather than rejecting. Guard
@@ -43,8 +45,12 @@ function copyWithExecCommand(text: string): boolean {
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
   // Outside an active modal the document is inert, so its selection cannot be copied.
-  const layer = [...(document.openClawModalLayers ?? [])].findLast((modal) => modal.isConnected);
-  (layer ?? document.body).appendChild(textarea);
+  const layers = [...(document.openClawModalLayers ?? [])].filter((modal) => modal.isConnected);
+  const container = resolveTransientContainer(layers.toReversed(), document);
+  if (!container) {
+    return false;
+  }
+  container.appendChild(textarea);
   textarea.select();
   try {
     return document.execCommand("copy");

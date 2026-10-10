@@ -2,12 +2,10 @@ type Sheet = { element: HTMLStyleElement; references: number };
 
 const roots = new WeakMap<Document | ShadowRoot, Map<string, Sheet>>();
 
-/** Document imports already own light DOM; legacy shadow roots need local sheets. */
+/** Share one stylesheet per root, including document-hosted native surfaces. */
 export function retainShadowStyles(root: Document | ShadowRoot, styles: readonly string[]) {
-  const doc = root.ownerDocument;
-  if (!doc) {
-    return () => {};
-  }
+  const target = "host" in root ? root : root.head;
+  const doc = target.ownerDocument;
   const sheets = roots.get(root) ?? new Map<string, Sheet>();
   roots.set(root, sheets);
   const retained = [...new Set(styles)].map((css) => {
@@ -16,7 +14,7 @@ export function retainShadowStyles(root: Document | ShadowRoot, styles: readonly
       const element = doc.createElement("style");
       element.setAttribute("data-openclaw-overlay-style", "");
       element.textContent = css;
-      root.append(element);
+      target.append(element);
       sheet = { element, references: 0 };
       sheets.set(css, sheet);
     }
@@ -42,10 +40,10 @@ export function retainShadowStyles(root: Document | ShadowRoot, styles: readonly
   };
 }
 
-/** Follow a view's containing root without observing descendant render traffic. */
+/** Follow a view's containing shadow root without duplicating document CSS imports. */
 export function bindShadowStyles(element: HTMLElement, styles: readonly string[]) {
   let ancestors: Node[] = [];
-  let root: Document | ShadowRoot | undefined;
+  let root: ShadowRoot | undefined;
   let release: (() => void) | undefined;
   let disposed = false;
   const observer = new MutationObserver(sync);
@@ -81,13 +79,8 @@ export function bindShadowStyles(element: HTMLElement, styles: readonly string[]
       }
     }
     const candidate = element.getRootNode();
-    const nextRoot = !element.isConnected
-      ? undefined
-      : candidate === doc
-        ? doc
-        : view && candidate instanceof view.ShadowRoot
-          ? candidate
-          : undefined;
+    const nextRoot =
+      element.isConnected && view && candidate instanceof view.ShadowRoot ? candidate : undefined;
     if (nextRoot === root) {
       return;
     }

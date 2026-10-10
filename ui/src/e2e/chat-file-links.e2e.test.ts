@@ -498,7 +498,10 @@ describeControlUiE2e("Control UI chat file links", () => {
         "2",
       );
       await page.screenshot({ path: path.join(artifactDir, "03-workspace-file-preview.png") });
-      await page.locator('.side-panel__header .tabstrip-tab[data-tab-value="workspace"]').click();
+      await page
+        .locator(".side-panel__header")
+        .getByRole("button", { name: "Files", exact: true })
+        .click();
       const search = page.locator('.chat-workspace-rail input[type="search"]');
       await search.fill("README");
       await expect

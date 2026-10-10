@@ -7,6 +7,7 @@ import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { resolveTransientContainer } from "./transient-container.ts";
 import "./web-awesome.ts";
 
 export type NativeLinkMenuAction = "inline" | "external" | "copy";
@@ -88,21 +89,6 @@ export class NativeLinkMenu extends OpenClawLightDomElement {
   }
 }
 
-function menuContainer(path: EventTarget[]): HTMLElement {
-  const modalHost = path.find(
-    (target) => target instanceof HTMLElement && target.localName === "openclaw-modal-dialog",
-  );
-  if (modalHost instanceof HTMLElement) {
-    return modalHost;
-  }
-  for (const target of path) {
-    if (target instanceof HTMLDialogElement && target.open && target.getRootNode() === document) {
-      return target;
-    }
-  }
-  return document.body;
-}
-
 /** Native-only menu placement and actions load with the menu, not the browser shell. */
 export function mountNativeLinkMenu(options: {
   path: EventTarget[];
@@ -114,8 +100,8 @@ export function mountNativeLinkMenu(options: {
   openExternal: () => void;
   openInline: () => void;
 }): NativeLinkMenu | null {
-  const container = menuContainer(options.path);
-  if (!container.isConnected) {
+  const container = resolveTransientContainer(options.path, options.anchor.ownerDocument);
+  if (!container?.isConnected) {
     return null;
   }
   // SAFETY: This module registers the tag; createElement uses its retained constructor after HMR.

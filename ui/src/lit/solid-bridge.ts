@@ -296,7 +296,8 @@ export function defineSolidBridge<Props extends object, Methods extends object =
     },
     {
       // The constructor materializes every declared property and method above.
-      Element: BridgeElement as new () => BridgeElement & Props & Methods,
+      Element: BridgeElement as (new () => SolidBridgeElement<Props, Methods>) &
+        typeof BridgeElement,
     },
   );
 }
