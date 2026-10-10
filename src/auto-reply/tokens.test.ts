@@ -176,6 +176,27 @@ describe("isSilentReplyPayloadText", () => {
       ),
     ).toBe(false);
   });
+
+  it("suppresses a reasoning body that declares the token mid-text and closes with it (#165025)", () => {
+    expect(
+      isSilentReplyPayloadText(
+        "think\nThe runtime context confirms another continuation event -- same inbound (msg 24682), and my reply already went out successfully (msg 24683).\n\nThe correct move: NO_REPLY. The user already has my response. Adding more text would be noise.\n\nNO_REPLY.",
+      ),
+    ).toBe(true);
+  });
+
+  it("suppresses reasoning text with a punctuation-attached trailing token", () => {
+    expect(isSilentReplyPayloadText("think\ninternal reasoning\nNO_REPLY.")).toBe(true);
+    expect(isSilentReplyPayloadText("think\ninternal reasoning\nNO_REPLY!")).toBe(true);
+  });
+
+  it("keeps reasoning bodies that mention the token but decide to answer", () => {
+    expect(
+      isSilentReplyPayloadText(
+        "think\nThe user asked me to reply NO_REPLY only when there is nothing new.\nHere is the answer: 2+2=4.\nNO_REPLY",
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {

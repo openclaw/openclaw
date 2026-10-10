@@ -119,7 +119,11 @@ function stripLeadingReasoningBlocks(text: string): string {
 
 function stripFinalSilentToken(text: string, token: string): string | null {
   const escaped = escapeRegExp(token);
-  const stripped = text.replace(new RegExp(`(?:^|[\\s*.])${escaped}\\s*$`, "i"), "").trim();
+  // Tolerate punctuation-attached trailing tokens (for example `NO_REPLY.`),
+  // mirroring isSilentReplyText's handling of punctuation-wrapped token-only text.
+  const stripped = text
+    .replace(new RegExp(`(?:^|[\\s*.])${escaped}(?:[.!?]+\\s*)?$`, "i"), "")
+    .trim();
   return stripped === text.trim() ? null : stripped;
 }
 
@@ -130,6 +134,13 @@ const substantiveAnswerCueRe =
   /\b(?:answer|here(?:'s|\s+is)|tell\s+them|you\s+(?:should|can|could|need|must)|please|try|use|send|service\s+is|resolved|retry|yes|no,|sure)\b/i;
 const bareReasoningPlaceholderRe =
   /^\s*(?:(?:internal|private)\s+)?(?:reasoning|thinking|thoughts?|analysis)(?:\s+notes?)?\s*$/i;
+
+// A standalone mention of the token inside the reasoning body itself (for
+// example `The correct move: NO_REPLY.`) is a deliberate silent decision,
+// not prose that happens to contain the token (#165025).
+const getSilentBodyMentionRegex = createTokenRegex(
+  (escaped) => new RegExp(`(?:^|[\\s*.])${escaped}(?=$|[\\s*.,:;!?])`, "i"),
+);
 
 function hasReasoningFinalSilentToken(
   text: string,
@@ -158,7 +169,13 @@ function hasReasoningFinalSilentToken(
       silentIntentTextRe.test(finalLine) &&
       previousLines &&
       !substantiveAnswerCueRe.test(previousLines),
-    ) || bareReasoningPlaceholderRe.test(withoutToken)
+    ) ||
+    bareReasoningPlaceholderRe.test(withoutToken) ||
+    Boolean(
+      withoutToken &&
+      getSilentBodyMentionRegex(token).test(withoutToken) &&
+      !substantiveAnswerCueRe.test(withoutToken),
+    )
   );
 }
 
