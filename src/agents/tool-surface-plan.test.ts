@@ -176,17 +176,14 @@ describe("resolveAgentToolSurfacePlan", () => {
   ] satisfies Array<{
     name: string;
     config: OpenClawConfig;
-    toolsAllow?: string[];
     forceCodeModeControls?: boolean;
-    model?: { toolSearchMode: "tools" };
   }>)("does not add $name controls to a completion-private message-only run", (run) => {
     const plan = resolveAgentToolSurfacePlan({
       ...basePlanParams,
       config: run.config,
       forceDirectMessageTool: true,
-      toolsAllow: run.toolsAllow ?? ["message"],
+      toolsAllow: ["message"],
       forceCodeModeControls: run.forceCodeModeControls,
-      model: run.model,
     });
     const result = applyAgentToolSurfaceCatalog({
       tools: [createStubTool("message")],

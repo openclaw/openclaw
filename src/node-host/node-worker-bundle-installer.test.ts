@@ -119,7 +119,7 @@ describe("node worker bundle installer", () => {
     return { gatewayUrl: `ws://127.0.0.1:${address.port}`, requests };
   }
 
-  it.each([4])(
+  it.each([1, 4])(
     "resumes an authenticated download after %i interruptions",
     async (interruptions) => {
       const fixture = await bundleFixture();
@@ -173,7 +173,7 @@ describe("node worker bundle installer", () => {
     },
   );
 
-  it.each(["partial", "ignored range"])(
+  it.each(["no bytes", "partial", "ignored range"])(
     "stops after three no-progress failures and removes staging (%s)",
     async (mode) => {
       const fixture = await bundleFixture();
@@ -201,10 +201,11 @@ describe("node worker bundle installer", () => {
         installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
       ).rejects.toThrow("3 consecutive no-progress failures");
 
-      expect(served.requests.mock.calls.map(([, headers]) => headers.range)).toEqual([
-        undefined,
-        ...Array<string>(3).fill(`bytes=${partialBytes}-`),
-      ]);
+      expect(served.requests.mock.calls.map(([, headers]) => headers.range)).toEqual(
+        mode !== "no bytes"
+          ? [undefined, ...Array<string>(3).fill(`bytes=${partialBytes}-`)]
+          : [undefined, undefined, undefined],
+      );
       await expect(
         fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
       ).resolves.toEqual([]);
@@ -253,50 +254,107 @@ describe("node worker bundle installer", () => {
     ).resolves.toEqual([]);
   });
 
-  it("rejects cancellation during local acquisition without HTTP or admission", async () => {
+  it("installs the exact prepared archive without HTTP and creates a fresh admission receipt", async () => {
     const fixture = await bundleFixture();
-    await prepareLocalArchive(fixture);
+    const archivePath = await prepareLocalArchive(fixture);
     const served = await serve(fixture.archive, fixture.input.archive.token);
     const installer = new NodeWorkerBundleInstaller({ root });
-    const controller = new AbortController();
-    const open = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      if (path.basename(String(args[0])) === "bundle.tgz" && args[1] === "wx") {
-        controller.abort(new Error("local acquisition cancelled"));
-      }
-      return await open(...args);
-    });
 
     await expect(
-      installer.ensure({
-        input: fixture.input,
-        gatewayUrl: served.gatewayUrl,
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("local acquisition cancelled");
+      installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(fixture.input.build);
 
     expect(served.requests).not.toHaveBeenCalled();
-    await expect(
-      fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
-    ).resolves.toEqual([]);
-    await expect(
-      installer.retain({ gatewayNamespace: fixture.input.gatewayNamespace, bundleHashes: [] }),
-    ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 0 });
+    const receipt = path.join(
+      root,
+      fixture.input.gatewayNamespace,
+      "bundles",
+      fixture.input.build.bundleHash,
+      "bootstrap-receipt.json",
+    );
+    expect(JSON.parse(await fs.readFile(receipt, "utf8"))).toEqual(fixture.input.build);
+    await expect(fs.readFile(archivePath)).resolves.toEqual(fixture.archive);
   });
 
-  it.each(["wrong-length", "symlink", "hardlink"] as const)(
+  it("uses authenticated HTTP for a different archive without modifying prepared bytes", async () => {
+    const prepared = await bundleFixture();
+    const archivePath = await prepareLocalArchive(prepared);
+    const requested = await bundleFixture({
+      fixtureName: "new-build",
+      workerSource: "export const changed = true;\n",
+    });
+    const served = await serve(requested.archive, requested.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+
+    await expect(
+      installer.ensure({ input: requested.input, gatewayUrl: served.gatewayUrl }),
+    ).resolves.toEqual(requested.input.build);
+
+    expect(served.requests).toHaveBeenCalledOnce();
+    await expect(fs.readdir(path.dirname(archivePath))).resolves.toEqual([
+      path.basename(archivePath),
+    ]);
+    await expect(fs.readFile(archivePath)).resolves.toEqual(prepared.archive);
+  });
+
+  it.each(["cancel", "missing-stage"] as const)(
+    "rejects %s during local acquisition without HTTP or admission",
+    async (failure) => {
+      const fixture = await bundleFixture();
+      await prepareLocalArchive(fixture);
+      const served = await serve(fixture.archive, fixture.input.archive.token);
+      const installer = new NodeWorkerBundleInstaller({ root });
+      const controller = new AbortController();
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        if (path.basename(String(args[0])) === "bundle.tgz" && args[1] === "wx") {
+          if (failure === "missing-stage") {
+            throw Object.assign(new Error("staging disappeared"), { code: "ENOENT" });
+          }
+          controller.abort(new Error("local acquisition cancelled"));
+        }
+        return await open(...args);
+      });
+
+      await expect(
+        installer.ensure({
+          input: fixture.input,
+          gatewayUrl: served.gatewayUrl,
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow(
+        failure === "cancel" ? "local acquisition cancelled" : "staging disappeared",
+      );
+
+      expect(served.requests).not.toHaveBeenCalled();
+      await expect(
+        fs.readdir(path.join(root, fixture.input.gatewayNamespace, "bundles")),
+      ).resolves.toEqual([]);
+      await expect(
+        installer.retain({ gatewayNamespace: fixture.input.gatewayNamespace, bundleHashes: [] }),
+      ).resolves.toEqual({ deleted: 0, hasMore: false, generation: 0 });
+    },
+  );
+
+  it.each(["corrupt", "wrong-length", "symlink", "hardlink", "directory"] as const)(
     "rejects a present %s prepared archive without HTTP or admission",
     async (kind) => {
       const fixture = await bundleFixture();
       const archivePath = await prepareLocalArchive(fixture);
-      if (kind === "wrong-length") {
+      if (kind === "corrupt") {
+        const corrupt = Buffer.from(fixture.archive);
+        corrupt.writeUInt8(corrupt.readUInt8(0) ^ 1, 0);
+        await fs.writeFile(archivePath, corrupt);
+      } else if (kind === "wrong-length") {
         await fs.appendFile(archivePath, "extra");
       } else {
         await fs.rename(archivePath, `${archivePath}.original`);
         if (kind === "symlink") {
           await fs.symlink(`${archivePath}.original`, archivePath);
-        } else {
+        } else if (kind === "hardlink") {
           await fs.link(`${archivePath}.original`, archivePath);
+        } else {
+          await fs.mkdir(archivePath);
         }
       }
       const served = await serve(fixture.archive, fixture.input.archive.token);
@@ -532,6 +590,33 @@ describe("node worker bundle installer", () => {
     await expect(fs.readFile(prewarmMarker, "utf8")).resolves.toBe("ready");
   });
 
+  it("reuses a v1 install when Windows cannot retain Unix artifact modes", async () => {
+    const fixture = await bundleFixture();
+    const served = await serve(fixture.archive, fixture.input.archive.token);
+    const installer = new NodeWorkerBundleInstaller({ root });
+    const readStats = fs.lstat.bind(fs);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      const stats = await readStats(...args);
+      if (stats.isFile()) {
+        stats.mode = (Number(stats.mode) & ~0o777) | 0o666;
+      }
+      return stats;
+    });
+
+    try {
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      await expect(
+        installer.ensure({ input: fixture.input, gatewayUrl: served.gatewayUrl }),
+      ).resolves.toEqual(fixture.input.build);
+      expect(served.requests).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("rejects the Cloudflare Access pair before a plaintext bundle transfer", async () => {
     const fixture = await bundleFixture();
     const served = await serve(fixture.archive, fixture.input.archive.token);
@@ -621,6 +706,62 @@ describe("node worker bundle installer", () => {
     for (const hash of staleHashes) {
       await expect(fs.access(path.join(bundlesRoot, hash))).rejects.toThrow();
     }
+  });
+
+  it("protects every install until a later snapshot acknowledges it", async () => {
+    const first = await bundleFixture({
+      fixtureName: "pending-a",
+      workerSource: "export const a = 1;\n",
+    });
+    const second = await bundleFixture({
+      fixtureName: "pending-b",
+      workerSource: "export const b = 1;\n",
+    });
+    server = http.createServer((req, res) => {
+      const archive = req.url?.endsWith(first.input.build.bundleHash)
+        ? first.archive
+        : second.archive;
+      res.writeHead(200, {
+        "content-type": "application/octet-stream",
+        "content-length": String(archive.byteLength),
+      });
+      res.end(archive);
+    });
+    await new Promise<void>((resolve) => {
+      server!.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("test server did not bind a TCP port");
+    }
+    const gatewayUrl = `ws://127.0.0.1:${address.port}`;
+    const installer = new NodeWorkerBundleInstaller({ root });
+    await installer.ensure({ input: first.input, gatewayUrl });
+    await installer.ensure({ input: second.input, gatewayUrl });
+
+    const initial = await installer.retain({
+      gatewayNamespace: first.input.gatewayNamespace,
+      bundleHashes: [],
+    });
+    expect(initial).toEqual({ deleted: 0, hasMore: false, generation: 2 });
+
+    const bundlesRoot = path.join(root, first.input.gatewayNamespace, "bundles");
+    await expect(
+      fs.access(path.join(bundlesRoot, first.input.build.bundleHash)),
+    ).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(bundlesRoot, second.input.build.bundleHash)),
+    ).resolves.toBeUndefined();
+
+    await installer.retain({
+      gatewayNamespace: first.input.gatewayNamespace,
+      bundleHashes: [],
+      acknowledgedGeneration: initial.generation,
+    });
+    await expect(fs.access(path.join(bundlesRoot, first.input.build.bundleHash))).rejects.toThrow();
+    await expect(
+      fs.access(path.join(bundlesRoot, second.input.build.bundleHash)),
+    ).rejects.toThrow();
   });
 
   it.each(["cold provisioning", "runtime refresh"])(

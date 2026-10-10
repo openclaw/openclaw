@@ -29,6 +29,24 @@ type HardeningCase = {
   expectedCommandPreview?: string | null;
 };
 
+type ScriptOperandFixture = {
+  command: string[];
+  scriptPath: string;
+  initialBody: string;
+  expectedArgvIndex: number;
+};
+
+type RuntimeFixture = {
+  name: string;
+  argv: string[];
+  scriptName: string;
+  initialBody: string;
+  expectedArgvIndex: number;
+  binName?: string;
+  binNames?: string[];
+  skipOnWin32?: boolean;
+};
+
 type UnsafeRuntimeInvocationCase = {
   name: string;
   binName: string;
@@ -46,6 +64,47 @@ function requirePathToken(pathToken: PathTokenSetup | null): PathTokenSetup {
 
 function sha256FileSync(filePath: string): string {
   return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+}
+
+function canWritePathSync(targetPath: string): boolean {
+  try {
+    fs.accessSync(targetPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function canMutateNativeBinaryFixturePath(binaryPath: string): boolean {
+  const realPath = fs.realpathSync(binaryPath);
+  return [binaryPath, path.dirname(binaryPath), realPath, path.dirname(realPath)].some((entry) =>
+    canWritePathSync(entry),
+  );
+}
+
+function createScriptOperandFixture(tmp: string, fixture?: RuntimeFixture): ScriptOperandFixture {
+  if (fixture) {
+    return {
+      command: fixture.argv,
+      scriptPath: path.join(tmp, fixture.scriptName),
+      initialBody: fixture.initialBody,
+      expectedArgvIndex: fixture.expectedArgvIndex,
+    };
+  }
+  if (process.platform === "win32") {
+    return {
+      command: [process.execPath, "./run.js"],
+      scriptPath: path.join(tmp, "run.js"),
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    };
+  }
+  return {
+    command: ["/bin/sh", "./run.sh"],
+    scriptPath: path.join(tmp, "run.sh"),
+    initialBody: "#!/bin/sh\necho SAFE\n",
+    expectedArgvIndex: 1,
+  };
 }
 
 let sharedFixtureRoot = "";
@@ -82,7 +141,12 @@ function writeFakeRuntimeBin(binDir: string, binName: string) {
   }
 }
 
-function withFakeRuntimeBins<T>(params: { binNames: string[]; run: () => T }): T {
+function withFakeRuntimeBins<T>(params: {
+  binNames: string[];
+  tmpPrefix?: string;
+  run: () => T;
+}): T {
+  void params.tmpPrefix;
   for (const binName of params.binNames) {
     if (sharedRuntimeBins.has(binName)) {
       continue;
@@ -94,6 +158,20 @@ function withFakeRuntimeBins<T>(params: { binNames: string[]; run: () => T }): T
     { PATH: `${sharedRuntimeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
     params.run,
   );
+}
+
+function uniqueRuntimeBinNames(
+  cases: ReadonlyArray<Pick<RuntimeFixture, "binName" | "binNames">>,
+): string[] {
+  return [
+    ...new Set(
+      cases.flatMap(
+        (runtimeCase) =>
+          runtimeCase.binNames ??
+          (runtimeCase.binName ? [runtimeCase.binName] : ["bunx", "pnpm", "npm", "npx", "tsx"]),
+      ),
+    ),
+  ];
 }
 
 let cachedNativeBinaryFixturePath: string | undefined;
@@ -135,6 +213,44 @@ function expectShellPayloadApprovalDenied(params: {
   expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
 }
 
+function expectMutableFileOperandApprovalPlan(fixture: ScriptOperandFixture, cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({
+    command: fixture.command,
+    cwd,
+  });
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) {
+    throw new Error("unreachable");
+  }
+  expect(prepared.plan.mutableFileOperand).toEqual({
+    argvIndex: fixture.expectedArgvIndex,
+    path: fs.realpathSync(fixture.scriptPath),
+    sha256: sha256FileSync(fixture.scriptPath),
+  });
+}
+
+function writeScriptOperandFixture(fixture: ScriptOperandFixture) {
+  fs.writeFileSync(fixture.scriptPath, fixture.initialBody);
+  if (process.platform !== "win32") {
+    fs.chmodSync(fixture.scriptPath, 0o755);
+  }
+}
+
+function withScriptOperandPlanFixture<T>(
+  params: {
+    tmpPrefix: string;
+    fixture?: RuntimeFixture;
+    afterWrite?: (fixture: ScriptOperandFixture, tmp: string) => void;
+  },
+  run: (fixture: ScriptOperandFixture, tmp: string) => T,
+) {
+  const tmp = createFixtureDir(params.tmpPrefix);
+  const fixture = createScriptOperandFixture(tmp, params.fixture);
+  writeScriptOperandFixture(fixture);
+  params.afterWrite?.(fixture, tmp);
+  return run(fixture, tmp);
+}
+
 const DENIED_RUNTIME_APPROVAL = expect.objectContaining({
   ok: false,
   reason: "unsupported-command-shape",
@@ -151,6 +267,15 @@ function runNamedCase(name: string, run: () => void) {
 function expectRuntimeApprovalDenied(command: string[], cwd: string) {
   const prepared = buildSystemRunApprovalPlan({ command, cwd });
   expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+}
+
+function expectApprovalPlanWithoutMutableOperand(command: string[], cwd: string) {
+  const prepared = buildSystemRunApprovalPlan({ command, cwd });
+  expect(prepared.ok).toBe(true);
+  if (!prepared.ok) {
+    throw new Error("unreachable");
+  }
+  expect(prepared.plan.mutableFileOperand).toBeUndefined();
 }
 
 const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
@@ -381,6 +506,186 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
+  const mutableOperandCases: RuntimeFixture[] = [
+    {
+      name: "python flagged file",
+      binName: "python3",
+      argv: ["python3", "-B", "./run.py"],
+      scriptName: "run.py",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "lua direct file",
+      binName: "lua",
+      argv: ["lua", "./run.lua"],
+      scriptName: "run.lua",
+      initialBody: 'print("SAFE")\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "versioned node alias file",
+      binName: "node20",
+      argv: ["node20", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "tsx direct file",
+      binName: "tsx",
+      argv: ["tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 1,
+    },
+    {
+      name: "bun run file",
+      binName: "bun",
+      argv: ["bun", "run", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "deno run file with flags",
+      binName: "deno",
+      argv: ["deno", "run", "-A", "--allow-read", "--", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "pnpm exec tsx file",
+      argv: ["pnpm", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 3,
+    },
+    {
+      name: "pnpm dlx tsx file",
+      argv: ["pnpm", "dlx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 3,
+    },
+    {
+      name: "pnpm reporter dlx package tsx file",
+      argv: ["pnpm", "--reporter", "silent", "dlx", "--package", "tsx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 7,
+    },
+    {
+      name: "pnpm reporter exec tsx file",
+      argv: ["pnpm", "--reporter", "silent", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "pnpm cwd exec tsx file",
+      argv: ["pnpm", "-C", "./package", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "pnpm js shim exec tsx file",
+      argv: ["./pnpm.js", "exec", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 3,
+      skipOnWin32: true,
+    },
+    {
+      name: "pnpm exec double-dash tsx file",
+      argv: ["pnpm", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
+      name: "pnpm node file",
+      argv: ["pnpm", "node", "./run.js"],
+      scriptName: "run.js",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+      binNames: ["pnpm", "node"],
+    },
+    {
+      name: "bunx tsx file",
+      argv: ["bunx", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 2,
+    },
+    {
+      name: "npm exec tsx file",
+      argv: ["npm", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
+      name: "npm x tsx file",
+      argv: ["npm", "x", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 4,
+    },
+    {
+      name: "npm loglevel exec tsx file",
+      argv: ["npm", "--loglevel=silent", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 5,
+    },
+    {
+      name: "npm cwd exec tsx file",
+      argv: ["npm", "-C", "./package", "exec", "--", "tsx", "./run.ts"],
+      scriptName: "run.ts",
+      initialBody: 'console.log("SAFE");\n',
+      expectedArgvIndex: 6,
+    },
+  ];
+
+  it("captures mutable runtime operands in approval plans", () => {
+    const tmp = createFixtureDir("openclaw-approval-script-plan-");
+    withFakeRuntimeBins({
+      binNames: uniqueRuntimeBinNames(mutableOperandCases),
+      run: () => {
+        for (const runtimeCase of mutableOperandCases) {
+          runNamedCase(runtimeCase.name, () => {
+            if (runtimeCase.skipOnWin32 && process.platform === "win32") {
+              return;
+            }
+            const fixture = createScriptOperandFixture(tmp, runtimeCase);
+            writeScriptOperandFixture(fixture);
+            const executablePath = fixture.command[0];
+            if (executablePath?.endsWith("pnpm.js")) {
+              const shimPath = path.join(tmp, "pnpm.js");
+              fs.writeFileSync(shimPath, "#!/usr/bin/env node\nconsole.log('shim')\n");
+              fs.chmodSync(shimPath, 0o755);
+            }
+            expectMutableFileOperandApprovalPlan(fixture, tmp);
+          });
+        }
+      },
+    });
+  });
+
+  it("captures mutable shell script operands in approval plans", () => {
+    withScriptOperandPlanFixture(
+      {
+        tmpPrefix: "openclaw-approval-script-plan-",
+      },
+      (fixture, tmp) => {
+        expectMutableFileOperandApprovalPlan(fixture, tmp);
+      },
+    );
+  });
+
   it("captures the execution host cwd when an approval request omits cwd", () => {
     const hardened = hardenApprovedExecutionPaths({
       approvedByAsk: true,
@@ -393,6 +698,68 @@ describe("hardenApprovedExecutionPaths", () => {
       throw new Error("unreachable");
     }
     expect(hardened.cwd).toBe(fs.realpathSync(process.cwd()));
+  });
+
+  it("handles shell payloads that invoke absolute-path native binaries", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const binaryPath = resolveNativeBinaryFixturePath();
+    const prepared = buildSystemRunApprovalPlan({
+      command: ["/bin/sh", "-lc", binaryPath],
+      rawCommand: binaryPath,
+      cwd: process.cwd(),
+    });
+    if (canMutateNativeBinaryFixturePath(binaryPath)) {
+      expect(prepared).toEqual(DENIED_RUNTIME_APPROVAL);
+      return;
+    }
+    expect(prepared.ok).toBe(true);
+    if (!prepared.ok) {
+      throw new Error("unreachable");
+    }
+    expect(prepared.plan.mutableFileOperand).toBeUndefined();
+  });
+
+  it("recognizes native binary headers across short positional reads", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const binaryPath = resolveNativeBinaryFixturePath();
+    if (canMutateNativeBinaryFixturePath(binaryPath)) {
+      return;
+    }
+    const realReadSync = fs.readSync.bind(fs);
+    let shortReadCalls = 0;
+    const readSpy = vi.spyOn(fs, "readSync").mockImplementation(((
+      fd: number,
+      buffer: NodeJS.ArrayBufferView,
+      offset: number,
+      length: number,
+      position: fs.ReadPosition | null,
+    ) => {
+      const cappedLength = typeof position === "number" ? Math.min(length, 1) : length;
+      if (cappedLength < length) {
+        shortReadCalls += 1;
+      }
+      return realReadSync(fd, buffer, offset, cappedLength, position);
+    }) as typeof fs.readSync);
+    try {
+      const prepared = buildSystemRunApprovalPlan({
+        command: ["/bin/sh", "-lc", binaryPath],
+        rawCommand: binaryPath,
+        cwd: process.cwd(),
+      });
+
+      expect(shortReadCalls).toBeGreaterThan(1);
+      expect(prepared.ok).toBe(true);
+      if (!prepared.ok) {
+        throw new Error("unreachable");
+      }
+      expect(prepared.plan.mutableFileOperand).toBeUndefined();
+    } finally {
+      readSpy.mockRestore();
+    }
   });
 
   it("keeps fail-closed behavior for relative native-binary shell payloads", () => {
@@ -552,6 +919,130 @@ describe("hardenApprovedExecutionPaths", () => {
     });
   });
 
+  it("detects rewritten script operands for pnpm dlx approval plans", () => {
+    withFakeRuntimeBins({
+      binNames: ["pnpm", "tsx"],
+      run: () => {
+        withScriptOperandPlanFixture(
+          {
+            tmpPrefix: "openclaw-pnpm-dlx-approval-",
+            fixture: {
+              name: "pnpm dlx rewritten script",
+              argv: ["pnpm", "dlx", "tsx", "./run.ts"],
+              scriptName: "run.ts",
+              initialBody: 'console.log("SAFE");\n',
+              expectedArgvIndex: 3,
+            },
+          },
+          (fixture, tmp) => {
+            const prepared = buildSystemRunApprovalPlan({
+              command: fixture.command,
+              cwd: tmp,
+            });
+            expect(prepared.ok).toBe(true);
+            if (!prepared.ok) {
+              throw new Error("unreachable");
+            }
+            const mutableFileOperand = prepared.plan.mutableFileOperand;
+            if (mutableFileOperand == null) {
+              throw new Error("expected mutable file operand snapshot");
+            }
+            fs.writeFileSync(fixture.scriptPath, 'console.log("PWNED");\n');
+            expect(
+              revalidateApprovedMutableFileOperand({
+                snapshot: mutableFileOperand,
+                argv: prepared.plan.argv,
+                cwd: prepared.plan.cwd ?? tmp,
+              }),
+            ).toBe(false);
+          },
+        );
+      },
+    });
+  });
+
+  it("does not bind pnpm dlx shell-mode commands to a mutable file operand", () => {
+    withFakeRuntimeBins({
+      binNames: ["pnpm", "tsx"],
+      run: () => {
+        const tmp = createFixtureDir("openclaw-pnpm-dlx-shell-mode-");
+        fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
+        expect(
+          resolveMutableFileOperandSnapshotSync({
+            argv: ["pnpm", "dlx", "--shell-mode", "tsx ./run.ts"],
+            cwd: tmp,
+            shellCommand: null,
+          }),
+        ).toEqual({ ok: true, snapshot: null });
+      },
+    });
+  });
+
+  it("allows pnpm dlx package binaries that do not bind mutable local files", () => {
+    withFakeRuntimeBins({
+      binNames: ["pnpm", "eslint"],
+      run: () => {
+        const casesResult = [
+          {
+            prefix: "openclaw-pnpm-dlx-package-bin-",
+            command: ["pnpm", "dlx", "cowsay", "hello"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-runtime-token-",
+            command: ["pnpm", "dlx", "cowsay", "node"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-runtime-token-multi-",
+            command: ["pnpm", "dlx", "cowsay", "node", "hello"],
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-file-",
+            command: ["pnpm", "dlx", "eslint", "src/index.ts"],
+            setup: (tmp: string) => {
+              fs.mkdirSync(path.join(tmp, "src"), { recursive: true });
+              fs.writeFileSync(path.join(tmp, "src", "index.ts"), 'console.log("SAFE");\n');
+            },
+          },
+          {
+            prefix: "openclaw-pnpm-dlx-package-data-tail-",
+            command: ["pnpm", "dlx", "cowsay", "tsx", "./run.ts"],
+            setup: (tmp: string) => {
+              fs.writeFileSync(path.join(tmp, "run.ts"), 'console.log("SAFE");\n');
+            },
+          },
+        ];
+        for (const testCase of casesResult) {
+          const tmp = createFixtureDir(testCase.prefix);
+          testCase.setup?.(tmp);
+          expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
+        }
+      },
+    });
+  });
+
+  it("treats -- as the end of pnpm dlx option parsing", () => {
+    withFakeRuntimeBins({
+      binNames: ["pnpm", "tsx"],
+      run: () => {
+        withScriptOperandPlanFixture(
+          {
+            tmpPrefix: "openclaw-pnpm-dlx-double-dash-",
+            fixture: {
+              name: "pnpm dlx double dash",
+              argv: ["pnpm", "dlx", "--", "tsx", "./run.ts"],
+              scriptName: "run.ts",
+              initialBody: 'console.log("SAFE");\n',
+              expectedArgvIndex: 4,
+            },
+          },
+          (fixture, tmp) => {
+            expectMutableFileOperandApprovalPlan(fixture, tmp);
+          },
+        );
+      },
+    });
+  });
+
   it("captures the real shell script operand after value-taking shell flags", () => {
     const casesValue = [
       {
@@ -644,6 +1135,19 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 
+  it("does not bind opaque shell command operands as mutable script files", () => {
+    const tmp = createFixtureDir("openclaw-opaque-shell-operand-");
+    const scriptPath = path.join(tmp, "run.sh");
+    fs.writeFileSync(scriptPath, "#!/bin/sh\necho SAFE\n");
+    fs.chmodSync(scriptPath, 0o755);
+    const snapshot = resolveMutableFileOperandSnapshotSync({
+      argv: ["nu", "--commands", "./run.sh"],
+      cwd: tmp,
+      shellCommand: null,
+    });
+    expect(snapshot).toEqual({ ok: true, snapshot: null });
+  });
+
   it("denies opaque shell inline payloads hidden by startup options", () => {
     const tmp = createFixtureDir("openclaw-opaque-shell-hidden-inline-");
     const configPath = path.join(tmp, "config.nu");
@@ -728,3 +1232,4 @@ describe("hardenApprovedExecutionPaths", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

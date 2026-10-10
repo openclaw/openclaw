@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import { attachModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildGuardedModelFetch } from "../provider-transport-fetch.js";
 import {
@@ -109,6 +110,7 @@ describe("google prompt cache failure handling", () => {
 
   it.each([
     ["missing name", { expireTime: new Date(NOW + 60_000).toISOString() }],
+    ["blank name", { name: " ", expireTime: new Date(NOW + 60_000).toISOString() }],
     [
       "wrong name prefix",
       { name: "files/cache-id", expireTime: new Date(NOW + 60_000).toISOString() },
@@ -118,8 +120,24 @@ describe("google prompt cache failure handling", () => {
       { name: "cachedContents/cache/id", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
+      "C0 null name",
+      { name: "cachedContents/cache\u0000id", expireTime: new Date(NOW + 60_000).toISOString() },
+    ],
+    [
       "lone high-surrogate name",
       { name: "cachedContents/cache\ud800id", expireTime: new Date(NOW + 60_000).toISOString() },
+    ],
+    [
+      "NFC Unicode name",
+      { name: "cachedContents/caf\u00e9", expireTime: new Date(NOW + 60_000).toISOString() },
+    ],
+    [
+      "query-delimited name",
+      { name: "cachedContents/cache-id?bad", expireTime: new Date(NOW + 60_000).toISOString() },
+    ],
+    [
+      "percent-encoded separator name",
+      { name: "cachedContents/cache%2Fid", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     [
       "current-directory name",
@@ -130,6 +148,8 @@ describe("google prompt cache failure handling", () => {
       { name: "cachedContents/..", expireTime: new Date(NOW + 60_000).toISOString() },
     ],
     ["missing expiry", { name: "cachedContents/cache-id" }],
+    ["non-string expiry", { name: "cachedContents/cache-id", expireTime: 123 }],
+    ["unparseable expiry", { name: "cachedContents/cache-id", expireTime: "not-a-date" }],
     [
       "nonfuture expiry",
       { name: "cachedContents/cache-id", expireTime: new Date(NOW).toISOString() },
@@ -234,6 +254,50 @@ describe("google prompt cache failure handling", () => {
     },
   );
 
+  it("keeps request-header construction failures outside optional cache handling", async () => {
+    const constructionFailure = new Error("request headers unavailable");
+    const model = makeGoogleModel();
+    Object.defineProperty(model, "headers", {
+      get() {
+        throw constructionFailure;
+      },
+    });
+    const entries: SessionCustomEntry[] = [];
+    const fetchMock = vi.fn();
+    const innerStreamFn = vi.fn();
+    const wrapped = await preparePromptCacheStream({
+      fetchMock,
+      model,
+      now: NOW,
+      sessionManager: makeSessionManager(entries),
+      streamFn: innerStreamFn,
+    });
+
+    await expect(invoke(wrapped, model)).rejects.toBe(constructionFailure);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(entries).toHaveLength(0);
+    expect(innerStreamFn).not.toHaveBeenCalled();
+  });
+
+  it("propagates writer-claim rebound while recording cache failure", async () => {
+    const rebound = new SessionTranscriptWriterClaimReboundError();
+    const innerStreamFn = vi.fn();
+    const wrapped = await preparePromptCacheStream({
+      fetchMock: vi.fn(async () => new Response("denied", { status: 403 })),
+      now: NOW,
+      sessionManager: {
+        appendCustomEntryAsync: vi.fn(async () => {
+          throw rebound;
+        }),
+        getEntries: () => [],
+      },
+      streamFn: innerStreamFn,
+    });
+
+    await expect(invoke(wrapped)).rejects.toBe(rebound);
+    expect(innerStreamFn).not.toHaveBeenCalled();
+  });
+
   it("continues when failure metadata persistence fails generically", async () => {
     const innerStreamFn = vi.fn(() => "visible-output" as never);
     const wrapped = await preparePromptCacheStream({
@@ -253,6 +317,8 @@ describe("google prompt cache failure handling", () => {
 
   it.each([
     ["missing expiry", { expireTime: undefined }],
+    ["malformed expiry", { expireTime: "not-a-date" }],
+    ["nonfuture expiry", { expireTime: new Date(NOW).toISOString() }],
     [
       "invalid cache name",
       {

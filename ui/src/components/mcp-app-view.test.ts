@@ -457,6 +457,31 @@ describe("mcp-app-view localization", () => {
     },
   );
 
+  it("delegates expired-view recovery to its board owner", async () => {
+    const request = vi.fn(async () => {
+      throw Object.assign(new Error("MCP App view expired"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      });
+    });
+    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
+    Reflect.set(view, "context", {
+      gateway: {
+        snapshot: { client: { request } },
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      },
+    });
+    view.sessionKey = "agent:main:main";
+    view.viewId = "mcp-app-expired";
+    view.surface = "board";
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    document.body.append(view);
+
+    await expect.poll(() => expired).toHaveBeenCalledOnce();
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector('[role="status"]')).toBeNull();
+  });
+
   it("relaunches an ended entrypoint through the panel's existing launch request", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "mcp.app.launch") {
@@ -526,6 +551,29 @@ describe("mcp-app-view localization", () => {
     ]);
   });
 
+  it("does not renew the view for unrelated upstream expiry errors", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("upstream token expired");
+    });
+    const view = document.createElement(MCP_APP_VIEW_ELEMENT_NAME) as McpAppViewElement;
+    Reflect.set(view, "context", {
+      gateway: {
+        snapshot: { client: { request } },
+        connection: { gatewayUrl: "ws://gateway.example:8443/openclaw" },
+      },
+    });
+    view.sessionKey = "agent:main:main";
+    view.viewId = "mcp-app-upstream-expired";
+    const expired = vi.fn();
+    view.addEventListener(MCP_APP_VIEW_EXPIRED_EVENT, expired);
+    document.body.append(view);
+
+    await expect
+      .poll(() => view.shadowRoot?.querySelector(".error")?.textContent)
+      .toContain("upstream token expired");
+    expect(expired).not.toHaveBeenCalled();
+  });
+
   it("does not advertise or install message support for read-only views", async () => {
     const { bridge, view } = await mountBridge(`view-read-only-${crypto.randomUUID()}`, false);
     expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
@@ -536,6 +584,37 @@ describe("mcp-app-view localization", () => {
     expect(bridge.capabilities).not.toHaveProperty("updateModelContext");
     expect(bridge.capabilities).not.toHaveProperty("serverResources");
     expect(bridge.updateModelContextHandler).toBeUndefined();
+  });
+
+  it("shows an inactive banner after a bridge request expires", async () => {
+    const { bridge, request, view } = await mountBridge(`view-expired-${crypto.randomUUID()}`);
+    request.mockRejectedValueOnce(
+      Object.assign(new Error("MCP App view expired or is not authorized"), {
+        details: { code: GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED },
+      }),
+    );
+    await expect(
+      bridge.updateModelContextHandler?.({ content: [{ type: "text", text: "selection" }] }),
+    ).rejects.toThrow("expired");
+    await view.updateComplete;
+    expect(view.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(
+      "Send a message to interact again",
+    );
+  });
+
+  it("forwards update-model-context through the bound Gateway view", async () => {
+    const { bridge, request } = await mountBridge(`view-context-${crypto.randomUUID()}`);
+    expect(bridge.capabilities).toMatchObject({ updateModelContext: { text: {} } });
+    await expect(
+      bridge.updateModelContextHandler?.({
+        content: [{ type: "text", text: "selected item" }],
+      }),
+    ).resolves.toBeDefined();
+    expect(request).toHaveBeenCalledWith("mcp.app.updateModelContext", {
+      sessionKey: "agent:main:main",
+      viewId: expect.any(String),
+      content: [{ type: "text", text: "selected item" }],
+    });
   });
 
   it("does not republish consumed context when an earlier bridge refresh settles", async () => {
@@ -936,7 +1015,12 @@ describe("mcp-app-view localization", () => {
       .toBe("Aplicativo MCP indisponível: Gateway do aplicativo MCP indisponível");
   });
 
-  it.each([["host origin", "/mcp-app-sandbox", 8444, "host"]])(
+  it.each([
+    ["foreign origin", "https://attacker.example/mcp-app-sandbox", 8444, undefined],
+    ["data URL", "data:text/html;base64,cHJveHk=", 8444, undefined],
+    ["same gateway port", "/mcp-app-sandbox", 8443, undefined],
+    ["host origin", "/mcp-app-sandbox", 8444, "host"],
+  ])(
     "rejects a %s sandbox URL through a reconstructed view",
     async (_label, sandboxUrl, sandboxPort, sandboxOrigin) => {
       const resolvedSandboxOrigin =
