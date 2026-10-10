@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -51,6 +52,8 @@ describe("worktree template registry", () => {
     const database = openOpenClawStateDatabase({ env });
     const databasePath = database.path;
     await closeStateDatabaseForTest();
+    await fs.rename(databasePath, `${databasePath}.template`);
+    await fs.copyFile(`${databasePath}.template`, databasePath, fs.constants.COPYFILE_EXCL);
     const { DatabaseSync } = requireNodeSqlite();
     const older = new DatabaseSync(databasePath);
     older.exec("DROP TABLE IF EXISTS worktree_templates");

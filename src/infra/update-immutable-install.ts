@@ -5,7 +5,11 @@ import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { requireDirectorySync, syncDirectory } from "./directory-durability.js";
 import { hasErrnoCode } from "./errno.js";
-import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
+import {
+  packageActivationRuntimeIdentity,
+  resolveImmutableRecoveryCommand,
+} from "./package-update-activation-paths.js";
+import type { ImmutableUpdateCoverage } from "./update-immutable-inspection.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import type {
   ImmutableInstallDescriptor,
@@ -23,6 +27,20 @@ import type { CommandRunner } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 const SHA = /^[a-f0-9]{40}$/u;
+// Only owner-authored reason codes belong in broadly visible status, never stored error text.
+const PUBLIC_ACTIVATION_FAILURES = new Set([
+  "activation-interrupted",
+  "candidate-start-failed",
+  "candidate-still-starting",
+  "candidate-verification-failed",
+  "candidate-verification-pending",
+  "post-start-canary-unverified",
+  "post-start-generation-unverified",
+  "predecessor-verification-failed",
+  "recovery-verification-pending",
+  "rollback-verification-pending",
+  "verification-pending",
+]);
 const SOURCE = "https://github.com/openclaw/openclaw.git";
 
 function inspectEntry(file: string, allowNotDirectory = false) {
@@ -49,6 +67,14 @@ export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateI
       phase: operation.phase,
       previousSha: operation.previous.sha,
       candidateSha: operation.candidate.sha,
+      ...(operation.failure !== undefined
+        ? {
+            failure: PUBLIC_ACTIVATION_FAILURES.has(operation.failure)
+              ? operation.failure
+              : "details-withheld",
+          }
+        : {}),
+      recoveryCommand: resolveImmutableRecoveryCommand(operation.recovery, descriptor),
     };
   }
   const lastResult = record.activation?.lastResult;
@@ -58,6 +84,16 @@ export function projectImmutableInstall(record: ImmutableInstallRecord): UpdateI
       outcome: lastResult.outcome,
       selectedSha: lastResult.selectedSha,
       verifiedAtMs: lastResult.verifiedAtMs,
+      ...(lastResult.gateway
+        ? {
+            gateway: {
+              pid: lastResult.gateway.pid,
+              bootId: lastResult.gateway.bootId,
+              version: lastResult.gateway.version,
+              buildId: lastResult.gateway.buildId,
+            },
+          }
+        : {}),
     };
   }
   if (prepared) {
@@ -310,6 +346,7 @@ export type ImmutableUpdateResult = {
   targetSha?: string;
   steps: UpdateStepResult[];
   warnings: string[];
+  coverage?: ImmutableUpdateCoverage;
 };
 
 /** Prepare only. Pointer publication, Doctor, drain, and service activation belong to slice 2. */
@@ -381,7 +418,11 @@ export async function prepareImmutableUpdate(params: {
       targetSha = match[1];
     }
     if (params.dryRun) {
-      return result("dry-run", "preparation-only; activation unavailable");
+      const { inspectImmutableUpdateCoverage } = await import("./update-immutable-inspection.js");
+      return {
+        ...result("dry-run", "inspection-only; no preparation or activation"),
+        coverage: await inspectImmutableUpdateCoverage({ root: installation.root, targetSha }),
+      };
     }
     requireUpdater();
     const { collectGitRuntimeErrors } = await import("./update-git-runtime.js");

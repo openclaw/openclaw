@@ -352,6 +352,9 @@ model.
 ## Troubleshooting
 
 - Managed setup: run `openclaw doctor` and `openclaw memory status --deep`.
+- Managed runtime status requires healthy `/health`, `/models`, and `/props`
+  endpoints and no model-load error. Optional `/metrics` can be `unavailable`
+  when a custom server omits `--metrics`; this does not make the runtime failed.
 - Existing server: inspect `/health`, `/models`, and `/props`. HTTP 503 means
   the model is still loading.
 - Missing tools: verify both tool capability flags in `/props` and use a

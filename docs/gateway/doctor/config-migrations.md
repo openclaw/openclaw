@@ -668,6 +668,19 @@ While a migration is pending, explicit config edits that would change or remove
 its retained inputs are refused with the recovery command. Unrelated settings
 remain writable. Complete the plugin migration before editing those inputs.
 
+## Blocked local plugins
+
+Doctor preserves the complete configuration entry and plugin policy for a local
+plugin rejected by discovery, including ownership and writable-path safety
+checks. A blocked plugin is not an uninstalled plugin. Its runtime remains
+blocked, and Doctor reports the path problem instead of removing its enablement
+or suggesting a registry reinstall for a local path. Fix the path and rerun
+`openclaw doctor --fix` as the account that runs the Gateway.
+
+This preservation also applies when an update invokes the candidate Doctor. It
+does not change the update execution account or repair files already made owned
+by another user.
+
 ## Retired TaskFlow Webhooks plugin
 
 The bundled TaskFlow Webhooks plugin has been removed. Existing

@@ -19,7 +19,10 @@ import {
   sqliteExtendedResultCode,
   sqlitePrimaryResultCode,
 } from "./sqlite-error-diagnostics.js";
-import { discardSqliteTransactionState } from "./sqlite-post-commit.js";
+import {
+  discardSqliteTransactionState,
+  withSqlitePostCommitPublications,
+} from "./sqlite-post-commit.js";
 import {
   captureSqliteReaderOwner,
   currentSqliteOperationTiming,
@@ -384,7 +387,6 @@ function runSqliteTransactionSync<T>(
   mode: SqliteTransactionMode,
   options?: SqliteTransactionOptions,
 ): T {
-  assertTransactionUsable(db);
   if (db.isTransaction) {
     // SQLite targets the most recent matching savepoint. Reusing its name keeps
     // nested native/SDK calls correct without module-local depth or counters.
@@ -508,7 +510,10 @@ export function runSqliteDeferredTransactionSync<T>(
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteTransactionSync(db, operation, "deferred", options);
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () =>
+    runSqliteTransactionSync(db, operation, "deferred", options),
+  );
 }
 
 export function runSqliteImmediateTransactionSync<T>(
@@ -516,7 +521,10 @@ export function runSqliteImmediateTransactionSync<T>(
   operation: () => T,
   options?: SqliteTransactionOptions,
 ): T {
-  return runSqliteTransactionSync(db, operation, "immediate", options);
+  assertTransactionUsable(db);
+  return withSqlitePostCommitPublications(db, () =>
+    runSqliteTransactionSync(db, operation, "immediate", options),
+  );
 }
 
 /** Admit the borrowed worker connection after BEGIN and before its physical commit. */

@@ -115,6 +115,8 @@ describe("subagent registry sqlite store", () => {
     saveSubagentRegistryToSqlite(new Map([[legacy.runId, legacy]]));
     const original = openOpenClawStateDatabase();
     closeOpenClawStateDatabaseForTest();
+    await fs.rename(original.path, `${original.path}.template`);
+    await fs.copyFile(`${original.path}.template`, original.path, fs.constants.COPYFILE_EXCL);
     const old = new DatabaseSync(original.path);
     try {
       for (const column of ["requester_store_path", "controller_store_path"]) {
