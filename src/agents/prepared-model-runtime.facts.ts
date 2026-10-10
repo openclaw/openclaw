@@ -516,16 +516,17 @@ export async function prepareWorkspaceBuildGroup(
     try {
       prepared = await run();
     } catch (error) {
+      let failure = error;
       try {
         await claim.release();
       } catch (cleanupError) {
-        throw new AggregateError(
+        failure = new AggregateError(
           [error, cleanupError],
           "Prepared construction and registration cleanup failed",
           { cause: error },
         );
       }
-      throw error;
+      throw failure;
     }
     // The caller still owns the original inspection; construction owns its actual awaited work.
     await claim.release();

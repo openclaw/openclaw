@@ -2,7 +2,6 @@ import {
   localAgentAvatarRevision,
   type LocalAgentAvatarRead,
   type LocalAgentAvatarResult,
-  type LocalAgentAvatarSnapshot,
 } from "./identity-avatar-file.js";
 import { prepareCachedIdentityRead } from "./identity-file-runtime.js";
 
@@ -11,12 +10,7 @@ type LoadedAvatar = Extract<LocalAgentAvatarResult, { ok: true }>;
 export function prepareLocalAgentAvatar(
   input: LocalAgentAvatarRead,
 ): Promise<LocalAgentAvatarResult> {
-  return prepareCachedIdentityRead<
-    LocalAgentAvatarRead,
-    LocalAgentAvatarSnapshot,
-    LocalAgentAvatarResult,
-    LoadedAvatar
-  >({
+  return prepareCachedIdentityRead<"localAgentAvatar", LocalAgentAvatarResult, LoadedAvatar>({
     runtimeKey: Symbol.for("openclaw.localAgentAvatars"),
     worker: "localAgentAvatar",
     readerName: "Avatar reader",

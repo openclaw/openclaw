@@ -367,10 +367,10 @@ export function createProcessTool(
       const scopedSession = isInScope(session) ? session : undefined;
       const scopedFinished = isInScope(finished) ? finished : undefined;
 
-      const sessionControlError = (session: ProcessSession) =>
-        !session.backgrounded
+      const sessionControlError = (candidate: ProcessSession) =>
+        !candidate.backgrounded
           ? `Session ${params.sessionId} is not backgrounded.`
-          : session.finalizing
+          : candidate.finalizing
             ? `Session ${params.sessionId} is finalizing.`
             : undefined;
       const resolveBackgroundedWritableStdin = () => {

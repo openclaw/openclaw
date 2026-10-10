@@ -4,30 +4,45 @@ import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import type { LocalAgentAvatarRead, LocalAgentAvatarSnapshot } from "./identity-avatar-file.js";
 import type { IdentityFileRead, IdentityFileSnapshot } from "./identity-file.js";
 
 type PreparedIdentityFile = Exclude<IdentityFileSnapshot, { kind: "unchanged" }>;
 type LoadedIdentityFile = Extract<IdentityFileSnapshot, { kind: "loaded" }>;
-type IdentityReadRuntime<Input, Snapshot, Result, Loaded> = {
-  pool?: WorkerTaskPool<Input, Snapshot>;
+type IdentityReadWorkers = {
+  identityFile: { input: IdentityFileRead; snapshot: IdentityFileSnapshot };
+  localAgentAvatar: { input: LocalAgentAvatarRead; snapshot: LocalAgentAvatarSnapshot };
+};
+type IdentityReadRuntime<Worker extends keyof IdentityReadWorkers, Result, Loaded> = {
+  pool?: WorkerTaskPool<
+    IdentityReadWorkers[Worker]["input"],
+    IdentityReadWorkers[Worker]["snapshot"]
+  >;
   closing?: Promise<void>;
   pending: Map<string, Promise<Result>>;
   cached: LruCache<Loaded>;
 };
 
 /** Identity metadata and avatar bytes share admission and cache settlement, not file policy. */
-export function prepareCachedIdentityRead<Input, Snapshot, Result, Loaded extends Result>(params: {
+export function prepareCachedIdentityRead<
+  Worker extends keyof IdentityReadWorkers,
+  Result,
+  Loaded extends Result,
+>(params: {
   runtimeKey: symbol;
-  worker: "identityFile" | "localAgentAvatar";
+  worker: Worker;
   readerName: "Identity file reader" | "Avatar reader";
   key: () => string;
-  input: (key: string, knownRevision: string | undefined) => Input;
+  input: (key: string, knownRevision: string | undefined) => IdentityReadWorkers[Worker]["input"];
   revision: (entry: Loaded) => string;
   sizeOf: (entry: Loaded) => number;
-  prepare: (snapshot: Snapshot, previous: Loaded | undefined) => Result | undefined;
+  prepare: (
+    snapshot: IdentityReadWorkers[Worker]["snapshot"],
+    previous: Loaded | undefined,
+  ) => Result | undefined;
   isLoaded: (result: Result) => result is Loaded;
 }): Promise<Result> {
-  const runtime = resolveGlobalSingleton<IdentityReadRuntime<Input, Snapshot, Result, Loaded>>(
+  const runtime = resolveGlobalSingleton<IdentityReadRuntime<Worker, Result, Loaded>>(
     params.runtimeKey,
     () => ({
       pending: new Map(),
@@ -57,7 +72,10 @@ export function prepareCachedIdentityRead<Input, Snapshot, Result, Loaded extend
     key,
     async () => {
       const previous = runtime.cached.peek(key);
-      const pool = (runtime.pool ??= new WorkerTaskPool<Input, Snapshot>({
+      const pool = (runtime.pool ??= new WorkerTaskPool<
+        IdentityReadWorkers[Worker]["input"],
+        IdentityReadWorkers[Worker]["snapshot"]
+      >({
         workerUrl: resolveRuntimeProcessEntrypointUrl(params.worker),
         workerClass: "file-reader",
         sharedCompute: true,
@@ -84,17 +102,12 @@ export function prepareCachedIdentityRead<Input, Snapshot, Result, Loaded extend
 }
 
 export function prepareIdentityFile(identityPath: string): Promise<PreparedIdentityFile> {
-  return prepareCachedIdentityRead<
-    IdentityFileRead,
-    IdentityFileSnapshot,
-    PreparedIdentityFile,
-    LoadedIdentityFile
-  >({
+  return prepareCachedIdentityRead<"identityFile", PreparedIdentityFile, LoadedIdentityFile>({
     runtimeKey: Symbol.for("openclaw.identityFiles"),
     worker: "identityFile",
     readerName: "Identity file reader",
     key: () => path.resolve(identityPath),
-    input: (identityPath, knownRevision) => ({ identityPath, knownRevision }),
+    input: (filePath, knownRevision) => ({ identityPath: filePath, knownRevision }),
     revision: (entry) => entry.revision,
     sizeOf: (entry) => entry.size,
     prepare: (result, previous) => (result.kind === "unchanged" ? previous : result),
