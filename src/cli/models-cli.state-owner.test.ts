@@ -2,15 +2,27 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { ExitError } from "../runtime.js";
 import { registerModelsCli } from "./models-cli.js";
 
 const mocks = vi.hoisted(() => ({
   domain: vi.fn(async () => undefined),
   getRuntimeConfig: vi.fn(() => ({})),
+  gateway: vi.fn(async () => ({ provider: "openai", profileId: "openai:manual" })),
+  readKey: vi.fn(async () => ({ provider: "openai", apiKey: "synthetic-api-key" })),
 }));
 
-// mock-isolation: A refused command must not initialize mutation-capable config.
+// mock-isolation: A delegated command must not initialize mutation-capable config.
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: mocks.getRuntimeConfig }));
+// mock-isolation: Supply inert key input without reading the test runner's terminal.
+vi.mock("../commands/models/auth-gateway.js", () => ({
+  readGatewayApiKeyParams: mocks.readKey,
+}));
+// mock-isolation: Observe owner routing without connecting to a real Gateway.
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.gateway,
+  isGatewayClientRequestError: () => false,
+}));
 vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/gateway-state-owner.js")>()),
   captureGatewayStateOwner: () => undefined,
@@ -66,7 +78,6 @@ it.each(
     ["login-github-copilot"],
     ["setup-token", "--provider", "synthetic"],
     ["paste-token", "--provider", "synthetic"],
-    ["paste-api-key", "--provider", "synthetic"],
     ["order", "get", "--provider", "synthetic"],
     ["order", "set", "--provider", "synthetic", "synthetic:manual"],
     ["order", "clear", "--provider", "synthetic"],
@@ -82,7 +93,71 @@ it.each(
       code: "OWNER_UNAVAILABLE",
       message: expect.stringContaining("stop the Gateway"),
     });
+    expect(mocks.gateway).not.toHaveBeenCalled();
     expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
     expect(mocks.domain).not.toHaveBeenCalled();
   },
 );
+
+it("delegates paste-api-key to the live owner without local credential admission", async () => {
+  const program = new Command().enablePositionalOptions();
+  registerModelsCli(program);
+  await program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
+    from: "user",
+  });
+  expect(mocks.gateway).toHaveBeenCalledWith(
+    expect.objectContaining({
+      method: "models.authSetApiKey",
+      params: {
+        provider: "openai",
+        apiKey: "synthetic-api-key",
+        expectedOwnerId: "synthetic-gateway-owner",
+      },
+      localPortOverride: 18789,
+      ignoreEnvUrlOverride: true,
+      requireLocalBackendSharedAuth: true,
+      scopes: ["operator.admin"],
+      requiredCapabilities: ["local-state-owner-routing-v1", "models-auth-set-api-key-owner-v1"],
+      prepareDispatchCurrent: expect.any(Function),
+      assertDispatchCurrent: expect.any(Function),
+    }),
+  );
+  expect(mocks.readKey).toHaveBeenCalledWith(
+    { provider: "openai", agent: undefined },
+    expect.any(AbortSignal),
+  );
+  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+  expect(mocks.domain).not.toHaveBeenCalled();
+});
+
+it("cancels API-key input without calling the Gateway or admitting local credentials", async () => {
+  mocks.readKey.mockRejectedValueOnce(new ExitError(0));
+  const program = new Command().enablePositionalOptions();
+  registerModelsCli(program);
+  await expect(
+    program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
+      from: "user",
+    }),
+  ).rejects.toMatchObject({ code: 0 });
+  expect(mocks.gateway).not.toHaveBeenCalled();
+  expect(mocks.domain).not.toHaveBeenCalled();
+  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+});
+
+it("does not fall back locally when the Gateway lacks owner-bound API-key support", async () => {
+  mocks.gateway.mockRejectedValueOnce(
+    new Error('Gateway does not support required capability "models-auth-set-api-key-owner-v1"'),
+  );
+  const program = new Command().enablePositionalOptions();
+  registerModelsCli(program);
+  await expect(
+    program.parseAsync(["models", "auth", "paste-api-key", "--provider", "openai"], {
+      from: "user",
+    }),
+  ).rejects.toMatchObject({
+    code: "OWNER_REFUSED",
+    message: expect.stringContaining("Update the Gateway"),
+  });
+  expect(mocks.domain).not.toHaveBeenCalled();
+  expect(mocks.getRuntimeConfig).not.toHaveBeenCalled();
+});

@@ -57,6 +57,8 @@ it("models.authSetApiKey validates the old wire request before the real credenti
         { ...request, provider: 1 },
         { ...request, agentId: "retired" },
         { ...request, provider: "openai", apiKey: "not-an-api-key" },
+        { ...request, expectedOwnerId: "wrong-owner" },
+        { ...request, expectedOwnerId: "" },
       ]) {
         await expect(client.request("models.authSetApiKey", invalid)).rejects.toThrow();
       }

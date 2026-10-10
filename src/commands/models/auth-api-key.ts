@@ -44,6 +44,7 @@ export async function saveModelProviderApiKey(params: {
   apiKey: string;
   profileId?: string;
   agentDir: string;
+  assertCurrent?: () => void;
 }): Promise<{ profileId: string; warning?: string }> {
   const provider = normalizeManualAuthProvider(params.provider);
   const key = normalizeSecretInput(params.apiKey);
@@ -137,6 +138,7 @@ export async function saveModelProviderApiKey(params: {
     }
   };
   const validateReplacement = (existing: AuthProfileCredential | undefined) => {
+    params.assertCurrent?.();
     validateCurrentCredential(existing);
     validateSharedBinding();
   };
@@ -154,6 +156,7 @@ export async function saveModelProviderApiKey(params: {
   let configChanged = false;
   await updateConfig(
     (current) => {
+      params.assertCurrent?.();
       const id = params.profileId ? undefined : configuredKey(current);
       if (
         !params.profileId &&

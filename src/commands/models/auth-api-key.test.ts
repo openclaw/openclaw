@@ -95,6 +95,26 @@ afterEach(async () => {
 });
 
 describe("shared API-key editing and removal", () => {
+  it("does not write credentials or config after the owner changes before commit", async () => {
+    const before = await readConfig();
+    const assertCurrent = vi
+      .fn<() => void>()
+      .mockImplementationOnce(() => undefined)
+      .mockImplementation(() => {
+        throw new Error("Gateway owner replaced");
+      });
+    await expect(
+      saveModelProviderApiKey({
+        provider: "sample",
+        apiKey: "synthetic-owner-key",
+        agentDir: agentDir("writer"),
+        assertCurrent,
+      }),
+    ).rejects.toThrow("Gateway owner replaced");
+    expect(loadPersistedAuthProfileStore(agentDir("writer"))?.profiles ?? {}).toEqual({});
+    expect(await readConfig()).toEqual(before);
+  });
+
   it("waits for the saved binding to reach the Gateway before allowing immediate removal", async () => {
     writeConfig({ models: { providers: { sample: { ...connection, apiKey: "old-inline" } } } });
     let claim: RuntimeConfigWriteApplicationClaim | undefined;

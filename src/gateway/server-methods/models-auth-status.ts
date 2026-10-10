@@ -34,6 +34,10 @@ import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { loadDeferredCatalog, readPreparedCatalog } from "../server-model-catalog-auth.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
@@ -170,16 +174,53 @@ async function refreshAfterCredentialMutation(
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
   ...modelsAuthRefreshHandlers,
-  "models.authSetApiKey": async ({ params, respond, context }) => {
+  "models.authSetApiKey": async (options) => {
+    const { params, respond, context, client } = options;
+    const expectedOwnerId = params.expectedOwnerId;
     if (
       !assertValidParams(params, validateModelsAuthSetApiKeyParams, "models.authSetApiKey", respond)
     ) {
       return;
     }
+    let assertCurrent: (() => void) | undefined;
+    if (expectedOwnerId !== undefined) {
+      if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "expectedOwnerId must be a non-empty string"),
+        );
+        return;
+      }
+      if (!hasGatewayAdminScope(client)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.FORBIDDEN, "missing scope: operator.admin"),
+        );
+        return;
+      }
+      try {
+        assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+      } catch (error) {
+        respond(false, undefined, localStateOwnerChangedError(error));
+        return;
+      }
+    }
     const provider = normalizeProviderId(params.provider);
     await respondUnavailableOnThrow(respond, async () => {
       const config = context.getRuntimeConfig();
-      const scope = resolveModelAuthAgentScope(config, params.agentId);
+      // CLI-only target semantics must not load the model-command runtime during Gateway startup.
+      const scope = assertCurrent
+        ? {
+            ok: true as const,
+            ...(await import("../../commands/models/shared.js")).resolveModelsTargetAgent(
+              config,
+              params.agentId,
+              { kind: "mutation" },
+            ),
+          }
+        : resolveModelAuthAgentScope(config, params.agentId);
       if (!scope.ok) {
         respond(false, undefined, scope.error);
         return;
@@ -190,6 +231,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         provider,
         apiKey: params.apiKey,
         agentDir: scope.agentDir,
+        assertCurrent,
       });
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
