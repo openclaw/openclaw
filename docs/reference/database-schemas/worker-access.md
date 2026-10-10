@@ -698,10 +698,11 @@ initializer is classified separately from its native event/head SQL.
 Creation, compaction, adoption, and child-spawn producers are non-notifying.
 Creation, compaction, adoption, child-spawn cursor seeding, reset/deletion cleanup,
 and periodic retention use the existing signal worker. Placement restart clearing
-uses the placement lifecycle worker. Its `UPDATE ... RETURNING` captures exact
-postimages in the mutation, installing the entire batch before revocation
-notifications and release waiters. Confirmed commit receipts survive lost replies;
-an uncertain write is never replayed.
+uses the placement lifecycle worker before turns are admitted and while startup
+holds the state-directory lock. Its `UPDATE ... RETURNING` captures exact
+postimages, which the host publishes after success. An uncertain result fails
+startup; the next boot can safely retry this idempotent cleanup. This bootstrap
+operation does not coordinate concurrent live turns.
 Move intents, move completion, and prepared-environment binding use the existing
 placement writer. Their synchronous transactions reread the exact placement and
 environment, check live host authority at transaction and commit admission, and

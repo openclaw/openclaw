@@ -100,16 +100,9 @@ export const placementLifecycleOperations = {
     input: { nowMs?: number },
     { write }: WorkerWriteOperationContext,
   ) =>
-    write(
-      ({ db, path }) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        const placements = clearLocalTurnClaimsInDatabase(db, path, input.nowMs ?? Date.now());
-        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: placements });
-        deferSqliteWorkerCommitReceipt(db, placements);
-        return placements;
-      },
-      { operationLabel: "workerPlacements.clearLocalTurnClaims" },
-    ),
+    write(({ db, path }) => clearLocalTurnClaimsInDatabase(db, path, input.nowMs ?? Date.now()), {
+      operationLabel: "workerPlacements.clearLocalTurnClaims",
+    }),
   "workerPlacements.beginMove": operation(
     "workerPlacements.beginMove",
     (runtime, input: MoveInput<"beginPlacementMove">, admit) => ({
