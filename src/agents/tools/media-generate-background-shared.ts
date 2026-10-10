@@ -256,11 +256,20 @@ async function createMediaGenerationTaskRun(
     assertCurrent();
     // Interactive WebChat media returns to its session. Internal wakes can use
     // the same channel sentinel and still need their saved external route.
+    const internalOrigin =
+      normalizeMessageChannel(params.requesterOrigin?.channel) === INTERNAL_MESSAGE_CHANNEL;
     const requesterOrigin =
-      params.inputProvenance?.kind === "external_user" &&
-      normalizeMessageChannel(params.requesterOrigin?.channel) === INTERNAL_MESSAGE_CHANNEL
+      internalOrigin && params.inputProvenance?.kind === "external_user"
         ? { channel: INTERNAL_MESSAGE_CHANNEL }
-        : resolveAnnounceOrigin(entry, params.requesterOrigin);
+        : resolveAnnounceOrigin(
+            entry,
+            internalOrigin
+              ? {
+                  accountId: params.requesterOrigin?.accountId,
+                  threadId: params.requesterOrigin?.threadId,
+                }
+              : params.requesterOrigin,
+          );
     const requesterTranscript =
       entry?.sessionId && agentId && storePath
         ? {

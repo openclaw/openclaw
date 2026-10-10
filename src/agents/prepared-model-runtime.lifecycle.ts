@@ -19,6 +19,10 @@ export function retirePreparedModelRuntimeGeneration(
   const retirement = owner.generationRetirement;
   owner.generationRetirement = undefined;
   retirement?.abort();
+  if (retirement?.signal.reason instanceof Error) {
+    // Retained signals must not keep the retiring caller's lazy stack frames alive.
+    void retirement.signal.reason.stack;
+  }
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;

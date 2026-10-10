@@ -30,7 +30,7 @@ A Gateway can remain healthy for browser users while node hosting is unavailable
 
 - **Machine authentication:** Tailscale identity headers do not authenticate node-role connections. In `gateway.auth.mode: "trusted-proxy"`, a new node also cannot supply the proxy's user identity headers. To use a shared token, switch to token mode and configure `gateway.auth.token` with a SecretRef; trusted-proxy mode rejects mixed token configuration. A trusted-proxy Gateway can use `gateway.auth.password` only for clean loopback/direct callers. See [trusted-proxy mixed token configuration](/gateway/trusted-proxy-auth#mixed-token-configuration).
 - **Node onboarding URL:** With only the default `gateway.bind: "loopback"` and no advertised endpoint, `openclaw devices join-code` reports that the Gateway is only bound to loopback and recommends `gateway.publicOrigin` as the primary fix. For public HTTPS ingress, set it to the proxy's reachable origin. Existing Tailscale Serve, `gateway.remote.url`, bind-derived addresses, and the pairing-specific `plugins.entries.device-pair.config.publicUrl` override retain their precedence; `publicOrigin` supplies the loopback fallback. Remote join URLs require TLS; enabling LAN bind alone does not enable plaintext remote join URLs. Explicitly configured loopback endpoints can produce HTTP join URLs, but the joining machine must be able to reach that loopback endpoint, for example through a local tunnel. Plaintext LAN pairing can use a setup code directly.
-- **Node onboarding support:** Join-code creation and `/j` redemption are core Gateway operations. They do not require enabling the `device-pair` plugin, even though its retained `publicUrl` configuration field can supply an endpoint. See [Join codes](/cli/devices#openclaw-devices-join-code) for the printed `npx openclaw connect <url>` command.
+- **Node onboarding support:** Join-code creation and `/j` redemption are core Gateway operations. They do not require enabling the `device-pair` plugin, even though its retained `publicUrl` configuration field can supply an endpoint. See [Join codes](/cli/devices#openclaw-devices-join-code) for the printed `npx -y openclaw connect <url> --service --session-host` command and the command-only alternative.
 - **Device session runtime:** Paired-device runners support the embedded OpenClaw runtime and explicitly authorized Codex `remote-exec`; ACPX routes cannot dispatch to a paired device. Codex requires `codex.exec-server.stdio.v1` in `gateway.nodes.commands.allow` plus its normal pairing and invocation approvals. Runtime policy belongs on provider/model routes, not the ignored whole-agent runtime keys. Multi-agent rosters must also set `agents.ownership: "explicit"`. See [Codex paired-device placement](/plugins/codex-harness/placement#run-codex-on-a-paired-device) and [runtime policy](/gateway/config-agents/runtime-and-cli-backends#runtime-policy).
 - **Edge routing:** When a reverse proxy or access edge fronts the Gateway, the node must satisfy edge auth on the join request, its main Gateway WebSocket, and the worker WebSocket. Keep WebSocket upgrade enabled for `/__openclaw__/worker`. You can instead exempt `/j/*` and `/__openclaw__/worker` from edge identity auth because both routes enforce their own short-lived credentials. See [worker protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol).
 
@@ -90,18 +90,14 @@ ssh -N -L 18790:127.0.0.1:18789 user@gateway-host
 
 # Terminal B: export the gateway token and connect through the tunnel
 export OPENCLAW_GATEWAY_TOKEN="<gateway-token>"
-openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node"
+openclaw node run --host 127.0.0.1 --port 18790 --display-name "Build Node" --auth-from-env
 ```
 
 Notes:
 
-- `openclaw node run` supports token or password auth.
-- Env vars are preferred: `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`.
-- Config fallback is `gateway.auth.token` / `gateway.auth.password`.
-- In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
-- In remote mode, `gateway.remote.token` / `gateway.remote.password` are eligible per remote precedence rules.
-- If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
-- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+- Reconnecting to the saved Gateway endpoint uses the paired device token, not ambient credentials from another Gateway.
+- `--auth-from-env` explicitly selects `OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`, including when a paired token exists. Use the same flag with `openclaw node install` to persist this choice for a service.
+- Without a pairing, normal environment/config auth remains available. See [node-host authentication](/cli/node#gateway-auth-for-node-host) for precedence and SecretRef behavior.
 
 ### Restrict the node command surface
 

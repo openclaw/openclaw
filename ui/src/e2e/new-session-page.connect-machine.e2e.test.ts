@@ -100,15 +100,33 @@ suite.define(() => {
       const firstRequest = await gateway.waitForRequest("device.pair.setupCode");
       expect(firstRequest.params).toEqual({ includeQr: false, joinUrl: true });
       const dialog = page.locator('openclaw-modal-dialog[label="Connect a machine"]');
-      await dialog.getByText(`npx openclaw connect '${firstJoinUrl}'`, { exact: true }).waitFor();
-      const copy = dialog.locator("button.chat-copy-btn");
-      expect(await copy.count()).toBe(1);
+      await dialog
+        .getByText(`npx -y openclaw connect '${firstJoinUrl}' --service --session-host`, {
+          exact: true,
+        })
+        .waitFor();
+      expect(
+        await dialog
+          .locator(".login-gate__command code")
+          .first()
+          .evaluate((element) => element.scrollWidth <= element.clientWidth),
+      ).toBe(true);
+      const copy = dialog.locator("button.chat-copy-btn").first();
+      expect(await dialog.locator("button.chat-copy-btn:visible").count()).toBe(1);
       expect(await copy.getAttribute("aria-label")).toBe("Copy command");
       await dialog
-        .getByText("Running it pairs that machine as a device for your team.", { exact: true })
+        .getByText(
+          "Installs a background node service that pairs this machine with your team and can run agent sessions.",
+          { exact: true },
+        )
         .waitFor();
       await dialog.getByText(/This link is single-use and expires at/u).waitFor();
       expect(await dialog.getByRole("button", { name: "Manage devices" }).count()).toBe(1);
+      await dialog.getByText("Command access only (no agent sessions)", { exact: true }).click();
+      await dialog
+        .getByText(`npx -y openclaw connect '${firstJoinUrl}' --service`, { exact: true })
+        .waitFor();
+      await dialog.getByText("Command access only (no agent sessions)", { exact: true }).click();
 
       await dialog.getByRole("button", { name: "Mint fresh code" }).click();
       await expect
@@ -118,7 +136,11 @@ suite.define(() => {
         includeQr: false,
         joinUrl: true,
       });
-      await dialog.getByText(`npx openclaw connect ${secondJoinUrl}`, { exact: true }).waitFor();
+      await dialog
+        .getByText(`npx -y openclaw connect ${secondJoinUrl} --service --session-host`, {
+          exact: true,
+        })
+        .waitFor();
       await captureProof(page, "02-connect-dialog.png", {
         surface: dialog.locator("dialog"),
         content: [copy],
@@ -189,7 +211,9 @@ suite.define(() => {
       await captureProof(page, "04-connect-timeout.png");
       const retry = dialog.getByRole("button", { name: "Mint fresh code" });
       await retry.click();
-      await dialog.getByText(`npx openclaw connect ${joinUrl}`, { exact: true }).waitFor();
+      await dialog
+        .getByText(`npx -y openclaw connect ${joinUrl} --service --session-host`, { exact: true })
+        .waitFor();
       expect(await gateway.getRequests("device.pair.setupCode")).toHaveLength(2);
     } finally {
       await context.close();

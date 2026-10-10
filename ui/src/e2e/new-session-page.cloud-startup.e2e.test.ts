@@ -260,9 +260,14 @@ suite.define(() => {
       const checkDelivery = page.getByRole("button", { name: "Check delivery", exact: true });
       await checkDelivery.waitFor({ state: "visible" });
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
-      await expect
-        .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
-        .toBe(true);
+      const followUp = page.locator(".agent-chat__composer-combobox textarea");
+      await expect.poll(() => followUp.isDisabled()).toBe(false);
+      await followUp.fill("Wait behind the unconfirmed initial turn");
+      await followUp.press("Enter");
+      await page
+        .locator(".chat-queue__item", { hasText: "Wait behind the unconfirmed initial turn" })
+        .waitFor();
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await checkDelivery.click();
@@ -300,6 +305,9 @@ suite.define(() => {
       await expect.poll(() => checkDelivery.count()).toBe(0);
       await expect.poll(() => retainedTurn.count()).toBe(1);
       await expect.poll(() => retainedTurn.locator(".chat-send-status").count()).toBe(0);
+      expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+        params: { sessionKey, message: "Wait behind the unconfirmed initial turn" },
+      });
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);

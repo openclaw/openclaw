@@ -2,6 +2,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMatrixAuthContext } from "./matrix/client.js";
 
 type MatrixVerificationRequest = Pick<GatewayRequestHandlerOptions, "params" | "respond"> & {
   context: Pick<GatewayRequestHandlerOptions["context"], "getRuntimeConfig">;
@@ -13,6 +14,23 @@ const loadMatrixVerificationRuntime = createLazyRuntimeModule(
 
 function sendError(respond: (ok: boolean, payload?: unknown) => void, err: unknown) {
   respond(false, { error: formatErrorMessage(err) });
+}
+
+function respondVerification(
+  request: MatrixVerificationRequest,
+  result: unknown,
+  success: boolean,
+) {
+  if (request.params.expectedOwnerId !== undefined) {
+    const accountId = resolveMatrixAuthContext({
+      cfg: request.context.getRuntimeConfig(),
+      accountId: normalizeOptionalString(request.params.accountId),
+    }).accountId;
+    // Owner-routed CLI calls preserve structured failure output and the selected account.
+    request.respond(true, { result, accountId });
+  } else {
+    request.respond(success, result);
+  }
 }
 
 export async function handleVerifyRecoveryKey({
@@ -32,7 +50,7 @@ export async function handleVerifyRecoveryKey({
       accountId,
       cfg: context.getRuntimeConfig(),
     });
-    respond(result.success, result);
+    respondVerification({ params, respond, context }, result, result.success);
   } catch (err) {
     sendError(respond, err);
   }
@@ -54,7 +72,7 @@ export async function handleVerificationBootstrap({
       recoveryKey,
       forceResetCrossSigning,
     });
-    respond(result.success, result);
+    respondVerification({ params, respond, context }, result, result.success);
   } catch (err) {
     sendError(respond, err);
   }
@@ -72,9 +90,10 @@ export async function handleVerificationStatus({
     const status = await getMatrixVerificationStatus({
       accountId,
       includeRecoveryKey,
+      ...(params.allowDegradedLocalState === true ? { readiness: "none" as const } : {}),
       cfg: context.getRuntimeConfig(),
     });
-    respond(true, status);
+    respondVerification({ params, respond, context }, status, true);
   } catch (err) {
     sendError(respond, err);
   }

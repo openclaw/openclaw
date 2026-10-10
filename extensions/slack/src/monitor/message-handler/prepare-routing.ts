@@ -3,6 +3,7 @@ import { captureSessionEntryCurrentCheck } from "openclaw/plugin-sdk/session-bin
 import {
   getConversationSession,
   resolveStorePath,
+  type SessionEntrySourceAuthority,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -144,7 +145,10 @@ export async function resolveSlackSessionEventRoutingContext(
     "ctx" | "assistantThreadTs" | "agentViewThreadTs"
   > & { ctx: SlackMonitorContext; intent: "stop" | "title" },
 ): Promise<
-  SlackRoutingContext & { isCurrentSession: () => boolean; assertCurrentSession: () => void }
+  SlackRoutingContext & {
+    isCurrentSession: () => boolean;
+    assertCurrentSession: SessionEntrySourceAuthority;
+  }
 > {
   const { ctx, message, eventScope } = params;
   const threadTs = message.thread_ts;

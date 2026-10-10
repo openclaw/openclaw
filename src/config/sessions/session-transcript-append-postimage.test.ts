@@ -232,3 +232,36 @@ it("keeps snapshot versions scoped to the requested session when a callback appe
     );
   });
 });
+
+it("reuses the write's context postimage and retires it after a raw write or rollback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = createSessionCompoundWorkerFixture();
+    runOpenClawAgentWriteTransaction((database) => {
+      appendTranscriptMessageInTransaction(database, resolveSqliteTranscriptScope(f.scope), {
+        eventId: "saved",
+        message: { role: "assistant", content: "durable bytes" },
+      });
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      const saved = readTranscriptContextVersionInTransaction(database, f.scope.sessionId);
+      const changedCopy = readTranscriptContextVersionInTransaction(database, f.scope.sessionId);
+      reads.restore();
+      expect(reads.queries).toEqual([]);
+      expect(saved.rawSeq).toBe(1);
+      changedCopy.updatedAt = -1;
+      expect(readTranscriptContextVersionInTransaction(database, f.scope.sessionId)).toEqual(saved);
+
+      expect(() =>
+        runOpenClawAgentWriteTransaction((nested) => {
+          nested.db
+            .prepare("UPDATE session_windows SET transcript_updated_at = ? WHERE session_id = ?")
+            .run(42, f.scope.sessionId);
+          expect(
+            readTranscriptContextVersionInTransaction(nested, f.scope.sessionId).updatedAt,
+          ).toBe(42);
+          throw new Error("rollback nested context");
+        }, f.scope),
+      ).toThrow("rollback nested context");
+      expect(readTranscriptContextVersionInTransaction(database, f.scope.sessionId)).toEqual(saved);
+    }, f.scope);
+  });
+});

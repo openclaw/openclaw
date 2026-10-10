@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import { configureSqliteConnectionPragmas } from "../../infra/sqlite-wal.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
@@ -12,7 +13,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  appendTranscriptEventSync,
   appendTranscriptMessageSync,
   assignSessionOwner,
   cleanupPluginHostSessionStore,
@@ -28,6 +28,7 @@ import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-li
 import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -455,35 +456,35 @@ describe("SQLite session entry cache", () => {
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 
-  it("observes a same-timestamp commit during a listing on the next read", async () => {
-    const { scope, sibling } = await seedPair("external-race");
+  it("observes a same-timestamp sibling commit during a listing on the next read", async () => {
+    const { scope, sibling } = await seedPair("sibling-race");
     listSessionEntriesCore(scope);
 
     const database = openOpenClawAgentDatabase(scope);
     const localEntry = sessionEntry("first", "local-after", 2);
     writeRaw(database.db, scope.sessionKey, localEntry);
 
-    const external = new DatabaseSync(database.path);
-    const maintenance = configureSqliteConnectionPragmas(external, {
+    const writer = openNodeSqliteDatabase(database.path);
+    const maintenance = configureSqliteConnectionPragmas(writer, {
       checkpointIntervalMs: 0,
-      databaseLabel: "session-entry-external-race-writer",
+      databaseLabel: "session-entry-sibling-race-writer",
       databasePath: database.path,
       foreignKeys: true,
       synchronous: "NORMAL",
     });
     try {
-      const externalEntry = sessionEntry("second", "external-after");
+      const siblingEntry = sessionEntry("second", "sibling-after");
       parseSessionEntryCalls.mockImplementationOnce(() => {
-        writeRaw(external, sibling.sessionKey, externalEntry);
+        writeRaw(writer, sibling.sessionKey, siblingEntry);
       });
 
       const entries = listingEntries(scope, true);
       expect(entries.get(scope.sessionKey)?.label).toBe("local-after");
       expect(entries.get(sibling.sessionKey)?.label).toBe("sibling");
-      expect(listingEntries(scope, true).get(sibling.sessionKey)?.label).toBe("external-after");
+      expect(listingEntries(scope, true).get(sibling.sessionKey)?.label).toBe("sibling-after");
     } finally {
       maintenance.close();
-      external.close();
+      writer.close();
     }
   });
 
@@ -593,6 +594,9 @@ describe("SQLite session entry cache", () => {
     const borrowedAfter = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
+    expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
+    parseSessionEntryCalls.mockClear();
+    expect(listSessionEntriesCore({ ...scope, clone: false })[0]?.entry).toBe(borrowedAfter);
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();
   });
 });

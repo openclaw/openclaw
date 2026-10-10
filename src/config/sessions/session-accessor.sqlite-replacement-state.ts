@@ -20,6 +20,7 @@ import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revi
 import {
   deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
+  readWrittenSessionEntryPostimage,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { captureSessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
@@ -35,14 +36,20 @@ import type {
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import {
+  captureSessionEntryPublicationSource,
+  hasSessionEntryPublicationCapacity,
+} from "./session-entry-publication-source.js";
+import { attachSessionEntrySnapshots } from "./session-entry-snapshots.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { SessionEntry } from "./types.js";
 
-/** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
+/** Display metadata and bounded full-entry facts share the writer's final persisted read. */
 export function prepareSessionEntryReplacementPublication(
   result: SessionEntryReplacementCommitted,
   database: OpenClawAgentDatabase,
+  options?: { captureFullFacts?: boolean },
 ): SessionEntryReplacementPublication {
   const archived = new Set(
     result.maintenancePlans.flatMap((plan) =>
@@ -51,23 +58,44 @@ export function prepareSessionEntryReplacementPublication(
   );
   const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   const current = new Map<string, SessionEntry>();
+  const fullEntries = options?.captureFullFacts ? new Map<string, SessionEntry>() : undefined;
   const projection = new Map<string, SessionEntryProjectionFacts>();
   const unavailableParticipantKeys = new Set<string>();
+  const written = new Map(
+    [...result.current].flatMap(([key, entry]) => {
+      const postimage = fullEntries
+        ? undefined
+        : readWrittenSessionEntryPostimage(database, key, entry);
+      return postimage ? [[key, postimage] as const] : [];
+    }),
+  );
+  const readWritten =
+    written.size === 0
+      ? undefined
+      : prepareExactSessionEntryRowReads(database, [...written.keys()], "list", undefined, {
+          includeBoardPresence: true,
+          includeMembership: true,
+          projectParticipants: false,
+        });
   let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const key of result.current.keys()) {
-    readCommitted ??= prepareExactSessionEntryRowReads(
-      database,
-      [...result.current.keys()],
-      "list",
-      undefined,
-      {
-        includeBoardPresence: true,
-        includeMembership: true,
-        onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
-      },
-    );
-    // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
-    const committed = readCommitted(key);
+    const writtenEntry = written.get(key);
+    const row = writtenEntry ? readWritten?.(key)?.row : undefined;
+    if (!writtenEntry) {
+      readCommitted ??= prepareExactSessionEntryRowReads(
+        database,
+        [...result.current.keys()].filter((currentKey) => !written.has(currentKey)),
+        fullEntries ? "full" : "list",
+        undefined,
+        {
+          includeBoardPresence: true,
+          includeMembership: true,
+          onParticipantProjectionError: (sessionKey) => unavailableParticipantKeys.add(sessionKey),
+        },
+      );
+    }
+    // Later assignment, alias moves and maintenance revoke the writer's exact postimage.
+    const committed = writtenEntry ? row && { entry: writtenEntry, row } : readCommitted?.(key);
     if (!committed) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
     }
@@ -78,11 +106,15 @@ export function prepareSessionEntryReplacementPublication(
     ) {
       throw new Error(`Session publication lost its committed membership: ${key}`);
     }
-    current.set(key, freezeJsonSnapshot(committed.entry));
+    const entry = freezeJsonSnapshot(
+      attachSessionEntrySnapshots({ ...committed.entry }, {}, "list"),
+    );
+    current.set(key, entry);
     if (unavailableParticipantKeys.has(key)) {
       continue;
     }
-    const { entry } = committed;
+    fullEntries?.set(key, freezeJsonSnapshot(committed.entry));
+    const projectedEntry = committed.entry;
     projection.set(
       key,
       freezeJsonSnapshot({
@@ -90,28 +122,28 @@ export function prepareSessionEntryReplacementPublication(
           key,
           isInternalSessionEffectsKey(key)
             ? null
-            : (normalizeOptionalString(entry.category) ?? null),
+            : (normalizeOptionalString(projectedEntry.category) ?? null),
           memberIds,
           {
-            ...(entry.participants ? { participants: entry.participants } : {}),
-            ...(entry.participantCount === undefined
+            ...(projectedEntry.participants ? { participants: projectedEntry.participants } : {}),
+            ...(projectedEntry.participantCount === undefined
               ? {}
-              : { participantCount: entry.participantCount }),
+              : { participantCount: projectedEntry.participantCount }),
           },
-          entry.sessionId,
+          projectedEntry.sessionId,
         ],
         hasBoard: committed.row.board_present === 1,
-        activitySummaryWatermark: readSessionActivitySummary(entry)
-          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
+        activitySummaryWatermark: readSessionActivitySummary(projectedEntry)
+          ? readSessionTranscriptWatermarkInDatabase(database, projectedEntry.sessionId)
           : undefined,
       }),
     );
   }
   const source = getAdmittedSqliteSchemaFacts(database.db)
-    ? {
+    ? captureSessionEntryPublicationSource(database.db, {
         ...readOpenClawAgentDatabaseIdentity(database),
         revision: readSessionNodesGeneration(database.db),
-      }
+      })
     : undefined;
   const changedKeys = [
     ...new Set([...result.previous.keys(), ...result.current.keys(), ...archived]),
@@ -126,7 +158,14 @@ export function prepareSessionEntryReplacementPublication(
         const entry = current.get(key);
         const facts = projection.get(key);
         if (entry && facts) {
-          return { kind: "postimage", value: { entry, projection: facts } };
+          return {
+            kind: "postimage",
+            value: {
+              entry,
+              ...(fullEntries ? { fullEntry: fullEntries.get(key) } : {}),
+              projection: facts,
+            },
+          };
         }
         if (entry && unavailableParticipantKeys.has(key)) {
           return { kind: "postimage", value: { entry, participantProjectionUnavailable: true } };
@@ -136,7 +175,7 @@ export function prepareSessionEntryReplacementPublication(
           : { kind: "unknown" };
       },
     });
-  return {
+  const publication: SessionEntryReplacementPublication = {
     kind: "session-entry-replacements",
     transcriptPublication: readStagedSessionTranscriptAuthority(database),
     pendingArchiveRecovery: result.pendingArchiveRecovery,
@@ -163,6 +202,7 @@ export function prepareSessionEntryReplacementPublication(
       ]),
     ),
     current,
+    ...(fullEntries ? { fullEntries } : {}),
     projection,
     ...(unavailableParticipantKeys.size > 0
       ? { unavailableParticipantKeys: [...unavailableParticipantKeys] }
@@ -177,6 +217,30 @@ export function prepareSessionEntryReplacementPublication(
     ...(source ? { source, receipt } : {}),
     changedKeys,
   };
+  boundSessionEntryReplacementPublication(publication);
+  return publication;
+}
+
+/** Keep every required receipt fact when its optional full snapshots exceed one bounded envelope. */
+export function boundSessionEntryReplacementPublication(
+  publication: SessionEntryReplacementPublication,
+  envelope: unknown = publication,
+): void {
+  if (!publication.fullEntries || hasSessionEntryPublicationCapacity(envelope)) {
+    return;
+  }
+  delete publication.fullEntries;
+  if (publication.source) {
+    delete publication.source.writeToken;
+  }
+  if (publication.receipt) {
+    delete publication.receipt.source.writeToken;
+    for (const fact of publication.receipt.facts.values()) {
+      if (fact.kind === "postimage") {
+        delete fact.value.fullEntry;
+      }
+    }
+  }
 }
 
 /** One SQL owner serves admitted worker writes and the native rollback exception. */

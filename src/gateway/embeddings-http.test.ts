@@ -201,10 +201,12 @@ async function expectDefaultEmbeddingResponse(res: Response) {
   const json = (await res.json()) as {
     object?: string;
     data?: Array<{ object?: string; embedding?: number[] }>;
+    usage?: { prompt_tokens: number; total_tokens: number };
   };
   expect(json.object).toBe("list");
   expect(json.data?.[0]?.object).toBe("embedding");
   expect(json.data?.[0]?.embedding).toEqual([0.1, 0.2]);
+  expect(json.usage).toEqual({ prompt_tokens: 0, total_tokens: 0 });
 }
 
 async function expectEmbeddingData(
@@ -214,8 +216,10 @@ async function expectEmbeddingData(
   expect(res.status).toBe(200);
   const json = (await res.json()) as {
     data?: Array<{ embedding?: number[]; index?: number }>;
+    usage?: { prompt_tokens: number; total_tokens: number };
   };
   expect(json.data).toEqual(expected);
+  return json;
 }
 
 async function expectInvalidEmbeddingRequest(res: Response, message?: string) {
@@ -243,10 +247,11 @@ async function expectGenericProviderEmbeddingRequest(expectedProviderCall: {
       ? { "x-openclaw-model": expectedProviderCall.override }
       : undefined,
   );
-  await expectEmbeddingData(res, [
+  const json = await expectEmbeddingData(res, [
     { object: "embedding", index: 0, embedding: [9.1, 9.2] },
     { object: "embedding", index: 1, embedding: [10.1, 9.2] },
   ]);
+  expect(json.usage).toEqual({ prompt_tokens: 777, total_tokens: 778 });
   expect(genericEmbeddingServer.requests.at(-1)?.body).toMatchObject({
     model: expectedProviderCall.model,
     dimensions: expectedProviderCall.dimensions,
@@ -300,6 +305,37 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     expect(lastCall.provider).toBe("openai");
     expect(lastCall.model).toBe("text-embedding-3-small");
     expect(closeEmbeddingProviderMock).toHaveBeenCalledTimes(closesBefore + 3);
+  });
+
+  it.each([
+    {
+      reports: [
+        { promptTokens: 2, totalTokens: 3 },
+        { promptTokens: 5, totalTokens: 6 },
+      ],
+      expected: { prompt_tokens: 7, total_tokens: 9 },
+    },
+    {
+      reports: [undefined, { promptTokens: 5, totalTokens: 6 }],
+      expected: { prompt_tokens: 0, total_tokens: 0 },
+    },
+    {
+      reports: [{ promptTokens: 2, totalTokens: 3 }, undefined],
+      expected: { prompt_tokens: 0, total_tokens: 0 },
+    },
+  ])("reports complete usage for split batches: $reports", async ({ reports, expected }) => {
+    embedBatchMock.mockImplementationOnce(async (_inputs, options) => {
+      for (const report of reports) {
+        options?.onUsage?.(report);
+      }
+      return [
+        [0.1, 0.2],
+        [1.1, 1.2],
+      ];
+    });
+    const response = await postEmbeddings({ model: "openclaw/default", input: ["a", "b"] });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ usage: expected });
   });
 
   it("supports base64 encoding and agent-scoped auth/config resolution", async () => {

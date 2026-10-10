@@ -55,6 +55,7 @@ export function projectSessionSharingEntry(entry: InternalSessionEntry) {
       : {}),
     archivedAt: entry.archivedAt,
     category: entry.category,
+    sidebarRoot: entry.sidebarRoot,
     ...(entry.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: entry.repositoryWorkspaceId }),
@@ -115,11 +116,14 @@ export type SessionEntryPublicationSource = {
   filename: string;
   canonicalPath?: string;
   revision?: number;
+  /** Complete postimages may be reused only at this committing writer's physical revision. */
+  writeToken?: string;
 };
 
 export type PreparedSessionEntryChanges = {
   source: SessionEntryPublicationSource;
   entries: ReadonlyMap<string, SessionEntry>;
+  fullEntries?: ReadonlyMap<string, SessionEntry>;
   sharing?: ReadonlyMap<string, SessionSharingEntry>;
   projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
 };
@@ -130,7 +134,7 @@ export type SessionEntryProjectionFacts = {
   activitySummaryWatermark: SessionTranscriptWatermark | undefined;
 };
 
-export type SessionEntryReplacementPostimage = { entry: SessionEntry } & (
+export type SessionEntryReplacementPostimage = { entry: SessionEntry; fullEntry?: SessionEntry } & (
   | { projection: SessionEntryProjectionFacts; participantProjectionUnavailable?: never }
   | { projection?: never; participantProjectionUnavailable: true }
 );
@@ -141,6 +145,8 @@ export type SessionEntryReplacementPublication = {
   pendingArchiveRecovery: boolean;
   previous: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision">>;
   current: Map<string, SessionEntry>;
+  /** Full snapshots belong to bounded entry readers, not resident display rows. */
+  fullEntries?: ReadonlyMap<string, SessionEntry>;
   /** Canonical metadata is committed, but these entries lack a valid display projection. */
   unavailableParticipantKeys?: readonly string[];
   ageChanges: SessionEntryMaintenanceAgeChange[];
@@ -209,6 +215,7 @@ export type SessionEntryPublicationRecord = {
       readCurrent?: (sessionKey: string) =>
         | {
             entry?: SessionEntry;
+            fullEntry?: SessionEntry;
             sharing?: SessionSharingEntry;
             projection?: SessionEntryProjectionFacts;
           }
