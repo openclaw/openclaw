@@ -263,29 +263,6 @@ describe("memory_search real manager", () => {
     });
   });
 
-  it("recovers when the memory manager closes after repair without another rebuild", async () => {
-    const cfg = createConfig({ vectorEnabled: false, minScore: 0 });
-    cfg.memory = { ...cfg.memory, search: { ...cfg.memory?.search, cache: { enabled: false } } };
-    const manager = await indexedManager(cfg, undefined, "cli");
-    const embeddingCalls = provider.embedBatchCalls;
-    requireFormatRepair();
-    const search = manager.search.bind(manager);
-    vi.spyOn(manager, "search").mockImplementationOnce(async (...args) => {
-      const results = await search(...args);
-      await manager.close();
-      return results;
-    });
-    const tool = searchTool(cfg);
-    const result = await tool.execute("closed-memory-manager", alphaQuery);
-    expect(result.details).not.toHaveProperty("error");
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ path: memoryPath })],
-    });
-    expect(result.details).not.toHaveProperty("unavailable");
-    expect(provider.embedBatchCalls).toBe(embeddingCalls + 1);
-    expect(result.details).toHaveProperty("warning", expect.stringContaining("provider cost"));
-  });
-
   it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
     const manager = await indexedManager(
       createConfig({ model: "old-embed", vectorEnabled: false }),

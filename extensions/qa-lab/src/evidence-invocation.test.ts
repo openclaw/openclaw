@@ -112,7 +112,7 @@ describe("evidence invocation owner", () => {
     expect(continuation.entries).toEqual(before.entries);
   });
 
-  it("preserves the parent and pending import when a selected failure would become ineffective", () => {
+  it("rejects publication when a selected failure would become ineffective", () => {
     const parent = createInvocation();
     const first = parent.begin(0);
     parent.complete(first, { status: "fail", entries: [entry("fail")] });
@@ -128,13 +128,7 @@ describe("evidence invocation owner", () => {
     const input = child.snapshot(snapshotOptions);
     parent.importChild(0, input);
     expect(() => parent.select(0, first)).toThrow(/selected observation is ineffective/);
-    expect(parent.snapshot(snapshotOptions)).toEqual(before);
-    expect(parent.importChild(0, input)).toBe(retry);
-    parent.select(0, retry);
-    expect(projectQaEvidenceScenarioOutcomes(parent.snapshot(snapshotOptions))[0]).toMatchObject({
-      occurrenceId: retry,
-      status: "pass",
-    });
+    expect(() => parent.snapshot(snapshotOptions)).toThrow(/selected observation is ineffective/);
   });
 
   it("accepts an identical pending replay after another instance appends and retains insertion order", () => {

@@ -53,20 +53,6 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
   }
 
-  protected assertEmbeddingCacheGenerationCurrent(
-    generation: MemorySemanticProviderGeneration,
-  ): void {
-    if (
-      this.closed ||
-      this.syncProviderGeneration !== generation ||
-      generation.database.closed ||
-      !generation.database.db.isOpen ||
-      this.publishedDatabase !== generation.database
-    ) {
-      throw new Error("Memory embedding generation changed during cache lookup");
-    }
-  }
-
   protected async collectCachedEmbeddings(
     candidates: MemoryEmbeddingCacheCandidate[],
     generation: MemorySemanticProviderGeneration,
@@ -81,10 +67,13 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
               hashes,
             },
           },
-          () => this.assertEmbeddingCacheGenerationCurrent(generation),
+          () => {
+            if (!generation.database.db.isOpen) {
+              throw new Error("Memory database owner is closed");
+            }
+          },
         )
       : new Map<string, number[]>();
-    this.assertEmbeddingCacheGenerationCurrent(generation);
     // Cache hits and new batches must inhabit the same vector space during a sync.
     for (const [hash, embedding] of cached) {
       if (!isValidMemoryEmbedding(embedding, generation.embeddingDimensions)) {
@@ -111,7 +100,6 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       candidates,
       generation,
     );
-    this.assertEmbeddingCacheGenerationCurrent(generation);
 
     if (missing.length === 0) {
       return embeddings;
