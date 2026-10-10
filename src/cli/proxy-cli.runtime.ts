@@ -1,13 +1,14 @@
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { loadPinnedRuntimeConfigAsync } from "../config/runtime-snapshot.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
 } from "../infra/net/proxy/proxy-validation.js";
+import { spawnCommand } from "../process/exec-spawn.js";
 import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
@@ -20,6 +21,7 @@ import { acquireDebugProxyCaptureStoreAsync } from "../proxy-capture/store.async
 import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { defaultRuntime, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
@@ -76,19 +78,25 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
     process.stdout.write(`Capture DB: ${store.dbPath}\n`);
     process.stdout.write("Press Ctrl+C to stop.\n");
     await new Promise<void>((resolve) => {
+      const signal = getAsyncWorkSignal();
       const onSignal = () => {
         process.off("SIGINT", onSignal);
         process.off("SIGTERM", onSignal);
+        signal?.removeEventListener("abort", onSignal);
         resolve();
       };
       process.on("SIGINT", onSignal);
       process.on("SIGTERM", onSignal);
+      signal?.addEventListener("abort", onSignal, { once: true });
+      if (signal?.aborted) {
+        onSignal();
+      }
     });
   } catch (error) {
     errors.push(error);
   }
   await finalizeProxyCommand(errors, finalizers);
-  process.exit(0);
+  process.exitCode = 0;
 }
 
 export async function runDebugProxyRunCommand(opts: {
@@ -133,18 +141,22 @@ export async function runDebugProxyRunCommand(opts: {
       sessionId,
       certDir: settings.certDir,
     });
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(expectDefined(command, "proxy cli.runtime command"), args, {
+    // The command owner cancels this child and joins its exit/stdio before
+    // the proxy and capture lease are retired. Keep inherited terminal I/O.
+    const result = await spawnCommand(
+      [expectDefined(command, "proxy cli.runtime command"), ...args],
+      {
         stdio: "inherit",
         env: childEnv,
         cwd: process.cwd(),
-      });
-      child.once("error", reject);
-      child.once("exit", (code, signal) => {
-        process.exitCode = resolveSubprocessExitCode(code, signal);
-        resolve();
-      });
-    });
+        cancelSignal: getAsyncWorkSignal(),
+        reject: false,
+      },
+    );
+    if (result.failed && result.exitCode === undefined && result.signal === undefined) {
+      throw toErrorObject(result, "Proxy child failed during launch or output capture");
+    }
+    process.exitCode = resolveSubprocessExitCode(result.exitCode, result.signal);
   } catch (error) {
     errors.push(error);
   }

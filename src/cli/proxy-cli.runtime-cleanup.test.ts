@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AsyncDebugProxyCaptureStore } from "../proxy-capture/store.types.js";
 
@@ -14,7 +13,8 @@ const {
 } = vi.hoisted(() => ({
   acquireStore:
     vi.fn<() => Promise<{ store: AsyncDebugProxyCaptureStore; release: () => Promise<void> }>>(),
-  spawnChild: vi.fn<() => EventEmitter>(),
+  spawnChild:
+    vi.fn<() => Promise<{ exitCode: number; signal?: NodeJS.Signals; failed?: boolean }>>(),
   stopServer: vi.fn<() => Promise<void>>(),
   startServer: vi.fn(),
   initializeCapture: vi.fn(),
@@ -23,9 +23,9 @@ const {
   captureSettings: { enabled: false },
 }));
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: spawnChild,
+vi.mock("../process/exec-spawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec-spawn.js")>()),
+  spawnCommand: spawnChild,
 }));
 vi.mock("../proxy-capture/store.async.js", () => ({
   acquireDebugProxyCaptureStoreAsync: acquireStore,
@@ -201,16 +201,11 @@ describe("proxy command cleanup errors", () => {
       const store = createStore(upsertSession, endSession);
       acquireStore.mockResolvedValue({ store, release });
       stopServer.mockImplementation(rejectCleanup("stop", stopFailure));
-      spawnChild.mockImplementation(() => {
-        const child = new EventEmitter();
-        queueMicrotask(() => {
-          if (outcome === "error") {
-            child.emit("error", childFailure);
-          } else {
-            child.emit("exit", 0, null);
-          }
-        });
-        return child;
+      spawnChild.mockImplementation(async () => {
+        if (outcome === "error") {
+          throw childFailure;
+        }
+        return { exitCode: 0 };
       });
 
       let failure: unknown;

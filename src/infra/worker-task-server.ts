@@ -26,7 +26,7 @@ type WorkerTaskHandler<Output> = (
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
 export function serveWorkerTasks<Output>(
   handler: WorkerTaskHandler<Output>,
-  options: { transferList?: (value: Output) => Transferable[] } = {},
+  options: { transferList?: (value: Output) => Transferable[]; retireOnError?: boolean } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
@@ -38,11 +38,13 @@ export function serveOwnedWorkerTasks<Output>(
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
     encodeResourceError?: (error: unknown) => unknown;
+    /** Unknown native state cannot publish a reusable task failure before isolate exit. */
+    retireOnError?: boolean;
   } = {},
 ): void {
   let memoryPort: MessagePort;
   let taskPort: MessagePort | undefined;
-  let memorySamplesStarted = false;
+  let closeMemorySamples: (() => void) | undefined;
   serveRuntimeWorkerTasks<Output, [string, string][]>(
     handler,
     {
@@ -80,14 +82,17 @@ export function serveOwnedWorkerTasks<Output>(
         taskPort?.postMessage({ status: "ready" }, []);
       },
       onMessage(sampleMemory) {
-        if (sampleMemory && !memorySamplesStarted) {
-          memorySamplesStarted = true;
-          serveWorkerMemorySamples(memoryPort);
+        if (sampleMemory && !closeMemorySamples) {
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
         }
         cancelWorkerIdleGc();
       },
       installTaskContext: installDeletedAgentDatabaseFences,
       onIdle: scheduleWorkerIdleGc,
+      onRetire() {
+        cancelWorkerIdleGc();
+        closeMemorySamples?.();
+      },
     },
   );
 }

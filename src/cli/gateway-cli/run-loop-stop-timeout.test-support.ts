@@ -45,15 +45,11 @@ export function registerTimedOutGatewayStopTests({
           expect(runtime.exit).not.toHaveBeenCalled();
           const options = close.mock.calls[0]?.[0];
           expect(options).toMatchObject({ reason: "gateway stopping", restartExpectedMs: null });
-          if (!drained && ownsProcessLifecycle) {
-            expect(options?.onProcessExitReady).toEqual(expect.any(Function));
-            await options?.onProcessExitReady?.();
-            await expect(exited).resolves.toBe(0);
+          expect(options).not.toHaveProperty("onProcessExitReady");
+          if (!drained) {
             expect(gatewayLog.warn).toHaveBeenCalledWith(
               "gateway active-work drain timeout reached; proceeding with shutdown: pendingReplies=5 rootRequests=165 sessionAdmissions=23",
             );
-          } else {
-            expect(options?.onProcessExitReady).toBeUndefined();
           }
         } finally {
           releaseClose.resolve();

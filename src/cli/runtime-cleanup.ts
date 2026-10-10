@@ -84,6 +84,10 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
     const scheduledWork = cleanup.scheduler.stop();
     await runCliDisposer("scheduled-work", () => scheduledWork, runCleanup);
     await scheduledWork;
+    await cleanup.pluginResources?.settleWork();
+    if (cleanup.releaseManagedProxy) {
+      await runCliDisposer("managed-proxy", cleanup.releaseManagedProxy, runCleanup);
+    }
   }
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {

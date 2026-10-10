@@ -4,15 +4,18 @@ import type { AgentHarness } from "../agents/harness/types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
-import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
+import { installCliSignalExitHandlers, registerSignalExitGate } from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
   scheduler: GatewayScheduler;
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
   pluginResources?: CliPluginInvocationResources;
+  /** Executable routing stays available until admitted command work has settled. */
+  releaseManagedProxy?: () => Promise<void>;
 };
 
 // Entry modules must stay runtime-free. Only executable bootstraps grant this scope;
@@ -80,19 +83,31 @@ export async function withCliCommandCleanup<T>(
     registries: new Set(),
     pluginResources,
   };
-  return sdkResourceHost.run(() =>
-    scope.run(cleanup, async () => {
-      try {
-        return await run(cleanup);
-      } finally {
-        // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
-        await runCliDisposerAfterPending("shared-state", async () => {
-          await closeOpenClawStateDatabaseAsync();
-          await closeDefaultRetainedNativeWorkerSource();
-        });
-      }
-    }),
-  );
+  const finished = createDeferredCore();
+  const releaseExitGate = registerSignalExitGate(finished.promise, (signal) => {
+    pluginResources.beginClose(
+      new DOMException(`CLI stopping${signal ? ` (${signal})` : ""}`, "AbortError"),
+    );
+    void scheduler.stop();
+  });
+  try {
+    return await sdkResourceHost.run(() =>
+      scope.run(cleanup, async () => {
+        try {
+          return await run(cleanup);
+        } finally {
+          // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+          await runCliDisposerAfterPending("shared-state", async () => {
+            await closeOpenClawStateDatabaseAsync();
+            await closeDefaultRetainedNativeWorkerSource();
+          });
+        }
+      }),
+    );
+  } finally {
+    releaseExitGate();
+    finished.resolve();
+  }
 }
 
 export function retainCliRegistryHarnesses(

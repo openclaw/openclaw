@@ -271,7 +271,7 @@ if (isMainThread && !runtime) {
   });
   if (!plan) throw new Error("fixture must exercise a real respawn");
   plan.env.FIXTURE_RUNTIME = "1";
-  runCliRespawnPlan(plan);
+  await runCliRespawnPlan(plan);
 } else if (isMainThread) {
   await new Promise((resolve, reject) => {
     const worker = new Worker(new URL(import.meta.url));
