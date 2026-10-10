@@ -83,7 +83,7 @@ suite.define(() => {
           .locator(".new-session-page__environment-heading")
           .allTextContents()
           .then((headings) => headings.map((heading) => heading.replace(/\s+/g, " ").trim())),
-      ).toEqual(["Your devices", "Cloud"]);
+      ).toEqual(["Your devices", "Hosted workspaces", "Cloud"]);
       const auto = destinations.locator('[data-value="auto-device"]');
       expect(await auto.getAttribute("aria-pressed")).toBe("false");
       expect(await destinations.getByRole("button", { name: /^aws(?: · .+)?$/ }).count()).toBe(1);

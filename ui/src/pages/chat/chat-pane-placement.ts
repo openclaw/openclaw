@@ -142,6 +142,7 @@ export function resolvePlacementComposer(params: {
   const common = {
     state,
     blocksSend:
+      !params.startupPending &&
       state.kind !== "ready" &&
       !canSendDuringWorkspaceSync &&
       !canSendDuringSetup &&

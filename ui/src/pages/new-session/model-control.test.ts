@@ -723,7 +723,7 @@ describe("runtime choices", () => {
       }
     });
 
-    it("drops a saved runtime that is no longer offered instead of running it through the base harness", async () => {
+    it("blocks a saved runtime that is no longer offered instead of silently selecting the default", async () => {
       const { runtimeChoices: _choices, ...base } = models[0]!;
       const { context } = contextWith([base]);
       const changed = vi.fn();
@@ -734,10 +734,11 @@ describe("runtime choices", () => {
       });
       try {
         await vi.waitFor(() =>
-          expect(changed).toHaveBeenCalledWith({ model: "", agentRuntime: "", thinkingLevel: "" }),
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable"),
         );
-        expect(control.agentRuntime).toBeUndefined();
-        expect(control.modelForSubmission()).toBe("");
+        expect(control.agentRuntime).toBe("codex");
+        expect(control.modelForSubmission()).toBe("openai/gpt-5.6-sol");
+        expect(changed).not.toHaveBeenCalled();
       } finally {
         control.reset();
       }

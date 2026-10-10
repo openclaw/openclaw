@@ -51,19 +51,33 @@ delete reactions for removed message identities in the same transaction, while
 a reset makes old-instance rows inert. Downgrade leaves the table intact and disables Control UI reactions until
 a supporting build returns. No transcript backfill or rewrite is required.
 
-Admitted agent and cached shared-state handles retain their schema version and
-table facts. The handle owner revokes these facts after local DDL or transaction
-rollback. A fresh `PRAGMA data_version` check observes foreign commits on the next
-unpinned read, even within the same event-loop turn. On a foreign commit, the owner
-compares `schema_version` and `user_version` in one pinned snapshot and retains
-facts and their revision when both are unchanged. Data-only commits therefore
-avoid table and column scans while version-only changes still trigger refusal
-when the stored version is newer than the running build. Actual
-SQLite read snapshots retain their view until they end; the next read then observes
-committed changes. Canonical session validation uses the same schema revision.
-Unchanged versions reuse parsed schema facts and prepared statements without
-repeating schema scans. Migration and snapshot consistency checks remain fresh reads.
-This changes no stored schema, migration, durability, or update behavior.
+The first admission validates each physical database's schema version and shape
+once per process load. Agent, shared-state, and other SQLite owners share those
+admitted facts with every later handle and worker, including reopens after idle
+close. A replaced file needs first admission for its new physical identity.
+Migration and repair owners validate their changes and publish new facts after
+successful DDL settlement; rollback cannot publish an uncommitted schema.
+The `schema_meta` role and agent ID describe the physical store's fixed schema
+owner. Creation and migration validate and publish them; changing that row through
+external SQL does not reassign an admitted store to another agent. Session
+permissions, leases, and other live authority remain current-row decisions.
+
+Catalog shape equality cannot prove that the `schema_meta` primary row or the
+`config_machine_state` content-version marker survived DDL. Observed DDL without
+owner-published replacement facts expires these row-backed admissions. The next
+owner lookup validates them once; later handles and opens reuse the result.
+Historical metadata remains private to its snapshot unless the owner positively
+matches it to the current committed admission. Rollback restores both staged
+publication and connection-local version facts.
+
+A fresh `PRAGMA data_version` check still observes foreign commits on the next
+unpinned read, even within the same event-loop turn. It invalidates cached row
+facts without rereading `schema_version`, `user_version`, or the catalog. SQLite
+read snapshots retain their view until they end; the next read then observes
+committed rows. Initial admission still refuses unsupported versions. Doctor,
+explicit verification, migration, and snapshot consistency checks retain their
+own contracts. This changes no stored schema, migration, durability, or update
+behavior.
 
 The nullable requester-authority columns on GitHub publication lifecycle and
 repository receipts require [state schema 18](/reference/database-schemas/state-schema-history#state-schema-18).

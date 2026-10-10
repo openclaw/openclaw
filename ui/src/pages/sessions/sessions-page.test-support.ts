@@ -184,6 +184,8 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
       groupSettings: [],
       sectionOrder: [],
     },
+    captureConnectionScope: () => null,
+    isConnectionScopeCurrent: () => false,
     list: vi.fn(async () => null),
     listSnapshot,
     subscribeList,

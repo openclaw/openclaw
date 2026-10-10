@@ -117,6 +117,16 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
+  it.each([
+    [{ error: "missing model" }, { message: "missing model", type: undefined }],
+    [
+      { error: "invalid_client", message: "Sign in again" },
+      { message: "Sign in again", type: "invalid_client" },
+    ],
+  ])("distinguishes string error messages from codes: %j", (payload, expected) => {
+    expect(parseApiErrorInfo(JSON.stringify(payload))).toMatchObject(expected);
+  });
+
   it.each(["", "error: ", "500 ", "500: ", "HTTP 502: "])(
     "preserves distinct validation type and code after %s",
     (prefix) => {

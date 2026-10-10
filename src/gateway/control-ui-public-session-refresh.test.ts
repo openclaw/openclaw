@@ -1,7 +1,21 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { PUBLIC_SESSION_ENTRY_SCRIPT } from "./control-ui-public-session-render.js";
+import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
+
+// Exercise the exact inline script the rendered page ships (and its CSP hash covers).
+const renderedEntryScript = renderPublicSessionDocument({
+  messages: [],
+  title: "Shared",
+  truncated: false,
+  latestUrl: "/share/session",
+  cardUrl: "https://example.test/card.png",
+  assetBasePath: "/control",
+}).match(/<script>([\s\S]*)<\/script><\/body>/);
+if (!renderedEntryScript) {
+  throw new Error("rendered public session page has no entry script");
+}
+const PUBLIC_SESSION_ENTRY_SCRIPT = renderedEntryScript[1];
 
 afterEach(() => vi.useRealTimers());
 function fixture() {

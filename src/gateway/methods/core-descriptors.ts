@@ -724,4 +724,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
   ["secrets.store.import", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["secrets.store.allowedHosts", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  ["users.background.get", "users", "operator.read", "2026.9"],
+  ["users.background.upload", "users", "operator.write", "2026.9"],
+  ["users.background.remove", "users", "operator.write", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

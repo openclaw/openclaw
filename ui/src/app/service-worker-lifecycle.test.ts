@@ -56,7 +56,11 @@ describe("Control UI service worker cache versioning", () => {
     });
     await expect(activation).resolves.toBeUndefined();
     expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
-    expect(cacheDelete).toHaveBeenCalledExactlyOnceWith("openclaw-control-oldest");
+    expect(cacheDelete.mock.calls).toEqual([
+      ["openclaw-control-oldest"],
+      ["openclaw-control-older"],
+      ["openclaw-control-previous"],
+    ]);
     for (const page of included) {
       expect(page.postMessage).toHaveBeenCalledExactlyOnceWith(
         { type: "sw-updated", version: "new-build" },
