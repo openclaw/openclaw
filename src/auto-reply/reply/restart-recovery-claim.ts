@@ -166,7 +166,10 @@ export function createReplyRestartRecoveryClaimController(params: {
       (readTarget.agentId !== target.agentId ||
         readTarget.storePath !== target.storePath ||
         readTarget.target.canonicalKey !== target.target.canonicalKey ||
-        !isDeepStrictEqual(readTarget.readSource, target.readSource))
+        readTarget.readSource?.agentId !== target.readSource?.agentId ||
+        readTarget.readSource?.path !== target.readSource?.path ||
+        readTarget.readSource?.databaseIdentity !== target.readSource?.databaseIdentity ||
+        readTarget.readSource?.databaseBirthtime !== target.readSource?.databaseBirthtime)
     ) {
       throw createRestartRecoveryClaimChangedError();
     }
