@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { toStringifiedError } from "openclaw/plugin-sdk/error-runtime";
 import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import { releaseQaCredentialLease } from "../shared/credential-lease-cleanup.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
@@ -58,11 +59,7 @@ export async function createDiscordQaTransportAdapter(
       throw new Error("Discord QA SUT application id must match the SUT bot user id.");
     }
   } catch (error) {
-    try {
-      await heartbeat.stop();
-    } finally {
-      await lease.release();
-    }
+    await releaseQaCredentialLease(lease, heartbeat);
     throw error;
   }
   const accountId = options.sutAccountId?.trim() || "sut";

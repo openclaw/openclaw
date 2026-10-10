@@ -169,6 +169,8 @@ const threadBindingSchema = z
     contextEngine: contextEngineSchema.optional().catch(undefined),
     environmentSelectionFingerprint: optionalStringSchema,
     conversationStartId: optionalStringSchema,
+    // Source lifecycle recorded at creation; cleanup may outlive the private session owner.
+    conversationIncognito: z.literal(true).optional(),
     conversationSourceTransferComplete: z.literal(true).optional().catch(undefined),
     historyCoveredThrough: optionalTimestampSchema,
     // Observed density of the last completed turn on this thread: prompt chars

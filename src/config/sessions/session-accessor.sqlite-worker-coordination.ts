@@ -4,10 +4,10 @@ import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary
 import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import { exchangeSqliteDatabaseAdmissions } from "../../infra/sqlite-worker-database-admission-relay.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import {
   createSqliteWorkerOperationAdmission,
-  exchangeSqliteDatabaseAdmissions,
   requestSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";

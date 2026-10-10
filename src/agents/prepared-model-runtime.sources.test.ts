@@ -26,6 +26,7 @@ import * as modelsPlan from "./models-config.plan.js";
 import * as catalogAuth from "./plugin-model-catalog-auth.js";
 import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import {
   prepareConfiguredRuntimeFactsBatch,
   type PreparedConfiguredModelRegistries,
@@ -33,7 +34,6 @@ import {
 import {
   createPreparedModelRuntimeSnapshot,
   prepareFullCatalogFacts,
-  prepareModelCatalogPublication,
 } from "./prepared-model-runtime.full-catalog.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import { AuthStorage } from "./sessions/auth-storage.js";

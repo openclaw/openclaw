@@ -23,7 +23,7 @@ const nativeSchtasksAuditEntries = createRuntimeProcessBuildEntries(
   Object.values(schtasksNativeEntrypoints),
 );
 
-const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!";
+const TEST_ENTRY_GLOB = "**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!";
 
 function listQaScenarioExecutionEntries(dir = "qa/scenarios"): string[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -47,10 +47,10 @@ function listQaScenarioExecutionEntries(dir = "qa/scenarios"): string[] {
 
 const QA_SCENARIO_EXECUTION_ENTRIES = listQaScenarioExecutionEntries();
 const ROOT_TEST_ENTRY_GLOBS = [
-  "*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
-  "test/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts}!",
+  "*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "src/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "scripts/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
+  "test/**/*.{test,spec}.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The PR artifact Vitest suite launches this standalone Node regression by path.
   "test/scripts/pr-review-artifacts.node.mjs!",
   // SHA-pinned dispatch tests load this admission transport by a generated file URL.
@@ -91,6 +91,13 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/e2e/qa-lab/runtime/mcp-channels-docker-client.ts!",
   // The Gateway/node MCP parity tests spawn this transport fixture by path.
   "test/e2e/qa-lab/runtime/gateway-node-mcp.fixture.mjs!",
+  // The Codex isolated-completion adapter test spawns this stdio app-server by path.
+  "test/e2e/qa-lab/runtime/codex-isolated-app-server.fixture.mjs!",
+  // The proxy owner test spawns this capture child through resolveRuntimeWorkerUrl.
+  "src/proxy-capture/child-transport.process.test-support.ts!",
+  // `pnpm ui:parity` runs this opt-in Vitest config by path; it includes the capture suite.
+  "scripts/control-ui-parity/vitest.config.ts!",
+  "scripts/control-ui-parity/capture-suite.ts!",
   // The hot-reload scenario passes this isolated upstream preload to the Gateway CLI.
   "test/e2e/qa-lab/runtime/gateway-config-hot-reload-upstream.mjs!",
   // The identity scenario spawns this process-isolated repeated-turn driver by path.
@@ -107,7 +114,7 @@ const ROOT_TEST_ENTRY_GLOBS = [
   // The Voice Call QA scenario loads this fixture through a generated plugin directory.
   "test/e2e/qa-lab/runtime/fixtures/voice-call-runtime-plugin/index.js!",
   // The topology analyzer owns these as an intentionally self-contained graph.
-  "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,mts,cts}!",
+  "test/fixtures/ts-topology/basic/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
   // The focused Oxlint test invokes these deliberate violations by path.
   "test/fixtures/oxlint-boundary-guards/*.ts!",
   // The ACP reset proof spawns this adapter by path from the proof driver.
@@ -148,7 +155,10 @@ const workspaces = Object.fromEntries(
           return relative.startsWith("../") ? [] : [`${relative}!`];
         }),
         ...(workspace === "."
-          ? [".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!", ...ROOT_TEST_ENTRY_GLOBS]
+          ? [
+              ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!",
+              ...ROOT_TEST_ENTRY_GLOBS,
+            ]
           : [
               TEST_ENTRY_GLOB,
               // The plugin README documents this standalone fixture benchmark command.
@@ -168,7 +178,7 @@ const workspaces = Object.fromEntries(
       ],
       project:
         workspace === "."
-          ? [...settings.project, ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,mts,cts}!"]
+          ? [...settings.project, ".agents/skills/**/scripts/**/*.{js,mjs,cjs,ts,tsx,mts,cts}!"]
           : settings.project,
     },
   ]),

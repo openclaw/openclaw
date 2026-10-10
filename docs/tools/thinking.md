@@ -22,6 +22,7 @@ title: "Thinking levels"
 - Provider notes:
   - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
   - `adaptive`, `xhigh`, and `max` are advertised only when the provider/model supports them. Ultra is a separate harness mode, not an additional provider API effort. Typed directives for unsupported native levels are rejected with that model's valid options.
+  - Agent turns use the published capability facts retained for their selected model and runtime, without fetching a model list during the turn. Explicit configured thinking-level maps and effort lists still take precedence. A `reasoning: true` declaration alone does not freeze the provider's supported levels. Sign in to xAI again to remove effort lists copied by an older sign-in; future levels then come from the live catalog.
   - Existing stored unsupported levels are remapped by provider profile rank. When `adaptive` is not selectable, it uses the provider's declared non-off default; otherwise its ranked fallback preserves enabled thinking, usually `medium`. `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.8 and Opus 4.7 keep thinking off unless you explicitly set a thinking level. Opus 4.8's provider-owned effort default is `high` after adaptive thinking is enabled.
@@ -188,6 +189,7 @@ check the per-agent setting if the model default still does not take effect.
 - Directive-only message toggles whether thinking blocks are shown in replies.
 - When enabled, reasoning is sent as a **separate message** prefixed with `Thinking`.
 - `stream`: streams reasoning while the reply is generating when the active channel supports reasoning previews, then sends the final answer without reasoning. Channel previews remove recognized internal runtime context before delivery; the original reasoning remains unchanged for model replay.
+- Control UI shows native-provider reasoning during generation for `on` and `stream`, with **View → Reasoning** enabled. In `on`, the preview hands off to the saved reasoning; in `stream`, it disappears when the run ends.
 - Control UI history shows saved reasoning only for `on`, with **View → Reasoning** enabled. `off` and `stream` keep it hidden, including after reload.
 - Visible Control UI reasoning preserves Markdown paragraphs and fenced code blocks, including blank lines inside code.
 - Alias: `/reason`.

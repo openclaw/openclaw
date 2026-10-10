@@ -4,10 +4,7 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
 } from "../infra/kysely-sync.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  getSqliteReadScopeRevision,
-} from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -50,11 +47,10 @@ export function readStateSchemaContentVersion(
   }
   const schema = getAdmittedSqliteSchemaFacts(db);
   const version = schema?.userVersion ?? readSqliteUserVersion(db);
-  const revision = getSqliteReadScopeRevision(db);
   const contentVersion = parseContentVersion(
     tableExists(db, "config_machine_state") ? readRow(db)?.value_json : undefined,
   );
-  if (!revision || getSqliteReadScopeRevision(db) === revision) {
+  if (getAdmittedSqliteSchemaFacts(db) === schema) {
     rememberStateSchemaVersionAdmission(db, { userVersion: version, contentVersion });
   }
   return Math.max(published ?? version, contentVersion);

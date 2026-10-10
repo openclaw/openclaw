@@ -19,6 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 import { runExclusiveSqliteTranscriptArchiveWorker } from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
+import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   maintenancePreparationFixture,
@@ -34,7 +35,7 @@ import { applySessionEntryExactReplacements } from "./session-accessor.sqlite-re
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 export function registerSessionMaintenancePreparationTests() {
-  it("rechecks a foreign backdate before accepting a read-only maintenance age", async () => {
+  it("rechecks a committed worker backdate before accepting a read-only maintenance age", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       const active = { sessionKey: "agent:main:readonly-age-active", storePath };
@@ -80,19 +81,8 @@ export function registerSessionMaintenancePreparationTests() {
       expect(() => expectDefined(assertConsumedPlan, "consumed maintenance guard")()).toThrow(
         "Session maintenance consumption has ended",
       );
-      const database = openOpenClawAgentDatabase(databaseOptions);
-      const peer = new (sqlite.requireNodeSqlite().DatabaseSync)(databaseOptions.path);
-      try {
-        peer
-          .prepare(`UPDATE session_nodes SET updated_at = 1,
-          entry_json = json_set(entry_json, '$.updatedAt', 1) WHERE session_key = ?`)
-          .run(victim.sessionKey);
-      } finally {
-        peer.close();
-      }
       if (result.readOnlyInput) {
-        // Publishing the final deadline is not another no-op verification. The same
-        // reader keeps its periodic foreign-write cadence until verification is requested.
+        // An unchanged planning result can publish its deadline without replanning.
         const finalAge = await runSqliteSessionReclamation({
           forceInProcess: false,
           plan: {
@@ -108,6 +98,11 @@ export function registerSessionMaintenancePreparationTests() {
           expect(finalAge.nextAt).toBeGreaterThan(Date.now());
         }
       }
+      await patchSessionEntryCore(victim, () => ({ sessionId: "victim", updatedAt: 1 }), {
+        replaceEntry: true,
+        workerGuard: {},
+        skipMaintenance: true,
+      });
       await expect(
         runSqliteSessionReclamation({
           forceInProcess: false,
@@ -123,6 +118,7 @@ export function registerSessionMaintenancePreparationTests() {
           },
         }),
       ).resolves.toEqual({ kind: "maintenance-plan-stale" });
+      const database = openOpenClawAgentDatabase(databaseOptions);
       expect(
         database.db
           .prepare("SELECT archived_at FROM session_nodes WHERE session_key = ?")

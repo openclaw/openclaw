@@ -19,9 +19,7 @@ async function runObserverBotReplyScenario(params: {
   withMention?: boolean;
 }) {
   return await runTopologyScopedTopLevelScenario({
-    accessToken: params.context.observerAccessToken,
     actorId: "observer",
-    actorUserId: params.context.observerUserId,
     context: params.context,
     roomKey: params.roomKey ?? params.context.topology.defaultRoomKey,
     tokenPrefix: params.tokenPrefix,

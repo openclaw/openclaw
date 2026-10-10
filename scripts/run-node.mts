@@ -26,6 +26,8 @@ import {
   resolveGitHead,
   writeRuntimePostBuildStamp as writeDistRuntimePostBuildStamp,
 } from "./lib/local-build-metadata.mts";
+import { hasUnjoinedWork } from "./lib/managed-child-process.mts";
+import { acquireManagedCleanup } from "./lib/managed-cleanup-handoff.mts";
 import { resolveQaCodexApiKeyEnvPatch } from "./lib/qa-codex-auth-env.mts";
 import {
   captureRunNodeInputState,
@@ -1695,14 +1697,22 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
   for (const [signal, handler] of signalHandlers) {
     deps.process.on(signal, handler);
   }
+  let releaseCleanup: Awaited<ReturnType<typeof acquireManagedCleanup>>;
+  let cleanupJoined = true;
   const finishRun = async (exitCode: RunNodeExit): Promise<RunNodeExit> => {
     const outcome = await closeRunNodeOutputTee(deps, exitCode);
+    // Keep cancellation live until custody is relinquished, then choose the status.
+    const release = releaseCleanup;
+    releaseCleanup = undefined;
+    await release?.(cleanupJoined, true);
     return interruptedSignal && typeof outcome !== "string"
       ? getSignalExitCode(interruptedSignal)
       : outcome;
   };
 
   try {
+    // This owner can detach children; its shim must wait for our signal cleanup.
+    releaseCleanup = await acquireManagedCleanup(deps.cancellation.signal);
     let exitCode: RunNodeExit = 1;
     if (shouldFastPathExistingDist(deps)) {
       exitCode = await runOpenClaw(deps);
@@ -1820,14 +1830,20 @@ export async function runNodeMain(params: RunNodeMainParams = {}): Promise<RunNo
     exitCode = await runOpenClaw(deps);
     return await finishRun(exitCode);
   } catch (error) {
+    cleanupJoined = !hasUnjoinedWork(error);
     const outcome = await finishRun(1);
     if (interruptedSignal) {
       return outcome;
     }
     throw error;
   } finally {
-    for (const [signal, handler] of signalHandlers) {
-      deps.process.off(signal, handler);
+    // Relinquish custody before callers may relay an uncatchable native signal.
+    try {
+      await releaseCleanup?.(cleanupJoined, true);
+    } finally {
+      for (const [signal, handler] of signalHandlers) {
+        deps.process.off(signal, handler);
+      }
     }
   }
 }

@@ -6,7 +6,6 @@ import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
-import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -147,15 +146,6 @@ export function pinConversationDatabaseScope(input: ConversationRegistryScope) {
     options: { ...options, path: storePath },
     scope: { ...input, databaseAgentId: options.agentId, storePath, env },
   };
-}
-
-/** Keep the logical agent and physical store fixed while its synchronous write waits. */
-export function runConversationDatabaseWrite<T>(
-  input: ConversationRegistryScope,
-  operation: (scope: PreparedConversationRegistryScope) => T,
-): Promise<T> {
-  const { options, scope } = pinConversationDatabaseScope(input);
-  return withOpenClawAgentDatabaseWrite(options, () => operation(scope));
 }
 
 function selectConversationRows(

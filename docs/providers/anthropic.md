@@ -896,9 +896,12 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="Server-side compaction">
-    Anthropic server-side compaction is opt-in. For supported `anthropic/*`
-    models using API-key auth directly against `api.anthropic.com`, enable it
-    per model:
+    OpenClaw enables Anthropic server-side compaction by default for direct
+    `api.anthropic.com` requests authenticated with an API key on the models
+    Anthropic documents for threshold compaction: Claude Fable 5.1, Mythos 5.1,
+    Fable 5, Mythos 5, Mythos Preview, Opus 5.5, Opus 5, Opus 4.8, Opus 4.7,
+    Opus 4.6, Sonnet 5.5, Sonnet 5, Sonnet 4.6, and Haiku 5.5. To turn it off
+    for one model:
 
     ```json5
     {
@@ -906,7 +909,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
         defaults: {
           models: {
             "anthropic/claude-sonnet-4-6": {
-              params: { anthropicServerCompaction: true },
+              params: { anthropicServerCompaction: false },
             },
           },
         },
@@ -914,20 +917,35 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     }
     ```
 
+    Set `anthropicServerCompaction: true` to opt in another direct Claude model.
+    Memory flush turns never use server-side compaction, so they can extract
+    durable memories from the unsummarized history.
+
     OpenClaw adds the `compact-2026-01-12` beta header and sends an Anthropic
-    `context_management` compaction edit. When compaction occurs, OpenClaw
-    assembles the streamed summary and stores it with the provider's opaque
-    compaction metadata as hidden replay state. Both survive session reopening
-    and are sent first on the next matching request. Summary text still passes
-    through transcript redaction; opaque metadata is preserved for replay.
-    The full transcript remains local;
-    only the outbound history before the checkpoint is omitted.
-    If Anthropic rejects a stored checkpoint, that turn reports the provider
-    error and the following turn falls back to full local history.
+    `context_management` compaction edit. The edit carries summarization
+    instructions that tell Claude not to call tools while summarizing, because
+    a tool call during summarization returns an empty compaction block. When
+    compaction occurs, OpenClaw assembles the streamed summary and stores it
+    with the provider's opaque compaction metadata as hidden replay state. Both
+    survive session reopening and are sent first on the next matching request.
+    Summary text still passes through transcript redaction; opaque metadata is
+    preserved for replay. The full transcript remains local; only the outbound
+    history before the checkpoint is omitted. An empty compaction block is not
+    stored as a checkpoint, so the next request sends the same history as
+    before and OpenClaw's client-side compaction stays available. If Anthropic
+    rejects a stored checkpoint, that turn reports the provider error and the
+    following turn falls back to full local history.
 
     When `anthropicCompactThreshold` is omitted, OpenClaw uses
-    `max(50000, floor(contextWindow * 0.7))`. To choose a different input-token
-    trigger:
+    `max(50000, floor(budget * 0.7))`, where the budget is the model's
+    `contextTokens` cap when set and its `contextWindow` otherwise. With the
+    default trigger, Anthropic compacts before local preflight compaction
+    would. If a trigger falls inside the local compaction reserve, for example
+    the 50000 minimum on a small window, local compaction may run first; that
+    only skips server compaction, never overflows. An explicit
+    `anthropicServerCompaction: true` delays the outer pre-run check to the
+    trigger; checkpoint safety guards can still compact locally first. To
+    choose a different input-token trigger:
 
     ```json5
     {
@@ -936,7 +954,6 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
           models: {
             "anthropic/claude-sonnet-4-6": {
               params: {
-                anthropicServerCompaction: true,
                 anthropicCompactThreshold: 120000,
               },
             },
@@ -949,11 +966,10 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
     Configured thresholds below `50000` are clamped to `50000`.
 
     <Warning>
-    Anthropic server-side compaction is a beta feature and OpenClaw never
-    enables it automatically. It applies only to direct Anthropic API requests
-    authenticated with an API key. OAuth/subscription tokens, Claude CLI,
-    proxies, Bedrock, Vertex, and Foundry are excluded. OpenClaw does not send
-    `pause_after_compaction` or custom compaction instructions.
+    Anthropic server-side compaction is a beta feature. It applies only to
+    direct Anthropic API requests authenticated with an API key.
+    OAuth/subscription tokens, Claude CLI, proxies, Bedrock, Vertex, and
+    Foundry are excluded. OpenClaw does not send `pause_after_compaction`.
     </Warning>
 
     See Anthropic's [compaction guide](https://platform.claude.com/docs/en/build-with-claude/compaction).
