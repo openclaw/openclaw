@@ -2,11 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { registerMatrixCliMetadata } from "../../extensions/matrix/cli-metadata.js";
-import { registerMatrixFullRuntime } from "../../extensions/matrix/index.js";
-import { registerMemoryCli } from "../../extensions/memory-core/cli.js";
-import type { SessionBackfillExecution } from "../../extensions/memory-core/src/session-backfill-contract.js";
-import { registerSessionBackfillGatewayMethods } from "../../extensions/memory-core/src/session-backfill-gateway.js";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
@@ -26,13 +21,16 @@ import {
 } from "../infra/gateway-lock.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
+import { createPluginRuntimeMock } from "../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import type { OpenClawPluginApi } from "../plugins/plugin-api.types.js";
 import type { OpenClawPluginCliRegistrar } from "../plugins/plugin-registration.types.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 
 const fixture = vi.hoisted(() => ({
   external: false,
   callGateway: vi.fn<(options: CallGatewayOptions) => Promise<unknown>>(),
-  executeBatch: vi.fn<() => Promise<SessionBackfillExecution>>(),
+  executeBatch: vi.fn<() => Promise<ReturnType<typeof backfillExecution>>>(),
   memoryManager: vi.fn(),
   search: vi.fn<MemorySearchManager["search"]>(),
   searchClose: vi.fn(async () => {}),
@@ -90,9 +88,7 @@ vi.mock("../../extensions/memory-core/src/cli.runtime.js", () => ({
 }));
 
 vi.mock("../../extensions/matrix/src/matrix/actions/verification.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../../extensions/matrix/src/matrix/actions/verification.js")
-  >()),
+  ...(await importOriginal<Record<string, unknown>>()),
   listMatrixVerifications: fixture.matrix,
   getMatrixVerificationSas: fixture.matrix,
   getMatrixVerificationStatus: fixture.status,
@@ -105,6 +101,19 @@ vi.mock("../../extensions/matrix/src/runtime.js", () => ({
   getMatrixRuntime: () => ({ config: { current: fixture.config } }),
   setMatrixRuntimeLifecycle: () => {},
 }));
+
+const { registerMatrixCliMetadata } = await loadBundledPluginFacade<{
+  registerMatrixCliMetadata(api: OpenClawPluginApi): void;
+}>({ pluginId: "matrix", artifactBasename: "cli-metadata.js" });
+const { registerMatrixFullRuntime } = await loadBundledPluginFacade<{
+  registerMatrixFullRuntime(api: OpenClawPluginApi): void;
+}>({ pluginId: "matrix", artifactBasename: "index.js" });
+const { registerMemoryCli } = await loadBundledPluginFacade<{
+  registerMemoryCli(program: Command): void;
+}>({ pluginId: "memory-core", artifactBasename: "cli.js" });
+const { default: memoryCore } = await loadBundledPluginFacade<{
+  default: { register(api: OpenClawPluginApi): void };
+}>({ pluginId: "memory-core", artifactBasename: "index.js" });
 
 const roots = useAutoCleanupTempDirTracker(afterAll);
 let root: string;
@@ -150,8 +159,8 @@ async function dispatchToGateway(options: CallGatewayOptions) {
 }
 
 function backfillExecution(
-  overrides: Partial<SessionBackfillExecution> = {},
-): SessionBackfillExecution {
+  overrides: { continuation?: { advanced: boolean; hasMore: boolean } } = {},
+) {
   return {
     result: {
       agentId: "main",
@@ -175,16 +184,16 @@ beforeAll(() => {
   root = roots.make("openclaw-plugin-cli-owner-");
   fs.writeFileSync(path.join(root, "openclaw.json"), "{}\n");
   const api = createTestPluginApi({
-    runtime: {
+    runtime: createPluginRuntimeMock({
       config: { current: () => gatewayConfig },
       agent: { resolveAgentWorkspaceDir: () => "/gateway/workspace" },
-    } as unknown as NonNullable<Parameters<typeof createTestPluginApi>[0]>["runtime"],
+    }),
     registerGatewayMethod: (name, handler) => {
       methods.set(name, handler);
     },
   });
   registerMatrixFullRuntime(api);
-  registerSessionBackfillGatewayMethods(api);
+  memoryCore.register(api);
   for (const [method, handler] of Object.entries(memorySearchHandlers)) {
     methods.set(method, handler);
   }
@@ -381,8 +390,14 @@ describe("plugin commands respect the local state owner", () => {
           .mockResolvedValueOnce(first)
           .mockResolvedValueOnce(backfillExecution());
       } else if (operation === "rollback") {
-        first.result.rollback = { removedDiaryEntries: 5, removedStagedEntries: 3 };
-        fixture.executeBatch.mockResolvedValueOnce(first);
+        const rollback = {
+          ...first,
+          result: {
+            ...first.result,
+            rollback: { removedDiaryEntries: 5, removedStagedEntries: 3 },
+          },
+        };
+        fixture.executeBatch.mockResolvedValueOnce(rollback);
       } else {
         fixture.executeBatch.mockResolvedValueOnce(first);
       }
