@@ -58,13 +58,12 @@ export async function accountAgentTurnCompaction(params: {
   let count: number | undefined;
   for (const fact of params.compaction?.durable ?? []) {
     const persistedCount = await incrementCompactionCount({
-      agentId: fact.target.agentId,
+      ...fact.target,
       sessionStore: params.sessionStore,
-      sessionKey: fact.target.sessionKey,
-      storePath: fact.target.storePath,
       expectedSession: fact.target,
       amount: fact.count,
       tokensAfter: fact.currentContextSnapshot?.tokens,
+      transcriptByteCompactionLatch: fact.hostCompactionCommitted ? null : undefined,
       authorize,
     });
     if (persistedCount !== undefined) {

@@ -17,6 +17,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
+import { recordTurnCompaction } from "./agent-runner-compaction-accounting.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import {
   agentAccountingPersistenceDiagnostic as diagnostic,
@@ -308,6 +309,32 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
     totalTokensFresh: true,
   });
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
+});
+
+describe.each(["ordinary", "followup"] as const)("%s byte-compaction accounting", (lane) => {
+  it.each([false, true])(
+    "preserves suppression unless host history changed (%s)",
+    async (hostCompactionCommitted) => {
+      const fixture = await createFixture();
+      const latch = { activeBytes: 60_000, sessionId: fixture.sessionId, maxBytes: 50_000 };
+      await fixture.replace({
+        ...fixture.context.activeSessionEntry!,
+        transcriptByteCompactionLatch: latch,
+      });
+      const compaction = fixture.recordCompaction({ currentContextTokens: 40 });
+      const fact = compaction.durable[0]!;
+      compaction.durable = [];
+      recordTurnCompaction(compaction, { ...fact, hostCompactionCommitted });
+      // A later native fact from the same writer must retain the prior host rewrite.
+      recordTurnCompaction(compaction, fact);
+
+      await fixture.account(lane, { compactionCount: 2, usage: { input: 120 } });
+
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(
+        hostCompactionCommitted ? undefined : latch,
+      );
+    },
+  );
 });
 
 it.each([

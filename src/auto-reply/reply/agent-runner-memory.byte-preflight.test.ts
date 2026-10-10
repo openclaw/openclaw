@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
@@ -36,11 +37,10 @@ it.each([
           if (!entry || !params.sessionStore || !params.sessionKey) {
             throw new Error("Missing compaction accounting target");
           }
+          const current: InternalSessionEntry = { ...entry, updatedAt: 1 };
           const updated: InternalSessionEntry = {
-            ...entry,
-            updatedAt: 1,
-            compactionCount: params.amount ?? 1,
-            transcriptByteCompactionLatch: params.transcriptByteCompactionLatch,
+            ...current,
+            ...projectCompactionAccountingPatch(current, params),
           };
           params.sessionStore[params.sessionKey] = updated;
           return params.amount ?? 1;

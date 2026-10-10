@@ -406,6 +406,7 @@ export async function handleCompactCommand(
       tokensAfter: result.result?.tokensAfter,
       compactionKind: result.compactionKind,
       expectedSession,
+      transcriptByteCompactionLatch: result.compactionKind === "native-harness" ? undefined : null,
     });
     if (compactionCount === undefined) {
       return (

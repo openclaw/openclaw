@@ -184,6 +184,10 @@ essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
 Suppressed byte-compaction retries still use a bounded view on subsequent turns.
+Native compaction that leaves the host transcript unchanged preserves retry
+suppression. Host compaction clears or refreshes it; changing the session or
+limit, falling below the limit, or growing by another full threshold also rearms
+the guard.
 Retained history remains available on disk and may continue growing; this is not
 a storage-retention limit. For Codex
 app-server sessions, the same threshold caps native rollout transcripts and

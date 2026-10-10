@@ -578,6 +578,12 @@ describe("completed compaction accounting", () => {
       expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
 
       expect(await incrementCompactionCount(fixture.params)).toBe(2);
+      expect(fixture.read()?.transcriptByteCompactionLatch).toEqual(latch);
+
+      await incrementCompactionCount({
+        ...fixture.params,
+        transcriptByteCompactionLatch: null,
+      });
       expect(fixture.read()?.transcriptByteCompactionLatch).toBeUndefined();
     });
   });
