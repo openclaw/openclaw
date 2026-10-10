@@ -543,6 +543,7 @@ describe("startup recovery admission", () => {
   it.for([
     { field: "initializationPending", action: "resume" },
     { field: "pendingProjectGitUrl", action: "resume" },
+    { field: "pendingProjectGitUrl", action: "retry" },
     { field: "pendingProjectGitUrl", action: "archive" },
     { field: "initializationPending", action: "replace" },
   ] as const)(
@@ -555,6 +556,29 @@ describe("startup recovery admission", () => {
       const startup = createDeferred();
       const resumed = createDeferred();
       const blocked = createDeferred();
+      const failedAttempt = createDeferred();
+      let failedRead = false;
+      const readSpy = vi.spyOn(transcriptReaders, "readSessionMessagesAsync");
+      if (action === "retry") {
+        readSpy.mockImplementationOnce(async () => {
+          failedRead = true;
+          throw new Error("transcript temporarily unavailable");
+        });
+      }
+      const admit = gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission;
+      const admissionSpy = vi
+        .spyOn(gatewayWorkAdmission, "runWithGatewayIndependentRootWorkAdmission")
+        .mockImplementation(
+          async <T>(run: () => Promise<T>, origin?: string, signal?: AbortSignal) => {
+            try {
+              return await admit(run, origin, signal);
+            } finally {
+              if (origin === "main-session:preparation-recovery" && failedRead) {
+                failedAttempt.resolve();
+              }
+            }
+          },
+        );
       const info = vi.spyOn(mainSessionRecoveryLog, "info").mockImplementation((line) => {
         if (line.includes("startup complete:")) {
           startup.resolve();
@@ -577,6 +601,9 @@ describe("startup recovery admission", () => {
         await withinTest(startup.promise, signal);
         expect(callGateway).not.toHaveBeenCalled();
         expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
+        if (action === "retry") {
+          vi.useFakeTimers();
+        }
         if (action === "replace") {
           await replaceSessionEntry(target, {
             sessionId: "replacement-session",
@@ -590,8 +617,14 @@ describe("startup recovery admission", () => {
             [field]: undefined,
             ...(action === "archive" ? { archivedAt: Date.now() } : {}),
           }));
+          if (action === "retry") {
+            await withinTest(failedAttempt.promise, signal);
+            expect(callGateway).not.toHaveBeenCalled();
+            expect(loadSessionEntry(target)?.mainRestartRecovery?.chargedAttempts).toBe(0);
+            await vi.advanceTimersByTimeAsync(5_000);
+          }
           await withinTest(action === "archive" ? blocked.promise : resumed.promise, signal);
-          if (action === "resume") {
+          if (action === "resume" || action === "retry") {
             await gatewayRuntime.expectAdmission(1, recovery, target);
           } else {
             await recovery.stop();
@@ -608,6 +641,9 @@ describe("startup recovery admission", () => {
         dispatchSettlement.resolve();
         await recovery.stop();
         info.mockRestore();
+        readSpy.mockRestore();
+        admissionSpy.mockRestore();
+        vi.useRealTimers();
       }
     },
   );

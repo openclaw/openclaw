@@ -185,6 +185,7 @@ async function recoverExpectedRestartRecovery(
     lifecycleGeneration?: string;
     observationOnly?: boolean;
     onPreparationPending?: (target: ExhaustedRestartRecoveryTarget) => void;
+    onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
     shouldContinue?: () => boolean;
     signal?: AbortSignal;
     stateDir?: string;
@@ -453,25 +454,52 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
       .map((refusal) => refusal.agentId),
   );
   const recoverPreparation = async (target: ExhaustedRestartRecoveryTarget) => {
-    if (!shouldContinue()) {
-      return;
-    }
-    await runWithGatewayIndependentRootWorkAdmission(
-      () =>
-        recoverExpectedRestartRecovery({
-          ...target,
-          expectedTarget: target,
-          cfg: params.getConfig(),
-          stateDir: params.stateDir,
-          gatewayRuntime: params.gatewayRuntime,
-          lifecycleGeneration,
-          shouldContinue,
-          signal: abortController.signal,
-          onPreparationPending: retainPendingPreparation,
-        }),
-      "main-session:preparation-recovery",
-      abortController.signal,
-    );
+    let exhausted = false;
+    const recover = (observationOnly = false) =>
+      runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          recoverExpectedRestartRecovery({
+            ...target,
+            expectedTarget: target,
+            cfg: params.getConfig(),
+            stateDir: params.stateDir,
+            gatewayRuntime: params.gatewayRuntime,
+            lifecycleGeneration,
+            shouldContinue,
+            observationOnly,
+            signal: abortController.signal,
+            onPreparationPending: retainPendingPreparation,
+            onExhaustedTarget: () => {
+              exhausted = true;
+            },
+          }),
+        "main-session:preparation-recovery",
+        abortController.signal,
+      );
+    await runRecoveryRetries({
+      initialDelayMs: 0,
+      maxRetries: Math.max(1, params.maxRetries ?? MAX_RECOVERY_RETRIES),
+      shouldContinue,
+      signal: abortController.signal,
+      attempt: async (finalAttempt) => {
+        exhausted = false;
+        let result = await recover();
+        if (finalAttempt && exhausted) {
+          result = await recover(true);
+        }
+        if (finalAttempt && result.failed > 0) {
+          mainSessionRecoveryLog.warn(
+            `main-session preparation recovery gave up for ${target.sessionKey}`,
+          );
+        }
+        return result.failed === 0;
+      },
+      onError: (error, finalAttempt) => {
+        if (finalAttempt) {
+          mainSessionRecoveryLog.warn(`main-session preparation recovery failed: ${String(error)}`);
+        }
+      },
+    });
   };
   let run = Promise.resolve().then(async () => {
     await runRecovery();
@@ -497,13 +525,7 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
           // They only wake recovery; the exact reader and admission revalidate the target.
           // Removing before queueing coalesces commits and avoids observing our own dispatch.
           stores.delete(storePath);
-          run = run
-            .then(() => recoverPreparation(target))
-            .catch((error) => {
-              mainSessionRecoveryLog.warn(
-                `main-session preparation recovery failed: ${String(error)}`,
-              );
-            });
+          run = run.then(() => recoverPreparation(target));
         }
         if (stores.size === 0) {
           pendingPreparation.delete(change.sessionKey);
