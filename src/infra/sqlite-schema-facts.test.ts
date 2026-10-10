@@ -1,69 +1,39 @@
+import { existsSync, fstatSync, linkSync, renameSync, statSync } from "node:fs";
 import path from "node:path";
 import { constants, DatabaseSync, StatementSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { hasSqliteSessionOwnerColumns } from "../config/sessions/session-accessor.sqlite-owner-projection.js";
 import { assertCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { assertSupportedAgentSchemaVersion } from "../state/openclaw-agent-db-schema-read.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
-import {
-  enableNodeSqliteKyselyStatementCache,
-  registerNodeSqliteDisposeCallback,
-} from "./kysely-sync-cache-state.js";
+import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  getSqliteDatabaseSchemaRevision,
+  hasPendingSqliteDatabaseSchemaMutation,
+  installSqliteDatabaseAdmissions,
+  retireSqliteDatabaseAdmissionForPath,
+} from "./sqlite-database-admission.js";
 import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
+import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
 import {
   admitSqliteSchema,
   adoptSqliteSchemaFacts,
   getAdmittedSqliteSchemaFacts,
-  getSqliteReadOperationRevision,
   readSqliteCacheDataVersion,
   readSqliteDataVersion,
-  readSqliteNativeMutationRevision,
   registerSqliteSchemaMutationListener,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
+import { useSqliteSchemaTestFixture } from "./sqlite-schema-facts.test-support.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 describe("admitted SQLite schema facts", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const databases: DatabaseSync[] = [];
-
-  function openDatabase(
-    schema = "CREATE TABLE original (id INTEGER); PRAGMA user_version = 1;",
-    admitted = true,
-    location = ":memory:",
-  ) {
-    const database = openNodeSqliteDatabase(location);
-    databases.push(database);
-    database.exec(schema);
-    enableNodeSqliteKyselyStatementCache(database);
-    if (admitted) {
-      admitSqliteSchema(database);
-    }
-    return database;
-  }
-
-  function openDatabasePair(schema?: string, admitted = true) {
-    const filename = path.join(tempDirs.make("openclaw-schema-facts-"), "state.sqlite");
-    const reader = openDatabase(schema, admitted, filename);
-    // Native peers bypass this process's schema publications, as foreign writers do.
-    const writer = new DatabaseSync(filename);
-    databases.push(writer);
-    return { filename, reader, writer };
-  }
-
-  afterEach(() => {
-    for (const database of databases.splice(0)) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
-  });
+  const { tempDirs, openDatabase, databases } = useSqliteSchemaTestFixture();
 
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(
@@ -87,143 +57,228 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it.each([
-    "CREATE TABLE unexpected (id INTEGER)",
-    "CREATE TEMP TABLE scratch (id); CREATE TABLE unexpected (id INTEGER)",
-    "DROP TABLE openclaw_session_nodes_cache_generation",
-    "PRAGMA user_version = 2",
-    "DROP TRIGGER temp.openclaw_session_nodes_cache_generation_update",
-    "ALTER TABLE temp.openclaw_session_nodes_cache_generation ADD COLUMN unexpected INTEGER",
-  ])("still revokes admission for ordinary DDL after tracker installation: %s", (sql) => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    readSessionNodesGeneration(database);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    database.exec(sql);
-    expect(schemaMutation).toHaveBeenCalledWith(undefined);
-  });
-
-  it.each([
-    "CREATE TEMP TABLE memory_publication_input (id)",
-    "DROP TABLE temp.original",
-    'DROP TABLE IF EXISTS "TeMp"."original"',
-    "DROP /* cleanup */ TABLE `temp`.[original]; -- done",
-  ])("expires local TEMP facts while preserving MAIN admission: %s", (sql) => {
-    const filename = path.join(tempDirs.make("openclaw-schema-temp-"), "state.sqlite");
-    const database = openDatabase("CREATE TABLE original(id)", true, filename);
-    const sibling = openDatabase("", true, filename);
-    database.exec("CREATE TEMP TABLE original(id)");
-    const readRevision = () =>
-      runSqliteReadOperationSync(database, () => {
-        getAdmittedSqliteSchemaFacts(database);
-        return getSqliteReadOperationRevision(database);
-      });
-    const beforeLocal = readRevision();
-    expect(beforeLocal).toBeDefined();
-    const nativeRevision = readSqliteNativeMutationRevision(database);
-    expect(nativeRevision).toBeDefined();
-    const siblingFacts = getAdmittedSqliteSchemaFacts(sibling);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    runSqliteReadOperationSync(database, () => {
-      const observation = observeSqliteReadSql(StatementSync.prototype);
-      try {
-        database.exec(sql);
-        expect(readRevision()).not.toBe(beforeLocal);
-        expect(readSqliteNativeMutationRevision(database)).not.toBe(nativeRevision);
-        expect(observation.queries.filter((query) => /data_version/iu.test(query))).toEqual([]);
-      } finally {
-        observation.restore();
-      }
-    });
-    expect(schemaMutation).not.toHaveBeenCalled();
-    expect(getAdmittedSqliteSchemaFacts(sibling)).toBe(siblingFacts);
-    expect(tableExists(database, "original")).toBe(true);
-  });
-
-  it("expires rolled-back TEMP facts without revoking MAIN admission", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    database.exec("BEGIN");
-    database.exec("CREATE TEMP TABLE scratch(id)");
-    const temporary = runSqliteReadOperationSync(database, () =>
-      getAdmittedSqliteSchemaFacts(database),
-    );
-    database.exec("ROLLBACK");
-    expect(getAdmittedSqliteSchemaFacts(database)).not.toBe(temporary);
-    expect(() => database.prepare("SELECT * FROM temp.scratch").all()).toThrow(/no such table/);
-    expect(schemaMutation).not.toHaveBeenCalled();
-  });
-
-  it("observes reentrant MAIN DDL during a declared tracker installation", () => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    const nativeExec = DatabaseSync.prototype.exec.bind(database);
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementationOnce((sql) => {
-      database.exec("CREATE TABLE unexpected (id INTEGER)");
-      return nativeExec(sql);
-    });
+  it("validates a physical file once across handles and close, and validates its replacement", () => {
+    const root = tempDirs.make("openclaw-schema-process-");
+    const filename = path.join(root, "state.sqlite");
+    const first = openDatabase(undefined, true, filename);
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    const schemaReads = () =>
+      observation.queries.filter((sql) =>
+        /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql),
+      );
     try {
-      readSessionNodesGeneration(database);
-      expect(schemaMutation).toHaveBeenCalled();
+      const second = openDatabase("", true, filename);
+      expect(tableExists(second, "original")).toBe(true);
+      second.close();
+      first.close();
+      const reopened = openDatabase("", true, filename);
+      expect(tableExists(reopened, "original")).toBe(true);
+      expect(schemaReads()).toEqual([]);
+      reopened.close();
+
+      const replacementPath = path.join(root, "replacement.sqlite");
+      const replacement = new DatabaseSync(replacementPath);
+      replacement.exec("CREATE TABLE replacement (id); PRAGMA user_version = 2");
+      replacement.close();
+      renameSync(replacementPath, filename);
+      const replaced = openDatabase("", true, filename);
+      expect(tableExists(replaced, "replacement")).toBe(true);
+      expect(tableExists(replaced, "original")).toBe(false);
+      expect(schemaReads().length).toBeGreaterThan(0);
+      const firstValidationCount = schemaReads().length;
+      replaced.close();
+      const replacementReopened = openDatabase("", true, filename);
+      expect(tableExists(replacementReopened, "replacement")).toBe(true);
+      expect(schemaReads()).toHaveLength(firstValidationCount);
     } finally {
-      exec.mockRestore();
+      observation.restore();
     }
   });
 
-  it("does not suppress reentrant MAIN DDL inside a TEMP table statement", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    database.function("create_main_table", () => {
-      database.exec("CREATE TABLE callback_table(id)");
-      return 1;
+  it("keeps a catalog capture private when a sibling publishes DDL before it returns", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-capture-race-"), "state.sqlite");
+    using source = new DatabaseSync(filename);
+    source.exec("PRAGMA journal_mode=WAL; CREATE TABLE original(id); PRAGMA user_version=1");
+    const reader = openDatabase("", false, filename);
+    const writer = openDatabase("", false, filename);
+    // oxlint-disable-next-line typescript/unbound-method -- The hook invokes the native method with its original statement receiver.
+    const readAll = StatementSync.prototype.all;
+    const capture = vi.spyOn(StatementSync.prototype, "all").mockImplementationOnce(function (
+      this: StatementSync,
+    ) {
+      const rows = readAll.call(this, {});
+      expect(rows.some((row) => row.name === "original")).toBe(true);
+      writer.exec("CREATE TABLE published(id); PRAGMA user_version=2");
+      admitSqliteSchema(writer);
+      return rows;
     });
-    database.exec("CREATE TEMP TABLE scratch AS SELECT create_main_table()");
-    expect(schemaMutation).toHaveBeenCalledWith(undefined);
-    expect(tableExists(database, "callback_table")).toBe(true);
+    try {
+      admitSqliteSchema(reader);
+      expect(capture).toHaveBeenCalled();
+    } finally {
+      capture.mockRestore();
+    }
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      const later = openDatabase("", true, filename);
+      for (const database of [reader, later]) {
+        expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(2);
+        expect(tableExists(database, "published")).toBe(true);
+      }
+      expect(
+        observation.queries.filter((sql) =>
+          /sqlite_schema|user_version|schema_version/iu.test(sql),
+        ),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
   });
 
-  it("revokes admission when tracker installation fails after creating its counter", () => {
-    const database = openDatabase();
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    expect(() => readSessionNodesGeneration(database)).toThrow(/session_nodes/u);
-    expect(schemaMutation).toHaveBeenCalled();
-  });
+  it.each(["existing", "missing"])(
+    "does not bind an %s native open to a replacement's admitted identity",
+    (initial) => {
+      const root = tempDirs.make("openclaw-schema-open-race-");
+      const filename = path.join(root, "state.sqlite");
+      const replacementPath = path.join(root, "replacement.sqlite");
+      if (initial === "existing") {
+        openDatabase(undefined, true, filename).close();
+      }
+      openDatabase("CREATE TABLE replacement (id)", true, replacementPath).close();
+      // oxlint-disable-next-line typescript/unbound-method -- The race hook calls the native method with its original receiver.
+      const nativeLocation = DatabaseSync.prototype.location;
+      const location = vi
+        .spyOn(DatabaseSync.prototype, "location")
+        .mockImplementationOnce(function (this: DatabaseSync) {
+          renameSync(replacementPath, filename);
+          return nativeLocation.call(this);
+        });
+      try {
+        expect(() => openNodeSqliteDatabase(filename)).toThrow(
+          /changed identity during native open/u,
+        );
+      } finally {
+        location.mockRestore();
+      }
+    },
+  );
 
-  it.each([
-    "CREATE TEMP TABLE openclaw_session_nodes_cache_generation (id INTEGER PRIMARY KEY, generation INTEGER)",
-    "CREATE TEMP TRIGGER openclaw_session_nodes_cache_generation_update AFTER INSERT ON main.session_nodes BEGIN SELECT 1; END",
-  ])("revokes admission for a preexisting mismatched tracker object: %s", (sql) => {
-    const database = openDatabase(`CREATE TABLE session_nodes (id INTEGER); ${sql}`);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    readSessionNodesGeneration(database);
-    expect(schemaMutation).toHaveBeenCalled();
-  });
-
-  it("retains readmitted facts when reinstalling the tracker's existing exact shapes", () => {
-    const database = openDatabase("CREATE TABLE session_nodes (id INTEGER)");
-    expect(readSessionNodesGeneration(database)).toBe(0);
-    database.exec("ALTER TABLE session_nodes ADD COLUMN value TEXT");
+  it("retains no descriptor for raw snapshot opens and retires admitted snapshot custody", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-retirement-"), "snapshot.sqlite");
+    const source = new DatabaseSync(filename);
+    source.exec("CREATE TABLE original (id)");
+    source.close();
+    const database = openDatabase("", false, filename);
+    expect(captureSqliteDatabaseAdmissions().some((record) => record.location === filename)).toBe(
+      false,
+    );
     admitSqliteSchema(database);
-    const schemaMutation = vi.fn();
-    registerSqliteSchemaMutationListener(database, schemaMutation);
-    expect(readSessionNodesGeneration(database)).toBe(1);
-    expect(schemaMutation).not.toHaveBeenCalled();
-    database.exec("INSERT INTO session_nodes (id) VALUES (1)");
-    expect(readSessionNodesGeneration(database)).toBe(2);
+    const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === filename)!;
+    expect(fstatSync(record.descriptor).isFile()).toBe(true);
+    const staleTransfer = structuredClone([record]);
+    database.close();
+    retireSqliteDatabaseAdmissionForPath(filename);
+    expect(() => fstatSync(record.descriptor)).toThrow();
+    installSqliteDatabaseAdmissions(staleTransfer);
+    expect(
+      captureSqliteDatabaseAdmissions().some((entry) => entry.identity === record.identity),
+    ).toBe(false);
+  });
+
+  it("does not retire canonical admission through a snapshot hardlink", () => {
+    const root = tempDirs.make("openclaw-schema-hardlink-");
+    const filename = path.join(root, "state.sqlite");
+    const database = openDatabase(undefined, true, filename);
+    const snapshot = path.join(root, "snapshot.sqlite");
+    linkSync(filename, snapshot);
+    const record = captureSqliteDatabaseAdmissions().find((entry) => entry.location === filename)!;
+    retireSqliteDatabaseAdmissionForPath(snapshot);
+    expect(fstatSync(record.descriptor).isFile()).toBe(true);
+    expect(tableExists(database, "original")).toBe(true);
+  });
+
+  it("preserves native creation permissions and refuses missing read-only or existing-only sources", () => {
+    const root = tempDirs.make("openclaw-schema-creation-options-");
+    const previous = process.umask(0);
+    try {
+      const baseline = path.join(root, "native.sqlite");
+      new DatabaseSync(baseline).close();
+      const candidate = path.join(root, "candidate.sqlite");
+      openNodeSqliteDatabase(candidate).close();
+      expect(statSync(candidate).mode & 0o777).toBe(statSync(baseline).mode & 0o777);
+      const readonly = path.join(root, "readonly.sqlite");
+      expect(() => openNodeSqliteDatabase(readonly, { readOnly: true })).toThrow();
+      expect(existsSync(readonly)).toBe(false);
+      const existing = path.join(root, "existing.sqlite");
+      expect(() => openNodeSqliteDatabase(`file:${existing}?mode=rw`)).toThrow();
+      expect(existsSync(existing)).toBe(false);
+      const deferred = path.join(root, "deferred.sqlite");
+      const unopened = openNodeSqliteDatabase(deferred, { open: false });
+      expect(existsSync(deferred)).toBe(false);
+      unopened.open();
+      unopened.close();
+      expect(existsSync(deferred)).toBe(true);
+    } finally {
+      process.umask(previous);
+    }
+  });
+
+  it("binds the replacement file when the same native handle is reopened", () => {
+    const root = tempDirs.make("openclaw-schema-native-reopen-");
+    const filename = path.join(root, "state.sqlite");
+    const replacementPath = path.join(root, "replacement.sqlite");
+    const database = openDatabase(undefined, true, filename);
+    database.close();
+    const replacement = new DatabaseSync(replacementPath);
+    replacement.exec("CREATE TABLE replacement (id); PRAGMA user_version = 7");
+    replacement.close();
+    renameSync(replacementPath, filename);
+    database.open();
+    expect(tableExists(database, "original")).toBe(false);
+    expect(tableExists(database, "replacement")).toBe(true);
+    expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(7);
+  });
+
+  it("publishes the final migration catalog without rechecking it on the next open", () => {
+    const filename = path.join(
+      tempDirs.make("openclaw-schema-migration-publication-"),
+      "state.sqlite",
+    );
+    const database = openDatabase(undefined, true, filename);
+    runSqliteImmediateTransactionSync(database, () => {
+      database.exec("ALTER TABLE original ADD COLUMN first_added TEXT");
+      expect(getAdmittedSqliteSchemaFacts(database)?.tableSql.get("original")).toContain(
+        "first_added",
+      );
+      database.exec("ALTER TABLE original ADD COLUMN last_added TEXT");
+    });
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      const sibling = openDatabase("", true, filename);
+      expect(getAdmittedSqliteSchemaFacts(sibling)?.tableSql.get("original")).toContain(
+        "last_added",
+      );
+      expect(
+        observation.queries.filter((sql) =>
+          /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql),
+        ),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
   });
 
   it("refreshes writer admission after BEGIN despite an enclosing read operation", () => {
-    const { reader: database, writer: peer } = openDatabasePair(
+    const filename = path.join(tempDirs.make("openclaw-schema-writer-"), "agent.sqlite");
+    const database = openDatabase(
       `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
+      true,
+      filename,
     );
     database.exec("PRAGMA journal_mode=WAL");
     assertCanonicalSessionValidationSchema(database);
+    const peer = openNodeSqliteDatabase(filename);
+    databases.push(peer);
     runSqliteReadOperationSync(database, () => {
       peer.exec(
         "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
@@ -278,10 +333,15 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it("retains table and column facts with one statement per foreign data commit", () => {
-    const { filename, reader, writer } = openDatabasePair(
+    const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
+    const reader = openDatabase(
       "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
+      true,
+      filename,
     );
     reader.exec("PRAGMA journal_mode=WAL");
+    const writer = openNodeSqliteDatabase(filename);
+    databases.push(writer);
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(reader, schemaMutation);
     const read = () =>
@@ -320,10 +380,11 @@ describe("admitted SQLite schema facts", () => {
   });
 
   it("invalidates derived column facts when adopting a foreign schema publication", () => {
-    const { filename, reader, writer } = openDatabasePair(
-      "CREATE TABLE session_nodes (id INTEGER)",
-    );
+    const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
+    const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
+    const writer = openNodeSqliteDatabase(filename);
+    databases.push(writer);
     writer.exec(`
       ALTER TABLE session_nodes ADD COLUMN owner_actor_type TEXT;
       ALTER TABLE session_nodes ADD COLUMN owner_actor_id TEXT;
@@ -338,49 +399,47 @@ describe("admitted SQLite schema facts", () => {
     expect(hasSqliteSessionOwnerColumns(reader)).toBe(true);
   });
   it.each(["data_version", "schema_version", "user_version"])(
-    "refuses a table shadowing the native %s observation",
+    "uses native freshness without consulting a table shadowing %s",
     (name) => {
       const database = openDatabase(
         `CREATE TABLE original (id); CREATE TABLE pragma_${name} (${name} INTEGER);
          INSERT INTO pragma_${name} VALUES (999); PRAGMA user_version = 1;`,
       );
-      expect(() =>
-        runSqliteReadOperationSync(database, () => tableExists(database, "original")),
-      ).toThrow(/not a function/iu);
+      expect(runSqliteReadOperationSync(database, () => tableExists(database, "original"))).toBe(
+        true,
+      );
+      expect(readSqliteDataVersion(database)).not.toBe(999);
     },
   );
 
   it.each(["transaction", "implicit snapshot"])(
-    "observes foreign commits on the next read while preserving an active %s",
+    "refreshes foreign row commits while trusting admitted format through an active %s",
     (pin) => {
-      const { filename, reader, writer } = openDatabasePair();
+      const filename = path.join(tempDirs.make("openclaw-schema-foreign-"), "state.sqlite");
+      const reader = openDatabase(undefined, true, filename);
       reader.exec("PRAGMA journal_mode=WAL");
+      // An external writer changes rows without publishing process-owned schema facts.
+      const writer = new DatabaseSync(filename);
+      databases.push(writer);
       const schemaMutation = vi.fn();
       registerSqliteSchemaMutationListener(reader, schemaMutation);
-      const hasTable = (name: string) =>
-        runSqliteReadOperationSync(reader, () => tableExists(reader, name));
-      expect(hasTable("committed")).toBe(false);
+      const rows = () =>
+        runSqliteReadOperationSync(reader, () =>
+          reader.prepare("SELECT id FROM original ORDER BY id").all(),
+        );
       writer.exec(
-        "BEGIN; CREATE TABLE committed (id); CREATE INDEX committed_index ON committed(id); PRAGMA user_version = 2; COMMIT;",
+        "BEGIN; INSERT INTO original VALUES (1); CREATE TABLE committed (id); PRAGMA user_version = 2; COMMIT;",
       );
-      expect(hasTable("committed")).toBe(true);
-      expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
-      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
-      expect(schemaMutation).toHaveBeenCalledTimes(1);
-      expect(schemaMutation).toHaveBeenLastCalledWith({
-        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
-        userVersion: 2,
-      });
+      expect(rows()).toEqual([{ id: 1 }]);
+      expect(tableExists(reader, "committed")).toBe(false);
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
 
       const readSnapshot = () => {
-        expect(hasTable("later")).toBe(false);
-        writer.exec(
-          "BEGIN; CREATE TABLE later (id); DROP INDEX committed_index; PRAGMA user_version = 3; COMMIT;",
-        );
-        expect(hasTable("later")).toBe(false);
-        expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
-        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
-        expect(schemaMutation).toHaveBeenCalledTimes(1);
+        expect(rows()).toEqual([{ id: 1 }]);
+        writer.exec("BEGIN; INSERT INTO original VALUES (2); PRAGMA user_version = 3; COMMIT;");
+        expect(rows()).toEqual([{ id: 1 }]);
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
+        expect(schemaMutation).not.toHaveBeenCalled();
       };
       if (pin === "transaction") {
         reader.exec("BEGIN");
@@ -393,50 +452,52 @@ describe("admitted SQLite schema facts", () => {
       } else {
         runSqlitePinnedReadSnapshotSync(reader, readSnapshot);
       }
-      expect(hasTable("later")).toBe(true);
-      expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(false);
-      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
-      expect(schemaMutation).toHaveBeenCalledTimes(2);
-      expect(schemaMutation).toHaveBeenLastCalledWith({
-        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
-        userVersion: 3,
-      });
+      expect(rows()).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
+      expect(schemaMutation).not.toHaveBeenCalled();
       writer.exec("PRAGMA user_version = 2147483647");
-      expect(() =>
+      expect(
         runSqliteReadOperationSync(reader, () =>
           assertSupportedAgentSchemaVersion(reader, filename),
         ),
-      ).toThrow(/newer schema version/iu);
+      ).toBe(1);
     },
   );
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
-    const { reader, writer } = openDatabasePair(undefined, false);
-    const hasTable = (name: string) =>
-      runSqliteReadOperationSync(reader, () => tableExists(reader, name));
+    const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
+    const reader = openDatabase(undefined, false, filename);
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
+    const version = () =>
+      runSqliteReadOperationSync(reader, () => readSqliteCacheDataVersion(reader));
     const admission = observeSqliteReadSql(StatementSync.prototype);
     expect(() =>
       runSqliteReadOperationSync(reader, () => {
         admitSqliteSchema(reader);
-        expect(hasTable("committed")).toBe(false);
+        expect(tableExists(reader, "committed")).toBe(false);
         throw new Error("read failed");
       }),
     ).toThrow("read failed");
     admission.restore();
     expect(admission.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(1);
-    writer.exec("CREATE TABLE committed (id)");
-    expect(hasTable("committed")).toBe(true);
+    const before = version();
+    writer.exec("INSERT INTO original VALUES (1)");
+    expect(version()).not.toBe(before);
 
     await runSqliteReadOperationSync(reader, async () => {
-      expect(hasTable("later")).toBe(false);
+      const beforeAwait = version();
       await Promise.resolve();
-      writer.exec("CREATE TABLE later (id)");
-      expect(hasTable("later")).toBe(true);
+      writer.exec("INSERT INTO original VALUES (2)");
+      expect(version()).not.toBe(beforeAwait);
     });
   });
 
   it("executes fresh version probes inside a read scope without preparing warm statements", () => {
-    const { reader, writer } = openDatabasePair();
+    const filename = path.join(tempDirs.make("openclaw-schema-fresh-"), "state.sqlite");
+    const reader = openDatabase(undefined, true, filename);
+    const writer = new DatabaseSync(filename);
+    databases.push(writer);
     readSqliteDataVersion(reader);
     readSqliteDataVersion(reader);
     readSqliteCacheDataVersion(reader);
@@ -508,6 +569,154 @@ describe("admitted SQLite schema facts", () => {
       expect(tableExists(reader, "implicit_snapshot")).toBe(false);
     });
     expect(tableExists(reader, "implicit_snapshot")).toBe(true);
+    writer.exec("BEGIN; CREATE TABLE closed_rollback (id)");
+    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(true);
+    writer.close();
+    expect(hasPendingSqliteDatabaseSchemaMutation(reader)).toBe(false);
+    expect(tableExists(reader, "closed_rollback")).toBe(false);
+  });
+
+  it.each([
+    { method: "exec", implicitSnapshot: false, admittedBeforeBegin: true, rollback: "ROLLBACK" },
+    { method: "iterate", implicitSnapshot: false, admittedBeforeBegin: true, rollback: "ROLLBACK" },
+    { method: "exec", implicitSnapshot: true, admittedBeforeBegin: true, rollback: "ROLLBACK" },
+    {
+      method: "exec",
+      implicitSnapshot: true,
+      admittedBeforeBegin: true,
+      rollback: "ROLLBACK; SELECT 1",
+    },
+    {
+      method: "exec",
+      implicitSnapshot: true,
+      admittedBeforeBegin: true,
+      rollback: "ROLLBACK; -- cleanup",
+    },
+    {
+      method: "exec",
+      implicitSnapshot: true,
+      admittedBeforeBegin: true,
+      rollback: "ROLLBACK; SELECT 'CREATE'",
+    },
+    { method: "exec", implicitSnapshot: true, admittedBeforeBegin: false, rollback: "ROLLBACK" },
+  ] as const)(
+    "keeps a sibling's committed catalog after a failed WAL upgrade and $method rollback, implicit pin=$implicitSnapshot, admitted=$admittedBeforeBegin, SQL=$rollback",
+    ({ method, implicitSnapshot, admittedBeforeBegin, rollback }) => {
+      const filename = path.join(tempDirs.make("openclaw-schema-busy-snapshot-"), "state.sqlite");
+      const stale = openDatabase(undefined, admittedBeforeBegin, filename);
+      stale.exec("PRAGMA journal_mode=WAL");
+      const writer = openDatabase("", true, filename);
+      const original = getAdmittedSqliteSchemaFacts(stale);
+      let committed: ReturnType<typeof getAdmittedSqliteSchemaFacts>;
+      let generation: number | undefined;
+      const observation = observeSqliteReadSql(StatementSync.prototype);
+      let rollbackStart = 0;
+      const rollbackFailedUpgrade = () => {
+        stale.exec("BEGIN");
+        stale.prepare("SELECT id FROM original").all();
+        writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
+        committed = getAdmittedSqliteSchemaFacts(writer);
+        generation = getSqliteDatabaseSchemaRevision(writer);
+        expect(committed?.userVersion).toBe(2);
+        expect(generation).toEqual(expect.any(Number));
+        let failure: unknown;
+        try {
+          stale.exec("CREATE TABLE rejected_upgrade (id)");
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toMatchObject({ errcode: 517 });
+        expect(stale.isTransaction).toBe(true);
+        if (!admittedBeforeBegin) {
+          admitSqliteSchema(stale);
+        }
+        rollbackStart = observation.queries.length;
+        if (method === "exec") {
+          stale.exec(rollback);
+        } else {
+          expect([...stale.prepare(rollback).iterate()]).toEqual([]);
+        }
+        if (implicitSnapshot) {
+          if (admittedBeforeBegin) {
+            expect(getAdmittedSqliteSchemaFacts(stale)?.admissionId).toBe(original?.admissionId);
+          }
+          expect(getAdmittedSqliteSchemaFacts(stale)?.userVersion).toBe(1);
+          expect(getAdmittedSqliteSchemaFacts(stale)?.tables.has("committed_sibling")).toBe(false);
+          expect(() => stale.prepare("SELECT id FROM committed_sibling").all()).toThrow(
+            /no such table/iu,
+          );
+        }
+        const reopened = openDatabase("", true, filename);
+        for (const database of implicitSnapshot ? [writer, reopened] : [stale, writer, reopened]) {
+          const facts = getAdmittedSqliteSchemaFacts(database);
+          expect(facts?.admissionId).toBe(committed?.admissionId);
+          expect(facts?.userVersion).toBe(2);
+          expect(facts?.tables.has("committed_sibling")).toBe(true);
+          expect(facts?.tables.has("rejected_upgrade")).toBe(false);
+          expect(getSqliteDatabaseSchemaRevision(database)).toBe(generation);
+        }
+      };
+      try {
+        if (implicitSnapshot) {
+          runSqlitePinnedReadSnapshotSync(stale, rollbackFailedUpgrade);
+        } else {
+          rollbackFailedUpgrade();
+        }
+        expect(getAdmittedSqliteSchemaFacts(stale)?.admissionId).toBe(committed?.admissionId);
+        expect(getAdmittedSqliteSchemaFacts(stale)?.userVersion).toBe(2);
+        expect(getAdmittedSqliteSchemaFacts(stale)?.tables.has("committed_sibling")).toBe(true);
+        expect(getSqliteDatabaseSchemaRevision(stale)).toBe(generation);
+        for (const pattern of [
+          /sqlite_schema/iu,
+          /PRAGMA user_version/iu,
+          /PRAGMA schema_version/iu,
+        ]) {
+          expect(
+            observation.queries.slice(rollbackStart).filter((sql) => pattern.test(sql)),
+          ).toHaveLength(0);
+        }
+      } finally {
+        observation.restore();
+      }
+    },
+  );
+
+  it("discards rolled-back staged catalog facts before transaction observers unwind", () => {
+    const filename = path.join(
+      tempDirs.make("openclaw-schema-rollback-publication-"),
+      "state.sqlite",
+    );
+    const database = openDatabase(undefined, true, filename);
+    const committed = getAdmittedSqliteSchemaFacts(database);
+    const generation = getSqliteDatabaseSchemaRevision(database);
+    const refusal = new Error("synthetic transaction refusal");
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    let rollbackStart = 0;
+    try {
+      expect(() =>
+        withSqlitePostCommitPublications(database, () => {
+          database.exec("BEGIN");
+          database.exec("CREATE TABLE rolled_back (id); PRAGMA user_version=3");
+          expect(getAdmittedSqliteSchemaFacts(database)?.tables.has("rolled_back")).toBe(true);
+          rollbackStart = observation.queries.length;
+          database.exec("ROLLBACK");
+          expect(getAdmittedSqliteSchemaFacts(database)?.admissionId).toBe(committed?.admissionId);
+          expect(getAdmittedSqliteSchemaFacts(database)?.tables.has("rolled_back")).toBe(false);
+          throw refusal;
+        }),
+      ).toThrow(refusal);
+      const reopened = openDatabase("", true, filename);
+      expect(getAdmittedSqliteSchemaFacts(reopened)?.admissionId).toBe(committed?.admissionId);
+      expect(getAdmittedSqliteSchemaFacts(reopened)?.userVersion).toBe(1);
+      expect(getSqliteDatabaseSchemaRevision(reopened)).toBe(generation);
+      expect(
+        observation.queries
+          .slice(rollbackStart)
+          .filter((sql) => /sqlite_schema|PRAGMA (?:user_version|schema_version)/iu.test(sql)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
   });
 
   it.each(["exec", "prepare"] as const)(

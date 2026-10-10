@@ -167,12 +167,12 @@ it.each([
   const probeEntered = createDeferredCore();
   const releaseProbe = createDeferredCore();
   let rejectClose = mode === "failed-close";
-  const embedBatch = vi.fn(async () => {
+  const embed = vi.fn(async () => {
     probeEntered.resolve();
     if (mode === "late-probe") {
       await releaseProbe.promise;
     }
-    return [[1, 0, 0]];
+    return [1, 0, 0];
   });
   const create = vi.fn(async () => {
     entered.resolve();
@@ -186,8 +186,8 @@ it.each([
       provider: {
         id: targetId,
         model: "synthetic-embedding",
-        embed: async () => [1, 0, 0],
-        embedBatch,
+        embed,
+        embedBatch: async () => [[1, 0, 0]],
         close,
       },
     };
@@ -325,7 +325,7 @@ it.each([
       assert(unaffected.manager, unaffected.error ?? "Expected an unaffected manager");
       await unaffected.manager.probeEmbeddingAvailability();
       const prepared = prepareMemoryRuntimeReload(owner.registry, next);
-      const probesBeforeAcquisition = embedBatch.mock.calls.length;
+      const probesBeforeAcquisition = embed.mock.calls.length;
       try {
         const retained = await owner.runtime.getMemorySearchManager({
           cfg: unaffectedConfig,
@@ -343,7 +343,7 @@ it.each([
           hasManager: false,
           error: expect.stringContaining("reloading"),
         });
-        expect(embedBatch).toHaveBeenCalledTimes(probesBeforeAcquisition);
+        expect(embed).toHaveBeenCalledTimes(probesBeforeAcquisition);
         expect(close).not.toHaveBeenCalled();
         expect(unaffectedClose).not.toHaveBeenCalled();
       } finally {

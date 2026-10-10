@@ -226,6 +226,75 @@ it("reports prepared immutable generations without offering package updates", as
   expect(output).not.toContain("npm update");
 });
 
+it.each([
+  { outcome: "succeeded", label: "accepted", pending: true, verified: true },
+  { outcome: "rolled-back", label: "restored", pending: false, verified: true },
+  { outcome: "succeeded", label: "accepted", pending: false, verified: false },
+] as const)(
+  "reports immutable $label history separately from pending recovery",
+  async ({ outcome, label, pending, verified }) => {
+    const immutable = {
+      root: "/opt/example",
+      currentSha: "a".repeat(40),
+      currentPath: "/opt/example/current",
+      activationEnabled: true,
+      ...(pending
+        ? {
+            activation: {
+              operationId: "11111111-1111-4111-8111-111111111111",
+              phase: "verifying" as const,
+              previousSha: "a".repeat(40),
+              candidateSha: "b".repeat(40),
+              failure: "candidate-verification-pending",
+              recoveryCommand: "/usr/bin/node /opt/example.control/recovery.mjs",
+            },
+          }
+        : {}),
+      lastActivation: {
+        operationId: "22222222-2222-4222-8222-222222222222",
+        outcome,
+        selectedSha: "a".repeat(40),
+        verifiedAtMs: 1000,
+        ...(verified
+          ? {
+              gateway: {
+                pid: 4242,
+                bootId: "fixture-boot",
+                version: "2026.10.1",
+                buildId: "fixture-build",
+              },
+            }
+          : {}),
+      },
+    };
+    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+      root: immutable.currentPath,
+      installKind: "immutable",
+      packageManager: "unknown",
+      immutable,
+    });
+    await updateStatusCommand({});
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain(label);
+    expect(output).toContain("Last immutable activation");
+    expect(output).toContain("verified");
+    if (verified) {
+      expect(output).toContain("fixture-build");
+      expect(output).toContain("PID 4242");
+      expect(output).toContain("fixture-boot");
+    } else {
+      expect(output).not.toContain("Last verified Gateway");
+    }
+    if (pending) {
+      expect(output).toContain("pending recovery · verifying");
+      expect(output).toContain("candidate-verification-pending");
+      expect(output).toContain("/usr/bin/node /opt/example.control/recovery.mjs");
+    }
+    await updateStatusCommand({ json: true });
+    expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({ update: { immutable } });
+  },
+);
+
 describe("update status channel failures", () => {
   it.each([true, false])("shows the Gateway's recorded trust refusal (JSON: %s)", async (json) => {
     const issue = {

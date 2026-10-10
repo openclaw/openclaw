@@ -141,6 +141,87 @@ function scenario() {
 }
 
 suite.define(() => {
+  it("uses narrow subagent panel width without empty avatar gutters", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 1000 }, colorScheme: "dark" },
+      async ({ page }) => {
+        const { parent, child } = scenario();
+        const report = [
+          "Ready: the navigation preference repair is implemented and verified.",
+          "### Worktree",
+          "`/workspace/openclaw/personal-navigation-preferences`",
+          "### Changed",
+          "- Preserve the latest navigation choice while a save is pending.\n- Keep preferences scoped to the signed-in profile.\n- Reconcile delayed updates without restoring an older selection.",
+          "### Repair",
+          "The existing preference owner applies each accepted change in order. A delayed response cannot overwrite a newer choice, and unrelated settings remain unchanged.",
+          "### Proof",
+          "- Reproduced the original failure through the real settings flow.\n- Verified keyboard navigation and reload behavior.\n- Confirmed that narrow panels keep long paths and reports readable.",
+        ].join("\n\n");
+        await installMockGateway(page, {
+          ...previewModel,
+          sessionKey: parent.key,
+          presenceUsers: [{ id: "layout-reviewer", name: "Layout reviewer", self: true }],
+          sessions: [parent, child],
+          historyMessages: [{ role: "assistant", content: "Reviewing navigation preferences." }],
+          sessionTranscripts: {
+            [child.key]: {
+              messages: [
+                {
+                  role: "user",
+                  content: "Review the navigation preference changes.",
+                  senderSession: { sessionKey: parent.key, agentId: "main", label: parent.label },
+                  provenance: {
+                    kind: "inter_session",
+                    sourceSessionKey: parent.key,
+                    sourceTool: "sessions_send",
+                  },
+                },
+                { role: "assistant", content: report },
+              ],
+            },
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
+        await openChatSidePanelType(page, "Subagents");
+        const panel = page.locator("openclaw-chat-subagents-panel");
+        await panel.getByRole("button", { name: child.label, exact: true }).click();
+        const detail = panel.locator(".chat-subagent-detail");
+        const copy = detail.getByText(
+          "Ready: the navigation preference repair is implemented and verified.",
+          { exact: true },
+        );
+        await copy.waitFor();
+        if (capture) {
+          const frame = await takeControlUiScreenshotFrame(page, panel, [copy], {
+            animations: "disabled",
+            elements: [panel],
+          });
+          await writeFile(
+            path.join(suite.artifactDir, "subagent-width.png"),
+            frame.elements[0]!.png,
+          );
+          await writeFile(path.join(suite.artifactDir, "subagent-width-context.png"), frame.png);
+        }
+        const geometry = await copy.evaluate((element) => {
+          const thread = element.closest<HTMLElement>(".chat-thread")!;
+          const column = element.closest(".chat-group-messages")!;
+          const outer = thread.getBoundingClientRect();
+          const inner = column.getBoundingClientRect();
+          return {
+            width: outer.width,
+            left: inner.left - outer.left,
+            right: outer.right - inner.right,
+            overflow: thread.scrollWidth - thread.clientWidth,
+          };
+        });
+        expect(geometry.width).toBeLessThanOrEqual(560);
+        expect(geometry.left).toBeLessThanOrEqual(24);
+        expect(geometry.right).toBeLessThanOrEqual(24);
+        expect(geometry.overflow).toBeLessThanOrEqual(1);
+      },
+    );
+  });
+
   it("keeps a child waiting on descendants in Running until its work settles", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const { parent, child, finished } = scenario();

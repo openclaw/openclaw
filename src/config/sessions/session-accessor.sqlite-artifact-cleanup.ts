@@ -110,6 +110,10 @@ export async function cleanupSessionLifecycleArtifactsCore(
         }
       : readDatabasePathIdentitySync(requested.path)
     : undefined;
+  // An absent store has no historical artifacts, even if startup creates it after capture.
+  if (source?.key.startsWith("path:")) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
   const resolved = { ...requested, path: source?.canonicalPath ?? requested.path };
   const databaseOptions = { ...toDatabaseOptions(resolved), path: resolved.path };
   return withSqliteMutationWorkerLifetime(databaseOptions, async ({ assertCurrent, signal }) => {

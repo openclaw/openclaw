@@ -23,6 +23,7 @@ const sqliteStatements = vi.hoisted(() => ({
   count: 0,
   prepared: [] as string[],
   executed: [] as string[],
+  schema: [] as string[],
 }));
 
 vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
@@ -32,7 +33,22 @@ vi.mock("openclaw/plugin-sdk/sqlite-worker-runtime", async (importOriginal) => {
     openNodeSqliteDatabase: (...args: Parameters<typeof actual.openNodeSqliteDatabase>) => {
       const db = actual.openNodeSqliteDatabase(...args);
       const prepare = db.prepare.bind(db);
+      const recordSchema = (sql: string) => {
+        if (
+          /user_version|schema_version|sqlite_schema|sqlite_master|pragma_table|PRAGMA\s+table_info|workboard_schema_migrations|CREATE\s+(?:TABLE|INDEX)/i.test(
+            sql,
+          )
+        ) {
+          sqliteStatements.schema.push(sql);
+        }
+      };
+      const exec = db.exec.bind(db);
+      vi.spyOn(db, "exec").mockImplementation((sql) => {
+        recordSchema(sql);
+        exec(sql);
+      });
       vi.spyOn(db, "prepare").mockImplementation((sql) => {
+        recordSchema(sql);
         sqliteStatements.prepared.push(sql);
         const statement = prepare(sql);
         for (const method of ["all", "get", "iterate", "run"] as const) {
@@ -126,6 +142,24 @@ function withStores<T>(run: (dbPath: string) => Promise<T>): Promise<T> {
 }
 
 describe("workboard sqlite batch card read", () => {
+  it("reopens without repeating admitted schema installation or column checks", async () => {
+    await withStores(async (dbPath) => {
+      for (let opened = 0; opened < 2; opened += 1) {
+        sqliteStatements.schema.length = 0;
+        const stores = createKernelStores(dbPath);
+        try {
+          if (opened === 0) {
+            expect(sqliteStatements.schema.length).toBeGreaterThan(0);
+          } else {
+            expect(sqliteStatements.schema).toEqual([]);
+          }
+          expect(await stores.cards.entries()).toEqual([]);
+        } finally {
+          await stores.close();
+        }
+      }
+    });
+  });
   it.each(["worker log", "proof"])("hydrates once when adding a %s", async (operation) => {
     await withStores(async (dbPath) => {
       const stores = createKernelStores(dbPath);

@@ -273,12 +273,11 @@ describe("session progress card store", () => {
     });
   });
 
-  it("refreshes foreign schema changes at write admission before recreating lazy storage", () => {
+  it("observes managed schema publication before recreating lazy storage", () => {
     admitSqliteSchema(db);
     writeSessionProgressCard(db, SESSION_KEY, { markdown: "Before foreign DDL" });
     const facts = getAdmittedSqliteSchemaFacts(db);
-    // An untracked connection models another isolate without local schema publication.
-    const foreign = new DatabaseSync(dbPath);
+    const foreign = openNodeSqliteDatabase(dbPath);
     try {
       foreign.exec("DROP TABLE session_progress_cards");
     } finally {

@@ -850,7 +850,8 @@ describe("managed llama-server", () => {
     );
   });
 
-  it("reports only facts observed from health, models, props, and metrics", async () => {
+  it("reports optional metrics separately from runtime readiness and load errors", async () => {
+    let metricsAvailable = true;
     const server = http.createServer((req, res) => {
       res.setHeader("content-type", "application/json");
       if (req.url === "/health") {
@@ -881,7 +882,7 @@ describe("managed llama-server", () => {
         );
         return;
       }
-      if (req.url?.startsWith("/metrics?")) {
+      if (metricsAvailable && req.url?.startsWith("/metrics?")) {
         res.setHeader("content-type", "text/plain");
         res.end("llamacpp:prompt_tokens_total 1\n");
         return;
@@ -890,21 +891,16 @@ describe("managed llama-server", () => {
       res.end("{}");
     });
     servers.push(server);
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("missing test server address");
-    }
-
-    await expect(
+    const port = await listen(server);
+    const inspect = (loadError?: string) =>
       inspectLlamaServerRuntime({
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        baseUrl: `http://127.0.0.1:${port}/v1`,
         modelId: "embedding-model",
         backend: "metal",
-      }),
-    ).resolves.toEqual({
+        loadError,
+      });
+
+    await expect(inspect()).resolves.toEqual({
       engine: "llama.cpp",
       state: "ready",
       backend: "metal",
@@ -917,6 +913,17 @@ describe("managed llama-server", () => {
         props: "ready",
         metrics: "ready",
       },
+    });
+
+    metricsAvailable = false;
+    await expect(inspect()).resolves.toMatchObject({
+      state: "ready",
+      endpoints: { health: "ready", models: "ready", props: "ready", metrics: "unavailable" },
+    });
+    await expect(inspect("Model load failed")).resolves.toMatchObject({
+      state: "failed",
+      loadError: "Model load failed",
+      endpoints: { metrics: "unavailable" },
     });
   });
 
@@ -977,7 +984,7 @@ describe("managed llama-server", () => {
 
       body = responseBytes(32 * 1024 * 1024);
       await expect(inspect()).resolves.toMatchObject({
-        state: "failed",
+        state: endpoint === "metrics" ? "ready" : "failed",
         endpoints: {
           health: "ready",
           models: "ready",

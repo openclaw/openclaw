@@ -6,7 +6,7 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
@@ -458,7 +458,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
   });
 });
 
-it("consumes admitted board absence for a cohort and observes first use and foreign DDL", async () => {
+it("consumes admitted board absence for a cohort and observes first use and published DDL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     const sessionKeys = Array.from(
@@ -471,7 +471,7 @@ it("consumes admitted board absence for a cohort and observes first use and fore
     database.db.exec("DROP TABLE board_widgets; DROP TABLE board_tabs");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    const peer = openNodeSqliteDatabase(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       retained.run(target, () => {

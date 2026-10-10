@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { describe, expect, it, vi } from "vitest";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -547,6 +548,9 @@ describe("runDoctorSessionSqlite", () => {
     const databaseBefore = fs.readFileSync(sqlitePath);
     expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
     expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(false);
+    // Keep real source sidecars present independently of cached owner inspection.
+    using sourceReader = new DatabaseSync(sqlitePath, { readOnly: true });
+    sourceReader.prepare("SELECT count(*) FROM sqlite_schema").get();
     const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
     expect(preview.artifacts.find((item) => item.path === originalMove.archivePath)?.outcome).toBe(
       "candidate",
@@ -556,7 +560,6 @@ describe("runDoctorSessionSqlite", () => {
       preview,
       readConfig: async () => ({}),
       confirm: async () => {
-        // The actual read-only owner inspection creates these sidecars before confirmation.
         expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(true);
         expect(fs.existsSync(`${sqlitePath}-shm`)).toBe(true);
         return true;

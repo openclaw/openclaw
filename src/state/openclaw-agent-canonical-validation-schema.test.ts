@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
@@ -165,7 +165,9 @@ DatabaseSync.prototype.prepare = function(sql) {
               carry ? "" : "comparison-ddl\nexpected-definitions\n",
             );
             if (carry) {
-              const changed = new DatabaseSync(pathname);
+              const driftedPath = state.path("canonical-handoff-drifted.sqlite");
+              copyFileSync(pathname, driftedPath);
+              const changed = new DatabaseSync(driftedPath);
               try {
                 changed.exec(
                   "CREATE TRIGGER unexpected_node_validation AFTER UPDATE ON session_nodes BEGIN SELECT 1; END",
@@ -173,9 +175,26 @@ DatabaseSync.prototype.prepare = function(sql) {
               } finally {
                 changed.close();
               }
-              await expect(read()).rejects.toThrow(
-                /canonical validation schema is missing or drifted/u,
+              const driftedReader = retainSessionHistoryWorkerDatabase(
+                { agentId: "main", path: driftedPath, env: state.env },
+                maintenanceLane,
               );
+              try {
+                await expect(
+                  driftedReader.owner.readTrajectoryRetention(
+                    {
+                      input: { sessionId: "retained" },
+                      now: 1,
+                      schemaContract: contract,
+                      expectedIdentity: readDatabasePathIdentitySync(driftedPath),
+                      env: { ...state.env, ...preloadEnv },
+                    },
+                    { signal, timeoutMs: 60_000 },
+                  ),
+                ).rejects.toThrow(/canonical validation schema is missing or drifted/u);
+              } finally {
+                driftedReader.release();
+              }
             }
           } finally {
             setEnvironmentData(factKey, inherited);

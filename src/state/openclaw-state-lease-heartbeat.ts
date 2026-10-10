@@ -124,7 +124,7 @@ type PendingHeartbeatRequest = {
 export function startOpenClawStateLeaseHeartbeat(
   params: Omit<
     LeaseHeartbeatWorkerData,
-    "shared" | "expectedIdentity" | "renewalProgress" | "deferActivation"
+    "shared" | "expectedIdentity" | "renewalProgress" | "completedRequest" | "deferActivation"
   > & {
     /** The caller retains its shared-state actor through startup and failure teardown. */
     startupContext?: OpenClawStateWorkerContext;
@@ -155,6 +155,9 @@ export function startOpenClawStateLeaseHeartbeat(
       new SharedArrayBuffer((state.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT),
     );
   const renewalProgress = new BigInt64Array(new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT));
+  const completedRequest = new BigInt64Array(
+    new SharedArrayBuffer(BigInt64Array.BYTES_PER_ELEMENT),
+  );
   Atomics.store(shared, state.expiresAt, BigInt(params.expiresAt));
   const ready = createDeferredCore();
   // Synchronous startup failures can occur before the caller receives ready.
@@ -211,7 +214,7 @@ export function startOpenClawStateLeaseHeartbeat(
     params.onLost(error);
   };
   const remainingLeaseMs = () => Number(Atomics.load(shared, state.expiresAt)) - Date.now();
-  const responseBudget = (leaseRemaining: () => number, maximumMs: number) => {
+  const responseBudget = (leaseRemaining: () => number, maximumMs: number, requestId?: bigint) => {
     let observedProgress = Atomics.load(renewalProgress, 0);
     let responseDeadline = performance.now() + WORKER_RESPONSE_TIMEOUT_MS;
     const operationDeadline = performance.now() + maximumMs;
@@ -221,12 +224,13 @@ export function startOpenClawStateLeaseHeartbeat(
         observedProgress = progress;
         responseDeadline = performance.now() + WORKER_RESPONSE_TIMEOUT_MS;
       }
-      // A busy worker may finish its native renewal within the lease bound.
+      // Completion survives delayed delivery, not lease or operation expiry.
       // Occupancy never satisfies the request or extends the operation forever.
+      const completed = requestId !== undefined && Atomics.load(completedRequest, 0) >= requestId;
       return Math.min(
         leaseRemaining(),
         operationDeadline - performance.now(),
-        progress % 2n === 1n ? Infinity : responseDeadline - performance.now(),
+        completed || progress % 2n === 1n ? Infinity : responseDeadline - performance.now(),
       );
     };
   };
@@ -397,6 +401,7 @@ export function startOpenClawStateLeaseHeartbeat(
             processOwner: params.processOwner,
             shared: shared.buffer,
             renewalProgress: renewalProgress.buffer,
+            completedRequest: completedRequest.buffer,
           } satisfies LeaseHeartbeatWorkerData,
           env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
           execArgv,
@@ -468,7 +473,7 @@ export function startOpenClawStateLeaseHeartbeat(
     if (!request) {
       return;
     }
-    if (reply.ok && request.remainingMs() <= 0) {
+    if (reply.ok && (request.remainingMs() <= 0 || reply.expiresAt <= Date.now())) {
       fail(new Error("state lease heartbeat is not responsive"));
       return;
     }
@@ -502,6 +507,7 @@ export function startOpenClawStateLeaseHeartbeat(
       remainingMs: responseBudget(
         remainingLeaseMs,
         Math.max(WORKER_RESPONSE_TIMEOUT_MS, params.leaseMs),
+        BigInt(id),
       ),
     };
     pending.set(id, awaiting);

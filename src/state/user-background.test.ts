@@ -13,6 +13,7 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import { FIRST_USE_STATE_TABLES, FIRST_USE_STATE_INDEXES } from "./openclaw-state-db-contract.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
@@ -449,7 +450,7 @@ describe("private profile backgrounds", () => {
       { ...empty, imageBase64: "fixture" },
       options,
     );
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseByPathAsync(options.path);
     const olderReader = new DatabaseSync(options.path);
     try {
       const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(

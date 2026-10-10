@@ -26,8 +26,8 @@ function readScope(context: ApplicationContext, assetId: string) {
   });
   const transport = new URL(gatewayWebSocketTransportUrl(gateway.connection.gatewayUrl));
   transport.protocol = transport.protocol.replace(/^ws/u, "http");
-  const basePath =
-    transport.origin === location.origin ? context.resourceBasePath : transport.pathname;
+  // A remote WebSocket pathname is not an HTTP resource mount.
+  const basePath = transport.origin === location.origin ? context.resourceBasePath : "";
   const url = new URL(buildControlUiUserBackgroundPath(assetId, basePath), transport.origin).href;
   return {
     client: snapshot.client,

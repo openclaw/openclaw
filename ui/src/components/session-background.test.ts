@@ -30,7 +30,7 @@ function fixture() {
     selfUser: { id: "profile-a" },
   };
   const gateway = createApplicationGateway(state);
-  gateway.gateway.connection.gatewayUrl = "ws://localhost/control";
+  gateway.gateway.connection.gatewayUrl = `${location.origin.replace(/^http/u, "ws")}/ws`;
   gateway.gateway.connection.token = "test-credential";
   const listeners = new Set<() => void>();
   const settings = {
@@ -184,7 +184,7 @@ it("reads a same-origin mounted asset using the canonical auth primitive without
   });
   expect(url).toBe("blob:background-a");
   expect(fetch).toHaveBeenCalledWith(
-    "http://localhost/control/__openclaw__/users/background/asset-a",
+    `${location.origin}/control/__openclaw__/users/background/asset-a`,
     expect.objectContaining({
       headers: { Authorization: "Bearer test-credential" },
       credentials: "include",
@@ -242,15 +242,35 @@ it("never retries an old credential after identity changed during a rejected fet
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-it("uses the selected remote gateway rather than the document mount", async () => {
+it.each([
+  ["ws://remote.example/ws", "http://remote.example"],
+  ["wss://remote.example/control", "https://remote.example"],
+])("does not infer a remote HTTP mount from %s", async (gatewayUrl, origin) => {
   const { context } = fixture();
-  context.gateway.connection.gatewayUrl = "wss://remote.example/control";
+  context.gateway.connection.gatewayUrl = gatewayUrl;
   await readBackgroundImage(context, "asset-a", {
     signal: new AbortController().signal,
     isCurrent: () => true,
   });
   expect(fetch).toHaveBeenCalledWith(
-    "https://remote.example/control/__openclaw__/users/background/asset-a",
+    `${origin}/__openclaw__/users/background/asset-a`,
+    expect.anything(),
+  );
+});
+
+it("preserves the explicit same-origin development proxy mount", async () => {
+  const { context } = fixture();
+  const gatewayUrl = "wss://remote.example/control";
+  const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+  vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+  context.gateway.connection.gatewayUrl = gatewayUrl;
+  context.resourceBasePath = `${proxyPath}/control`;
+  await readBackgroundImage(context, "asset-a", {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+  expect(fetch).toHaveBeenCalledWith(
+    `${location.origin}${proxyPath}/control/__openclaw__/users/background/asset-a`,
     expect.anything(),
   );
 });
