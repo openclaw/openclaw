@@ -4,12 +4,14 @@ import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { withIncognitoSessionActor } from "../../../config/sessions/session-incognito-binding.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
+import { openIncognitoTestActor } from "../../../state/openclaw-agent-execution-incognito.test-support.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import * as clientVoiceSession from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -216,6 +218,80 @@ describe("Talk target preparation through Gateway authorization", () => {
     const respond = await dispatch("talk.client.create", { ...createParams, sessionKey });
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(browserSession), undefined);
     expect(mocks.bootstrap).toHaveBeenCalledWith(expect.objectContaining({ agentId, sessionKey }));
+  });
+
+  it("creates Talk from the bound actor only for an administrator", async () => {
+    const authority = { assertCurrent() {} };
+    const actor = await openIncognitoTestActor(state.env, authority, "voice");
+    const sessionKey = "agent:voice:dashboard:incognito-gateway-talk";
+    const sessionId = "private-gateway-talk";
+    try {
+      await actor.sessions.create(authority, {
+        sessionKey,
+        entry: {
+          sessionId,
+          lifecycleRevision: "private-gateway-talk-generation",
+          updatedAt: 1,
+          incognito: true,
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: client.authenticatedUserProfile!.profileId,
+          },
+        },
+      });
+      await actor.sessions.transcript(authority, {
+        type: "session.message.append",
+        input: {
+          sessionKey,
+          sessionId,
+          fence: { expectedLifecycleRevision: "private-gateway-talk-generation" },
+          message: { role: "user", content: "Private voice continuity.", timestamp: 1 },
+        },
+      });
+      await withIncognitoSessionActor(actor, async () => {
+        const params = { ...createParams, sessionKey };
+        expect(await dispatch("talk.client.create", params)).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            code: "INVALID_REQUEST",
+            message: `Incognito session "${sessionKey}" was not found.`,
+          }),
+        );
+        expect(createBrowserSession).not.toHaveBeenCalled();
+        expect(mocks.bootstrap).not.toHaveBeenCalled();
+        client.connect.scopes = ["operator.admin"];
+        const respond = await dispatch("talk.client.create", params);
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining(browserSession),
+          undefined,
+        );
+        expect(createBrowserSession).toHaveBeenCalledWith(
+          expect.objectContaining({
+            agentId: "voice",
+            initialItems: [{ role: "user", text: "Private voice continuity." }],
+          }),
+        );
+        const { voiceSessionId } = respond.mock.calls[0]![1] as { voiceSessionId: string };
+        expect(clientVoiceSessionTesting.readRecord("voice", voiceSessionId)).toMatchObject({
+          sessionKey,
+          status: "open",
+        });
+        expect(actor.sessions.readSharing(sessionKey)?.entry?.sessionId).toBe(sessionId);
+        expect(
+          await dispatch("talk.client.close", { sessionKey, voiceSessionId }),
+        ).toHaveBeenCalledWith(true, { ok: true }, undefined);
+        await closeTalkClientGatewayControlSession({
+          sessionKey,
+          voiceSessionId,
+          connId: client.connId,
+        });
+      });
+    } finally {
+      await actor.close();
+    }
   });
 
   it("rejects ambiguous default ownership before loading profile or provider state", async () => {

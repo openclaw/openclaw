@@ -254,6 +254,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/plugins/runtime/runtime-agent.acp-binding.test.ts",
   "src/tui/tui-last-session.test.ts",
   "src/agents/session-placement-admission.caller-scope.test.ts",
+  "src/trajectory/runtime-reset.incognito.test.ts",
   "src/trajectory/runtime-store-writer.test.ts",
   "src/trajectory/runtime.test.ts",
   "src/infra/outbound/bound-delivery-router.test.ts",

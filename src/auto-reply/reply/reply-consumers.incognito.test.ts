@@ -2,6 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { generateExportHtmlVendorAssets } from "../../../scripts/runtime-postbuild.mts";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.entry-mutation.js";
@@ -24,6 +25,7 @@ import { handleNameCommand } from "./commands-name.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { prepareNativeReplyToolAuthorityRead } from "./reply-tool-authority.native-read.js";
 
+const exportVendorAssets = vi.hoisted(() => new Map<string, string>());
 const exportPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ systemPrompt: "synthetic", tools: [] })),
 );
@@ -31,12 +33,34 @@ vi.mock("./commands-system-prompt.js", () => ({
   resolveCommandsSystemPromptBundle: exportPrompt,
 }));
 
+// Source-mode exports use the same generated browser assets as runtime postbuild.
+// Authored templates, HTML rendering, and artifact writes still use their real owners.
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const mocked = {
+    ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const filePath = typeof args[0] === "string" ? args[0].replaceAll("\\", "/") : undefined;
+      for (const [fileName, contents] of exportVendorAssets) {
+        if (filePath?.endsWith(`/export-html/vendor/${fileName}`)) {
+          return contents;
+        }
+      }
+      return actual.readFile(...args);
+    },
+  };
+  return { ...mocked, default: mocked };
+});
+
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {} };
 let actor: IncognitoAgentDatabaseExecution;
 let env: NodeJS.ProcessEnv;
 
 beforeAll(async () => {
+  for (const [fileName, contents] of Object.entries(generateExportHtmlVendorAssets())) {
+    exportVendorAssets.set(fileName, contents);
+  }
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-reply-consumers-") };
   actor = await openIncognitoTestActor(env, authority);
 });
@@ -176,6 +200,49 @@ it("reads the completed fallback model from the actor transcript", async () => {
           selectedModel: "selected",
         }),
       ).toEqual({ modelProvider: "openai", model: "fallback" });
+    });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+});
+
+it("exports the selected private transcript on an owner request without host SQL", async () => {
+  const { scope, entry } = await create("export-success");
+  const workspaceDir = tempDirs.make("incognito-export-success-");
+  const params = {
+    ...scope,
+    cfg: {},
+    workspaceDir,
+    command: {
+      commandBodyNormalized: "/export-session private-export.html",
+      isAuthorizedSender: true,
+      senderIsOwner: true,
+    },
+    sessionEntry: entry,
+  } as HandleCommandsParams;
+  const sql = observeHostDataSql();
+  try {
+    await withIncognitoSessionActor(actor, async () => {
+      await appendTranscriptMessage(
+        { ...scope, sessionId: entry.sessionId },
+        { message: { role: "assistant", content: "Owner-requested private export" } },
+      );
+      expect((await buildExportSessionReply(params)).text).toContain("Session exported!");
+    });
+    expect(await fs.readdir(workspaceDir)).toEqual(["private-export.html"]);
+    const html = await fs.readFile(`${workspaceDir}/private-export.html`, "utf8");
+    const match = html.match(/id="session-data"[^>]*>([^<]+)</);
+    assert(match?.[1]);
+    expect(JSON.parse(Buffer.from(match[1].trim(), "base64").toString("utf8"))).toMatchObject({
+      header: { id: entry.sessionId },
+      entries: [
+        {
+          type: "message",
+          message: { role: "assistant", content: "Owner-requested private export" },
+        },
+      ],
+      systemPrompt: "synthetic",
     });
     expect(sql.queries).toEqual([]);
   } finally {
