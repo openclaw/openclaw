@@ -26,6 +26,10 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import {
+  readSessionEntriesWithRetainedFacts,
+  readSessionEntryWithRetainedFacts,
+} from "./session-entry-read-facts.js";
+import {
   readAdmittedSessionEntry,
   withOrderedSessionEntriesInWorker,
 } from "./session-entry-read-ordered.js";
@@ -157,7 +161,9 @@ export async function withSessionEntryReadOnlyInWorker<T>(
         readConsistency: scope.readConsistency,
         projection: scope.projection,
       };
-      const read = await reader.readEntryResult({ scope: readScope, continuation });
+      const read = await readSessionEntryWithRetainedFacts(database, readScope, () =>
+        reader.readEntryResult({ scope: readScope, continuation }),
+      );
       owner.assertCurrent();
       const value = await consumeRead(read, {
         ...owner,
@@ -490,7 +496,9 @@ export async function withSessionEntriesFromStoreInWorker<T>(
     input,
     async ({ reader, database, continuation, assertCurrent }) => {
       assertCurrent();
-      const result = await reader.readExactEntries({ ...request, env: database.env, continuation });
+      const result = await readSessionEntriesWithRetainedFacts(database, request, () =>
+        reader.readExactEntries({ ...request, env: database.env, continuation }),
+      );
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
