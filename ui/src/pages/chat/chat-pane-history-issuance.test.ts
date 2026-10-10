@@ -54,50 +54,6 @@ function assistantHistory(text: string) {
 }
 
 describe("chat pane history issuance across Gateway connection transitions", () => {
-  it("keeps an unread transcript pending until hello supplies an authoritative empty history", async () => {
-    const started = createDeferred();
-    const history = createDeferred<{ messages: never[] }>();
-    const committed = createDeferred();
-    const request = vi.fn((method: string) => {
-      if (method === "chat.startup") {
-        started.resolve();
-        return history.promise;
-      }
-      if (method === "agents.list") {
-        return Promise.resolve({ agents: [] });
-      }
-      return Promise.resolve({});
-    });
-    const { pane, state, snapshot } = createCanonicalRoutePane(request);
-    pane.sessionKey = state.sessionKey;
-    state.connected = false;
-    state.loadAssistantIdentity = vi.fn(async () => undefined);
-    state.requestUpdate = () => {
-      if (getChatHistoryLoadState(state).phase === "committed") {
-        committed.resolve();
-      }
-    };
-
-    pane.applyGatewaySnapshot({ ...snapshot, client: null, phase: "reconnecting", hello: null });
-    expect(getChatHistoryLoadState(state)).toMatchObject({
-      phase: "pending-connection",
-      startup: true,
-    });
-    expect(state.chatLoading).toBe(true);
-    pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null });
-    expect(state.chatLoading).toBe(true);
-    expect(requestCalls(request, "chat.startup")).toHaveLength(0);
-
-    pane.applyGatewaySnapshot(snapshot);
-    await started.promise;
-    expect(state.chatLoading).toBe(true);
-    history.resolve({ messages: [] });
-    await committed.promise;
-    expect(state.chatLoading).toBe(false);
-    expect(state.chatMessages).toEqual([]);
-    expect(requestCalls(request, "chat.startup")).toHaveLength(1);
-  });
-
   it("does not request the optional header platform while initial history is pending", async () => {
     const subscribed = createDeferred();
     const historyStarted = createDeferred();

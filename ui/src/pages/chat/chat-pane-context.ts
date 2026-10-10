@@ -36,11 +36,7 @@ import {
   synchronizeInitialChatSnapshotConnection,
 } from "./chat-history-state.ts";
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
-import {
-  applyChatAgentsList,
-  loadChatHistory,
-  resumePendingChatHistoryLoad,
-} from "./chat-history.ts";
+import { applyChatAgentsList, resumePendingChatHistoryLoad } from "./chat-history.ts";
 import { ChatPaneLifecycle } from "./chat-pane-lifecycle.ts";
 import { resolvePlacementComposer } from "./chat-pane-placement.ts";
 import { chatSessionPresentationKey } from "./chat-pane-session-presentation.ts";
@@ -496,7 +492,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.providerPolicyNotice = null;
       this.resetSessionPullRequests();
       this.resetOlderMessagesViewport();
-      state.chatLoading = getChatHistoryLoadState(state).phase === "pending-connection";
+      state.chatLoading = false;
     }
     if (
       sourceChanged ||
@@ -608,9 +604,6 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
       state.assistantName = this.context.config.current.assistantIdentity.name;
     }
     if (snapshot.phase !== "connected") {
-      if (!catalogRouteKey && getChatHistoryLoadState(state).phase === "idle") {
-        void loadChatHistory(state, { startup: true });
-      }
       if (wasConnected) {
         const currentSessionId =
           typeof state.currentSessionId === "string" ? state.currentSessionId.trim() : "";
