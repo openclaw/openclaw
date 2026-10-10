@@ -401,6 +401,7 @@ suite.define(() => {
               {
                 host,
                 identity: "unchanged-route-and-owner",
+                id: "recovery-fence-fixture",
               },
             );
             component.style.cssText =
@@ -410,7 +411,7 @@ suite.define(() => {
           },
           { initialIncognito: change === "incognito", key: legacyKey, value: legacyValue },
         );
-        const notice = page.locator("openclaw-chat-outbox-recovery");
+        const notice = page.locator("#recovery-fence-fixture");
         const restore = notice.getByRole("button", { name: "Restore", exact: true });
         if (change === "incognito") {
           await notice.evaluate(async (element) => {
@@ -433,9 +434,7 @@ suite.define(() => {
           // Leaving Incognito reveals the retained source, never an adopted destination.
           await hostHandle.evaluate((host) => {
             host.selectedChatSessionIncognito = false;
-            const component = document.querySelector(
-              "openclaw-chat-outbox-recovery",
-            ) as LitElement & {
+            const component = document.querySelector("#recovery-fence-fixture") as LitElement & {
               identity: string;
             };
             component.identity = "non-incognito-review-owner";

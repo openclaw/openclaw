@@ -174,7 +174,7 @@ export async function resolveAgentDeliveryPhase(params: {
   }
 
   if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
-    const fallback = resolveAgentOutboundTarget({
+    const fallback = await resolveAgentOutboundTarget({
       cfg: params.cfgForAgent ?? params.cfg,
       plan: effectivePlan,
       targetMode: deliveryTargetMode ?? "implicit",
@@ -187,43 +187,31 @@ export async function resolveAgentDeliveryPhase(params: {
     }
   }
 
-  if (wantsDelivery && isDeliverableMessageChannel(resolvedChannel) && !resolvedTo) {
+  const missingTarget = isDeliverableMessageChannel(resolvedChannel) && !resolvedTo;
+  if (wantsDelivery && (missingTarget || resolvedChannel === INTERNAL_MESSAGE_CHANNEL)) {
     if (!params.bestEffortDeliver) {
       respond(
         false,
         undefined,
-        deliveryTargetResolutionError
+        missingTarget && deliveryTargetResolutionError
           ? errorShapeFromError(ErrorCodes.INVALID_REQUEST, deliveryTargetResolutionError)
           : errorShape(
               ErrorCodes.INVALID_REQUEST,
-              `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`,
+              missingTarget
+                ? `delivery target is required for ${resolvedChannel}: pass --to/--reply-to or configure a default target`
+                : "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
             ),
       );
       return undefined;
     }
     params.context.logGateway.info(
-      deliveryTargetResolutionError && !isIncognito
-        ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
-        : "agent delivery target missing (bestEffortDeliver): no deliverable target",
-    );
-  }
-
-  if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
-    if (!params.bestEffortDeliver) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
-        ),
-      );
-      return undefined;
-    }
-    params.context.logGateway.info(
-      deliveryResolutionError && !isIncognito
-        ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
-        : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
+      missingTarget
+        ? deliveryTargetResolutionError && !isIncognito
+          ? `agent delivery target missing (bestEffortDeliver): ${String(deliveryTargetResolutionError)}`
+          : "agent delivery target missing (bestEffortDeliver): no deliverable target"
+        : deliveryResolutionError && !isIncognito
+          ? `agent delivery unresolved (bestEffortDeliver); final delivery will report: ${deliveryResolutionError}`
+          : "agent delivery unresolved (bestEffortDeliver); final delivery will report: no deliverable channel",
     );
   }
 

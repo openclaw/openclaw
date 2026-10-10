@@ -371,7 +371,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
 }
 
 /** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
-export function canUseProfileAsProviderEntryApiKey(params: {
+function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
   provider: string;

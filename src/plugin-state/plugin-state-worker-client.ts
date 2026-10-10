@@ -4,6 +4,7 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import { assertStateDatabaseReadAllowed } from "../infra/gateway-state-owner.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -12,7 +13,23 @@ import type {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { withPluginStatePublication } from "./plugin-state-publication.js";
+import {
+  observationFromCachedPluginState,
+  preparePluginStateObservationCacheRead,
+  readPluginStateObservationCache,
+} from "./plugin-state-observation-cache.js";
+import type {
+  PluginStateOperationCommit,
+  PluginStateOperationResult,
+} from "./plugin-state-operation-contract.js";
+import {
+  beginPluginStateMutation,
+  capturePluginStateMutationSettlement,
+} from "./plugin-state-operation-epochs.js";
+import {
+  recordPluginStateReadDependency,
+  withPluginStatePublication,
+} from "./plugin-state-publication.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
 import type { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
@@ -39,6 +56,46 @@ type Input<Key extends keyof PluginStateWorkerOperations> =
 type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
   result: PluginStateWorkerRequests[Key]["output"],
 ) => boolean;
+type ReadDependency = { pluginId: string; namespace: string; keys: readonly string[] };
+
+type PluginStateCommandOrder = { ready: Promise<void> | undefined; finish?: () => void };
+
+function prepareCommandOrder(
+  coordinationKey: string,
+  command: {
+    [Key in keyof PluginStateWorkerOperations]: {
+      type: Key;
+      input: PluginStateWorkerOperations[Key]["input"];
+    };
+  }[keyof PluginStateWorkerOperations],
+): PluginStateCommandOrder | undefined {
+  switch (command.type) {
+    case "pluginState.executeOperation":
+      return undefined;
+    case "pluginState.lookup":
+    case "pluginState.lookupMany":
+    case "pluginState.entries":
+    case "pluginState.entriesInKeyRange":
+    case "pluginState.count":
+    case "pluginState.observe":
+      return { ready: capturePluginStateMutationSettlement(coordinationKey, [command.input]) };
+    case "pluginState.sweep":
+      // Expiry changes no live row; each receipt already carries its earliest TTL deadline.
+      return undefined;
+    case "pluginState.appendJournal":
+      return beginPluginStateMutation(coordinationKey, [
+        { pluginId: command.input.pluginId, namespace: command.input.cursorNamespace },
+        { pluginId: command.input.pluginId, namespace: command.input.journalNamespace },
+      ]);
+    case "pluginState.moveEntries":
+      return beginPluginStateMutation(coordinationKey, [
+        command.input,
+        { ...command.input, namespace: command.input.sourceNamespace },
+      ]);
+    default:
+      return beginPluginStateMutation(coordinationKey, [command.input]);
+  }
+}
 
 async function execute<Key extends keyof PluginStateWorkerOperations>(
   { env, assertActive, sessionEntryCurrent, context: capturedContext, signal }: HostAdmission,
@@ -48,9 +105,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     assertCurrent?: () => void;
     isObservation?: ObservationCheck<Key>;
     existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
+    readDependency?: ReadDependency;
+    onCommitted?: (facts: unknown) => void;
   } = {},
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
-  const { assertCurrent, isObservation, existingOnly } = checks;
+  const { assertCurrent, isObservation, existingOnly, onCommitted } = checks;
   const currentEntries: SessionEntriesCurrentCheck | undefined =
     sessionEntryCurrent && "source" in sessionEntryCurrent
       ? {
@@ -69,9 +128,56 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     capturedContext?.admission.databasePath ?? resolveOpenClawStateSqlitePath(env ?? process.env);
   const description = pluginStateWorkerOperations[command.type];
   let dispatched = false;
+  let order: PluginStateCommandOrder | undefined;
+  let installObservation: ReturnType<typeof preparePluginStateObservationCacheRead> | undefined;
   try {
     const context =
       capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
+    if (checks.readDependency) {
+      const identity = context.admission.identity.key;
+      recordPluginStateReadDependency({
+        ...checks.readDependency,
+        identity: identity.startsWith("file:") ? identity : undefined,
+        assertCurrent: context.admission.assertCurrent,
+      });
+    }
+    order = prepareCommandOrder(
+      context.admission.coordinationKey,
+      // SAFETY: Key and input are correlated by every caller; this forms the dispatch union.
+      command as Parameters<typeof prepareCommandOrder>[1],
+    );
+    if (order?.ready) {
+      await order.ready;
+      assertAdmission?.();
+    }
+    if (
+      command.input &&
+      "key" in command.input &&
+      (command.type === "pluginState.observe" ||
+        command.type === "pluginState.compareUpdate" ||
+        command.type === "pluginState.compareDelete")
+    ) {
+      const identity = context.admission.identity.key;
+      const current = readPluginStateObservationCache(identity, command.input);
+      if (command.type === "pluginState.observe" && !currentEntries) {
+        context.admission.assertCurrent();
+        if (current) {
+          assertStateDatabaseReadAllowed(databasePath);
+          assertAdmission?.();
+          const observation = observationFromCachedPluginState(
+            identity,
+            databasePath,
+            command.input,
+            current,
+          );
+          // SAFETY: This branch handles only the observe command's observation output.
+          return observation as PluginStateWorkerRequests[Key]["output"];
+        }
+        installObservation = preparePluginStateObservationCacheRead(identity, command.input);
+      } else if (command.type !== "pluginState.observe" && current) {
+        Object.assign(command.input, { current });
+      }
+    }
     // A write-only await here would let later reads overtake it before broker admission.
     const [
       { runOpenClawStateWorkerOperation },
@@ -98,6 +204,12 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       if (!result.ok) {
         throw restorePluginStateWorkerFailure(result.error);
       }
+      if (command.type === "pluginState.observe") {
+        const observation =
+          // SAFETY: The command discriminant fixes this worker result's private row envelope.
+          result.value as PluginStateWorkerRequests["pluginState.observe"]["output"];
+        installObservation?.(observation.row);
+      }
       return result.value;
     };
     if (missing) {
@@ -114,7 +226,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       assertAdmission?.();
       assertSessionEntriesCurrentAdmission(request, currentEntries);
     };
-    const createAdmission: SqliteWorkerAdmissionFactory =
+    const baseAdmission: SqliteWorkerAdmissionFactory =
       command.type === "pluginState.replaceEntry"
         ? () => {
             // Revocation commits before replacement; both transactions require fresh grants.
@@ -140,7 +252,7 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       signal,
       assertCurrent: assertAdmission,
-      createAdmission: withPluginStatePublication(createAdmission, context),
+      createAdmission: withPluginStatePublication(baseAdmission, context, onCommitted),
       existingOnly: existingOnly !== undefined,
     });
     if (result === undefined && existingOnly) {
@@ -158,7 +270,37 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       dispatched ? description.message : "Failed to open the plugin state database.",
       databasePath,
     );
+  } finally {
+    order?.finish?.();
   }
+}
+
+export function executePluginStateOperationInWorker(
+  params: Input<"pluginState.executeOperation">,
+  options: {
+    missing?: () => PluginStateOperationResult;
+    onCommitted: (facts: PluginStateOperationCommit["pluginStateOperation"]) => void;
+  },
+): Promise<PluginStateOperationResult> {
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, context, ...input } = params;
+  const readOnly = input.writeStores.length === 0;
+  return execute(
+    { env, assertActive, sessionEntryCurrent, context },
+    { type: "pluginState.executeOperation", input },
+    readOnly
+      ? (options.missing ??
+          (() => {
+            throw new Error("Plugin state operation source does not exist");
+          }))
+      : undefined,
+    {
+      assertCurrent,
+      onCommitted(facts) {
+        // SAFETY: This admission belongs to the host-minted plugin state command and receipt shape.
+        options.onCommitted((facts as PluginStateOperationCommit).pluginStateOperation);
+      },
+    },
+  );
 }
 
 function createOperation<
@@ -167,6 +309,7 @@ function createOperation<
   type: Key,
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   isObservation?: ObservationCheck<Key>,
+  readDependency?: (params: Input<Key>) => ReadDependency,
 ) {
   return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
     // Host authority stays in the broker admission; only data crosses to the worker.
@@ -185,6 +328,7 @@ function createOperation<
       {
         assertCurrent,
         isObservation,
+        readDependency: readDependency?.(params),
       },
     );
   };
@@ -194,11 +338,16 @@ export const registerPluginStateInWorker = createOperation("pluginState.register
 export const replacePluginStateInWorker = createOperation("pluginState.replace");
 export const replacePluginStateEntryInWorker = createOperation("pluginState.replaceEntry");
 
-export const observePluginStateInWorker = createOperation(
+const observePluginState = createOperation(
   "pluginState.observe",
   undefined,
   () => true,
+  ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
 );
+export async function observePluginStateInWorker(params: Input<"pluginState.observe">) {
+  const { value, comparison } = await observePluginState(params);
+  return { value, comparison };
+}
 export const comparePluginStateUpdateInWorker = createOperation(
   "pluginState.compareUpdate",
   undefined,
@@ -211,7 +360,12 @@ export const comparePluginStateDeleteInWorker = createOperation(
 );
 export const registerPluginStateIfAbsentInWorker = createOperation("pluginState.registerIfAbsent");
 export const deletePluginStateIfEqualInWorker = createOperation("pluginState.deleteIfEqual");
-export const lookupPluginStateInWorker = createOperation("pluginState.lookup", () => undefined);
+export const lookupPluginStateInWorker = createOperation(
+  "pluginState.lookup",
+  () => undefined,
+  undefined,
+  ({ pluginId, namespace, key }) => ({ pluginId, namespace, keys: [key] }),
+);
 
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
@@ -225,6 +379,7 @@ export async function lookupManyPluginStateInWorker(
     { env, assertActive, sessionEntryCurrent, context, signal },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
+    { readDependency: { pluginId: input.pluginId, namespace: input.namespace, keys: input.keys } },
   );
   return results.map((result) =>
     result.ok ? result : err(restorePluginStateWorkerFailure(result.error)),

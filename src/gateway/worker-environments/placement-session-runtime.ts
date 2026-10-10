@@ -1,5 +1,7 @@
 import { resolveEffectiveAgentDir } from "../../agents/agent-scope-config.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+import { readSessionRuntimeOwnershipAsync } from "../../agents/harness/session-runtime-ownership.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../../agents/harness/types.js";
 import { resolveLegacyInheritedAuthAgentId } from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -8,6 +10,7 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { captureRuntimeStateEnvironment } from "../../config/paths.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
@@ -25,12 +28,20 @@ export function resolveWorkerPlacementSessionRuntime(params: {
   entry: SessionEntry;
   agentId: string;
   sessionKey: string;
+  preparedRuntimeOwnership?: AgentHarnessSessionRuntimeOwnership | null;
 }): string {
   const { provider, model } = resolveSessionSelectedModelRef({
     ...params,
     source: {
       entry: params.entry,
       readSourceEntry: (key) => {
+        const metadata = captureSessionEntryMetadataRead({
+          sessionKey: key,
+          agentId: params.agentId,
+        });
+        if (metadata) {
+          return metadata.readCurrent();
+        }
         const target = resolveGatewaySessionStoreTargetWithStore({
           ...params,
           key: params.sessionKey,
@@ -44,6 +55,28 @@ export function resolveWorkerPlacementSessionRuntime(params: {
     },
   });
   return resolveWorkerPlacementModelRuntime({ ...params, provider, model });
+}
+
+export async function resolveWorkerPlacementSessionRuntimeAsync(
+  params: Omit<
+    Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
+    "preparedRuntimeOwnership"
+  > & {
+    assertCurrent?: () => void;
+  },
+): Promise<string> {
+  const ownership = await readSessionRuntimeOwnershipAsync({
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sessionEntry: params.entry,
+    assertCurrent: params.assertCurrent,
+  });
+  params.assertCurrent?.();
+  return resolveWorkerPlacementSessionRuntime({
+    ...params,
+    preparedRuntimeOwnership: ownership ?? null,
+  });
 }
 
 export function resolveWorkerPlacementModelRuntime(
@@ -135,6 +168,14 @@ export function resolveWorkerPlacementSessionRuntimeCapabilities(
   params: Parameters<typeof resolveWorkerPlacementSessionRuntime>[0],
 ) {
   return resolveWorkerPlacementCapabilities(resolveWorkerPlacementSessionRuntime(params));
+}
+
+export async function resolveWorkerPlacementSessionRuntimeCapabilitiesAsync(
+  params: Parameters<typeof resolveWorkerPlacementSessionRuntimeAsync>[0],
+) {
+  return resolveWorkerPlacementCapabilities(
+    await resolveWorkerPlacementSessionRuntimeAsync(params),
+  );
 }
 
 export function projectWorkerPlacementAgentRuntime(

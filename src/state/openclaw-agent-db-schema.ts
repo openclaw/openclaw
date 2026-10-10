@@ -19,7 +19,7 @@ import {
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
-import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import {
   admitSqliteSchema,
   getAdmittedSqliteSchemaFacts,
@@ -258,16 +258,12 @@ export function refreshOpenClawAgentDatabaseSchema(
     throw new Error("Agent schema admission requires a settled writer");
   }
   try {
-    const reused = runSqliteReadOperationSync(
-      db,
-      () => {
-        assertSupportedAgentSchemaVersion(db, pathname);
-        assertCurrentAgentSchemaMetadata(readExistingAgentSchemaMeta(db), agentId, pathname);
-        const validation = getOpenClawAgentDatabaseValidation(database);
-        return validation && adoptOpenClawAgentDatabaseSchema(database) ? validation : undefined;
-      },
-      "fresh",
-    );
+    const reused = runSqliteReadOperationSync(db, () => {
+      assertSupportedAgentSchemaVersion(db, pathname);
+      assertCurrentAgentSchemaMetadata(readExistingAgentSchemaMeta(db), agentId, pathname);
+      const validation = getOpenClawAgentDatabaseValidation(database);
+      return validation && adoptOpenClawAgentDatabaseSchema(database) ? validation : undefined;
+    });
     if (reused) {
       return reused;
     }
@@ -289,7 +285,7 @@ export function refreshOpenClawAgentDatabaseSchema(
       ensureAgentSchema(db, agentId, pathname);
     }
     // Publish facts from the same schema snapshot that passes the final contract checks.
-    return runSqlitePinnedReadSnapshotSync(db, () => {
+    return runSqliteSchemaReadSnapshotSync(db, () => {
       admitSqliteSchema(db);
       assertOpenClawAgentCurrentRuntimeSchema(db, { agentId, pathname });
       assertCanonicalSessionValidationSchema(db);
@@ -458,6 +454,26 @@ function ensureAgentSchema(
       const migrationSchemaSql = requiresStorageMigration
         ? withLegacyAgentStorageSchema(storageSchemaSql, previousVersion)
         : storageSchemaSql;
+      const finishStorageMigration = () => {
+        if (requiresStorageMigration) {
+          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
+        }
+        if (requiresSnapshotMigration) {
+          migrateSessionEntrySnapshotsInTransaction(db);
+        }
+        if (requiresCanonicalWriterMigration) {
+          migrateCanonicalSessionWriterValidation(db);
+        }
+        finishAgentSchemaMigration(
+          db,
+          agentId,
+          pathname,
+          targetVersion,
+          schemaSql,
+          identityMigration,
+          assertMigration,
+        );
+      };
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
@@ -491,24 +507,7 @@ function ensureAgentSchema(
             seedCanonicalSessionValidationPending(db);
           }
         }
-        if (requiresStorageMigration) {
-          migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
-        }
-        if (requiresSnapshotMigration) {
-          migrateSessionEntrySnapshotsInTransaction(db);
-        }
-        if (requiresCanonicalWriterMigration) {
-          migrateCanonicalSessionWriterValidation(db);
-        }
-        finishAgentSchemaMigration(
-          db,
-          agentId,
-          pathname,
-          targetVersion,
-          schemaSql,
-          identityMigration,
-          assertMigration,
-        );
+        finishStorageMigration();
         return;
       }
       if (previousVersion === AGENT_MEDIA_SCHEMA_VERSION) {
@@ -588,24 +587,7 @@ function ensureAgentSchema(
       ) {
         seedCanonicalSessionValidationPending(db);
       }
-      if (requiresStorageMigration) {
-        migrateAgentStorageInTransaction(db, storageSchemaSql, previousVersion, warnings);
-      }
-      if (requiresSnapshotMigration) {
-        migrateSessionEntrySnapshotsInTransaction(db);
-      }
-      if (requiresCanonicalWriterMigration) {
-        migrateCanonicalSessionWriterValidation(db);
-      }
-      finishAgentSchemaMigration(
-        db,
-        agentId,
-        pathname,
-        targetVersion,
-        schemaSql,
-        identityMigration,
-        assertMigration,
-      );
+      finishStorageMigration();
     };
     runSqliteImmediateTransactionSync(db, () => withMutation(mutate), {
       databaseLabel: pathname,

@@ -140,7 +140,6 @@ export {
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 export { deferOpenClawAgentPostCommitPublication } from "./openclaw-agent-db-lifecycle.js";
-export { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 export {
   listOpenClawRegisteredAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,

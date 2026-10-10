@@ -12,6 +12,10 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The existing `live-cache` release job has a 30-minute budget for three sequential
+eight-minute checks on one runner: stored cache floors, transport prefixes, and
+agent-turn prefixes. See [prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage).
+
 Native video smoke coverage uses four shards of four providers. Each provider has a ten-minute operation timeout plus 30 seconds of test overhead; each shard has a 50-minute job budget, leaving eight minutes for setup. These shards keep full-mode video testing disabled.
 
 Broad PRs retain their compact selected-owner Node plan when time-based splitting
@@ -141,7 +145,7 @@ Control UI, repo E2E, and native live browser CI restore the Chromium revision p
 
 The first `checks-ui` shard also runs a curated WebKit overlay and composer-focus project when changed paths touch its interaction owners, their styles, or the subset in `ui/vitest.config.ts`. The manifest owns that selection. WebKit runs sequentially after the existing UI tests, with the same three-worker limit and no additional runner or matrix row. Scheduled runs without changed paths and frozen targets omit it. The selected row installs the pinned Playwright WebKit browser and Linux dependencies. Run the same project explicitly with `OPENCLAW_UI_WEBKIT=1 pnpm --dir ui test --project=webkit --maxWorkers=3`; ordinary UI test runs remain Chromium-only. CDP-dependent modal media and accessibility-tree suites stay on Chromium until their browser-neutral replacements land.
 
-The WebKit-only expected-failure list in `ui/test/webkit-expected-failures.ts` records twelve observed assertions and suspected causes. Each entry matches one complete test name in one file and uses Vitest's expected-failure behavior: an unexpected pass fails the run and requires removing the entry. Missing or skipped cases and errors that do not match the recorded assertion also fail. These exceptions do not apply to Chromium, and changes to the list select the WebKit lane.
+The WebKit project requires every selected assertion to pass, with no expected-failure exceptions. Shared fixtures wait for usable overlay content, inspect native adopted stylesheets, and establish keyboard traversal independently of Safari's pointer-focus behavior.
 
 Linux baseline ratchets and native grep tests reuse an existing `rg` or download the checksum-pinned ripgrep 14.1.1 release directly into the runner's temporary directory. Setup does not use apt, sudo, package-index refreshes, or package-manager locks. The small archive download has bounded retries and transfer timeouts; unsupported architectures and checksum failures fail the job.
 

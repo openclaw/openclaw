@@ -64,7 +64,11 @@ async function success(
     content: [{ type: "text", text: JSON.stringify(content) }],
     details,
   });
-  expect(mock).toHaveBeenCalledWith({ cfg: context.cfg ?? cfg, ...expectedArgs });
+  expect(mock).toHaveBeenCalledWith({
+    cfg: context.cfg ?? cfg,
+    accountId: context.accountId,
+    ...expectedArgs,
+  });
 }
 
 function ok(action: string, result: Record<string, unknown> = {}) {
@@ -91,6 +95,35 @@ beforeEach(() => {
 });
 
 describe("Teams action routing and authority", () => {
+  it.each([
+    { selected: "default", expected: "default" },
+    { selected: undefined, expected: "support" },
+  ])(
+    "preserves the selected/default account for presentation sends: $expected",
+    async ({ selected, expected }) => {
+      const accountCfg: OpenClawConfig = {
+        channels: {
+          msteams: {
+            defaultAccount: "support",
+            accounts: { support: { appId: "support-app" } },
+          },
+        },
+      };
+      runtime.sendAdaptiveCardMSTeams.mockResolvedValue({
+        messageId: "sent-1",
+        conversationId: "conv-1",
+      });
+      await run(
+        "send",
+        { to: conversation, presentation: { blocks: [{ type: "text", text: "Hello" }] } },
+        { cfg: accountCfg, accountId: selected },
+      );
+      expect(runtime.sendAdaptiveCardMSTeams).toHaveBeenCalledWith(
+        expect.objectContaining({ accountId: expected, to: conversation }),
+      );
+    },
+  );
+
   it("reads the trusted current conversation under restrictive policies", async () => {
     await success(
       "read",

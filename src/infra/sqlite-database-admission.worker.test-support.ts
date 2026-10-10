@@ -1,6 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
-import { threadId } from "node:worker_threads";
+import { MessagePort, threadId } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  captureSqliteDatabaseAdmissions,
+  getSqliteDatabaseAdmission,
+  installSqliteDatabaseAdmissions,
+  publishSqliteDatabaseAdmission,
+  retireSqliteDatabaseAdmissionForPath,
+  type SqliteDatabaseAdmissionKey,
+} from "./sqlite-database-admission.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import type { SqliteWorkerBackend, SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import {
@@ -9,8 +18,17 @@ import {
 } from "./sqlite-worker-operation-admission.js";
 
 export type AdmissionOperations = {
-  admitted: { input: undefined; output: { sql: string[]; threadId: number } };
+  admitted: {
+    input: { measureHostAbsence: true } | undefined;
+    output: { sql: string[]; threadId: number; hostLookupMessages?: number };
+  };
+  hostFacts: {
+    input: { path: string };
+    output: { value: number | undefined; lookupMessages: number };
+  };
   mutate: { input: undefined; output: undefined };
+  retirePath: { input: { path: string }; output: undefined };
+  writeRows: { input: { sql: string }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
     output: { native: boolean; admitted: boolean };
@@ -24,6 +42,36 @@ export type AdmissionOperations = {
     output: { values: number[]; sql: string[]; threadId: number };
   };
 };
+
+export const hostFactKey: SqliteDatabaseAdmissionKey<number> = {
+  name: "admission-test-host-value",
+  writer: "host",
+  read: (value) => (typeof value === "number" ? value : undefined),
+};
+const absentHostFactKey = { ...hostFactKey, name: "admission-test-host-absent" };
+const workerFactKey = {
+  name: "admission-test-worker-value",
+  read: hostFactKey.read,
+};
+
+function countLookupMessages(read: () => void): number {
+  let messages = 0;
+  // oxlint-disable-next-line typescript/unbound-method -- Retain the raw method for restoration; Reflect.apply supplies the live receiver.
+  const original = MessagePort.prototype.postMessage;
+  MessagePort.prototype.postMessage = function (...args) {
+    const message: unknown = args[0];
+    if (isRecord(message) && message.kind === "sqlite-database-admissions") {
+      messages += 1;
+    }
+    Reflect.apply(original, this, args);
+  };
+  try {
+    read();
+    return messages;
+  } finally {
+    MessagePort.prototype.postMessage = original;
+  }
+}
 
 function observeAdmission(database: DatabaseSync): string[] {
   const sql: string[] = [];
@@ -61,12 +109,52 @@ export function createSqliteWorkerBackend(
   function execute(
     command: SqliteWorkerCommand<AdmissionOperations>,
   ): AdmissionOperations[keyof AdmissionOperations]["output"];
-  function execute(command: SqliteWorkerCommand<AdmissionOperations>) {
+  function execute(
+    command: SqliteWorkerCommand<AdmissionOperations>,
+  ): AdmissionOperations[keyof AdmissionOperations]["output"] {
     if (command.type === "admitted") {
+      if (command.input?.measureHostAbsence) {
+        publishSqliteDatabaseAdmission(database, workerFactKey, 1);
+        const hostLookupMessages = countLookupMessages(() => {
+          if (getSqliteDatabaseAdmission(database, absentHostFactKey) !== undefined) {
+            throw new Error("Absent host fact unexpectedly exists");
+          }
+        });
+        return { sql, threadId, hostLookupMessages };
+      }
       return { sql, threadId };
+    }
+    if (command.type === "hostFacts") {
+      const reader = openNodeSqliteDatabase(command.input.path, { readOnly: true });
+      try {
+        admitSqliteSchema(reader);
+        const before = captureSqliteDatabaseAdmissions();
+        requestSqliteWorkerOperationAdmission({ stage: "prepare", facts: undefined });
+        // Relaying local knowledge cannot certify the host publication that just happened.
+        installSqliteDatabaseAdmissions(captureSqliteDatabaseAdmissions());
+        const value = getSqliteDatabaseAdmission(reader, hostFactKey);
+        // An older complete snapshot cannot revoke newer completeness already received.
+        installSqliteDatabaseAdmissions(before);
+        const lookupMessages = countLookupMessages(() => {
+          if (getSqliteDatabaseAdmission(reader, absentHostFactKey) !== undefined) {
+            throw new Error("Absent host fact unexpectedly exists");
+          }
+        });
+        return { value, lookupMessages };
+      } finally {
+        reader.close();
+      }
+    }
+    if (command.type === "retirePath") {
+      retireSqliteDatabaseAdmissionForPath(command.input.path);
+      return undefined;
     }
     if (command.type === "mutate") {
       database.exec("CREATE TABLE worker_publication (value)");
+      return undefined;
+    }
+    if (command.type === "writeRows") {
+      database.exec(command.input.sql);
       return undefined;
     }
     if (command.type === "mutateAfterHostAdmission") {

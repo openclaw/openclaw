@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
 const loadI18n = useLazyEnglishTest();
@@ -15,7 +15,21 @@ it.each([
   expect(manager.t("chat.detailPanel.reloadBlocked")).toBe("chat.detailPanel.reloadBlocked");
 
   await manager.setLocale("de");
-  await load();
+  // Cold module imports rerun registrations, but jsdom keeps its element registry.
+  // This suite checks catalog loading without mounting those elements.
+  const define = customElements.define.bind(customElements);
+  const registration = vi
+    .spyOn(customElements, "define")
+    .mockImplementation((name, constructor, options) => {
+      if (!customElements.get(name)) {
+        define(name, constructor, options);
+      }
+    });
+  try {
+    await load();
+  } finally {
+    registration.mockRestore();
+  }
 
   expect(manager.t("common.health")).toBe("Gesundheit");
   expect(manager.t("filePreview.label")).toBe("Support files");

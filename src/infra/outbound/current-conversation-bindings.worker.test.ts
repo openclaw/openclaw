@@ -13,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
@@ -267,6 +268,49 @@ it("keeps inspection noncreating and performs durable read, expiry, and scoped t
     expect(await inspectCurrentConversationBindingRecordAsync(sibling.conversation)).toEqual(
       sibling,
     );
+  });
+});
+
+it("reuses resolved bindings until sync or worker writes publish new facts", async () => {
+  await withOpenClawTestState({ label: "binding-resolve-cache" }, async () => {
+    const original = record("cached");
+    openOpenClawStateDatabase();
+    const run = vi.spyOn(workerStore, "runOpenClawStateWorkerOperation");
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
+    expect(run).not.toHaveBeenCalled();
+
+    updateCurrentConversationBindingRecord(original.conversation, () => original);
+    const resolved = await resolveCurrentConversationBindingRecordAsync(original.conversation);
+    expect(resolved).toEqual(original);
+    resolved!.metadata!.lastActivityAt = 99;
+    run.mockClear();
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
+      original,
+    );
+    expect(run).not.toHaveBeenCalled();
+
+    const replacement = { ...original, targetSessionKey: "agent:main:replacement" };
+    await bindCurrentConversationRecordAsync({ record: replacement });
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toEqual(
+      replacement,
+    );
+    await touchCurrentConversationBindingRecordAsync({
+      conversation: original.conversation,
+      bindingId: original.bindingId,
+      at: 100,
+    });
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toMatchObject(
+      {
+        metadata: { lastActivityAt: 100 },
+      },
+    );
+    await removeCurrentConversationBindingsAsync({
+      conversation: original.conversation,
+      bindingId: original.bindingId,
+    });
+    expect(await resolveCurrentConversationBindingRecordAsync(original.conversation)).toBeNull();
   });
 });
 

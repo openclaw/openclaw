@@ -166,7 +166,11 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         commands: registerCommandPaletteEnglish.catalog.chat.commands,
         welcome: registerCommandPaletteEnglish.catalog.chat.welcome,
         messages: registerChatMessageMetadataEnglish.catalog.chat.messages,
+        pullRequests: registerGitHubEnglish.catalog.chat.pullRequests,
       },
+      sessionHovercard: registerGitHubEnglish.catalog.sessionHovercard,
+      githubPublication: registerGitHubEnglish.catalog.githubPublication,
+      githubConnections: registerGitHubEnglish.catalog.githubConnections,
       agentTools: {
         ...registerGitHubEnglish.catalog.agentTools,
         ...en.agentTools,

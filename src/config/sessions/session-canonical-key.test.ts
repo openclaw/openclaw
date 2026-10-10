@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -129,7 +130,7 @@ describe("cold canonical session validation", () => {
         closeOpenClawAgentDatabasesForTest();
       }
       openOpenClawAgentDatabase({ ...scope, path: scope.storePath });
-      const writer = new DatabaseSync(scope.storePath);
+      const writer = openNodeSqliteDatabase(scope.storePath);
       const originalParse = JSON.parse;
       let committed = false;
       const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
@@ -245,11 +246,11 @@ describe("cold canonical session validation", () => {
           ),
         { ...scope, path: scope.storePath },
       );
-    // Raw repair publishes pending rows after changing the persisted policy.
+    // Config publication invalidates the previously admitted policy before another write.
     const external = new DatabaseSync(scope.storePath);
     try {
+      setCanonicalSqliteSessionMainKey(database, "custom");
       external.exec("BEGIN IMMEDIATE");
-      external.prepare("UPDATE session_key_contract SET main_key = ? WHERE id = 1").run("custom");
       external
         .prepare("UPDATE session_nodes SET entry_json = '{' WHERE session_key = ?")
         .run(otherKey);

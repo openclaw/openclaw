@@ -6,7 +6,7 @@ import {
   automaticGroupReplyConfig,
   dispatchReplyFromConfig,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 // Registered inside the existing dispatch suite so privacy and routing share its mock graph.

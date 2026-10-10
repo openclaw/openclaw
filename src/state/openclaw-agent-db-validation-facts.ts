@@ -32,6 +32,8 @@ export function readTransferredAgentSchema(
     typeof facts.schemaVersion !== "number" ||
     !(facts.tables instanceof Set) ||
     ![...facts.tables].every((table) => typeof table === "string") ||
+    !(facts.views instanceof Set) ||
+    ![...facts.views].every((view) => typeof view === "string") ||
     !(facts.tableSql instanceof Map) ||
     ![...facts.tableSql].every(
       ([name, sql]) => typeof name === "string" && (sql === null || typeof sql === "string"),
@@ -65,6 +67,7 @@ export function readTransferredAgentSchema(
       userVersion: facts.userVersion,
       schemaVersion: facts.schemaVersion,
       tables: facts.tables,
+      views: facts.views,
       tableSql: facts.tableSql,
       indexes: facts.indexes,
       indexDefinitions: facts.indexDefinitions,

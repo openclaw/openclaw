@@ -36,9 +36,26 @@ type PluginStateChange =
   | { kind: "unknown"; identity: string | symbol }
   | { kind: "pending" | "settled"; identity: string | symbol; operationId: string };
 
+/** Descriptive read dependencies; these snapshots never grant mutation authority. */
+export type PluginStateReadDependency = {
+  /** A missing database uses a wildcard so its first committed creation invalidates absence. */
+  identity?: string | symbol;
+  pluginId: string;
+  namespace: string;
+  keys: readonly string[];
+};
+
+type PluginStateReadCapture = {
+  dependencies: PluginStateReadDependency[];
+  assertions: Array<() => void>;
+  accepting: boolean;
+  keyCount: number;
+};
+
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication"), () => ({
   sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
   capture: new AsyncLocalStorage<Map<string, SqliteCommittedFact<PluginStateRow>>>(),
+  reads: new AsyncLocalStorage<PluginStateReadCapture>(),
   installingFacts: 0,
   facts: new Set<(change: PluginStateChange) => void>(),
   observers: new Set<(change: PluginStateChange) => void>(),
@@ -108,6 +125,101 @@ export const pluginStatePublication = {
     registerListener(state.observers, listener),
 };
 
+/** Record the actual keyed store read without opening or inspecting another database. */
+export function recordPluginStateReadDependency(
+  dependency: PluginStateReadDependency & { assertCurrent?: () => void },
+): void {
+  const capture = state.reads.getStore();
+  if (!capture) {
+    return;
+  }
+  if (!capture.accepting) {
+    throw new Error("Plugin state read capture has ended");
+  }
+  capture.keyCount += dependency.keys.length;
+  if (capture.keyCount > 10_000) {
+    throw new Error("Plugin state ownership reads exceeded 10,000 dependency keys");
+  }
+  const { assertCurrent, ...source } = dependency;
+  capture.dependencies.push({ ...source, keys: [...source.keys] });
+  if (assertCurrent) {
+    capture.assertions.push(assertCurrent);
+  }
+}
+
+/** Pending work is not new committed truth; indeterminate outcomes retire the whole source. */
+export function pluginStateReadDependenciesAffected(
+  dependencies: readonly PluginStateReadDependency[],
+  change: PluginStateChange,
+): boolean {
+  if (change.kind === "pending" || change.kind === "settled") {
+    return false;
+  }
+  const identity = change.kind === "committed" ? change.receipt.source.identity : change.identity;
+  return dependencies.some((dependency) => {
+    if (dependency.identity !== undefined && dependency.identity !== identity) {
+      return false;
+    }
+    if (change.kind === "committed") {
+      return dependency.keys.some((key) =>
+        change.receipt.facts.has(JSON.stringify([dependency.pluginId, dependency.namespace, key])),
+      );
+    }
+    return change.kind === "unknown";
+  });
+}
+
+/** Keep the transient witness until its consumer installs the dependencies in its own cache. */
+export async function capturePluginStateReadDependencies<T>(read: () => Promise<T>) {
+  const capture: PluginStateReadCapture = {
+    dependencies: [],
+    assertions: [],
+    accepting: true,
+    keyCount: 0,
+  };
+  let active = true;
+  let changed = false;
+  const stop = pluginStatePublication.subscribeFacts((change) => {
+    if (pluginStateReadDependenciesAffected(capture.dependencies, change)) {
+      changed = true;
+    }
+  });
+  const release = () => {
+    active = false;
+    capture.accepting = false;
+    stop();
+  };
+  const assertCurrent = () => {
+    if (!active || changed) {
+      throw new Error("Plugin state changed while preparing session ownership");
+    }
+    for (const assertSourceCurrent of capture.assertions) {
+      assertSourceCurrent();
+    }
+  };
+  try {
+    const value = await state.reads.run(capture, read);
+    capture.accepting = false;
+    return {
+      value,
+      dependencies: Object.freeze(capture.dependencies),
+      assertCurrent,
+      isCurrent() {
+        try {
+          assertCurrent();
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
 function stage(db: DatabaseSync, facts: Map<string, SqliteCommittedFact<PluginStateRow>>) {
   if (!facts.size) {
     return;
@@ -152,19 +264,24 @@ function stagePluginStateDeletions(db: DatabaseSync, rows: readonly EntryKey[]):
 }
 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
-export function withPluginStateWorkerReceipt<T>(db: DatabaseSync, write: () => T): T {
+export function withPluginStateWorkerReceipt<T>(
+  db: DatabaseSync,
+  write: () => T,
+  additionalFacts?: (result: T) => Record<string, unknown>,
+): T {
   return state.capture.run(new Map(), () => {
     const result = write();
     const facts = state.capture.getStore()!;
     // Empty receipts distinguish a confirmed no-op from missing commit evidence.
-    const receipt = captureReceipt(db, facts);
+    const metadata = additionalFacts?.(result);
+    const receipt = { ...metadata, ...captureReceipt(db, facts) };
     // Publication cannot make a previously valid large clear/import fail to commit.
     // Unbounded retained namespaces may exceed the transport even with keys alone.
     deferSqliteWorkerCommitReceipt(
       db,
       serialize(receipt).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES
         ? receipt
-        : { kind: "unknown", identity: receipt.source.identity },
+        : { ...metadata, kind: "unknown", identity: receipt.source.identity },
       facts.size === 0 ? "settlement" : "commit",
     );
     return result;
@@ -214,6 +331,7 @@ function readReceipt(value: unknown): Receipt {
 export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
+  onCommitted?: (facts: unknown) => void,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const owner = createAdmission(operation);
@@ -263,6 +381,7 @@ export function withPluginStatePublication(
         if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {
           received = true;
           install({ kind: "unknown", identity: identity() });
+          onCommitted?.(facts);
           return;
         }
         const receipt = readReceipt(facts);
@@ -282,6 +401,7 @@ export function withPluginStatePublication(
         installing = true;
         publishSqliteCommittedState(publication(current));
         received = true;
+        onCommitted?.(facts);
       } catch (error) {
         install({ kind: "unknown", identity: identity() });
         throw error;
