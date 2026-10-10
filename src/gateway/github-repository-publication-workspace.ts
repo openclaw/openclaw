@@ -115,17 +115,7 @@ export async function captureCheckpoint<T>(
   }
   const selectedAuthority: GitHubPublicationTransitionAuthority | undefined = authority && {
     ...authority,
-    async prepareSource() {
-      assertSelected();
-      const source = await authority.prepareSource();
-      try {
-        assertSelected();
-        return source;
-      } catch (error) {
-        await source.release();
-        throw error;
-      }
-    },
+    assertAction: assertSelected,
   };
   return await withSessionRepositoryCheckpoint(
     {
