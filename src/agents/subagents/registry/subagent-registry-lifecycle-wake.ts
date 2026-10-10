@@ -474,6 +474,10 @@ export function scheduleRequesterSettleWake(
                   batch,
                   rearmGeneration,
                   async (members, episode) => {
+                    // A no-outcome decision needs its whole batch; let the next sweep reselect it.
+                    if (!outcome && !episode.committedWake && members.length !== batch.length) {
+                      return true;
+                    }
                     if (
                       Boolean(admittedWake?.pauseNotice) !==
                       Boolean(entry.requesterSettleWake?.pauseNotice)

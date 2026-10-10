@@ -150,6 +150,9 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
     }
   }
   const preparedPayloads = persisted;
+  const missingAtPreparation = new Set(
+    selected.runIds.filter((runId) => !preparedPayloads.has(runId) && !inMemoryRuns.has(runId)),
+  );
   return {
     consume(consume) {
       assertCurrent();
@@ -180,7 +183,10 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
           const entry = snapshot.get(runId);
           return entry && !matches(entry);
         });
-      if (needsHydration) {
+      if (
+        needsHydration ||
+        current.runIds.some((runId) => !full.has(runId) && !missingAtPreparation.has(runId))
+      ) {
         return { ready: false };
       }
       const finalScope = selectionScope(current);

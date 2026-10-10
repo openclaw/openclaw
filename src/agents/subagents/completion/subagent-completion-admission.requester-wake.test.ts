@@ -12,7 +12,11 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { loadPendingFinalDeliveryPayload } from "../registry/subagent-delivery-state.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { mutateSubagentRuns } from "../registry/subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+  SubagentRegistryVersionConflictError,
+} from "../registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { getPendingWakeCommit } from "../registry/subagent-registry-requester-wake-commit.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
@@ -296,9 +300,6 @@ describe("persisted subagent requester wakes", () => {
         expect(inputs.map(({ subagent }) => subagent)).toEqual(liveBefore);
         expect(snapshot()).toEqual(before);
         if (cut === "second owner") {
-          expect(subagentRuns.get(second.subagent.runId)?.generation).toBe(
-            (second.subagent.generation ?? 0) + 1,
-          );
           observed.mockClear();
         } else {
           expect(observed).not.toHaveBeenCalled();
@@ -647,6 +648,7 @@ describe("persisted subagent requester wakes", () => {
             "delivered",
           );
           expect(currentCompletionRun(first).requesterSettleWake).toBeDefined();
+          await restoreSubagentRunsFromDisk({ runs: subagentRuns });
         } else {
           database.db.exec("DROP TRIGGER reject_outcome");
         }
@@ -800,7 +802,7 @@ describe("persisted subagent requester wakes", () => {
         reason: "requester unavailable",
       });
       if (change === "superseded generation") {
-        await expect(blocked).rejects.toThrow("delivery generation changed");
+        await expect(blocked).rejects.toBeInstanceOf(SubagentRegistryVersionConflictError);
       } else {
         await expect(blocked).resolves.toBe(false);
       }

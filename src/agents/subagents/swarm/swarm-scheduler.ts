@@ -169,6 +169,9 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
       failurePersisted = await launch.onStartFailure(error);
     } catch (cleanupError) {
       console.warn(`[swarm] Failed launch cleanup: ${sanitizeForLog(String(cleanupError))}`);
+      if (hasRetainedPluginRuntimeCloseError(cleanupError)) {
+        void finalizeRemovedRun(item);
+      }
     }
     const location = runLocations.get(item.runId);
     if (location?.state !== "active" || location.lane !== lane || location.item !== item) {

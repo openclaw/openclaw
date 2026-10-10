@@ -318,8 +318,8 @@ export function commitRequesterWake(
       const current = context.options.runs.get(entry.runId);
       return current
         ? isSameSubagentRunOwner(current, entry) &&
-            (pending.committedWake !== undefined ||
-              current.requesterSettleWake?.rearmGeneration === generation)
+            (current.requesterSettleWake?.rearmGeneration === generation ||
+              (pending.committedWake !== undefined && current.requesterSettleWake === undefined))
         : pending.ownsRetirement(entry);
     },
   };
