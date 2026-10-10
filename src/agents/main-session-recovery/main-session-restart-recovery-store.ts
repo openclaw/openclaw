@@ -238,6 +238,10 @@ export async function recoverStore(params: {
         skip("not_main_session");
         continue;
       }
+      if (entry.archivedAt !== undefined) {
+        skip("archived");
+        continue;
+      }
       if (resolveAgentSessionWorkStartError(sessionKey, entry)) {
         skip("work_start_blocked");
         continue;
