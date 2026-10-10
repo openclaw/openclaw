@@ -7,12 +7,13 @@ import {
   type OpenBlobStoreOptions,
 } from "../plugin-state/plugin-blob-store.js";
 import {
-  createPluginStateSyncKeyedStore,
+  createPluginStateRuntimeStores,
   type OpenAsyncKeyedStoreOptions,
-  type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginRuntimeKeyedStore } from "./plugin-runtime-keyed-store.js";
+import { capturePluginStateOperationModuleSource } from "./plugin-state-operation-source.js";
 import { PluginTrustRefusalError } from "./plugin-trust.js";
 import {
   capturePluginLifecycleAuthority,
@@ -182,11 +183,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => {
               return createPluginBlobStore<TMetadata>(pluginId, options);
             },
+            ...createPluginStateRuntimeStores(pluginId, assertRuntimeCurrent, () =>
+              capturePluginStateOperationModuleSource(
+                getPluginInstance(record),
+                assertRuntimeCurrent,
+              ),
+            ),
             openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
               createPluginRuntimeKeyedStore<T>(record, options, assertRuntimeCurrent),
-            openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-              return createPluginStateSyncKeyedStore<T>(pluginId, options);
-            },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {

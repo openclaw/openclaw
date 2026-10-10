@@ -486,7 +486,7 @@ describe("worker inference provider runtime", () => {
         authProfileHash: "oe8bkr3r8947",
       };
       Object.assign(message.content[0]!, { type, providerScratch: "text-state" });
-      Object.assign(message.content[1]!, { partialArgs: "{}", streamIndex: 0 });
+      Object.assign(message.content[1]!, { partialJson: "{}", streamIndex: 0 });
       Object.assign(message.usage, { providerScratch: { requestId: "private" } });
       Object.assign(message.providerReplay, { providerScratch: "private" });
       runtime.stream.mockImplementation(() => providerStream(message));
@@ -495,7 +495,7 @@ describe("worker inference provider runtime", () => {
 
       expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
       expect(JSON.stringify(outcome)).not.toContain("providerScratch");
-      expect(JSON.stringify(outcome)).not.toContain("partialArgs");
+      expect(JSON.stringify(outcome)).not.toContain("partialJson");
       expect(JSON.stringify(outcome)).not.toContain("streamIndex");
       if (type === "unsupported") {
         expect(outcome).toMatchObject({

@@ -5,6 +5,7 @@ import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
+import { createApplicationConfigCapability } from "../app/config.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
@@ -25,7 +26,12 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const { gateway } = createGatewayHarness(client);
   const agents = createAgentCapability(gateway);
   const sessions = createTestSessionCapability(gateway);
-  const context = { gateway, agents, sessions } as unknown as ApplicationContext;
+  const context = {
+    gateway,
+    agents,
+    sessions,
+    config: createApplicationConfigCapability({ resourceBasePath: "" }),
+  } as unknown as ApplicationContext;
   const abort = new AbortController();
   const owner = {
     client,
@@ -713,6 +719,7 @@ describe("native UI conversation dock", () => {
     const { gateway } = createGatewayHarness(client);
     const context = {
       assistantDock: dock,
+      config: createApplicationConfigCapability({ resourceBasePath: "" }),
       gateway,
       sessions: { subscribe },
       agents: { subscribe },
