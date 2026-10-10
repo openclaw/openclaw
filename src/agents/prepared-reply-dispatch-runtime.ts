@@ -167,7 +167,7 @@ export class PreparedReplyDispatchPublicationOwner {
       }
       const pending = replacement ?? pendingOwner?.pending;
       if (pending) {
-        await racePromiseWithAbortSignal(pending, abortSignal);
+        await racePromiseWithAbortSignal<void | PreparedModelRuntimeSnapshot>(pending, abortSignal);
         continue;
       }
       const runtime = this.#publication.find((candidate) => candidate.agentId === agentId);
