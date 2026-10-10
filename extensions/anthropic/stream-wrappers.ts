@@ -224,7 +224,11 @@ function createAnthropicCompactionWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    const compaction = resolveAnthropicServerCompactionPlan(
+      model,
+      extraParams,
+      options?.apiKey ?? getEnvApiKey(model.provider),
+    );
     if (!compaction.enabled) {
       return underlying(model, context, options);
     }
@@ -329,9 +333,8 @@ export function wrapAnthropicProviderStream(
             ctx.extraParams,
           )
       : undefined,
-    ctx.extraParams?.anthropicServerCompaction === true
-      ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)
-      : undefined,
+    // The shared plan owns the default, opt-out, and per-request auth/route gates.
+    (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams),
     createAnthropicThinkingPrefillWrapper,
   );
 }

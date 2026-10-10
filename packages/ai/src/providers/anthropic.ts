@@ -7,6 +7,7 @@ import type { AnthropicContextManagementOptions, AnthropicOptions } from "../pro
 import {
   isAnthropicReplayRejection,
   suppressAnthropicCompaction,
+  type AnthropicCompactionBlock,
 } from "../transports/anthropic-compaction-replay.js";
 import {
   buildAnthropicRequest,
@@ -142,7 +143,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
     const refusalBuffer = usesClaudeStreamingRefusalContract(model)
       ? createDeferredEventBuffer<AssistantMessageEvent>(stream)
       : undefined;
-    let usedCompactionReplay = false;
+    let replayedCompaction: AnthropicCompactionBlock | undefined;
 
     try {
       let client: Anthropic;
@@ -194,7 +195,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         serverSideFallback,
         claudeCodeVersion,
       );
-      usedCompactionReplay = builtParams.usedCompactionReplay;
+      replayedCompaction = builtParams.replayedCompaction;
       const { params, headers } = await prepareAnthropicRequest(
         builtParams.params,
         model,
@@ -236,8 +237,8 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicComp
         refusalBuffer.discard();
         output.content = [];
       }
-      if (usedCompactionReplay && isAnthropicReplayRejection(error)) {
-        suppressAnthropicCompaction(output, model, requestOptions);
+      if (replayedCompaction && isAnthropicReplayRejection(error)) {
+        suppressAnthropicCompaction(output, model, requestOptions, replayedCompaction);
       }
       stream.push({ type: "error", reason: terminal.stopReason, error: output });
       stream.end();
@@ -288,6 +289,7 @@ export const streamSimpleAnthropic: StreamFunction<
     anthropicServerCompaction: options?.anthropicServerCompaction,
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
+    onCompactionRejected: options?.onCompactionRejected,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,

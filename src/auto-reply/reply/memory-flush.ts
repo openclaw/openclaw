@@ -91,6 +91,11 @@ export function resolveResponsesServerCompactionThreshold(params: {
   });
   const extraParams = { ...defaultParams, ...modelParams };
   if (normalizedProvider === "anthropic") {
+    // The default Anthropic trigger sits below the local threshold, so only an explicit opt-in
+    // (which may target any Claude model or a raised trigger) needs local compaction held back.
+    if (extraParams.anthropicServerCompaction !== true) {
+      return undefined;
+    }
     return resolveAnthropicServerCompactionPlan(
       {
         provider,

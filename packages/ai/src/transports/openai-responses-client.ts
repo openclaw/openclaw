@@ -44,6 +44,7 @@ import {
   summarizeOpenAITransportError,
   summarizeResponsesPayload,
 } from "./openai-responses-debug.js";
+import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import { recordResponsesInputReplay } from "./openai-responses-input-replay.js";
 import {
   buildOpenAIResponsesParams,
@@ -75,7 +76,6 @@ import { observeResponsesStream } from "./openai-responses-stream-observer-inter
 import {
   createOpenAIResponsesWebSocketStream,
   type OpenAIResponsesWebSocketMode,
-  supportsNativeOpenAIResponsesEndpoint,
 } from "./openai-responses-websocket.js";
 import {
   assertCodeModeResponsesToolSurface,
