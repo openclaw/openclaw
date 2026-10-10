@@ -203,6 +203,8 @@ export async function prepareSessionLifecycleDrain(
           abortOrigin: "rpc",
           stopReason: params.action,
           requester: { isAdmin: true },
+          assertCurrent: () => params.authorize?.(),
+          stopEmbeddedRun: true,
           includeProtectedRuns: true,
           onControllerTargets: (targets) => {
             controllerDrain = waitForChatAbortControllerRemoval({

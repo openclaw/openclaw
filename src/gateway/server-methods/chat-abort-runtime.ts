@@ -423,6 +423,7 @@ function prepareChatSessionAbort(
     const wasActive = Boolean(persistedSessionId && isEmbeddedAgentRunActive(persistedSessionId));
     params.assertCurrent?.();
     const embeddedAborted = Boolean(
+      params.stopEmbeddedRun &&
       !params.runId &&
       persistedSessionId &&
       params.sessionKey !== "global" &&

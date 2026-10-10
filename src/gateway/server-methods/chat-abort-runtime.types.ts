@@ -28,6 +28,11 @@ export type ChatSessionAbortParams = {
   stopReason?: string;
   requester: ChatAbortRequester;
   assertCurrent?: () => void;
+  /**
+   * Session Stop owners also stop the controller-less embedded producer and record
+   * its cancellation. They must supply their live authority as assertCurrent.
+   */
+  stopEmbeddedRun?: true;
   preserveSideRuns?: boolean;
   cascadeDescendants?: true;
   /** Exact lifecycle owners may include hidden and side runs for this one session. */

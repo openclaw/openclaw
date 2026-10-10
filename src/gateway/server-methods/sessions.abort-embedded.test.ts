@@ -22,6 +22,7 @@ import {
   isSwarmRunActive,
 } from "../../agents/subagents/swarm/swarm-scheduler.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import * as sessions from "../../config/sessions/session-accessor.js";
 import * as sessionEntryRead from "../../config/sessions/session-entry-read-runtime.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -29,11 +30,16 @@ import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { cancelGatewayWorkerSessionWork } from "../server-worker-placement-cancel.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { createActiveRun, createChatAbortContext } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import {
+  prepareSessionLifecycleDrain,
+  type SessionLifecycleDrain,
+} from "./sessions-lifecycle-drain.js";
 
 const fixture = useChatAbortRegistryFixture();
 const parentKey = "agent:main:direct:embedded-parent";
@@ -132,6 +138,89 @@ it.each(["chat.abort", "sessions.abort", "controller-backed"] as const)(
     }
   },
 );
+
+it.each(["revoked", "current"] as const)(
+  "archive drain fences embedded cancellation persistence (authority %s)",
+  async (authority) => {
+    const runId = "drain-embedded-run";
+    const target = await seedEmbeddedSession(runId);
+    const before = sessions.loadSessionEntry(target);
+    expect(before).toMatchObject({ lifecycleRunId: runId, abortedLastRun: false });
+    let current = true;
+    const revoked = new Error("archive drain authority revoked");
+    const abort = vi.fn(() => {
+      current = authority === "current";
+      clearActiveEmbeddedRun(parentId, handle, parentKey);
+    });
+    const handle = createEmbeddedRunHandle({ runId, abort });
+    setActiveEmbeddedRun(parentId, handle, parentKey, undefined, "main");
+    let drain: SessionLifecycleDrain | undefined;
+    try {
+      let failure: unknown;
+      try {
+        drain = await prepareSessionLifecycleDrain({
+          action: "archive",
+          authorize: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+          context: createDirectChatContext({ getRuntimeConfig }),
+          storePath: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
+            agentId: "main",
+          }),
+          sessionKeys: [parentKey],
+          sessionKey: parentKey,
+          sessionId: parentId,
+          agentId: "main",
+          defaultAgentId: "main",
+          lifecycleIdentities: [parentKey, parentId],
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(abort).toHaveBeenCalledOnce();
+      const after = sessions.loadSessionEntry({ ...target, readConsistency: "latest" });
+      if (authority === "revoked") {
+        expect(after).toEqual(before);
+        expect(drain).toBeUndefined();
+        expect(failure).toMatchObject({
+          message: "Chat cancellation and persistence failed",
+          errors: [revoked, revoked],
+        });
+      } else {
+        expect(failure).toBeUndefined();
+        expect(drain?.hasAuthoritativeWork()).toBe(false);
+        expect(after).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+        expect(after?.lifecycleRunId).toBeUndefined();
+      }
+    } finally {
+      drain?.release();
+      clearActiveEmbeddedRun(parentId, handle, parentKey);
+    }
+  },
+);
+
+it("worker placement cancellation preserves controller-less embedded work", async () => {
+  const runId = "placement-embedded-run";
+  const target = await seedEmbeddedSession(runId);
+  const before = sessions.loadSessionEntry(target);
+  const abort = vi.fn();
+  const handle = createEmbeddedRunHandle({ runId, abort });
+  setActiveEmbeddedRun(parentId, handle, parentKey, undefined, "main");
+  try {
+    await cancelGatewayWorkerSessionWork(createDirectChatContext({ getRuntimeConfig }), {
+      sessionId: parentId,
+      sessionKeys: [parentKey],
+      agentId: "main",
+      assertCurrent: () => {},
+    });
+    expect(abort).not.toHaveBeenCalled();
+    expect(sessions.loadSessionEntry({ ...target, readConsistency: "latest" })).toEqual(before);
+  } finally {
+    clearActiveEmbeddedRun(parentId, handle, parentKey);
+  }
+});
 
 it.each(["forbidden", "allowed"] as const)(
   "chat.abort enforces session access before embedded Stop effects (%s)",
