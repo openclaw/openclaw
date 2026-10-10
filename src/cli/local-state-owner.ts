@@ -133,9 +133,9 @@ export async function runWithLocalStateOwner<T>(params: {
       assertOwnerCurrent();
     };
     assertCurrent();
-    const { getRuntimeConfig } = await import("../config/config.js");
+    const { captureRuntimeConfigAsyncReader } = await import("../config/io.runtime.js");
     assertCurrent();
-    const config = getRuntimeConfig();
+    const config = await captureRuntimeConfigAsyncReader({ assertCurrent })();
     assertCurrent();
     return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
   };
