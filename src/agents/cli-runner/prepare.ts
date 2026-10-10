@@ -1554,7 +1554,8 @@ async function prepareCliRunContextWithinReadFence(
           !reusableCliSessionId?.trim() || reusableCliSession.mode === "reuse-with-drift",
         thinkLevel: params.thinkLevel,
         runtimeContextFragments: params.runtimeContextFragments,
-        sessionTarget: params.sessionTarget,
+        // Caller-owned memory cannot grant access to persisted interrupted inputs.
+        sessionTarget: params.isolatedCompletion ? undefined : cliHistoryWriter?.target,
         context: [
           turnRuntimeFacts?.relocatable,
           promptBuildHookResult?.appendContext,
