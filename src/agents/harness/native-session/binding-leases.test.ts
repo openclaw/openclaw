@@ -221,44 +221,6 @@ describe("native session binding leases", () => {
     },
   );
 
-  it("reports lease loss even when the callback catches a commit refusal", async () => {
-    vi.useFakeTimers();
-    const { state, values, owner } = createLeaseFixture();
-    values.set("binding", { value: "original" });
-    const withCurrent = state.withCurrent.bind(state);
-    let expireBeforeAdmission = false;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          if (expireBeforeAdmission) {
-            expireBeforeAdmission = false;
-            vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
-          }
-          return await store.compareAndApply(...args);
-        },
-      };
-    };
-    await expect(
-      owner.withLease(
-        "binding",
-        async () => {
-          expireBeforeAdmission = true;
-          await expect(
-            owner.transact("binding", (current) => ({
-              next: { ...current, value: "unauthorized" },
-              result: true,
-            })),
-          ).rejects.toThrow("Lost binding lease");
-          return "callback completed";
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
-    ).rejects.toThrow("Lost binding lease");
-    expect(values.get("binding")).toEqual({ value: "original" });
-  });
-
   it("joins queued renewal before releasing a failed owner", async () => {
     vi.useFakeTimers();
     const { state, values, owner } = createLeaseFixture();

@@ -41,14 +41,8 @@ export async function refreshPublishedModelRuntimeCatalog(
   ) {
     return undefined;
   }
-  const generation = owner.generation;
   const catalog = await snapshot.loadFullModelCatalog({ ...options, refresh });
-  if (
-    owner.catalogStale &&
-    !catalog.pendingProviders?.length &&
-    owner.generation === generation &&
-    owners.get(ownerKey(owner.input)) === owner
-  ) {
+  if (owner.catalogStale && !catalog.pendingProviders?.length) {
     owner.catalogStale = false;
   }
   return catalog;
@@ -90,43 +84,24 @@ export async function loadPreparedModelRuntimeOwner<T>(
     preserveWorkspaceDirOnRefresh:
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
-  for (;;) {
+  assertLifetime();
+  const replacement = context.getPendingReplacement();
+  if (replacement) {
+    assertPreparedModelRuntimeAdmissionCanWait();
+    await replacement.promise;
     assertLifetime();
-    const replacement = context.getPendingReplacement();
-    if (replacement) {
-      assertPreparedModelRuntimeAdmissionCanWait();
-      await replacement.promise;
-      if (context.getPendingReplacement()) {
-        continue;
-      }
-      input = rebindInputToCommittedConfiguredOwner(context.owners, input);
-      continue;
-    }
-    try {
-      return await projectPublishedModelRuntimeOwner(input, context, project);
-    } catch (error) {
-      if (!isPreparedModelRuntimeMissingOwnerError(error)) {
-        throw error;
-      }
-    }
-    if (context.getPendingReplacement()) {
-      continue;
-    }
-    assertLifetime();
-    const activated = await activateStandalone(input);
-    if (context.getPendingReplacement()) {
-      continue;
-    }
-    try {
-      return await projectPublishedModelRuntimeOwner(input, context, project);
-    } catch (error) {
-      if (!activated || !isPreparedModelRuntimeMissingOwnerError(error)) {
-        throw error;
-      }
-      // A concurrent publication boundary may retire the standalone owner between build and read.
-      // Retry only after proving that no replacement gate owns the next generation.
+    input = rebindInputToCommittedConfiguredOwner(context.owners, input);
+  }
+  try {
+    return await projectPublishedModelRuntimeOwner(input, context, project);
+  } catch (error) {
+    if (!isPreparedModelRuntimeMissingOwnerError(error)) {
+      throw error;
     }
   }
+  await activateStandalone(input);
+  // Concurrent reloads may make this request fail; the next request uses the new owner.
+  return await projectPublishedModelRuntimeOwner(input, context, project);
 }
 
 /** Bind passive reads and retained acquisitions to the same publication owner. */
@@ -161,7 +136,6 @@ async function projectPublishedModelRuntimeOwner<T>(
     assertPreparedModelRuntimeAdmissionCanWait();
     await replacement.promise;
     assertLifetime();
-    return await projectPublishedModelRuntimeOwner(rawInput, context, project);
   }
   const input = normalizePreparedModelRuntimeInput(rawInput);
   const existing = resolvePublishedOwner(context.owners, input, {
@@ -187,10 +161,9 @@ async function projectPublishedModelRuntimeOwner<T>(
     try {
       await existing.pending;
     } catch {
-      // Re-read the owner below so a superseding generation wins over this result or error.
+      // Preserve the owner's recorded publication error below.
     }
     assertLifetime();
-    return await projectPublishedModelRuntimeOwner(rawInput, context, project);
   }
   if (existing?.needsRefresh) {
     throw existing.refreshError ?? new Error("prepared model runtime refresh is pending");

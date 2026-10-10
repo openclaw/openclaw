@@ -78,7 +78,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   /** Explicit inventory acquisition; ordinary thinking reads stay selected-harness-only. */
   includePickerRuntimes?: boolean;
   pluginRegistry?: PluginRegistry | null;
-  isCurrent?: () => boolean;
   observationConfig?: OpenClawConfig;
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
@@ -145,12 +144,9 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   const pluginRegistry = params.observationConfig
     ? params.pluginRegistry
     : (params.pluginRegistry ?? getActivePluginRegistry());
-  if (!pluginRegistry || params.isCurrent?.() === false) {
+  if (!pluginRegistry) {
     return params.snapshot;
   }
-  const isCurrent = () =>
-    params.isCurrent?.() !== false &&
-    (Boolean(params.pluginRegistry) || getActivePluginRegistry() === pluginRegistry);
   if (params.includePickerRuntimes) {
     for (const { harness } of pluginRegistry.agentHarnesses) {
       if (harness.loadModelCatalog && !runtimeProviders.has(harness.id)) {
@@ -199,9 +195,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     if (!harness?.loadModelCatalog) {
       continue;
     }
-    if (params.isCurrent?.() === false) {
-      return params.snapshot;
-    }
     for (const provider of scopedProviders) {
       params.onDiscoveryStarted?.(provider);
     }
@@ -229,9 +222,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
         }
       }
     } catch (error) {
-      if (!isCurrent()) {
-        return params.snapshot;
-      }
       const failedProviders = new Set(
         [
           ...scopedProviders,
@@ -251,9 +241,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
       );
       params.onError?.(error, scopedProviders);
       continue;
-    }
-    if (!isCurrent()) {
-      return params.snapshot;
     }
     const scopedRows = includesProvider
       ? listedRows.filter((entry) => includesProvider(entry.provider))
@@ -325,9 +312,6 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     result.routeVariants = dedupeByKey([...rows, ...retainedVariants], (entry) =>
       modelCatalogRouteVariantKey(entry, variantKeyOf(entry)),
     );
-  }
-  if (!isCurrent()) {
-    return params.snapshot;
   }
   if (discovered) {
     params.onDiscoveryCompleted?.(completedRows);
@@ -414,7 +398,6 @@ export function augmentPreparedModelCatalogWithAgentHarness(params: {
   snapshot: ModelCatalogSnapshot;
   preparedSnapshot?: ModelCatalogSnapshot;
   pluginRegistry?: PluginRegistry;
-  isCurrent?: () => boolean;
   includesProvider?: (provider: string) => boolean;
   normalizeProvider?: (provider: string) => string;
   onDiscoveryStarted?: (provider: string) => void;

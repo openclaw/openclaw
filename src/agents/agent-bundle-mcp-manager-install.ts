@@ -129,16 +129,13 @@ export function createSessionMcpRuntimeManagerInstall(
       });
       store.runtimeSlots.set(runtime, slot);
       store.runtimesBySessionId.set(runtimeKey, runtime);
-      let publication = configReloadAtAdmission;
-      // Keep explicit run snapshots, but fence any publish crossed by acquisition.
-      // Plugin epochs survive subsequent ordinary config publishes.
-      while (store.configReload && store.configReload !== publication) {
-        const next = store.configReload;
+      const next = store.configReload;
+      // Catch up once after creation; published runtimes receive later reloads directly.
+      if (next && next !== configReloadAtAdmission) {
         await sessionMcpRuntimeOwners.get(runtime)?.reload({
           ...next,
-          reloadPlugins: next.pluginGeneration !== (publication?.pluginGeneration ?? 0),
+          reloadPlugins: next.pluginGeneration !== (configReloadAtAdmission?.pluginGeneration ?? 0),
         });
-        publication = next;
       }
       if (!(sessionMcpRuntimeOwners.get(runtime)?.hasServers() ?? hasServers)) {
         await lifecycle.releaseEmptyRuntimeSlot(runtimeKey, runtime);

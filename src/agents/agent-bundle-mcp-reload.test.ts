@@ -521,7 +521,7 @@ it.each(["removal", "public origin change", "plugin replacement with explicit sh
   },
 );
 
-it("retains plugin retirement across a later config-only publication during creation", async () => {
+it("retires an in-flight plugin across publication and reconnects on the next acquisition", async () => {
   const resolverRegistry = createMcpProofPluginRegistry();
   await withPluginRuntimeRegistryScope(resolverRegistry.registry, async () => {
     const url = await httpProbe();
@@ -569,8 +569,10 @@ it("retains plugin retirement across a later config-only publication during crea
       manifestRegistry: params.manifestRegistry,
     });
     released.resolve();
-    expect(await probe(await pending, "scoped")).not.toEqual(firstConnection);
+    await expect(probe(await pending, "scoped")).rejects.toThrow("disposed");
     await expect(probe(expectDefined(retired, "retired plugin owner"), "scoped")).rejects.toThrow();
+    const next = await manager.getOrCreate({ ...params, cfg, requesterSenderId: "alice" });
+    expect(await probe(next, "scoped")).not.toEqual(firstConnection);
   });
 });
 
