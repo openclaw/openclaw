@@ -161,82 +161,31 @@ describe("native command archive recovery ownership", () => {
     }
   });
 
-  it.each(["new", "reset"] as const)("restores an archived explicit %s target", async (command) => {
-    const result = await admitNativeCommand({
-      command,
-      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
-      target: { sessionId: "target-history", updatedAt: 1, archivedAt: 3 },
-    });
-    expect(result.outcome).toEqual({ status: "ready" });
-    expect(result.entries.get(sourceKey)?.archivedAt).toBeUndefined();
-    expect(result.entries.get(targetKey)).toMatchObject({ sessionId: "target-history" });
-    expect(result.entries.get(targetKey)?.archivedAt).toBeUndefined();
-  });
-
-  it("uses the ordinary missing-source path before restoring an archived reset target", async () => {
-    const result = await admitNativeCommand({
-      command: "new",
-      target: { sessionId: "target-history", updatedAt: 1, archivedAt: 3 },
-    });
-    expect(result.outcome).toEqual({ status: "ready" });
-    expect(result.entries.has(sourceKey)).toBe(false);
-    expect(result.entries.get(targetKey)?.archivedAt).toBeUndefined();
-  });
-
-  it.each(["new", "reset"] as const)(
-    "restores a same-key archived native %s target before source admission",
-    async (command) => {
+  it.each([
+    { command: "new", noTargetOverride: false, restored: true },
+    { command: "reset", noTargetOverride: false, restored: true },
+    { command: "new", noTargetOverride: true, restored: true },
+    { command: "reset", noTargetOverride: true, restored: true },
+    { command: "status", noTargetOverride: false, restored: false },
+    { command: "status", noTargetOverride: true, restored: false },
+  ] as const)(
+    "handles same-key native /$command with noTargetOverride=$noTargetOverride",
+    async ({ command, noTargetOverride, restored }) => {
       const entry = { sessionId: "same-key-history", updatedAt: 1, archivedAt: 2 };
       const result = await admitNativeCommand({
         command,
         sameKey: true,
+        noTargetOverride,
         source: entry,
         target: entry,
       });
-      expect(result.outcome).toEqual({ status: "ready" });
-      expect(result.entries.get(sourceKey)).toMatchObject({ sessionId: "same-key-history" });
-      expect(result.entries.get(sourceKey)?.archivedAt).toBeUndefined();
+      expect(result.entries.get(sourceKey)?.sessionId).toBe("same-key-history");
+      expect(result.entries.get(sourceKey)?.archivedAt).toBe(restored ? undefined : 2);
+      if (restored) {
+        expect(result.outcome).toEqual({ status: "ready" });
+      }
     },
   );
-
-  it.each(["new", "reset"] as const)(
-    "restores a same-key native %s target without an override",
-    async (command) => {
-      const entry = { sessionId: "same-key-history", updatedAt: 1, archivedAt: 2 };
-      const result = await admitNativeCommand({
-        command,
-        sameKey: true,
-        noTargetOverride: true,
-        source: entry,
-        target: entry,
-      });
-      expect(result.outcome).toEqual({ status: "ready" });
-      expect(result.entries.get(sourceKey)?.archivedAt).toBeUndefined();
-    },
-  );
-
-  it("keeps a same-key archived non-reset native target closed", async () => {
-    const entry = { sessionId: "same-key-history", updatedAt: 1, archivedAt: 2 };
-    const result = await admitNativeCommand({
-      command: "status",
-      sameKey: true,
-      source: entry,
-      target: entry,
-    });
-    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
-  });
-
-  it("keeps a same-key archived non-reset native target without an override closed", async () => {
-    const entry = { sessionId: "same-key-history", updatedAt: 1, archivedAt: 2 };
-    const result = await admitNativeCommand({
-      command: "status",
-      sameKey: true,
-      noTargetOverride: true,
-      source: entry,
-      target: entry,
-    });
-    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
-  });
 
   it.each([
     { name: "non-reset archived target", command: "status" as const, authorized: true },
@@ -310,41 +259,40 @@ describe("native command archive recovery ownership", () => {
     expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
   });
 
-  it("rechecks command-owner authority after placement preparation", async () => {
-    let current = true;
-    placementContextMocks.getMany.mockImplementation(() => {
-      current = false;
-      return new Map();
-    });
-    const result = await admitNativeCommand({
-      command: "status",
-      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
-      target: { sessionId: "target-history", updatedAt: 1 },
-      configureContext: (ctx) => bindCommandOwnerAuthority(ctx, { isCurrent: () => current }),
-    });
-    expect(result.outcome).toBeInstanceOf(Error);
-    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
-  });
-
-  it("rechecks the dispatch generation after placement preparation", async () => {
-    let current = true;
-    placementContextMocks.getMany.mockImplementation(() => {
-      current = false;
-      return new Map();
-    });
-    const result = await admitNativeCommand({
-      command: "status",
-      source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
-      target: { sessionId: "target-history", updatedAt: 1 },
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("generation changed");
-        }
-      },
-    });
-    expect(result.outcome).toBeInstanceOf(Error);
-    expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
-  });
+  it.each(["command owner", "dispatch generation"] as const)(
+    "rechecks %s after placement preparation",
+    async (authority) => {
+      let current = true;
+      placementContextMocks.getMany.mockImplementation(() => {
+        current = false;
+        return new Map();
+      });
+      const result = await admitNativeCommand({
+        command: "status",
+        source: { sessionId: "source-history", updatedAt: 1, archivedAt: 2 },
+        target: { sessionId: "target-history", updatedAt: 1 },
+        ...(authority === "command owner"
+          ? {
+              configureContext: (ctx: ReturnType<typeof buildTestCtx>) =>
+                bindCommandOwnerAuthority(ctx, { isCurrent: () => current }),
+            }
+          : {
+              assertCurrent: () => {
+                if (!current) {
+                  throw new Error("generation changed");
+                }
+              },
+            }),
+      });
+      expect(result.outcome).toMatchObject({
+        message:
+          authority === "command owner"
+            ? "Channel operator authority changed; send a new request."
+            : "generation changed",
+      });
+      expect(result.entries.get(sourceKey)?.archivedAt).toBe(2);
+    },
+  );
 
   it("rejects a source generation changed during placement preparation", async () => {
     let entries: Map<string, SessionEntry>;

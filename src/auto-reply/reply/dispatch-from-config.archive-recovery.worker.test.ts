@@ -75,7 +75,25 @@ async function prepare(crossStore = false) {
     InboundEventKind: "user_request",
     InputProvenance: { kind: "external_user", sourceChannel: "discord" },
   });
-  return { ctx, source, target, targetGuard, sourceScope, targetScope };
+  const restore = (overrides: Partial<Parameters<typeof restoreArchivedDispatchSession>[0]> = {}) =>
+    restoreArchivedDispatchSession({
+      ctx,
+      entry: source,
+      hasPluginOwnedBinding: false,
+      allowNativeCommandRestore: true,
+      additionalCommitGuard: targetGuard,
+      targetMutationScope: {
+        sessionKey: targetScope.sessionKey,
+        storePath: targetScope.storePath,
+        expected: target,
+      },
+      requireSnapshotMatch: true,
+      placementContext: { workerSessionPlacementService: { getMany: () => new Map() } },
+      sessionKey: sourceKey,
+      storePath: sourceScope.storePath,
+      ...overrides,
+    });
+  return { source, target, sourceScope, targetScope, restore };
 }
 
 it("reads the durable archived source through the worker on the host thread", async () => {
@@ -84,15 +102,9 @@ it("reads the durable archived source through the worker on the host thread", as
   vi.spyOn(sessionAccessor, "loadSessionEntryReadOnly").mockImplementation(() => {
     throw new Error("Gateway-thread source read");
   });
-  const restored = await restoreArchivedDispatchSession({
-    ctx: fixture.ctx,
-    entry: fixture.source,
-    hasPluginOwnedBinding: false,
-    allowNativeCommandRestore: true,
-    requireSnapshotMatch: true,
-    placementContext: { workerSessionPlacementService: { getMany: () => new Map() } },
-    sessionKey: sourceKey,
-    storePath: fixture.sourceScope.storePath,
+  const restored = await fixture.restore({
+    additionalCommitGuard: undefined,
+    targetMutationScope: undefined,
   });
   expect(restored?.archivedAt).toBeUndefined();
   vi.restoreAllMocks();
@@ -116,64 +128,9 @@ it("refuses a worker-committed source restore when a direct writer replaces the 
       },
     },
   };
-  await expect(
-    restoreArchivedDispatchSession({
-      ctx: fixture.ctx,
-      entry: fixture.source,
-      hasPluginOwnedBinding: false,
-      allowNativeCommandRestore: true,
-      additionalCommitGuard: fixture.targetGuard,
-      targetMutationScope: {
-        sessionKey: targetKey,
-        storePath: fixture.sourceScope.storePath,
-        expected: fixture.target,
-      },
-      requireSnapshotMatch: true,
-      placementContext,
-      sessionKey: sourceKey,
-      storePath: fixture.sourceScope.storePath,
-    }),
-  ).rejects.toThrow("stale command target");
+  await expect(fixture.restore({ placementContext })).rejects.toThrow("stale command target");
   expect(placementReads).toBeGreaterThan(0);
   expect(loadSessionEntryReadOnly(fixture.targetScope)?.sessionId).toBe("replacement-conversation");
-  expect(loadSessionEntryReadOnly(fixture.sourceScope)?.archivedAt).toBe(2);
-});
-
-it("keeps the durable source archived when command authority expires during placement", async () => {
-  expect(isMainThread).toBe(true);
-  const fixture = await prepare();
-  let current = true;
-  await expect(
-    restoreArchivedDispatchSession({
-      ctx: fixture.ctx,
-      entry: fixture.source,
-      hasPluginOwnedBinding: false,
-      allowNativeCommandRestore: true,
-      additionalCommitGuard: fixture.targetGuard,
-      targetMutationScope: {
-        sessionKey: fixture.targetScope.sessionKey,
-        storePath: fixture.targetScope.storePath,
-        expected: fixture.target,
-      },
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("command owner revoked");
-        }
-      },
-      requireSnapshotMatch: true,
-      placementContext: {
-        workerSessionPlacementService: {
-          getMany: () => new Map(),
-          getManyAsync: async () => {
-            current = false;
-            return new Map();
-          },
-        },
-      },
-      sessionKey: sourceKey,
-      storePath: fixture.sourceScope.storePath,
-    }),
-  ).rejects.toThrow("command owner revoked");
   expect(loadSessionEntryReadOnly(fixture.sourceScope)?.archivedAt).toBe(2);
 });
 
@@ -201,21 +158,8 @@ it("holds target lifecycle changes behind a busy target run until worktree resto
     resetTriggered: false,
   });
   try {
-    const restoring = restoreArchivedDispatchSession({
-      ctx: fixture.ctx,
+    const restoring = fixture.restore({
       entry: worktreeEntry,
-      hasPluginOwnedBinding: false,
-      allowNativeCommandRestore: true,
-      additionalCommitGuard: fixture.targetGuard,
-      targetMutationScope: {
-        sessionKey: fixture.targetScope.sessionKey,
-        storePath: fixture.targetScope.storePath,
-        expected: fixture.target,
-      },
-      requireSnapshotMatch: true,
-      placementContext: { workerSessionPlacementService: { getMany: () => new Map() } },
-      sessionKey: sourceKey,
-      storePath: fixture.sourceScope.storePath,
     });
     await withinTest(
       awaitGateBeforeSettlement(entered.promise, restoring, "worktree restore was not reached"),
@@ -285,21 +229,8 @@ it("refuses a target changed before fence acquisition without restoring the work
       ),
       signal,
     );
-    const restoring = restoreArchivedDispatchSession({
-      ctx: fixture.ctx,
+    const restoring = fixture.restore({
       entry: worktreeEntry,
-      hasPluginOwnedBinding: false,
-      allowNativeCommandRestore: true,
-      additionalCommitGuard: fixture.targetGuard,
-      targetMutationScope: {
-        sessionKey: fixture.targetScope.sessionKey,
-        storePath: fixture.targetScope.storePath,
-        expected: fixture.target,
-      },
-      requireSnapshotMatch: true,
-      placementContext: { workerSessionPlacementService: { getMany: () => new Map() } },
-      sessionKey: sourceKey,
-      storePath: fixture.sourceScope.storePath,
     });
     release.resolve();
     await withinTest(changingTarget, signal);

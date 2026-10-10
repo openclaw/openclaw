@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   ApplicationCommandOptionType,
   ChannelType,
@@ -260,6 +260,50 @@ function expectVisibleStatus(harness: ReturnType<typeof createHarness>, channelI
   expectFollowUp(harness, `Status for ${sessionKey}`);
 }
 
+function archivedCommandScopes(prefix: string, userId = USER) {
+  const storePath = join(tempDirs.make(prefix), "sessions.json");
+  const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
+  return {
+    cfg,
+    source: { storePath, sessionKey: `agent:main:discord:slash:${userId}` },
+    target: { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` },
+  };
+}
+
+function persistedCommandHarness(cfg: OpenClawConfig) {
+  const harness = createHarness(cfg);
+  harness.dispatch.mockRestore();
+  harness.session.mockRestore();
+  return harness;
+}
+
+function runPersistedCommand(params: {
+  cfg: OpenClawConfig;
+  harness: ReturnType<typeof createHarness>;
+  id: string;
+  command: "compact" | "new" | "reset";
+  userId?: string;
+}) {
+  return withRegisteredChannelIngress(
+    { plugin: discordPlugin, config: params.cfg, setRuntime: setDiscordRuntime },
+    () =>
+      params.harness.client.handleInteraction(
+        createInternalInteractionPayload({
+          ...payload(CHANNEL, false, params.userId),
+          id: params.id,
+          type: InteractionType.ApplicationCommand,
+          data: { id: `${params.command}-command`, name: params.command, type: 1 },
+        }),
+      ),
+  );
+}
+
+function commandReplies(harness: ReturnType<typeof createHarness>) {
+  return [...harness.post.mock.calls, ...harness.patch.mock.calls]
+    .map((call) => call[1]?.body)
+    .filter((body) => body && "content" in body);
+}
+
 // Isolated boundary proof: REST is controlled; interaction construction, dispatch,
 // access policy, conversation routing and response serialization are production code.
 describe("Client.handleInteraction native command channel identity", () => {
@@ -267,10 +311,7 @@ describe("Client.handleInteraction native command channel identity", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("restores an archived slash source and runs compact without replacing its history", async () => {
-    const storePath = join(tempDirs.make("openclaw-discord-archived-"), "sessions.json");
-    const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
-    const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
-    const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+    const { cfg, source, target } = archivedCommandScopes("openclaw-discord-archived-");
     const sessionId = "archived-command-session";
     await sessionStore.upsertSessionEntry({
       ...source,
@@ -299,22 +340,8 @@ describe("Client.handleInteraction native command channel identity", () => {
     expect(archived).toMatchObject({ sessionId, archivedAt: 2 });
     const transcript = sessionStore.loadTranscriptEventsSync({ ...source, sessionId });
     expect(JSON.stringify(transcript)).toContain("Synthetic archived history");
-    const harness = createHarness(cfg);
-    harness.dispatch.mockRestore();
-    harness.session.mockRestore();
-    await withRegisteredChannelIngress(
-      { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
-      async () => {
-        await harness.client.handleInteraction(
-          createInternalInteractionPayload({
-            ...payload(CHANNEL),
-            id: "archived-compact",
-            type: InteractionType.ApplicationCommand,
-            data: { id: "compact-command", name: "compact", type: 1 },
-          }),
-        );
-      },
-    );
+    const harness = persistedCommandHarness(cfg);
+    await runPersistedCommand({ cfg, harness, id: "archived-compact", command: "compact" });
     expect(harness.post).toHaveBeenCalledWith(
       "/interactions/archived-compact/test-token/callback",
       {
@@ -324,9 +351,7 @@ describe("Client.handleInteraction native command channel identity", () => {
         },
       },
     );
-    const replies = [...harness.post.mock.calls, ...harness.patch.mock.calls]
-      .map((call) => call[1]?.body)
-      .filter((body) => body && "content" in body);
+    const replies = commandReplies(harness);
     expect(replies).toHaveLength(1);
     expect(replies[0]).toMatchObject({ content: expect.stringContaining("Compaction") });
     const after = sessionStore.getSessionEntry(source);
@@ -348,10 +373,7 @@ describe("Client.handleInteraction native command channel identity", () => {
   ] as const)(
     "runs /$command for an archived conversation with a $sourceState command source",
     async ({ command, sourceState }) => {
-      const storePath = join(tempDirs.make("openclaw-discord-archived-reset-"), "sessions.json");
-      const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
-      const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
-      const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+      const { cfg, source, target } = archivedCommandScopes("openclaw-discord-archived-reset-");
       if (sourceState !== "missing") {
         await sessionStore.upsertSessionEntry({
           ...source,
@@ -384,24 +406,14 @@ describe("Client.handleInteraction native command channel identity", () => {
         ...target,
         update: () => ({ archivedAt: 2, archivedBy: { type: "human", id: "test-operator" } }),
       });
-      const harness = createHarness(cfg);
-      harness.dispatch.mockRestore();
-      harness.session.mockRestore();
-      await withRegisteredChannelIngress(
-        { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
-        () =>
-          harness.client.handleInteraction(
-            createInternalInteractionPayload({
-              ...payload(CHANNEL),
-              id: `archived-${command}-${sourceState}`,
-              type: InteractionType.ApplicationCommand,
-              data: { id: "reset-command", name: command, type: 1 },
-            }),
-          ),
-      );
-      const replies = [...harness.post.mock.calls, ...harness.patch.mock.calls]
-        .map((call) => call[1]?.body)
-        .filter((body) => body && "content" in body);
+      const harness = persistedCommandHarness(cfg);
+      await runPersistedCommand({
+        cfg,
+        harness,
+        id: `archived-${command}-${sourceState}`,
+        command,
+      });
+      const replies = commandReplies(harness);
       expect(replies).toHaveLength(1);
       expect(replies[0]).toMatchObject({
         content: command === "new" ? "✅ New session started." : "✅ Session reset.",
@@ -430,11 +442,8 @@ describe("Client.handleInteraction native command channel identity", () => {
   it.each(["source", "reset target"] as const)(
     "refuses archived %s recovery after live command policy revocation",
     async (held) => {
-      const root = tempDirs.make("openclaw-discord-revoked-archive-");
-      const storePath = join(root, "sessions.json");
-      const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
-      const source = { storePath, sessionKey: `agent:main:discord:slash:${USER}` };
-      const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+      const { cfg, source, target } = archivedCommandScopes("openclaw-discord-revoked-archive-");
+      const root = dirname(source.storePath);
       const sourceId = "retained-hidden-history";
       const targetId = "retained-conversation-history";
       await sessionStore.upsertSessionEntry({
@@ -491,25 +500,13 @@ describe("Client.handleInteraction native command channel identity", () => {
         await release.promise;
         return () => {};
       });
-      const harness = createHarness(cfg);
-      harness.dispatch.mockRestore();
-      harness.session.mockRestore();
-      const pending = withRegisteredChannelIngress(
-        { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
-        () =>
-          harness.client.handleInteraction(
-            createInternalInteractionPayload({
-              ...payload(CHANNEL),
-              id: `revoked-archive-${held}`,
-              type: InteractionType.ApplicationCommand,
-              data: {
-                id: "revoked-command",
-                name: held === "source" ? "compact" : "reset",
-                type: 1,
-              },
-            }),
-          ),
-      );
+      const harness = persistedCommandHarness(cfg);
+      const pending = runPersistedCommand({
+        cfg,
+        harness,
+        id: `revoked-archive-${held}`,
+        command: held === "source" ? "compact" : "reset",
+      });
       try {
         await entered.promise;
         harness.replacePolicy();
@@ -537,11 +534,11 @@ describe("Client.handleInteraction native command channel identity", () => {
   it.each(["non-reset command", "unauthorized reset"] as const)(
     "does not restore archived sessions for a %s",
     async (scenario) => {
-      const storePath = join(tempDirs.make("openclaw-discord-archive-denied-"), "sessions.json");
-      const cfg: OpenClawConfig = { ...createConfig(), session: { store: storePath } };
       const userId = scenario === "unauthorized reset" ? "100000000000000099" : USER;
-      const source = { storePath, sessionKey: `agent:main:discord:slash:${userId}` };
-      const target = { storePath, sessionKey: `agent:main:discord:channel:${CHANNEL}` };
+      const { cfg, source, target } = archivedCommandScopes(
+        "openclaw-discord-archive-denied-",
+        userId,
+      );
       for (const [scope, sessionId] of [
         [source, "source"],
         [target, "target"],
@@ -553,34 +550,21 @@ describe("Client.handleInteraction native command channel identity", () => {
       }
       const beforeSource = sessionStore.getSessionEntry(source);
       const beforeTarget = sessionStore.getSessionEntry(target);
-      const harness = createHarness(cfg);
-      harness.dispatch.mockRestore();
-      harness.session.mockRestore();
+      const harness = persistedCommandHarness(cfg);
       const run = () =>
-        withRegisteredChannelIngress(
-          { plugin: discordPlugin, config: cfg, setRuntime: setDiscordRuntime },
-          () =>
-            harness.client.handleInteraction(
-              createInternalInteractionPayload({
-                ...payload(CHANNEL, false, userId),
-                id: `archive-denied-${scenario}`,
-                type: InteractionType.ApplicationCommand,
-                data: {
-                  id: "denied-command",
-                  name: scenario === "unauthorized reset" ? "new" : "compact",
-                  type: 1,
-                },
-              }),
-            ),
-        );
+        runPersistedCommand({
+          cfg,
+          harness,
+          id: `archive-denied-${scenario}`,
+          command: scenario === "unauthorized reset" ? "new" : "compact",
+          userId,
+        });
       if (scenario === "unauthorized reset") {
         await run();
         expectFollowUp(harness, "You are not authorized to use this command.");
       } else {
         await expect(run()).rejects.toThrow("is archived");
-        const replies = [...harness.post.mock.calls, ...harness.patch.mock.calls]
-          .map((call) => call[1]?.body)
-          .filter((body) => body && "content" in body);
+        const replies = commandReplies(harness);
         expect(replies).toHaveLength(1);
         expect(replies[0]).toMatchObject({
           content:
