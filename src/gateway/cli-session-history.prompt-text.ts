@@ -51,7 +51,7 @@ function stripLeadingSystemEventLines(text: string): string {
   if (!hasEvent || (end < lines.length && lines[end] !== "")) {
     return text;
   }
-  return context + lines.slice(end).join("\n");
+  return context + lines.slice(end).join("\n").replace(/^\n+/u, "");
 }
 
 // Correlation/provenance-only view without the context OpenClaw added around
