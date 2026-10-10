@@ -53,6 +53,7 @@ import { readSqliteSessionParticipantProjection } from "./session-accessor.sqlit
 import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
 import { captureSessionEntryPublicationSource } from "./session-entry-publication-source.js";
+import type { SessionEntrySnapshot } from "./session-entry-snapshots.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -91,6 +92,7 @@ type SessionEntryCacheUpdate = { sessionKey: string } & (
       entryJson: string;
       sideMetadata: SessionEntrySideMetadata;
       snapshotEntry?: SessionEntry;
+      snapshots?: readonly SessionEntrySnapshot[];
     }
   | { entry?: undefined; entryJson?: never }
 );
@@ -402,6 +404,7 @@ export function publishSessionEntryCacheInvalidation(
           update.entryJson,
           cached?.sideMetadata ?? update.sideMetadata,
           update.snapshotEntry,
+          update.snapshots,
         )
       : undefined;
   publishSessionSharingEntryChange(database, { ...update, facts, ...(entry ? { entry } : {}) });
