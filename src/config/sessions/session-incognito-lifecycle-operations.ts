@@ -3,11 +3,21 @@ import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { resolveSessionStorePathCore } from "./paths.js";
+import type {
+  DeleteSessionEntryLifecycleParams,
+  DeleteSessionEntryLifecycleResult,
+} from "./session-accessor.sqlite-contract.js";
+import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import {
+  captureIncognitoSessionOperation,
+  captureIncognitoSessionSource,
+} from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type {
   IncognitoLifecycleEntry,
   IncognitoLifecycleOperations,
 } from "./session-incognito-lifecycle-contract.js";
+import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
 type IncognitoLifecycleTarget = {
   actor: Pick<
@@ -48,12 +58,14 @@ export function deleteIncognitoSessionLifecycle(
     target: IncognitoLifecycleEntry;
     reason: "reset" | "deleted";
     expectedPluginOwnerId?: string;
+    expectedAgentHarnessId?: string;
   },
 ): Promise<IncognitoLifecycleOperations["session.lifecycle.delete"]["output"]> {
   const { actor, authority, scope } = captureLifecycle(params);
   const target = structuredClone(params.target);
   const reason = params.reason;
   const expectedPluginOwnerId = params.expectedPluginOwnerId;
+  const expectedAgentHarnessId = params.expectedAgentHarnessId;
   return actor.sessions.withSharedState(async () => {
     const [
       { withSqliteSessionDeletions },
@@ -84,6 +96,7 @@ export function deleteIncognitoSessionLifecycle(
               target,
               reason,
               expectedPluginOwnerId,
+              expectedAgentHarnessId,
               admissionIdentities: [
                 ...(collectActiveSessionWorkAdmissions().get(scope.ownerStorePath ?? actor.path) ??
                   []),
@@ -207,4 +220,82 @@ export function reclaimIncognitoSessionLifecycle(
       },
     );
   });
+}
+
+export function deleteCapturedIncognitoSession(
+  params: DeleteSessionEntryLifecycleParams,
+  expectedPluginOwnerId?: string,
+  expectedAgentHarnessId?: string,
+): Promise<DeleteSessionEntryLifecycleResult> | undefined {
+  const source = captureIncognitoSessionSource({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (source && "kind" in source) {
+    params.commitGuard?.();
+    source.assertCurrent();
+    return Promise.resolve({
+      deleted: false,
+      archivedTranscripts: [],
+      ...((params.expectedEntry ||
+        params.expectedSessionId != null ||
+        params.expectedLifecycleRevision !== undefined ||
+        params.expectedUpdatedAt !== undefined) && { expectedEntryMismatch: true as const }),
+    });
+  }
+  const binding = captureIncognitoSessionOperation({
+    ...params,
+    sessionKey: params.target.canonicalKey,
+  });
+  if (binding) {
+    const captured = {
+      ...params,
+      target: structuredClone(params.target),
+      expectedEntry: params.expectedEntry && structuredClone(params.expectedEntry),
+      env: captureSessionTranscriptTargetBinding({
+        storePath: binding.actor.path,
+        agentId: binding.actor.agentId,
+        env: params.env,
+      }).env,
+    };
+    const authority = {
+      assertCurrent() {
+        binding.authority.assertCurrent();
+        captured.commitGuard?.();
+      },
+    };
+    return binding.actor.sessions.withSharedState(async () => {
+      const { entry } = await binding.actor.sessions.read(
+        authority,
+        { sessionKey: captured.target.canonicalKey },
+        binding.admissionSignal,
+      );
+      if (
+        (captured.expectedEntry && !sqliteSessionEntriesEqual(entry, captured.expectedEntry)) ||
+        (captured.expectedSessionId !== undefined &&
+          (entry?.sessionId ?? null) !== captured.expectedSessionId) ||
+        (captured.expectedLifecycleRevision !== undefined &&
+          entry?.lifecycleRevision !== captured.expectedLifecycleRevision) ||
+        (captured.expectedUpdatedAt !== undefined &&
+          entry?.updatedAt !== captured.expectedUpdatedAt)
+      ) {
+        return { deleted: false, archivedTranscripts: [], expectedEntryMismatch: true as const };
+      }
+      if (!entry) {
+        return { deleted: false, archivedTranscripts: [] };
+      }
+      binding.admissionSignal?.throwIfAborted();
+      return deleteIncognitoSessionLifecycle({
+        actor: binding.actor,
+        authority,
+        env: captured.env,
+        ownerStorePath: captured.storePath,
+        target: { sessionKey: captured.target.canonicalKey, entry },
+        reason: "deleted",
+        expectedPluginOwnerId,
+        expectedAgentHarnessId,
+      });
+    });
+  }
+  return undefined;
 }

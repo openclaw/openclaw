@@ -1,7 +1,17 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
+  "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
+  "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
+  "src/agents/tools/sessions-send-tool.incognito.test.ts",
+  "src/agents/tools/terminal-tool.incognito.test.ts",
   "src/agents/interrupted-input-context.integration.test.ts",
   // Physical admission and descriptor custody belong to the application host, not an unhosted test Worker.
+  "src/acp/runtime/session-meta-read.cache.test.ts",
+  "src/state/user-profile-catalog-identity.read.test.ts",
+  "src/talk/client-voice-session-store.test.ts",
+  "src/trajectory/runtime-retention.sqlite.test.ts",
+  "src/trajectory/runtime-store.sqlite.test.ts",
   "src/state/openclaw-agent-db.checkonce.test.ts",
   "src/state/openclaw-state-db-checkonce.test.ts",
   "src/state/openclaw-state-db-schema-version.test.ts",
@@ -20,7 +30,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/cli-runner/history-boundary.incognito.test.ts",
   "src/agents/sandbox/runtime-status.incognito.test.ts",
   "src/agents/harness/host-capability.node-authority.test.ts",
-  "src/infra/sqlite-foreign-observation.worker.test.ts",
   "src/state/openclaw-state-db-current-reader.test.ts",
   "src/state/openclaw-state-db-existing-write.test.ts",
   "src/cli/admin-state-owner.process.test.ts",

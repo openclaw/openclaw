@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveEmbeddedCliBackendDispatchEligibility } from "../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js";
@@ -17,7 +16,6 @@ import { getRuntimeConfig } from "../../config/config.js";
 import * as session from "../../config/sessions/lifecycle.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
-  deleteSessionEntryLifecycle,
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadSessionEntryReadOnly,
@@ -26,6 +24,8 @@ import {
   rollbackPluginOwnedSessionEntryLifecycle,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
 import { sessionEntryCommitGuardOptions } from "../../config/sessions/session-source-authority.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -48,8 +48,8 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
-import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
+import { createRuntimeSessionEntry } from "./runtime-agent-session-create.js";
 import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
@@ -546,49 +546,66 @@ async function createSessionEntry(
 }
 
 async function runWithSessionWorkAdmission<T>(
-  params: { storePath: string; sessionKey: string; signal?: AbortSignal },
+  input: { storePath: string; sessionKey: string; signal?: AbortSignal },
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
-  const initialEntry = getSessionEntry({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    readConsistency: "latest",
-  });
-  const lifecycleAbortController = new AbortController();
-  const admission = await beginSessionWorkAdmission({
-    scope: params.storePath,
-    identities: [params.sessionKey, initialEntry?.sessionId],
-    signal: params.signal,
-    onInterrupt: () =>
-      lifecycleAbortController.abort(
-        new Error("Agent work interrupted by a session lifecycle change."),
-      ),
-    assertAllowed: () => {
-      const currentEntry = getSessionEntry({
-        storePath: params.storePath,
-        sessionKey: params.sessionKey,
-        readConsistency: "latest",
-      });
-      const changed = initialEntry
-        ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
-        : Boolean(currentEntry);
-      if (changed) {
-        throw session.createSessionWorkStartChangedError(params.sessionKey);
-      }
-      const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
-      if (startError) {
-        throw new Error(startError);
-      }
-    },
-  });
+  const params = { ...input };
+  const source = captureIncognitoSessionSource(params);
+  if (source && !("kind" in source)) {
+    return source.actor.sessions.withSharedState(() => runAdmittedWork());
+  }
+  return runAdmittedWork();
 
-  try {
-    const signal = params.signal
-      ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
-      : lifecycleAbortController.signal;
-    return await admission.run(async () => await run(signal));
-  } finally {
-    admission.release();
+  async function runAdmittedWork(): Promise<T> {
+    const initialEntry = await readSessionEntryReadOnlyInWorker({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      readConsistency: "latest",
+    });
+    const lifecycleAbortController = new AbortController();
+    const admission = await beginSessionWorkAdmission({
+      scope: params.storePath,
+      identities: [params.sessionKey, initialEntry?.sessionId],
+      signal: params.signal,
+      onInterrupt: () =>
+        lifecycleAbortController.abort(
+          new Error("Agent work interrupted by a session lifecycle change."),
+        ),
+      assertAllowed: () => {
+        source?.admissionSignal?.throwIfAborted();
+        if (source && "kind" in source) {
+          source.assertCurrent();
+        }
+        const currentEntry = source
+          ? "kind" in source
+            ? undefined
+            : source.actor.sessions.readSharing(params.sessionKey)?.entry
+          : getSessionEntry({
+              storePath: params.storePath,
+              sessionKey: params.sessionKey,
+              readConsistency: "latest",
+            });
+        const changed = initialEntry
+          ? !currentEntry || currentEntry.sessionId !== initialEntry.sessionId
+          : Boolean(currentEntry);
+        if (changed) {
+          throw session.createSessionWorkStartChangedError(params.sessionKey);
+        }
+        const startError = session.resolveSessionWorkStartError(params.sessionKey, currentEntry);
+        if (startError) {
+          throw new Error(startError);
+        }
+      },
+    });
+
+    try {
+      const signal = params.signal
+        ? AbortSignal.any([params.signal, lifecycleAbortController.signal])
+        : lifecycleAbortController.signal;
+      return await admission.run(async () => await run(signal));
+    } finally {
+      admission.release();
+    }
   }
 }
 
@@ -659,7 +676,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath: resolveSessionStorePathCore,
-    createSessionEntry,
+    createSessionEntry: createRuntimeSessionEntry,
     getSessionEntry,
     getSessionEntryAsync,
     getSessionEntryByIdAsync,

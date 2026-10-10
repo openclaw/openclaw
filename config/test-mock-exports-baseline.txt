@@ -9730,7 +9730,6 @@
 ["src/state/openclaw-state-lease-async.timer.test.ts","./openclaw-state-worker-store.js","7e57a3b03b102a2fa8ad9201f5e43a93be197f9f4c0b580e1ac77b8e9f77818f",1]
 ["src/state/openclaw-state-lease-heartbeat.diagnostics.test.ts","../infra/gateway-state-owner.js","75f4947819c782299a5a77ec89e7b22aa777d17f2d7e995384f6ed5ed032c3c2",1]
 ["src/state/openclaw-state-lease-heartbeat.diagnostics.test.ts","../infra/sqlite-busy-timeout.js","7e66f65cacd57e566125c3bd46642bb63b50bb57bcea0f15c623e3647332b8cd",1]
-["src/state/openclaw-state-lease-heartbeat.diagnostics.test.ts","../infra/sqlite-transaction.js","10d82e3f4a105da55509ce8624c7ebbf61369d1af5fd406cf305d5857ad7cefc",1]
 ["src/state/openclaw-state-lease-heartbeat.diagnostics.test.ts","./openclaw-state-db-handle.js","ff92667d404b46da4d39376302d817bcc31e9669e9d646c9f7bf20f3dbbcf7c3",1]
 ["src/state/openclaw-state-lease-heartbeat.diagnostics.test.ts","./openclaw-state-lease-store.js","c82d46a7572b30d1cd98e54e54592aa0db19967f0898e464deb57a2fc7be44b7",1]
 ["src/state/openclaw-state-lease-heartbeat.lifetime.test.ts","../infra/node-sqlite.js","b01fd24392aea414066079c028dd465dca1fc2190f3917b6f23e4c141163205f",1]

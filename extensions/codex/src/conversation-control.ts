@@ -4,7 +4,7 @@ import {
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
 import {
-  getSessionEntry,
+  getSessionEntryAsync,
   prepareSessionEntryPatch,
   resolveStorePath,
   type SessionEntrySourceAuthority,
@@ -275,7 +275,7 @@ export async function setCodexConversationPermissions(params: {
       agentId: params.session.agentId,
     });
   if (!params.mode) {
-    const entry = getSessionEntry({
+    const entry = await getSessionEntryAsync({
       agentId: params.session.agentId,
       hydrateSkillPromptRefs: false,
       readConsistency: "latest",

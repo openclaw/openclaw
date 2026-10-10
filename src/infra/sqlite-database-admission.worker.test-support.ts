@@ -11,6 +11,7 @@ import {
 export type AdmissionOperations = {
   admitted: { input: undefined; output: { sql: string[]; threadId: number } };
   mutate: { input: undefined; output: undefined };
+  writeRows: { input: { sql: string }; output: undefined };
   mutateAfterHostAdmission: {
     input: { path: string };
     output: { native: boolean; admitted: boolean };
@@ -67,6 +68,10 @@ export function createSqliteWorkerBackend(
     }
     if (command.type === "mutate") {
       database.exec("CREATE TABLE worker_publication (value)");
+      return undefined;
+    }
+    if (command.type === "writeRows") {
+      database.exec(command.input.sql);
       return undefined;
     }
     if (command.type === "mutateAfterHostAdmission") {
