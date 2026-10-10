@@ -2,6 +2,11 @@ import { expect } from "vitest";
 import type { SidebarLifecycleState } from "./app-sidebar.ts";
 import { waitForFast } from "./wait-for.ts";
 
+type SessionMenuHost = Pick<
+  SidebarLifecycleState,
+  "querySelector" | "updateComplete" | "sessionData"
+>;
+
 export function sessionMenuChoice(menu: Element, value: string) {
   const [kind, option] = value.split(":");
   const ids: Record<string, string> = {
@@ -20,7 +25,7 @@ export function sessionMenuChoice(menu: Element, value: string) {
   );
 }
 
-export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<HTMLElement> {
+export async function openSessionMenu(sidebar: SessionMenuHost): Promise<HTMLElement> {
   if (!sidebar.querySelector(".sidebar-session-sort-menu")) {
     sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!.click();
     await sidebar.updateComplete;
@@ -32,7 +37,7 @@ export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<H
   return menu;
 }
 
-export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function activateSessionMenuValue(sidebar: SessionMenuHost, value: string) {
   const menu = await openSessionMenu(sidebar);
   if (
     value === "involving-me" ||
@@ -80,7 +85,7 @@ export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, v
   await sidebar.updateComplete;
 }
 
-export async function selectSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
+export async function selectSessionMenuValue(sidebar: SessionMenuHost, value: string) {
   await activateSessionMenuValue(sidebar, value);
   await waitForFast(() => expect(sidebar.sessionData.sessionsLoading).toBe(false));
   await sidebar.updateComplete;

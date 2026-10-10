@@ -51,6 +51,11 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await waitForSessionRosterHydration(page);
+      // Keyboard owner selection is an All-scope control; keep the initial Mine default.
+      await page
+        .locator(".sidebar-navigation-scope")
+        .getByRole("button", { name: "All", exact: true })
+        .click();
       const trigger = page.getByRole("button", { name: "Filter & sort", exact: true });
       await trigger.focus();
       await page.keyboard.press("Enter");

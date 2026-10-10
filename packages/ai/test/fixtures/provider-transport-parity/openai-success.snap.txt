@@ -180,11 +180,6 @@
         "delta": "Think."
       },
       {
-        "type": "thinking_delta",
-        "contentIndex": 0,
-        "delta": ""
-      },
-      {
         "type": "text_start",
         "contentIndex": 1
       },

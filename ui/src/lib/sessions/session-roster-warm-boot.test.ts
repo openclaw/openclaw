@@ -175,6 +175,71 @@ function harness(
 }
 
 describe("session capability warm roster", () => {
+  it.each(["profile", "credentials", "gateway", "stop"])(
+    "retains canonical display identity through transport/client replacement, then retires it on %s",
+    async (retirement) => {
+      const h = harness({ withBootRecord: false });
+      h.connect();
+      const live = sessionsResult([{ key: "agent:main:retained", kind: "direct" }], 2);
+      h.live.resolve(live);
+      await h.sessions.refresh();
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.resultCached).not.toBe(true);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      const requestCount = h.request.mock.calls.length;
+      h.publish({ phase: "reconnecting", selfUser: undefined });
+      expect(h.sessions.state.result).toBeNull();
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      h.publish({ client: createTestGatewayClient(h.request) });
+      expect(h.sessions.presentation.result).toEqual(live);
+      expect(h.sessions.presentation.profileId).toBe("profile-one");
+      expect(h.request).toHaveBeenCalledTimes(requestCount);
+      if (retirement === "profile") {
+        h.connect("profile-two");
+      } else if (retirement === "stop") {
+        h.publish({ client: null, phase: "stopped" });
+      } else {
+        if (retirement === "gateway") {
+          Object.defineProperty(h.gateway, "connection", {
+            value: { gatewayUrl: "ws://other.example.test", token: "test-token" },
+          });
+        } else {
+          h.changeCredentials();
+        }
+        h.publish({ phase: "connecting" });
+      }
+      expect(h.sessions.presentation.result).toBeNull();
+      expect(h.sessions.presentation.profileId).toBeUndefined();
+      h.sessions.dispose();
+    },
+  );
+
+  it.each(["profile", "credentials", "retirement"])(
+    "pairs admitted warm rows with display identity and retires both on %s change",
+    async (change) => {
+      const h = harness();
+      await h.sessions.whenCachedRosterSettled();
+      expect(h.sessions.presentation).toMatchObject({
+        result: roster().result,
+        resultCached: true,
+        profileId: "profile-one",
+      });
+      expect(h.request).not.toHaveBeenCalled();
+      if (change === "profile") {
+        h.connect("profile-two");
+      } else if (change === "credentials") {
+        h.changeCredentials();
+        h.publish({ phase: "connecting" });
+      } else {
+        clearBootRecords(scope, { recoveryScope: bootRecord.recoveryScope! });
+      }
+      expect(h.sessions.presentation.result).toBeNull();
+      expect(h.sessions.presentation.profileId).toBeUndefined();
+      h.live.resolve(sessionsResult([], 2));
+    },
+  );
+
   it("retires the captured legacy roster even with a different live hello identity", async () => {
     const legacy = { ...bootRecord, recoveryScope: undefined };
     const h = harness({

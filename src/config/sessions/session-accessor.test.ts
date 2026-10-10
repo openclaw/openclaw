@@ -80,7 +80,7 @@ import { applySessionEntryCanonicalReplacements } from "./session-accessor.sqlit
 import {
   appendTranscriptEventSync,
   replaceTranscriptEvents,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";

@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import type { VerboseLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import {
@@ -20,6 +21,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { isSubagentCoordinationInputProvenance } from "../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../sessions/session-state-events.js";
@@ -100,6 +102,17 @@ async function agentCommandInternal(
     prepared.opts.preserveUserFacingSessionModelState === true;
   const lifecycleAbortController = new AbortController();
   const preparedOpts = resolveCommandRecoveryOptions(prepared);
+  const parentAbortSignal = preparedOpts.abortSignal;
+  if (parentAbortSignal?.aborted) {
+    lifecycleAbortController.abort(parentAbortSignal.reason);
+  }
+  // Node 24's AbortSignal.any can replace an unread reason when another source aborts.
+  using _ =
+    parentAbortSignal && !parentAbortSignal.aborted
+      ? addAbortListener(parentAbortSignal, () => {
+          lifecycleAbortController.abort(parentAbortSignal.reason);
+        })
+      : undefined;
   const compactionSessionIdReporter = createCompactionSessionIdReporter(
     prepared.sessionId,
     preparedOpts.onSessionIdChanged,
@@ -107,9 +120,7 @@ async function agentCommandInternal(
   let opts: AgentCommandOpts = {
     ...preparedOpts,
     onSessionIdChanged: compactionSessionIdReporter.onSessionIdChanged,
-    abortSignal: preparedOpts.abortSignal
-      ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
-      : lifecycleAbortController.signal,
+    abortSignal: lifecycleAbortController.signal,
   };
   const preparedContext = { ...prepared };
   const {
@@ -197,8 +208,23 @@ async function agentCommandInternal(
       scope: storePath ?? `agent:${sessionAgentId}`,
       isSettling: opts.isTerminalOutcomeObserved,
       identities: [sessionKey, sessionId],
+      run: {
+        runId,
+        sessionKey,
+        sessionId,
+        agentId: sessionAgentId,
+        controlUiVisible:
+          !suppressVisibleSessionEffects &&
+          !isSubagentCoordinationInputProvenance(opts.inputProvenance),
+      },
       signal: opts.abortSignal,
-      onInterrupt: (reason) => lifecycleAbortController.abort(reason),
+      onInterrupt: (reason) => {
+        if (opts.abortSignal?.aborted) {
+          return undefined;
+        }
+        lifecycleAbortController.abort(reason);
+        return { runId };
+      },
       assertAllowed: async () => {
         const scope = { agentId: sessionAgentId, storePath, sessionKey: sessionKey ?? "" };
         const currentEntry =
