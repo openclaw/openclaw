@@ -252,10 +252,11 @@ export function createPluginMetadataSnapshotFrame(
   return createPluginExecutionFrame(
     {
       ...current,
-      cacheScope: { cache, parent: current?.cacheScope },
+      cacheScope: { cache },
       metadataScope: {
         snapshot,
         cache,
+        metadata: cache.metadata,
         configFingerprint,
         envFingerprint: resolvePluginMetadataEnvFingerprint(options.env),
         compatiblePolicyHashes,

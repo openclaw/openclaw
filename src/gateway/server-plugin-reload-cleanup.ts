@@ -422,7 +422,7 @@ export function createPluginReloadCleanup({
       for (const record of previousRegistry.plugins) {
         if (pluginIds.has(record.id)) {
           const instance = getPluginInstance(record);
-          instance?.assertCanReplace();
+          instance?.reserveReplacement();
           // A turn retains its instances between callbacks; waiting here would wait on itself.
           if (instance && heldInstances?.has(instance)) {
             throw new Error(

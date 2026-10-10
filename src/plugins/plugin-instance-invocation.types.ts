@@ -5,6 +5,7 @@ import type { PluginInvocationInstance } from "./plugin-instance.types.js";
 export type PluginInstanceInvocation = {
   instance: PluginInvocationInstance;
   token: object;
+  readonly parent?: PluginInstanceInvocation;
 };
 
 export type PluginSourceCaptureStorage = Readonly<{

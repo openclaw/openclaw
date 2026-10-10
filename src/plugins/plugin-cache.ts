@@ -153,6 +153,7 @@ function createPluginMetadataCache(): PluginCache["metadata"] {
       defaultDiscoveryCompatible: false,
       compatiblePolicyHashes: undefined,
       compatibleConfigFingerprints: undefined,
+      revision: Symbol("plugin-metadata-snapshot"),
       configIdentities: new WeakSet(),
     },
     snapshots: new Map(),

@@ -70,6 +70,7 @@ export interface PluginModuleLoaderOwner extends PluginInstanceResource, PluginI
 export interface PluginInvocationInstance extends PluginModuleLoaderOwner {
   /** The current invocation's call or retained-consumer token is still admitted. */
   readonly hasActiveCall: boolean;
+  holdsPendingReplacement(token: object): boolean;
   readonly slots: Map<string | symbol, { runtime: unknown }>;
   wrap<T>(value: T): T;
 }

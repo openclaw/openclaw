@@ -180,7 +180,8 @@ export async function prepareBundledDiscoveryMode(
           );
       value = parseBundledDiscoveryMode(row ? JSON.parse(row.value_json) : undefined);
     }
-    return { value };
+    // Keep the SDK-reachable fact shape without a separate invalidation generation.
+    return { value, generation: owner };
   });
   const activate = () => {
     prepared.assertCurrent();

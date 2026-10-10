@@ -151,6 +151,15 @@ export class PluginInstance {
     return this.activeCall() !== undefined;
   }
 
+  /** SDK-reachable compatibility: reload checks callers but no longer reserves instances. */
+  get replacementPending(): boolean {
+    return false;
+  }
+
+  holdsPendingReplacement(token: object): boolean {
+    return this.replacementPending && this.hasToken(token);
+  }
+
   run<T>(run: () => T): T {
     const current = this.activeCall();
     if (current) {
@@ -250,12 +259,13 @@ export class PluginInstance {
   }
 
   /** Refuse a caller-dependent reload before stopping its serving instance. */
-  assertCanReplace(): void {
+  reserveReplacement(): () => void {
     if (this.hasActiveCall) {
       throw new Error(
         `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
       );
     }
+    return () => {};
   }
 
   /** Retain executable use or idle donor custody through its physical completion. */

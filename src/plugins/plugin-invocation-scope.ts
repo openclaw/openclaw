@@ -60,17 +60,19 @@ export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
+  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
     options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
   ) {
+    this.consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
         if (options.retained) {
           const acquire = () =>
-            instance.retainConsumer((run) => this.run(run), registry, options.kind);
+            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
@@ -97,6 +99,12 @@ export class PluginInvocationScope {
     if (this.closed) {
       throw new Error("Plugin invocation scope is closed");
     }
+  }
+
+  get holdsPendingReplacement(): boolean {
+    return (
+      !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
+    );
   }
 
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {

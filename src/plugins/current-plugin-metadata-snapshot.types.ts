@@ -16,5 +16,6 @@ export type PluginMetadataSnapshotCandidate = {
 export type ScopedPluginMetadataSnapshot = PluginMetadataSnapshotCandidate & {
   snapshot: PluginMetadataSnapshot;
   cache: PluginCache;
+  metadata: PluginCache["metadata"];
   parent?: ScopedPluginMetadataSnapshot;
 };

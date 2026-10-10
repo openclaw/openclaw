@@ -15,6 +15,7 @@ import type { PluginRecord, PluginRegistry, PluginRegistryGatewayOwner } from ".
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;
   readonly acceptingCalls: boolean;
+  readonly replacementPending: boolean;
   readonly hasRetainedConsumers: boolean;
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
@@ -32,7 +33,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
     options?: { includeConsumers?: boolean; includeCalls?: boolean },
   ): Promise<void>;
   waitForIdle(signal: AbortSignal): Promise<void>;
-  assertCanReplace(): void;
+  reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
@@ -57,6 +58,7 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
@@ -82,6 +84,15 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInvocationContext"),
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
+
+/** Compatibility query for callers holding a published plugin invocation context. */
+export function currentPluginWorkHoldsPendingReplacement(): boolean {
+  const call = pluginInstanceInvocation.getStore();
+  return (
+    (call?.instance.holdsPendingReplacement(call.token) ?? false) ||
+    pluginInvocationContext.getStore()?.holdsPendingReplacement === true
+  );
+}
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {
   let owner = pluginInstanceState.records.get(record);
