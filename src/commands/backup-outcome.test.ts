@@ -143,4 +143,37 @@ describe("backup outcome ownership", () => {
       missingScope: "operator.admin",
     });
   });
+
+  it("leaves database bytes unchanged when the live owner refuses the routed outcome", async () => {
+    const { databasePath } = await fixture();
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    lock = await acquireGatewayLock({ allowInTests: true, port: 18789 });
+    const before = await fs.readFile(databasePath);
+    vi.spyOn(stateOwner, "captureGatewayStateOwner").mockReturnValueOnce(undefined);
+    transport.call.mockImplementation(async (options: CallGatewayOptions) => {
+      await options.prepareDispatchCurrent?.();
+      options.assertDispatchCurrent?.();
+      const response = await receive(options.params as Record<string, unknown>, false);
+      expect(response).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+        }),
+      );
+      throw Object.assign(new Error("Owner refused the outcome"), {
+        name: "GatewayClientRequestError",
+        gatewayCode: "INVALID_REQUEST",
+        retryable: false,
+        details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+      });
+    });
+    const runtime = createTestRuntime();
+    await backupRecordCommand(runtime, { status: "ok", target: "refused" });
+    expect(transport.call).toHaveBeenCalledTimes(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("No local mutation"));
+    expect(await fs.readFile(databasePath)).toEqual(before);
+    expect(await readBackupRuns(process.env)).toEqual([]);
+  });
 });

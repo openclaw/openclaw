@@ -125,9 +125,19 @@ export async function runWithLocalStateOwner<T>(params: {
     assertCurrent();
     const { getRuntimeConfig } = await import("../config/config.js");
     assertCurrent();
-    const config = getRuntimeConfig();
-    assertCurrent();
-    return await params.runLocal({ env, config, signal: controller.signal, assertCurrent });
+    let config: OpenClawConfig | undefined;
+    return await params.runLocal({
+      env,
+      // Loading config can write state. Config-free owners must reach their own admission first.
+      get config() {
+        assertCurrent();
+        config ??= getRuntimeConfig();
+        assertCurrent();
+        return config;
+      },
+      signal: controller.signal,
+      assertCurrent,
+    });
   };
   const route = async (owner: GatewayLockIdentity): Promise<T> => {
     if (typeof params.onForeignOwner === "function") {
