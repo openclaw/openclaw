@@ -64,6 +64,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-schema-read.ts",
     "src/state/openclaw-agent-db-metadata.ts",
     "src/state/openclaw-agent-db-schema.ts",
+    // Extracted migration publication owns canonical DDL and version/FK PRAGMAs only.
+    "src/state/openclaw-agent-schema-migration-finalize.ts",
     "src/state/openclaw-agent-db-session-nodes-migration.ts",
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
