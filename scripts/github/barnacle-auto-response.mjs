@@ -731,7 +731,14 @@ function isClawSweeperOwnedLabel(label) {
   return label === "clawsweeper" || label.startsWith("clawsweeper:");
 }
 
-async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
+async function applyPullRequestCandidateLabels(
+  github,
+  context,
+  core,
+  pullRequest,
+  labelSet,
+  removeStaleCandidateLabels = false,
+) {
   const files = await github.paginate(github.rest.pulls.listFiles, {
     owner: context.repo.owner,
     repo: context.repo.repo,
@@ -749,7 +756,10 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     context.payload.action === "labeled" &&
     context.payload.label?.name === skillCloseLabel &&
     !isAutomationActor(context);
-  const staleContextLabels = structuralContextLabelValues.filter(
+  const removableLabelValues = removeStaleCandidateLabels
+    ? [...new Set([...structuralContextLabelValues, ...candidateLabelValues])]
+    : structuralContextLabelValues;
+  const staleContextLabels = removableLabelValues.filter(
     (label) =>
       (!preserveSkillCloseLabel || label !== skillCloseLabel) &&
       labelSet.has(label) &&
@@ -990,9 +1000,15 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   const eventLabel = context.payload.label?.name ?? "";
   const isPrCandidateEvent =
     pullRequest &&
-    ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
-      context.payload.action,
-    );
+    [
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+      "labeled",
+      "unlabeled",
+    ].includes(context.payload.action);
   if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
     return;
   }
@@ -1041,7 +1057,18 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
     }
 
-    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+    const refreshInferredCandidateLabels =
+      !hasTriggerLabel &&
+      !isLabelEvent &&
+      (context.payload.action === "edited" || context.payload.action === "ready_for_review");
+    await applyPullRequestCandidateLabels(
+      github,
+      context,
+      core,
+      pullRequest,
+      labelSet,
+      refreshInferredCandidateLabels,
+    );
 
     if (isLabelEvent && eventLabel === skillCloseLabel && isAutomationActor(context)) {
       core.info(

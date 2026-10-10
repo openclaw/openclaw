@@ -519,6 +519,52 @@ describe("barnacle-auto-response", () => {
     expect(calls.update).toStrictEqual([]);
   });
 
+  it.each(["edited", "ready_for_review"])(
+    "replaces stale draft candidate labels with the ready-PR set on %s",
+    async (action) => {
+      const files = [file("src/gateway/server.ts")];
+      const opened = await runBarnacle(
+        barnacleContext(
+          {
+            title: "Fix gateway status reporting",
+            body: prContextBody("pnpm test passed."),
+          },
+          [],
+          { action: "opened" },
+        ),
+        files,
+      );
+      const refreshed = await runBarnacle(
+        barnacleContext(
+          {
+            title: "Fix gateway status reporting",
+            body: prContextBody("pnpm test passed."),
+          },
+          [candidateLabels.blankTemplate, candidateLabels.lowSignalDocs, "proof: supplied"],
+          { action },
+        ),
+        files,
+      );
+
+      expect(refreshed.removeLabel).toEqual([
+        expectedRemoveLabel(123, candidateLabels.blankTemplate),
+        expectedRemoveLabel(123, candidateLabels.lowSignalDocs),
+      ]);
+      expect(refreshed.addLabels).toEqual(opened.addLabels);
+      expect(refreshed.createComment).toEqual(opened.createComment);
+      expect(refreshed.update).toEqual(opened.update);
+    },
+  );
+
+  it("subscribes Barnacle auto-response to draft ready-for-review", () => {
+    const workflow = readFileSync(
+      new URL("../../.github/workflows/auto-response.yml", import.meta.url),
+      "utf8",
+    );
+    const types = workflow.match(/pull_request_target:[\s\S]*?\n\s+types:\s*\[([^\]]+)\]/);
+    expect(types?.[1]?.split(",").map((type) => type.trim())).toContain("ready_for_review");
+  });
+
   it("removes stale context labels without changing ClawSweeper proof labels", async () => {
     const calls = await runBarnacle(
       barnacleContext(
