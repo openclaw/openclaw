@@ -99,17 +99,22 @@ async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParam
   );
 }
 
+async function loadSigningKeys(owner: LoginOwner) {
+  const keys = await requestJson(`${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`, owner);
+  if (!Array.isArray(keys.keys) || !keys.keys.every(isRecord)) {
+    throw new Error("ChatGPT returned an invalid signing key set. Start sign-in again.");
+  }
+  return createLocalJWKSet({ keys: keys.keys });
+}
+
 async function verifyIdentity(
   idToken: string,
   clientId: string,
   owner: LoginOwner,
   nonce?: string,
+  signingKeys?: ReturnType<typeof createLocalJWKSet>,
 ) {
-  const keys = await requestJson(`${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`, owner);
-  if (!Array.isArray(keys.keys) || !keys.keys.every(isRecord)) {
-    throw new Error("ChatGPT returned an invalid signing key set. Start sign-in again.");
-  }
-  const { payload } = await jwtVerify(idToken, createLocalJWKSet({ keys: keys.keys }), {
+  const { payload } = await jwtVerify(idToken, signingKeys ?? (await loadSigningKeys(owner)), {
     issuer: TOKEN_SHARING_ISSUER,
     audience: clientId,
     algorithms: ["RS256"],
@@ -134,6 +139,7 @@ async function readCredential(params: {
   owner: LoginOwner;
   nonce?: string;
   previous?: OAuthCredential;
+  signingKeys?: ReturnType<typeof createLocalJWKSet>;
 }): Promise<{ credential: OAuthCredential & { accountId: string }; subject: string }> {
   const { json, previous, clientId, owner } = params;
   const access = normalizeOptionalString(json.access_token);
@@ -153,7 +159,7 @@ async function readCredential(params: {
   // Initial identity is signature-verified; refresh may omit its unchanged ID token.
   const identity =
     json.id_token || !previous
-      ? await verifyIdentity(idToken, clientId, owner, params.nonce)
+      ? await verifyIdentity(idToken, clientId, owner, params.nonce, params.signingKeys)
       : decodeJwt(idToken);
   const subject = identity.sub;
   if (!subject || (previous?.idToken && decodeJwt(previous.idToken).sub !== subject)) {
@@ -213,6 +219,9 @@ export async function refreshTokenSharingCredential(
   ) {
     throw new Error("ChatGPT token-sharing registration is missing. Sign in again to reconnect.");
   }
+  // Refresh tokens may rotate on use. Resolve the network dependency before consuming
+  // the current token so a signing-key fetch failure cannot discard its successor.
+  const signingKeys = await loadSigningKeys({});
   const json = await requestJson(
     TOKEN_ENDPOINT,
     {},
@@ -224,7 +233,13 @@ export async function refreshTokenSharingCredential(
     }),
   );
   return (
-    await readCredential({ json, clientId: credential.clientId, owner: {}, previous: credential })
+    await readCredential({
+      json,
+      clientId: credential.clientId,
+      owner: {},
+      previous: credential,
+      signingKeys,
+    })
   ).credential;
 }
 

@@ -38,12 +38,12 @@ beforeAll(async () => {
   jwks = { keys: [{ ...(await exportJWK(keys.publicKey)), kid: "test-key" }] };
 });
 
-async function identityToken() {
+async function identityToken(kid = "test-key") {
   return new SignJWT({
     nonce: identityNonce ?? authorization.searchParams.get("nonce"),
     email: identityEmail,
   })
-    .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+    .setProtectedHeader({ alg: "RS256", kid })
     .setIssuer(TOKEN_SHARING_ISSUER)
     .setAudience(idTokenAudience)
     .setSubject(identitySubject)
@@ -303,7 +303,8 @@ describe("ChatGPT token-sharing authorization", () => {
       }
       request.mockClear();
       const refreshed = await refreshTokenSharingCredential(credential);
-      expect(request.mock.calls[0]![0].init.body.get("client_id")).toBe(registeredId);
+      const refreshRequest = request.mock.calls.find(([params]) => params.init?.method === "POST");
+      expect(refreshRequest![0].init.body.get("client_id")).toBe(registeredId);
       expect(refreshed.clientId).toBe(registeredId);
 
       const reconnect = context();
@@ -449,19 +450,24 @@ describe("ChatGPT token-sharing authorization", () => {
       identityEmail = "owner@example.test";
       const credential = await loginCredential();
       request.mockClear();
-      request.mockResolvedValue({
-        response: Response.json({
-          access_token: "renewed-access",
-          token_type: "Bearer",
-          expires_in: 3600,
-          ...(replacement ? { refresh_token: replacement } : {}),
-          ...(scope === undefined ? {} : { scope }),
-        }),
+      request.mockImplementation(async (params) => ({
+        response: Response.json(
+          params.url.endsWith("jwks.json")
+            ? jwks
+            : {
+                access_token: "renewed-access",
+                token_type: "Bearer",
+                expires_in: 3600,
+                ...(replacement ? { refresh_token: replacement } : {}),
+                ...(scope === undefined ? {} : { scope }),
+              },
+        ),
         release: async () => undefined,
-      });
+      }));
       // Existing SIWC profiles may retain the verified token without its email metadata.
       const refreshed = await refreshTokenSharingCredential({ ...credential, email: undefined });
-      expect(Object.fromEntries(request.mock.calls[0]![0].init.body)).toEqual({
+      const tokenRequest = request.mock.calls.find(([params]) => params.init?.method === "POST");
+      expect(Object.fromEntries(tokenRequest![0].init.body)).toEqual({
         grant_type: "refresh_token",
         client_id: clientId,
         refresh_token: "test-refresh",
@@ -492,6 +498,119 @@ describe("ChatGPT token-sharing authorization", () => {
     },
   );
 
+  it("loads signing keys before rotating and needs no network after the token response", async () => {
+    const credential = await loginCredential();
+    const renewedIdentity = await identityToken();
+    request.mockClear();
+    let rotated = false;
+    request.mockImplementation(async (params) => {
+      if (params.url.endsWith("jwks.json")) {
+        if (rotated) {
+          throw Object.assign(new Error("Signing-key connection reset"), { code: "ECONNRESET" });
+        }
+        return { response: Response.json(jwks), release: async () => undefined };
+      }
+      rotated = true;
+      return {
+        response: Response.json({
+          access_token: "renewed-access",
+          refresh_token: "rotated-refresh",
+          expires_in: 3600,
+          token_type: "Bearer",
+          id_token: renewedIdentity,
+        }),
+        release: async () => undefined,
+      };
+    });
+
+    await expect(refreshTokenSharingCredential(credential)).resolves.toMatchObject({
+      access: "renewed-access",
+      refresh: "rotated-refresh",
+      accountId: credential.accountId,
+    });
+    expect(request.mock.calls.map(([params]) => params.url)).toEqual([
+      `${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`,
+      `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`,
+    ]);
+  });
+
+  it.each(["unreachable", "malformed"])(
+    "does not consume the refresh token when signing keys are %s",
+    async (failure) => {
+      const credential = await loginCredential();
+      const renewedIdentity = await identityToken();
+      request.mockClear();
+      request.mockImplementation(async (params) => {
+        if (params.url.endsWith("jwks.json")) {
+          if (failure === "unreachable") {
+            throw Object.assign(new Error("Signing-key connection reset"), { code: "ECONNRESET" });
+          }
+          return { response: Response.json({ keys: "invalid" }), release: async () => undefined };
+        }
+        return {
+          response: Response.json({
+            access_token: "renewed-access",
+            refresh_token: "rotated-refresh",
+            expires_in: 3600,
+            token_type: "Bearer",
+            id_token: renewedIdentity,
+          }),
+          release: async () => undefined,
+        };
+      });
+
+      await expect(refreshTokenSharingCredential(credential)).rejects.toThrow(
+        failure === "unreachable" ? "Signing-key connection reset" : "invalid signing key set",
+      );
+      expect(request.mock.calls.map(([params]) => params.url)).toEqual([
+        `${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`,
+      ]);
+    },
+  );
+
+  it.each(["signature", "subject", "key"])(
+    "still rejects a renewed ID token with a different %s using prefetched keys",
+    async (failure) => {
+      const credential = await loginCredential();
+      if (failure === "subject") {
+        identitySubject = "another-user";
+      }
+      const signed = await identityToken(failure === "key" ? "rotated-signing-key" : "test-key");
+      const [header, payload, signature] = signed.split(".");
+      const renewedIdentity =
+        failure === "signature"
+          ? `${header}.${payload}.${signature![0] === "A" ? "B" : "A"}${signature!.slice(1)}`
+          : signed;
+      request.mockClear();
+      request.mockImplementation(async (params) => ({
+        response: Response.json(
+          params.url.endsWith("jwks.json")
+            ? jwks
+            : {
+                access_token: "renewed-access",
+                refresh_token: "rotated-refresh",
+                expires_in: 3600,
+                token_type: "Bearer",
+                id_token: renewedIdentity,
+              },
+        ),
+        release: async () => undefined,
+      }));
+
+      await expect(refreshTokenSharingCredential(credential)).rejects.toThrow(
+        failure === "subject"
+          ? "ChatGPT account changed"
+          : failure === "key"
+            ? "no applicable key found"
+            : "signature verification failed",
+      );
+      expect(request.mock.calls.map(([params]) => params.url)).toEqual([
+        `${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`,
+        `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`,
+      ]);
+    },
+  );
+
   it.each([
     { metadata: { accountId: undefined }, expectedError: "Sign in again" },
     {
@@ -513,13 +632,15 @@ describe("ChatGPT token-sharing authorization", () => {
 
   it("classifies revoked refreshes without exposing the provider response or credentials", async () => {
     const credential = await loginCredential();
-    request.mockResolvedValue({
+    request.mockImplementation(async (params) => ({
       response: Response.json(
-        { error: "invalid_grant", error_description: "secret-provider-detail" },
-        { status: 400 },
+        params.url.endsWith("jwks.json")
+          ? jwks
+          : { error: "invalid_grant", error_description: "secret-provider-detail" },
+        { status: params.url.endsWith("jwks.json") ? 200 : 400 },
       ),
       release: async () => undefined,
-    });
+    }));
     await expect(refreshTokenSharingCredential(credential)).rejects.toMatchObject({
       message: "ChatGPT connection expired or was revoked. Sign in again to reconnect.",
       oauthRefreshFailure: { reason: "invalid_grant" },
