@@ -340,7 +340,7 @@ export function createCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         name: Type.Optional(Type.String({ description: "Job name" })),
         declarationKey: Type.Optional(
           Type.String({
-            description: "Idempotent declaration key (add only).",
+            description: "Key to avoid duplicate declarations (add only).",
             minLength: 1,
             maxLength: 200,
           }),

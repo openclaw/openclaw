@@ -217,7 +217,7 @@ export async function repairEmbeddedAcpSessionMetaForDoctor(params: {
                     ))
                 ) {
                   throw new Error(
-                    "Canonical ACP metadata conflicts with embedded metadata; both sources retained.",
+                    "Stored ACP metadata conflicts with embedded metadata; both sources retained.",
                   );
                 }
                 assertSourceCurrent();

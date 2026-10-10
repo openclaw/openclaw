@@ -156,7 +156,7 @@ function parseKeybindingsConfig(
     throw createInvalidConfigError(
       configPath,
       `Retired keybinding names: ${retired.join("; ")}. ` +
-        "Preserve the original file and replace the retired names, keeping existing canonical bindings when both names occur. " +
+        "Preserve the original file and replace the retired names, keeping bindings that already use the current names when both names occur. " +
         "OpenClaw 2026.9.7 retains the former keybinding reader for a staged upgrade. " +
         "See https://docs.openclaw.ai/gateway/doctor/config-migrations#session-settings.",
       { recovery: "manual" },
