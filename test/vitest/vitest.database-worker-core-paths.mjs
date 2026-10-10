@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/embedded-agent-runner.prompt-cache.test.ts",
   "src/agents/bash-tools.exec-approval-followup.incognito.test.ts",
   "src/agents/subagents/announce/subagent-announce.incognito.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.incognito.test.ts",
