@@ -158,20 +158,16 @@ async function runShortTermDreamingPromotion(params: {
   ]);
   for (const { agentId, agentIds, workspaceDir } of workspaces) {
     const sweepNowMs = Date.now();
+    let phaseResult: Awaited<ReturnType<typeof runDreamingSweepPhases>>;
     try {
-      const phaseResult = await runDreamingSweepPhases({
+      phaseResult = await runDreamingSweepPhases({
         agentId,
         workspaceDir,
         pluginConfig,
         cfg: params.cfg,
         logger: params.logger,
-        subagent: params.subagent,
-        narrativeTimeoutMs: params.narrativeTimeoutMs,
-        runInBackground: params.runInBackground,
         nowMs: sweepNowMs,
       });
-      degradedNarratives += phaseResult.degradedPhases;
-      pendingNarratives += phaseResult.pendingNarratives;
     } catch (err) {
       failedWorkspaces += 1;
       params.logger.error(
@@ -180,159 +176,188 @@ async function runShortTermDreamingPromotion(params: {
       continue;
     }
 
-    try {
-      const reportLines: string[] = [];
-      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
-      if (repair.changed) {
-        params.logger.info(
-          `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
-        );
-        reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
-      }
-      const candidates = await rankShortTermPromotionCandidates({
-        workspaceDir,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        recencyHalfLifeDays,
-        maxAgeDays: params.config.maxAgeDays,
-        nowMs: sweepNowMs,
-      });
-      totalCandidates += candidates.length;
-      reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
-      if (params.config.verboseLogging) {
-        const candidateSummary =
-          candidates.length > 0
-            ? candidates
-                .map(
-                  (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
-                )
-                .join(" | ")
-            : "none";
-        params.logger.info(
-          `memory-core: dreaming candidate details [workspace=${workspaceDir}] ${candidateSummary}`,
-        );
-      }
-      const applied = await applyShortTermPromotions({
-        agentId,
-        workspaceAgentIds: agentIds,
-        workspaceDir,
-        candidates,
-        limit: params.config.limit,
-        minScore: params.config.minScore,
-        minRecallCount: params.config.minRecallCount,
-        minUniqueQueries: params.config.minUniqueQueries,
-        maxAgeDays: params.config.maxAgeDays,
-        maxPromotedSnippetTokens: params.config.maxPromotedSnippetTokens,
-        maxPriorEntryLossFraction: params.config.maxPriorEntryLossFraction,
-        memoryFileMaxChars: resolveMemoryPromotionFileMaxChars({
-          cfg: params.cfg,
-          agentIds,
-        }),
-        consolidation: {
-          ...(params.subagent ? { subagent: params.subagent } : {}),
-          ...(params.config.execution?.model ? { model: params.config.execution.model } : {}),
-          logger: params.logger,
-        },
-        timezone: params.config.timezone,
-        nowMs: sweepNowMs,
-      });
-      totalApplied += applied.applied;
-      reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
-      if (applied.rejectedCandidates.length > 0) {
-        const rejectionCounts = new Map<PromotionRejectionCategory, number>();
-        for (const { category } of applied.rejectedCandidates) {
-          rejectionCounts.set(category, (rejectionCounts.get(category) ?? 0) + 1);
+    const { narratives, failed } = phaseResult;
+    if (failed) {
+      failedWorkspaces += 1;
+    } else {
+      try {
+        const reportLines: string[] = [];
+        const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+        if (repair.changed) {
+          params.logger.info(
+            `memory-core: normalized recall artifacts before dreaming (${formatRepairSummary(repair)}) [workspace=${workspaceDir}].`,
+          );
+          reportLines.push(`- Repaired recall artifacts: ${formatRepairSummary(repair)}.`);
         }
-        const summary = [...rejectionCounts]
-          .toSorted(([left], [right]) => left.localeCompare(right))
-          .map(([category, count]) => `${category}: ${count}`)
-          .join(", ");
-        reportLines.push(
-          `- Not promoted: ${applied.rejectedCandidates.length} candidate(s) (${summary}).`,
-        );
-      }
-      if (params.config.verboseLogging) {
-        const appliedSummary =
-          applied.appliedCandidates.length > 0
-            ? applied.appliedCandidates
-                .map(
-                  (candidate) =>
-                    `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount}`,
-                )
-                .join(" | ")
-            : "none";
-        params.logger.info(
-          `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
-        );
-      }
-      const hasReportableRejections = applied.rejectedCandidates.some(
-        ({ category }) => category !== "memory budget",
-      );
-      const deepHasContent = repair.changed || applied.applied > 0 || hasReportableRejections;
-      await writeDeepDreamingReport({
-        workspaceDir,
-        bodyLines: reportLines,
-        hasContent: deepHasContent,
-        nowMs: sweepNowMs,
-        timezone: params.config.timezone,
-        storage: params.config.storage ?? { mode: "separate", separateReports: false },
-      });
-      if (applied.applied > 0) {
-        const promotions = applied.appliedCandidates
-          .map((candidate) => candidate.snippet)
-          .filter(Boolean);
-        const data: NarrativePhaseData = {
-          phase: "deep",
-          snippets: promotions,
-          promotions,
-          sourceEntryKeys: [...new Set(applied.appliedCandidates.map((c) => c.key))],
-        };
-        if (!params.subagent) {
-          await appendFallbackNarrativeEntry({
-            workspaceDir,
-            data,
-            nowMs: sweepNowMs,
-            timezone: params.config.timezone,
+        const candidates = await rankShortTermPromotionCandidates({
+          workspaceDir,
+          limit: params.config.limit,
+          minScore: params.config.minScore,
+          minRecallCount: params.config.minRecallCount,
+          minUniqueQueries: params.config.minUniqueQueries,
+          recencyHalfLifeDays,
+          maxAgeDays: params.config.maxAgeDays,
+          nowMs: sweepNowMs,
+        });
+        totalCandidates += candidates.length;
+        reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
+        if (params.config.verboseLogging) {
+          const candidateSummary =
+            candidates.length > 0
+              ? candidates
+                  .map(
+                    (candidate) =>
+                      `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount} queries=${candidate.uniqueQueries} components={freq=${candidate.components.frequency.toFixed(3)},rel=${candidate.components.relevance.toFixed(3)},div=${candidate.components.diversity.toFixed(3)},rec=${candidate.components.recency.toFixed(3)},cons=${candidate.components.consolidation.toFixed(3)},concept=${candidate.components.conceptual.toFixed(3)}}`,
+                  )
+                  .join(" | ")
+              : "none";
+          params.logger.info(
+            `memory-core: dreaming candidate details [workspace=${workspaceDir}] ${candidateSummary}`,
+          );
+        }
+        const applied = await applyShortTermPromotions({
+          agentId,
+          workspaceAgentIds: agentIds,
+          workspaceDir,
+          candidates,
+          limit: params.config.limit,
+          minScore: params.config.minScore,
+          minRecallCount: params.config.minRecallCount,
+          minUniqueQueries: params.config.minUniqueQueries,
+          maxAgeDays: params.config.maxAgeDays,
+          maxPromotedSnippetTokens: params.config.maxPromotedSnippetTokens,
+          maxPriorEntryLossFraction: params.config.maxPriorEntryLossFraction,
+          memoryFileMaxChars: resolveMemoryPromotionFileMaxChars({
+            cfg: params.cfg,
+            agentIds,
+          }),
+          consolidation: {
+            ...(params.subagent ? { subagent: params.subagent } : {}),
+            ...(params.config.execution?.model ? { model: params.config.execution.model } : {}),
             logger: params.logger,
-            reason: "subagent runtime is unavailable",
-          });
-        } else {
-          const narrativeOutcome = await runDreamNarrative({
-            agentId,
-            timeoutMs: params.narrativeTimeoutMs,
-            subagent: params.subagent,
-            workspaceDir,
+          },
+          timezone: params.config.timezone,
+          nowMs: sweepNowMs,
+        });
+        totalApplied += applied.applied;
+        reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
+        if (applied.rejectedCandidates.length > 0) {
+          const rejectionCounts = new Map<PromotionRejectionCategory, number>();
+          for (const { category } of applied.rejectedCandidates) {
+            rejectionCounts.set(category, (rejectionCounts.get(category) ?? 0) + 1);
+          }
+          const summary = [...rejectionCounts]
+            .toSorted(([left], [right]) => left.localeCompare(right))
+            .map(([category, count]) => `${category}: ${count}`)
+            .join(", ");
+          reportLines.push(
+            `- Not promoted: ${applied.rejectedCandidates.length} candidate(s) (${summary}).`,
+          );
+        }
+        if (params.config.verboseLogging) {
+          const appliedSummary =
+            applied.appliedCandidates.length > 0
+              ? applied.appliedCandidates
+                  .map(
+                    (candidate) =>
+                      `${candidate.path}:${candidate.startLine}-${candidate.endLine} score=${candidate.score.toFixed(3)} signals=${candidate.signalCount} recalls=${candidate.recallCount}`,
+                  )
+                  .join(" | ")
+              : "none";
+          params.logger.info(
+            `memory-core: dreaming applied details [workspace=${workspaceDir}] ${appliedSummary}`,
+          );
+        }
+        if (applied.applied > 0) {
+          const promotions = applied.appliedCandidates
+            .map((candidate) => candidate.snippet)
+            .filter(Boolean);
+          const data: NarrativePhaseData = {
+            phase: "deep",
+            snippets: promotions,
+            promotions,
+            sourceEntryKeys: [...new Set(applied.appliedCandidates.map((c) => c.key))],
+          };
+          narratives.push({
             data,
-            nowMs: sweepNowMs,
             timezone: params.config.timezone,
             model: params.config.execution?.model,
-            logger: params.logger,
-            runInBackground: params.runInBackground,
           });
-          if (narrativeOutcome.status === "degraded") {
-            degradedNarratives += 1;
-          } else if (narrativeOutcome.status === "pending") {
-            pendingNarratives += 1;
-          }
         }
+        const hasReportableRejections = applied.rejectedCandidates.some(
+          ({ category }) => category !== "memory budget",
+        );
+        const deepHasContent = repair.changed || applied.applied > 0 || hasReportableRejections;
+        await writeDeepDreamingReport({
+          workspaceDir,
+          bodyLines: reportLines,
+          hasContent: deepHasContent,
+          nowMs: sweepNowMs,
+          timezone: params.config.timezone,
+          storage: params.config.storage ?? { mode: "separate", separateReports: false },
+        });
+      } catch (err) {
+        failedWorkspaces += 1;
+        const error = formatErrorMessage(err);
+        params.logger.error(
+          `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${error}`,
+        );
+        await appendFailedDreamingEvent({
+          workspaceDir,
+          phase: "deep",
+          error,
+          storageMode: params.config.storage?.mode ?? "separate",
+          nowMs: sweepNowMs,
+          logger: params.logger,
+        });
       }
-    } catch (err) {
-      failedWorkspaces += 1;
-      const error = formatErrorMessage(err);
-      params.logger.error(
-        `memory-core: dreaming promotion failed for workspace ${workspaceDir}: ${error}`,
-      );
-      await appendFailedDreamingEvent({
+    }
+    // The sweep owns diary publication, not the individual phases. Preserve prepared
+    // Light/REM material even when promotion/reporting failed, and publish only once.
+    const firstNarrative = narratives[0];
+    const lastNarrative = narratives.at(-1);
+    if (!firstNarrative || !lastNarrative) {
+      continue;
+    }
+    const data: NarrativePhaseData = {
+      ...firstNarrative.data,
+      phase: lastNarrative.data.phase,
+      snippets: uniqueStrings(narratives.flatMap(({ data: phaseData }) => phaseData.snippets)),
+      themes: uniqueStrings(narratives.flatMap(({ data: phaseData }) => phaseData.themes ?? [])),
+      promotions: uniqueStrings(
+        narratives.flatMap(({ data: phaseData }) => phaseData.promotions ?? []),
+      ),
+      sourceEntryKeys: uniqueStrings(
+        narratives.flatMap(({ data: phaseData }) => phaseData.sourceEntryKeys ?? []),
+      ),
+    };
+    if (!params.subagent) {
+      await appendFallbackNarrativeEntry({
         workspaceDir,
-        phase: "deep",
-        error,
-        storageMode: params.config.storage?.mode ?? "separate",
+        data,
         nowMs: sweepNowMs,
+        timezone: lastNarrative.timezone,
         logger: params.logger,
+        reason: "subagent runtime is unavailable",
       });
+    } else {
+      const narrativeOutcome = await runDreamNarrative({
+        agentId,
+        timeoutMs: params.narrativeTimeoutMs,
+        subagent: params.subagent,
+        workspaceDir,
+        data,
+        nowMs: sweepNowMs,
+        timezone: lastNarrative.timezone,
+        model: lastNarrative.model,
+        logger: params.logger,
+        runInBackground: params.runInBackground,
+      });
+      if (narrativeOutcome.status === "degraded") {
+        degradedNarratives += 1;
+      } else if (narrativeOutcome.status === "pending") {
+        pendingNarratives += 1;
+      }
     }
   }
   // A summary that reads identically whether the sweep worked or failed everywhere is how

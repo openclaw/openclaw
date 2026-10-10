@@ -3,6 +3,7 @@ import type {
   MemoryPublicationFragment,
 } from "./manager-publication-task.js";
 import type {
+  MemorySourceIndexHeader,
   MemorySourceIndexReplacement,
   MemorySourceIndexRow,
 } from "./manager-source-index-kernel.js";
@@ -92,25 +93,51 @@ function* rowFragments(
   }
 }
 
+export function memoryPublicationHeader(replacement: MemorySourceIndexReplacement): {
+  header: MemorySourceIndexHeader;
+  rows: number;
+} {
+  const { chunks, embeddings: _embeddings, ...fields } = replacement;
+  if (fields.source !== "sessions") {
+    return { header: fields, rows: chunks.length };
+  }
+  // Retained rows travel in the bounded transfer, never the header.
+  const { retained = [], ...header } = fields;
+  return {
+    header: { ...header, delta: retained.length > 0 },
+    rows: chunks.length + retained.length,
+  };
+}
+
 export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    for (const [row, chunk] of replacement.chunks.entries()) {
+    // The kernel validates every retained row before it writes the first new row.
+    const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
+    for (const chunk of retained) {
       yield {
-        chunk: {
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          text: chunk.text,
-          hash: chunk.hash,
-          importance: chunk.importance,
-          triggers: chunk.triggers,
-          projectKey: chunk.projectKey,
-          ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
-        },
-        embedding: replacement.embeddings[row] ?? [],
+        // Retained rows keep their stored text; identity and provenance suffice.
+        chunk: { ...row(chunk), text: "" },
+        embedding: [],
+        retained: true,
       };
     }
+    for (const [index, chunk] of replacement.chunks.entries()) {
+      yield { chunk: row(chunk), embedding: replacement.embeddings[index] ?? [] };
+    }
+  }
+  function row(chunk: MemorySourceIndexReplacement["chunks"][number]) {
+    return {
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      text: chunk.text,
+      hash: chunk.hash,
+      importance: chunk.importance,
+      triggers: chunk.triggers,
+      projectKey: chunk.projectKey,
+      ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
+    };
   }
   yield* publicationBatches(rows());
 }
