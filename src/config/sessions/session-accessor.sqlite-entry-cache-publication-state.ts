@@ -219,6 +219,20 @@ function prepareSessionEntryReplacementChanges(
         )
         .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
     ),
+    fullEntries:
+      replacement.fullEntries &&
+      new Map(
+        [...replacement.fullEntries]
+          .filter(
+            ([key]) =>
+              current(key) &&
+              !owner.metadataSuperseded.has(key) &&
+              !owner.projectionSuperseded.has(key) &&
+              !owner.ownerChanges.has(key) &&
+              !replacement.unavailableParticipantKeys?.includes(key),
+          )
+          .map(([key, entry]) => [key, freezeJsonSnapshot(entry)]),
+      ),
     sharing: new Map(
       [...replacement.current]
         .filter(([key]) => current(key))
@@ -317,6 +331,10 @@ export function prepareSessionEntryPublicationFacts(params: {
       : undefined;
     return {
       entry,
+      fullEntry:
+        !owner.projectionSuperseded.has(key) && !owner.ownerChanges.has(key)
+          ? prepared?.fullEntries?.get(key)
+          : undefined,
       projection:
         projection?.activitySummaryWatermark === undefined ||
         transcriptVersion === readSessionTranscriptUpdateVersion()
@@ -608,6 +626,7 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
   return {
     source: prepared.source,
     entry,
+    fullEntry: record.readCurrent ? current?.fullEntry : prepared.fullEntries?.get(sessionKey),
     sharing: record.readCurrent
       ? (current?.sharing ?? (current?.entry && projectSessionSharingEntry(current.entry)))
       : (prepared.sharing?.get(sessionKey) ??

@@ -133,6 +133,7 @@ openclaw plugins disable <plugin-id>
 Toggles a plugin's config entry without touching installed files. Some
 bundled plugins (bundled model/speech providers, the bundled browser plugin)
 are enabled by default; others require `enable` after install.
+Repeating an already-applied enable or disable choice leaves the config file unchanged.
 
 ## Capability consent
 
