@@ -17,9 +17,10 @@ export type SessionContextCapacity =
       synthetic: boolean;
       contextTokensSource?: "resolved";
       contextTokenLimit?: number;
+      unacceptedModelMetadata?: true;
     }
   /** Owner-scoped negative state: this owner cannot answer; never another owner's value. */
-  | { state: "unavailable" };
+  | { state: "unavailable"; unacceptedModelMetadata?: true };
 
 export type SessionContextCapacityOwner = {
   config?: OpenClawConfig;
@@ -74,6 +75,24 @@ export function createSessionContextCapacityResolver(
     } catch {
       return { state: "unavailable" };
     }
+    const matchingEntries = [
+      ...(catalog.routeVariants ?? []),
+      ...(catalog.entries ?? []),
+      ...(catalog.staticEntries ?? []),
+    ].filter(
+      (entry) =>
+        (!selection?.route || modelTransportRoutesMatch(entry, selection.route)) &&
+        (selection?.nativeRuntime
+          ? entry.nativeRuntime === selection.nativeRuntime
+          : !entry.nativeRuntime) &&
+        normalizeProviderId(entry.provider) === providerId &&
+        entry.id === modelId,
+    );
+    const unacceptedModelMetadata = matchingEntries.some(
+      (entry) => entry.contextCapacitySource === "unaccepted-starter",
+    )
+      ? true
+      : undefined;
     if (
       selection?.profileId !== undefined &&
       !catalog?.acceptedDiscoveryOrigins?.some(
@@ -88,7 +107,10 @@ export function createSessionContextCapacityResolver(
           outcome.status === "ready",
       )
     ) {
-      return { state: "unavailable" };
+      return {
+        state: "unavailable",
+        ...(unacceptedModelMetadata ? { unacceptedModelMetadata } : {}),
+      };
     }
     const { fixedContextWindow } = resolveConfiguredContextTokenLimits({
       cfg: owner?.config,
@@ -101,18 +123,8 @@ export function createSessionContextCapacityResolver(
     let selectable = false;
     let contextTokenLimit: number | undefined;
     let nativeRoute: ModelCatalogEntry | undefined;
-    for (const entry of [
-      ...(catalog?.routeVariants ?? []),
-      ...(catalog?.entries ?? []),
-      ...(catalog?.staticEntries ?? []),
-    ]) {
-      if (
-        (selection?.route && !modelTransportRoutesMatch(entry, selection.route)) ||
-        (selection?.nativeRuntime && entry.nativeRuntime !== selection.nativeRuntime) ||
-        (!selection?.nativeRuntime && Boolean(entry.nativeRuntime)) ||
-        normalizeProviderId(entry.provider) !== providerId ||
-        entry.id !== modelId
-      ) {
+    for (const entry of matchingEntries) {
+      if (entry.contextCapacitySource === "unaccepted-starter") {
         continue;
       }
       if (selection?.nativeRuntime && !selection.route) {
@@ -159,13 +171,19 @@ export function createSessionContextCapacityResolver(
       return {
         state: "ready",
         contextTokens: reported,
+        ...(unacceptedModelMetadata ? { unacceptedModelMetadata } : {}),
         synthetic: false,
         ...(selectable ? { contextTokensSource: "resolved" as const } : {}),
         ...(contextTokenLimit !== undefined ? { contextTokenLimit } : {}),
       };
     }
     return estimate === undefined
-      ? { state: "unavailable" }
-      : { state: "ready", contextTokens: estimate, synthetic: true };
+      ? { state: "unavailable", ...(unacceptedModelMetadata ? { unacceptedModelMetadata } : {}) }
+      : {
+          state: "ready",
+          contextTokens: estimate,
+          synthetic: true,
+          ...(unacceptedModelMetadata ? { unacceptedModelMetadata } : {}),
+        };
   };
 }

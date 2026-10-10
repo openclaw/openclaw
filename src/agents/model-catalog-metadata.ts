@@ -34,6 +34,7 @@ function clearRouteBoundCatalogMetadata(
   const {
     contextWindow: _contextWindow,
     contextWindowSource: _contextWindowSource,
+    contextCapacitySource: _contextCapacitySource,
     contextWindows: _contextWindows,
     contextWindowDefault: _contextWindowDefault,
     contextTokens: _contextTokens,
@@ -99,6 +100,9 @@ export function overlayCatalogMetadata(
       ? { contextWindowSource: overlay.contextWindowSource }
       : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),
+    ...(overlay.contextCapacitySource
+      ? { contextCapacitySource: overlay.contextCapacitySource }
+      : {}),
     ...(overlay.reasoning !== undefined ? { reasoning: overlay.reasoning } : {}),
     ...(overlay.configuredReasoning !== undefined
       ? { configuredReasoning: overlay.configuredReasoning }

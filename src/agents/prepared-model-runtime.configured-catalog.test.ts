@@ -663,7 +663,7 @@ describe("synthetic configured context publication", () => {
     );
     expect(publication.discoveryOrigins).toEqual([]);
     expect(catalog.staticEntries).toContainEqual(fallback);
-    expect(catalog.entries).toContainEqual(discovered);
+    expect(catalog.entries).toContainEqual(expect.objectContaining(discovered));
   });
 
   it("retains only same-account inventory after failure", async () => {
@@ -909,7 +909,7 @@ describe("synthetic configured context publication", () => {
         catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic"),
       ).toBe(true);
       expect(catalog.staticEntries).toContainEqual(fallback);
-      expect(catalog.entries).toContainEqual(missingNative);
+      expect(catalog.entries).toContainEqual(expect.objectContaining(missingNative));
     });
 
     it("(d) a retained inventory from another account cannot replace the fallback", async () => {

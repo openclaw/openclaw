@@ -96,6 +96,7 @@ type ModelSelectionState = {
   hasConfiguredThinkingDefault?: boolean;
   /** Default reasoning level from model capability: "on" if model has reasoning, else "off". */
   resolveDefaultReasoningLevel: (selection?: ThinkingDefaultSelection) => Promise<"on" | "off">;
+  modelContextRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
   modelContextWindow?: number;
   modelContextWindowSource?: "synthetic";
   modelContextTokens?: number;
@@ -687,6 +688,7 @@ export async function createModelSelectionState(params: {
     resolveDefaultThinkingLevel,
     hasConfiguredThinkingDefault,
     resolveDefaultReasoningLevel,
+    modelContextRoute: capacityCatalogEntry,
     nativeRuntime: agentRuntime,
     modelContextWindow: capacityCatalogEntry?.contextWindow,
     modelContextWindowSource: capacityCatalogEntry?.contextWindowSource,

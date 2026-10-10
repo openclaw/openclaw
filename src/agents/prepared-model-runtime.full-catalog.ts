@@ -481,7 +481,11 @@ export function prepareModelCatalogPublication(
               legacyRows.get(normalizeProvider(entry.provider))?.has(rowKey(entry))
             ),
         ),
-        ...starters.filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider))),
+        ...starters
+          .filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider)))
+          .map((entry) =>
+            Object.assign({}, entry, { contextCapacitySource: "unaccepted-starter" as const }),
+          ),
         ...retained.filter(
           (entry) =>
             !entry.nativeRuntime &&

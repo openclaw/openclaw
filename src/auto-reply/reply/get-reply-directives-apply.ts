@@ -1,10 +1,11 @@
 import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
-import { resolveModelContextTokenProjection } from "../../agents/context.js";
+import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { modelKey } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { resolveProjectedSessionContextTokenBudget } from "../../config/sessions/context-token-provenance.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { AgentConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -506,20 +507,38 @@ export async function applyInlineDirectiveOverrides(params: {
       modelKey(entry.provider, entry.id) === modelKey(provider, model) &&
       (agentRuntime === "openclaw" ? !entry.nativeRuntime : entry.nativeRuntime === agentRuntime),
   );
-  contextTokenProjection = resolveModelContextTokenProjection({
-    cfg,
-    allowAsyncLoad: false,
-    provider: resolveContextConfigProviderForRuntime({
-      provider,
-      runtimeId: agentRuntime,
-      config: cfg,
+  const currentSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
+  contextTokenProjection = await racePromiseWithAbortSignal(
+    resolveContextTokenBudgetForModel({
+      cfg,
+      agentId,
+      agentDir,
+      workspaceDir: params.workspaceDir,
+      provider: resolveContextConfigProviderForRuntime({
+        provider,
+        runtimeId: agentRuntime,
+        config: cfg,
+      }),
+      model,
+      profileId: currentSessionEntry.authProfileOverride,
+      contextWindow: currentSessionEntry.contextWindow,
+      route: selectedCatalogEntry,
+      nativeRuntime: agentRuntime,
+      modelContextWindow: selectedCatalogEntry?.contextWindow,
+      modelContextWindowSource: selectedCatalogEntry?.contextWindowSource,
+      modelContextTokens: selectedCatalogEntry?.contextTokens,
+      knownContextBudget: resolveProjectedSessionContextTokenBudget({
+        entry: currentSessionEntry,
+        provider,
+        model,
+        agentHarnessId: agentRuntime,
+        authProfileId: currentSessionEntry.authProfileOverride,
+        resolvedContextTokens: undefined,
+      }),
     }),
-    model,
-    nativeRuntime: agentRuntime,
-    modelContextWindow: selectedCatalogEntry?.contextWindow,
-    modelContextWindowSource: selectedCatalogEntry?.contextWindowSource,
-    modelContextTokens: selectedCatalogEntry?.contextTokens,
-  });
+    params.abortSignal,
+  );
+  assertReplyPreprocessingActive(params.abortSignal);
   contextTokens = contextTokenProjection.contextTokens ?? DEFAULT_CONTEXT_TOKENS;
 
   const perMessageQueueMode =

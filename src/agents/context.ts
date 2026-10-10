@@ -304,15 +304,13 @@ type ContextBudgetPreparationParams = ContextTokenResolutionParams &
 export async function resolveContextTokenBudgetForModel(
   params: ContextBudgetPreparationParams,
 ): Promise<ModelContextTokenProjection> {
-  const input = { ...params, allowAsyncLoad: false };
-  let current =
-    params.profileId !== undefined || params.route
-      ? resolveModelContextTokenProjectionFromCache(
-          input,
-          () => undefined,
-          () => undefined,
-        )
-      : resolveModelContextTokenProjection(input);
+  let input = { ...params, allowAsyncLoad: false };
+  // A provider/model cache has no account or transport binding; this operation consumes owned facts.
+  let current = resolveModelContextTokenProjectionFromCache(
+    input,
+    () => undefined,
+    () => undefined,
+  );
   const provider = params.provider?.trim();
   const model = params.model?.trim();
   if (!provider || !model) {
@@ -328,14 +326,6 @@ export async function resolveContextTokenBudgetForModel(
       env: params.env,
     };
     const published = runtime.getPublishedPreparedModelCatalogOwnerSnapshot(request);
-    if (published) {
-      // The shared cache has no account or transport binding; consume this owner's facts directly.
-      current = resolveModelContextTokenProjectionFromCache(
-        input,
-        () => undefined,
-        () => undefined,
-      );
-    }
     const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
     const { createSessionContextCapacityResolver } = await import("./session-context-capacity.js");
     const capacity = createSessionContextCapacityResolver(published)(provider, model, {
@@ -344,6 +334,19 @@ export async function resolveContextTokenBudgetForModel(
       contextWindow: params.contextWindow,
       route: params.route,
     });
+    if (capacity?.unacceptedModelMetadata) {
+      input = {
+        ...input,
+        modelContextTokens: undefined,
+        modelContextWindow: undefined,
+        modelContextWindowSource: undefined,
+      };
+      current = resolveModelContextTokenProjectionFromCache(
+        input,
+        () => undefined,
+        () => undefined,
+      );
+    }
     if (capacity?.state === "ready") {
       const projection =
         capacity.synthetic && current.source !== "fallback"

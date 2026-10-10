@@ -22,6 +22,7 @@ export function modelCatalogRowToEntry(
     ...(row.baseUrl ? { baseUrl: row.baseUrl } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(row.contextWindowSource ? { contextWindowSource: row.contextWindowSource } : {}),
+    ...(row.contextCapacitySource ? { contextCapacitySource: row.contextCapacitySource } : {}),
     ...(row.contextWindows
       ? { contextWindows: row.contextWindows.map((option) => ({ ...option })) }
       : {}),
