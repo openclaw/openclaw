@@ -58,11 +58,15 @@ async function ownTelegramFixture(
               const record = JSON.parse(fs.readFileSync(manifest, "utf8"));
               if (record.status !== "deleted") {
                 Object.assign(evidence.cleanup, {
-                  status: "uncertain-creation",
+                  status:
+                    record.status === "deletion-pending-verification"
+                      ? record.status
+                      : "uncertain-creation",
                   title: record.title,
                   createdAt: record.createdAt,
                   testerUserId: record.testerUserId,
                   groupId: record.groupId || record.basicGroupId,
+                  ...(record.deletion ? { deletion: record.deletion } : {}),
                 });
               }
             }

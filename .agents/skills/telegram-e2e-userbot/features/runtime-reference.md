@@ -130,6 +130,9 @@ match with a group-state read-back. An inconclusive search or deletion retains a
 `uncertain-creation` record with the title, creation timestamp, and tester user
 ID in the summary. Cleanup failure retains the lease state for recovery; do not
 treat an absent ID or an empty search as proof that creation never happened.
+A successful deletion awaiting a fresh read-back is saved separately as
+`deletion-pending-verification`, including its deletion receipt. Retrying cleanup
+only verifies that recorded deletion; it does not delete the group again.
 The direct driver also accepts `send --forum-topic-id <id>`. TDLib 1.8.67 uses
 `topic_id: messageTopicForum` for forum topics; ordinary message threads use
 `messageTopicThread`. Inspect `topicType` and `topicId` on both the sent message

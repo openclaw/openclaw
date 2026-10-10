@@ -346,8 +346,9 @@ test("a failed run still deletes its run-owned forum before release", async () =
   assert.equal(f.credential.testForum.cleanup.status, "deleted");
 });
 
-for (const malformed of [false, true]) {
-  test(`forum cleanup preserves failure evidence with ${malformed ? "truncated" : "complete"} intent`, async (context) => {
+for (const status of ["setup-failed", "truncated", "deletion-pending-verification"]) {
+  const malformed = status === "truncated";
+  test(`forum cleanup preserves failure evidence with ${status} intent`, async (context) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-uncertain-forum-"));
     context.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const f = fixture();
@@ -356,7 +357,8 @@ for (const malformed of [false, true]) {
       title: "OpenClaw QA forum uncertain",
       testerUserId: "123",
       createdAt: "2026-10-10T14:32:19Z",
-      status: "setup-failed",
+      status,
+      ...(status === "deletion-pending-verification" ? { deletion: { "@type": "ok" } } : {}),
     };
     const command = f.options.runCommandImpl;
     f.options.runCommandImpl = async (name, args) => {
@@ -382,12 +384,22 @@ for (const malformed of [false, true]) {
       }),
     );
     const { cleanup } = JSON.parse(fs.readFileSync(output, "utf8")).testForum;
-    assert.equal(cleanup.status, malformed ? "failed" : "uncertain-creation");
+    assert.equal(
+      cleanup.status,
+      malformed
+        ? "failed"
+        : status === "deletion-pending-verification"
+          ? status
+          : "uncertain-creation",
+    );
     assert.match(cleanup.error, /search timed out/);
     if (!malformed) {
       assert.equal(cleanup.title, intent.title);
       assert.equal(cleanup.testerUserId, intent.testerUserId);
       assert.equal(cleanup.createdAt, intent.createdAt);
+      if (status === "deletion-pending-verification") {
+        assert.deepEqual(cleanup.deletion, intent.deletion);
+      }
     }
     assert.equal(f.releaseCount(), 0, "failed reconciliation retains the lease for recovery");
   });

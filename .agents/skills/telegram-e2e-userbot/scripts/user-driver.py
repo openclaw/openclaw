@@ -1210,7 +1210,7 @@ def forum_identity(driver, test_server):
 def public_forum_record(record):
     keys = ("ok", "status", "groupId", "forumTopicId", "title", "topicTitle")
     if record.get("creationUncertain"):
-        keys += ("testerUserId", "createdAt", "error", "deletionReadback")
+        keys += ("testerUserId", "createdAt", "error", "deletion", "deletionReadback")
     return {key: record[key] for key in keys if key in record}
 
 
@@ -1319,6 +1319,36 @@ def prepare_forum(driver, manifest_path, test_server):
         raise
 
 
+def verify_forum_deletion(driver, manifest_path, record):
+    try:
+        group_id = int(record.get("groupId") or record["basicGroupId"])
+        remaining = driver.client.request({
+            "@type": "searchChatsOnServer", "query": record["title"], "limit": 100,
+        })
+        if group_id in remaining["chat_ids"]:
+            chat_type = record["deletionChatType"]
+            if chat_type["@type"] == "chatTypeBasicGroup":
+                group = driver.client.request({
+                    "@type": "getBasicGroup", "basic_group_id": chat_type["basic_group_id"],
+                })
+                deleted = group.get("is_active") is False
+            else:
+                group = driver.client.request({
+                    "@type": "getSupergroup", "supergroup_id": chat_type["supergroup_id"],
+                })
+                deleted = group["status"]["@type"] in {
+                    "chatMemberStatusLeft", "chatMemberStatusBanned",
+                }
+            if not deleted:
+                raise DriverError("Deleted forum is still active in the deletion read-back.")
+        record.pop("error", None)
+        record.update(status="deleted", ok=True, deletionReadback=True)
+    except (DriverError, KeyError, TypeError, ValueError) as error:
+        record.update(ok=False, error=str(error))
+    write_json_private(manifest_path, record)
+    return public_forum_record(record)
+
+
 def cleanup_forum(driver, manifest_path, test_server):
     record = read_json(manifest_path)
     if not record:
@@ -1328,6 +1358,8 @@ def cleanup_forum(driver, manifest_path, test_server):
         raise DriverError("Forum cleanup record belongs to a different identity.")
     if record.get("status") == "deleted":
         return public_forum_record(record)
+    if record.get("status") == "deletion-pending-verification":
+        return verify_forum_deletion(driver, manifest_path, record)
     group_id = record.get("groupId") or record.get("basicGroupId")
     reconciled = not group_id or record.get("creationUncertain") is True
     if not group_id:
@@ -1383,27 +1415,15 @@ def cleanup_forum(driver, manifest_path, test_server):
                 raise
             time.sleep(1)
     if reconciled:
-        try:
-            chat_type = chat["type"]
-            if chat_type["@type"] == "chatTypeBasicGroup":
-                remaining = driver.client.request({
-                    "@type": "getBasicGroup", "basic_group_id": chat_type["basic_group_id"],
-                })
-                deleted = remaining.get("is_active") is False
-            else:
-                remaining = driver.client.request({
-                    "@type": "getSupergroup", "supergroup_id": chat_type["supergroup_id"],
-                })
-                deleted = remaining["status"]["@type"] in {
-                    "chatMemberStatusLeft", "chatMemberStatusBanned",
-                }
-            if not deleted:
-                raise DriverError("Deleted forum is still active in the deletion read-back.")
-            record["deletionReadback"] = True
-        except (DriverError, KeyError, TypeError, ValueError) as error:
-            record.update(status="uncertain-creation", ok=False, error=str(error))
-            write_json_private(manifest_path, record)
-            return public_forum_record(record)
+        record.update(
+            status="deletion-pending-verification",
+            deletion=deletion,
+            deletionChatType=chat["type"],
+            ok=False,
+        )
+        record.pop("inviteLink", None)
+        write_json_private(manifest_path, record)
+        return verify_forum_deletion(driver, manifest_path, record)
     record.pop("inviteLink", None)
     record.pop("error", None)
     record.update(status="deleted", deletion=deletion, ok=True)
