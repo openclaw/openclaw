@@ -477,19 +477,6 @@ vi.mock("../../agent-project-settings.js", () => ({
   }),
 }));
 
-vi.mock("../../agent-settings.js", () => ({
-  applyAgentAutoCompactionGuard: () => {},
-  applyAgentCompactionSettingsFromConfig: () => ({
-    didOverride: false,
-    compaction: {
-      reserveTokens: 0,
-      keepRecentTokens: 40_000,
-    },
-  }),
-  isSilentOverflowProneModel: () => false,
-  resolveEffectiveCompactionMode: () => "default",
-}));
-
 vi.mock("../extensions.js", () => ({
   buildEmbeddedExtensionFactories: () => [],
 }));
