@@ -1,7 +1,12 @@
 import path from "node:path";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
+import type { OpenClawConfig } from "../../../config/types.js";
+import { prepareFileContextFromMedia } from "../../../media-understanding/file-context.js";
+import { resolveFileExtractionLimits } from "../../../media-understanding/file-extraction-limits.js";
 import {
+  attachRuntimePromptMediaFacts,
+  readRuntimePromptImageOrder,
   readPersistedMediaFacts,
   readRuntimePromptMediaFacts,
   stripLegacyMediaContextFields,
@@ -11,9 +16,21 @@ import {
  * Prunes already-processed image payloads from replayed prompt history.
  */
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { readModelPromptProjection } from "../../../sessions/user-turn-transcript.message.js";
+import { collectTextContentBlocks } from "../../content-blocks.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { hasNonBlankUserText } from "./attempt-history.js";
-import { hydratePromptMediaMessages } from "./images.js";
+import { sanitizeImageBlocks } from "../../tool-images.js";
+import {
+  hasNonBlankUserText,
+  resolveUserTranscriptMessages,
+  type UserTranscriptContext,
+} from "./attempt-history.js";
+import { buildPromptImageFailureNotice, hydratePromptMediaMessages } from "./images.js";
+import {
+  appendExtractedPromptImages,
+  collectPreparedDocumentImageFactIndexes,
+  readPersistedImageBlockFactIndexes,
+} from "./prompt-image-metadata.js";
 
 /** Replacement text for old image blocks that were already available to the model. */
 const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
@@ -273,14 +290,42 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+function readReplayText(content: unknown): string {
+  return typeof content === "string" ? content : collectTextContentBlocks(content).join("\n\n");
+}
+
 /** Installs an agent context transform that prunes old image/media history before model input. */
 export function installHistoryImagePruneContextTransform(
   agent: PrunableContextAgent,
-  mediaOptions?: Parameters<typeof hydratePromptMediaMessages>[1],
+  mediaOptions?: Parameters<typeof hydratePromptMediaMessages>[1] & {
+    config?: OpenClawConfig;
+    channelId?: string;
+    accountId?: string;
+    assertCurrent?: () => void;
+    getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
+  },
   onPruned?: (messages: ReadonlyMap<number, AgentMessage>) => void,
 ): () => void {
   const originalTransformContext = agent.transformContext;
+  // Attempt-owned projections keep randomized untrusted wrappers and file bytes
+  // fixed during tool loops. Pruned messages never reach extraction; teardown
+  // releases the cache rather than persisting enrichment in canonical history.
+  const documents = new Map<string, Awaited<ReturnType<typeof prepareFileContextFromMedia>>>();
+  let active = true;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
+    const assertCurrent = () => {
+      signal?.throwIfAborted();
+      mediaOptions?.assertCurrent?.();
+      if (!active) {
+        throw new Error("History media projection is no longer active");
+      }
+    };
+    assertCurrent();
+    const liveTranscripts = resolveUserTranscriptMessages(
+      messages,
+      mediaOptions?.getUserTranscriptContexts?.(),
+      undefined,
+    );
     const pruned = new Map<number, AgentMessage>();
     const prune = (source: AgentMessage[]) => {
       const projected = pruneProcessedHistoryImages(source);
@@ -293,17 +338,128 @@ export function installHistoryImagePruneContextTransform(
       return projected ?? source;
     };
     const prunedInput = prune(messages);
+    let documentInput = prunedInput;
+    const retainedDocumentKeys = new Set<string>();
+    if (mediaOptions) {
+      const config = mediaOptions.config ?? {};
+      const maxChars = resolveFileExtractionLimits(config).maxChars;
+      for (const [index, message] of prunedInput.entries()) {
+        if (message.role !== "user") {
+          continue;
+        }
+        const liveTranscript = liveTranscripts?.[index];
+        const textAlreadyPrepared =
+          (readModelPromptProjection(liveTranscript) ?? readModelPromptProjection(message)) !==
+            undefined ||
+          (liveTranscript?.role === "user" &&
+            readReplayText(message.content) !== readReplayText(liveTranscript.content));
+        const media =
+          readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [];
+        if (!media.length) {
+          continue;
+        }
+        // A suppressed retry can be paired with a canonical row without page bytes.
+        // Only actual images with producer-owned source indexes permit skipping reads.
+        const preparedPages = collectPreparedDocumentImageFactIndexes(
+          media,
+          Array.isArray(message.content)
+            ? message.content.filter((block) => block.type === "image")
+            : [],
+          readPersistedImageBlockFactIndexes(message),
+        );
+        const key = JSON.stringify([
+          message.timestamp,
+          media,
+          textAlreadyPrepared,
+          [...preparedPages],
+        ]);
+        retainedDocumentKeys.add(key);
+        let files = documents.get(key);
+        if (!files) {
+          files = await prepareFileContextFromMedia({
+            media,
+            config,
+            workspaceDir: mediaOptions.workspaceDir,
+            channelId: mediaOptions.channelId,
+            accountId: mediaOptions.accountId,
+            maxChars,
+            totalMaxChars: maxChars,
+            textAlreadyPrepared,
+            skipAttachmentIndexes: preparedPages,
+            assertCurrent,
+          });
+          assertCurrent();
+          documents.set(key, files);
+        }
+        if (!files.text && !files.images.length) {
+          continue;
+        }
+        const content = Array.isArray(message.content)
+          ? message.content.slice()
+          : [{ type: "text" as const, text: message.content }];
+        if (files.text) {
+          content.push({ type: "text", text: files.text });
+        }
+        let projected: Extract<AgentMessage, { role: "user" }> = { ...message, content };
+        let extractedPageMedia: MediaFact[] | undefined;
+        if (files.images.length) {
+          if (mediaOptions.model.input?.includes("image")) {
+            const pages = [];
+            let dropped = 0;
+            for (const page of files.images) {
+              const sanitized = await sanitizeImageBlocks([page], "history:files", mediaOptions);
+              assertCurrent();
+              dropped += sanitized.dropped;
+              pages.push(
+                ...sanitized.images.map((image) => ({ image, factIndex: page.attachmentIndex })),
+              );
+            }
+            if (dropped) {
+              content.push({ type: "text", text: buildPromptImageFailureNotice(dropped) });
+            }
+            projected = appendExtractedPromptImages(projected, media, pages);
+            extractedPageMedia = readPersistedMediaFacts(projected);
+          } else {
+            content.push({
+              type: "text",
+              text: "[Attachment images omitted: this model does not support image input]",
+            });
+          }
+        }
+        const runtimeMedia = readRuntimePromptMediaFacts(message);
+        if (runtimeMedia) {
+          attachRuntimePromptMediaFacts(
+            projected,
+            extractedPageMedia ?? runtimeMedia,
+            readRuntimePromptImageOrder(message),
+          );
+        }
+        if (documentInput === prunedInput) {
+          documentInput = prunedInput.slice();
+        }
+        documentInput[index] = projected;
+      }
+    }
+    for (const key of documents.keys()) {
+      if (!retainedDocumentKeys.has(key)) {
+        documents.delete(key);
+      }
+    }
     const hydratedInput = mediaOptions
-      ? await hydratePromptMediaMessages(prunedInput, mediaOptions)
+      ? await hydratePromptMediaMessages(documentInput, { ...mediaOptions, signal })
       : prunedInput;
+    assertCurrent();
     const transformed = originalTransformContext
       ? await originalTransformContext.call(agent, hydratedInput, signal)
       : hydratedInput;
+    assertCurrent();
     const result = prune(transformed);
     onPruned?.(pruned);
     return result;
   };
   return () => {
+    active = false;
+    documents.clear();
     agent.transformContext = originalTransformContext;
   };
 }

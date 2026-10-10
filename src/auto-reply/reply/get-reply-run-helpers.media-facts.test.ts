@@ -33,6 +33,53 @@ describe("persisted media image layout", () => {
     expect(layout).toEqual(image ? { slots: [{ kind: "offloaded", factIndex: 0 }] } : undefined);
   });
 
+  it.each([
+    {
+      name: "document-only pages",
+      media: [{ path: "/tmp/scan.pdf", contentType: "application/pdf", hydrationSuppressed: true }],
+      imageSourceIndexes: [0, 0],
+      expected: {
+        slots: [
+          { kind: "inline", factIndex: 0 },
+          { kind: "inline", factIndex: 0 },
+        ],
+      },
+    },
+    {
+      name: "photo and multiple PDFs with suppressed and offloaded photos",
+      media: [
+        { path: "/tmp/inline.png", contentType: "image/png" },
+        { path: "/tmp/first.pdf", contentType: "application/pdf", hydrationSuppressed: true },
+        { path: "/tmp/described.png", contentType: "image/png", hydrationSuppressed: true },
+        { path: "/tmp/second.pdf", contentType: "application/pdf", hydrationSuppressed: true },
+        { path: "/tmp/offloaded.png", contentType: "image/png" },
+      ],
+      imageSourceIndexes: [0, 1, 1, 3, 3],
+      expected: {
+        slots: [
+          { kind: "inline", factIndex: 0 },
+          { kind: "inline", factIndex: 1 },
+          { kind: "inline", factIndex: 1 },
+          { kind: "inline", factIndex: 3 },
+          { kind: "inline", factIndex: 3 },
+          { kind: "offloaded", factIndex: 4 },
+        ],
+        suppressedFactIndexes: [2],
+      },
+    },
+  ])("retains exact attachment ownership for $name", ({ media, imageSourceIndexes, expected }) => {
+    const normalized = normalizeMediaFacts(media);
+    expect(
+      buildPersistedMediaImageLayout({
+        ctx: {},
+        media: normalized,
+        ctxMediaCount: normalized.length,
+        imageOrder: imageSourceIndexes.map(() => "inline"),
+        imageSourceIndexes,
+      }),
+    ).toEqual(expected);
+  });
+
   it("does not resurrect hydration-suppressed image facts as offloaded slots", () => {
     const normalized = normalizeMediaFacts([
       { path: "/tmp/readable.png", contentType: "image/png" },

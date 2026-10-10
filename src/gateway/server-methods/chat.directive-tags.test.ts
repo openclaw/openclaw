@@ -1714,6 +1714,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.hasMessageReceivedHooks = true;
     const documentPath = path.join(suiteFixtureRoot, "notes.txt");
     fs.writeFileSync(documentPath, "steered document body");
+    mockState.config = { agents: { defaults: { workspace: suiteFixtureRoot } } };
+    mockState.stagedRelativePaths = [documentPath];
     setSavedMediaResults([documentPath, "text/plain"]);
     if (renderFails) {
       mockState.steerDocumentRenderError = new Error("lazy media runtime unavailable");
@@ -1731,6 +1733,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     try {
       await send({
         idempotencyKey: "idem-steer-document",
+        waitFor: "none",
         requestParams: {
           queueMode: "steer",
           attachments: [
@@ -1758,16 +1761,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       operation.complete();
       mockState.steerDocumentRenderError = null;
     }
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ status: "started" }),
+      undefined,
+      expect.any(Object),
+    );
     expect(queueMessage).toHaveBeenCalledOnce();
     const [injectedText] = expectDefined(queueMessage.mock.calls[0], "injected document text");
     if (renderFails) {
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ status: "started" }),
-        undefined,
-        expect.any(Object),
-      );
-      expect(injectedText).toBeDefined();
       expect(injectedText).not.toContain('<file name="notes.txt"');
       expect(injectedText).toContain("hello");
     } else {
@@ -4576,10 +4578,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("resolves attachment image support from the session agent model", async () => {
-    await createTranscriptFixture("openclaw-chat-send-agent-scoped-text-only-attachments-", {
-      agentId: "writer",
-      sessionKey: "agent:writer:main",
-    });
+    const workspaceDir = await createTranscriptFixture(
+      "openclaw-chat-send-agent-scoped-text-only-attachments-",
+      { agentId: "writer", sessionKey: "agent:writer:main" },
+    );
+    const stagedPath = path.join(workspaceDir, "media", "inbound", "image.png");
+    mockState.stagedRelativePaths = [stagedPath];
     mockState.finalText = "ok";
     mockState.config = {
       agents: {
@@ -4589,6 +4593,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           },
           writer: {
             model: "test-provider/text-only",
+            workspace: workspaceDir,
           },
         },
       },
@@ -4623,14 +4628,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
     expect(mockState.lastDispatchImages).toBeUndefined();
     expect(mockState.lastDispatchImageOrder).toEqual(["offloaded"]);
-    expect(mockState.lastDispatchCtx?.Body).toBe("describe image");
-    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
     expect(mockState.lastDispatchCtx?.media).toEqual([
       {
         fileName: "attachment-1",
-        path: "/tmp/1.png",
+        path: stagedPath,
+        url: "media://inbound/saved-media",
         contentType: "image/png",
-        workspaceDir: "/tmp",
+        workspaceDir,
+        staged: true,
       },
     ]);
     expect(mockState.savedMediaCalls).toEqual([
@@ -4794,20 +4799,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         },
         expectBroadcast: false,
       });
-      if (mode === "throw") {
-        expect(mockState.lastDispatchCtx?.media).toEqual([
-          {
-            fileName: "report.pdf",
-            path: "/home/user/.openclaw/media/inbound/report.pdf",
-            contentType: "application/pdf",
-            workspaceDir: "/home/user/.openclaw/media/inbound",
-          },
-        ]);
-      } else {
-        expect(mockState.lastDispatchCtx?.media?.map((fact) => fact.path)).toEqual([
-          "/home/user/.openclaw/media/inbound/report.pdf",
-        ]);
-      }
+      expect(mockState.lastDispatchCtx?.media).toEqual([
+        {
+          fileName: "report.pdf",
+          path: "/home/user/.openclaw/media/inbound/report.pdf",
+          url: "media://inbound/saved-media",
+          contentType: "application/pdf",
+          workspaceDir: "/home/user/.openclaw/media/inbound",
+        },
+      ]);
       expect(mockState.deleteMediaBufferCalls).toEqual([]);
     },
   );

@@ -7,6 +7,7 @@ import { createAgentRunDirectAbortError } from "../../agents/run-termination.js"
 import * as sandboxWorkspace from "../../agents/sandbox/context.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -23,7 +24,9 @@ it.each([
   { canTransfer: false, stopped: false },
   { canTransfer: false, stopped: true },
   { canTransfer: true, stopped: true },
-])("routes chat uploads: %j", async ({ canTransfer, stopped }) => {
+  { canTransfer: true, stopped: false, workspaceOverride: true },
+  { canTransfer: true, stopped: true, workspaceOverride: true },
+])("routes chat uploads: %j", async ({ canTransfer, stopped, workspaceOverride }) => {
   await withOpenClawTestState({ label: "remote-chat-attachment" }, async (state) => {
     const cfg = {
       agents: {
@@ -41,6 +44,16 @@ it.each([
       },
     } satisfies OpenClawConfig;
     await state.writeConfig(cfg);
+    if (workspaceOverride) {
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:main" },
+        {
+          sessionId: "remote-owner-session",
+          updatedAt: 1,
+          spawnedCwd: state.path("execution-workspace"),
+        },
+      );
+    }
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const respond = vi.fn<RespondFn>();
     const runId = "remote-attachment";
@@ -348,6 +361,7 @@ it.each([
         expect(result.value.mediaPathOffloads).toEqual([
           {
             path: inboundPath,
+            url: result.value.offloadedRefs[0]!.mediaRef,
             contentType: "application/pdf",
             fileName: "notes.pdf",
             workspaceDir: path.dirname(inboundPath),

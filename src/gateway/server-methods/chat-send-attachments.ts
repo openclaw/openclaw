@@ -2,6 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { StageSandboxMediaResult } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
@@ -60,6 +61,7 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  workspaceDir: string;
   skillLibrarySelections?: SkillSnapshot["librarySelections"];
   existingSkillsSnapshot?: SkillSnapshot;
   abortSignal: AbortSignal;
@@ -79,25 +81,32 @@ async function prestageMediaPathOffloads(params: {
       ]);
     params.abortSignal.throwIfAborted();
     params.assertWorkAdmissionCurrent();
-    const refsByManagedPath = (refs: OffloadedRef[]): MediaFact[] =>
-      refs.map((ref) => ({
-        path: ref.path,
-        contentType: ref.mimeType,
-        fileName: ref.label,
-        workspaceDir: path.dirname(ref.path),
-      }));
+    // Deliberate passthrough only: a remote owner prepares the copy, or PDF
+    // readers use the managed source. Retain its existing skip-staging location
+    // contract; this is neither a workspace copy nor a file-tool access grant.
+    const factByManagedPath = (ref: OffloadedRef): MediaFact => ({
+      path: ref.path,
+      url: ref.mediaRef,
+      contentType: ref.mimeType,
+      fileName: ref.label,
+      workspaceDir: path.dirname(ref.path),
+    });
     // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
     const refsToStage = mediaPathRefs.filter(
       (ref) => !(ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)),
     );
     if (refsToStage.length === 0) {
-      return refsByManagedPath(mediaPathRefs);
+      return mediaPathRefs.map(factByManagedPath);
     }
 
-    const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
-      return refsByManagedPath(mediaPathRefs);
+    // A session cwd changes local staging placement, not the configured host owner.
+    const agentWorkspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+    if (
+      getAgentWorkspaceAccess(agentWorkspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments
+    ) {
+      return mediaPathRefs.map(factByManagedPath);
     }
+    const { workspaceDir } = params;
     const skillsSnapshot = params.skillLibrarySelections?.length
       ? (
           await (
@@ -121,12 +130,11 @@ async function prestageMediaPathOffloads(params: {
       workspaceDir,
       skillsSnapshot,
     });
+    params.abortSignal.throwIfAborted();
     params.assertWorkAdmissionCurrent();
-    if (!sandbox) {
-      return refsByManagedPath(mediaPathRefs);
-    }
 
-    // The parser admits more than the sandbox can stage. Reject non-PDF files
+    // Host and sandbox readers need the same safe workspace copy.
+    // The parser admits more than staging can copy. Reject non-PDF files
     // in that gap as permanent 4xx instead of a retryable staging failure.
     const oversizedForSandbox = refsToStage.filter(
       (ref) => ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES,
@@ -165,8 +173,10 @@ async function prestageMediaPathOffloads(params: {
       ) {
         throw stageErr;
       }
-      return refsByManagedPath(mediaPathRefs);
+      return mediaPathRefs.map(factByManagedPath);
     }
+    params.abortSignal.throwIfAborted();
+    params.assertWorkAdmissionCurrent();
 
     // stageSandboxMedia preserves an absolute source path when no copy lands;
     // the staged map is the authoritative success signal.
@@ -179,21 +189,24 @@ async function prestageMediaPathOffloads(params: {
       );
     }
     const stagedMedia = stagingCtx.media ?? [];
-    // Preserve request order while mixing sandbox-relative paths with managed
-    // host paths used by pass-through or fallback PDFs.
-    const resolvedByRef = new Map(
-      refsToStage.map((ref, index) => [ref, stagedMedia[index]] as const),
-    );
-    return mediaPathRefs.map((ref) => {
-      const resolved = resolvedByRef.get(ref);
-      return {
-        path: resolved?.path ?? ref.path,
+    // Preserve request order and exact staging proof; PDF fallbacks retain
+    // their managed source rather than claiming a copy in the runner workspace.
+    const resolvedByRef = new Map<OffloadedRef, MediaFact>();
+    refsToStage.forEach((ref, index) => {
+      const stagedPath = stagedSources.get(index);
+      if (stagedPath === undefined) {
+        return;
+      }
+      resolvedByRef.set(ref, {
+        path: stagedPath,
         url: ref.mediaRef,
-        contentType: resolved?.contentType ?? ref.mimeType,
+        contentType: stagedMedia[index]?.contentType ?? ref.mimeType,
         fileName: ref.label,
-        workspaceDir: sandbox.workspaceDir,
-      };
+        workspaceDir: stagedMedia[index]?.workspaceDir ?? sandbox?.workspaceDir ?? workspaceDir,
+        staged: true,
+      });
     });
+    return mediaPathRefs.map((ref) => resolvedByRef.get(ref) ?? factByManagedPath(ref));
   } catch (err) {
     if (
       (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
@@ -296,12 +309,19 @@ export async function prepareChatSendAttachments(params: {
                     resolveOperatorSessionCreation(client),
                   )
                 ).skillLibrarySelections;
+          assertInputCurrent();
           mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,
             includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,
+            workspaceDir:
+              resolveIngressWorkspaceOverrideForSessionRun({
+                spawnedBy: stagingEntry?.spawnedBy,
+                workspaceDir: stagingEntry?.spawnedWorkspaceDir,
+                cwd: stagingEntry?.spawnedCwd,
+              }) ?? resolveAgentWorkspaceDir(cfg, agentId),
             skillLibrarySelections: selectedSkills,
             existingSkillsSnapshot: stagingEntry?.skillsSnapshot,
             abortSignal: activeRunAbort.controller.signal,

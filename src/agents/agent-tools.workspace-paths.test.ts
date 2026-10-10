@@ -5,7 +5,10 @@ import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { buildInboundMediaUriFromPath } from "../media/media-reference.js";
+import { saveMediaBuffer } from "../media/store.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./agent-tools.read.js";
@@ -143,6 +146,38 @@ describe("workspace path resolution", () => {
       ).rejects.toThrow(/Path escapes sandbox root/i);
     });
   });
+
+  it.each([false, true])(
+    "resolves managed read URIs before enforcing workspaceOnly=%s",
+    async (workspaceOnly) => {
+      await withOpenClawTestState({ label: "read-managed-uri" }, async (state) => {
+        const bytes = "managed attachment contents";
+        const saved = await saveMediaBuffer(
+          Buffer.from(bytes),
+          "text/plain",
+          "inbound",
+          1024,
+          "notes.txt",
+        );
+        const uri = buildInboundMediaUriFromPath(saved.path)!;
+        const { readTool } = expectReadWriteEditTools(
+          createOpenClawCodingTools({
+            workspaceDir: state.workspaceDir,
+            config: { tools: { fs: { workspaceOnly } } },
+          }),
+        );
+        if (workspaceOnly) {
+          for (const source of [uri, saved.path]) {
+            await expect(readTool.execute("read-managed", { path: source })).rejects.toThrow(
+              /Path escapes sandbox root/i,
+            );
+          }
+        } else {
+          expect(getTextContent(await readTool.execute("read-managed", { path: uri }))).toBe(bytes);
+        }
+      });
+    },
+  );
 
   it("guards decoded file URLs while forwarding the original URL", async () => {
     await withTempDir("openclaw-guard-url-", async (stateDir) => {

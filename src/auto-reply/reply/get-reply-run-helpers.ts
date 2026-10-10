@@ -37,12 +37,20 @@ export function buildPersistedMediaImageLayout(params: {
       availableFactIndexes.add(factIndex);
     }
   }
-  if (availableFactIndexes.size === 0 && suppressedFactIndexes.length === 0) {
-    return undefined;
-  }
   const canInferByPosition = availableFactIndexes.size === (params.imageOrder?.length ?? 0);
   const slots = (params.imageOrder ?? []).map((kind, slotIndex) => {
     const sourceIndex = params.imageSourceIndexes?.[slotIndex];
+    const sourceFact = sourceIndex === undefined ? undefined : params.media[sourceIndex];
+    // Extracted document pages share their source fact; unlike photos, each page
+    // keeps that identity even when direct hydration of the document is suppressed.
+    if (
+      kind === "inline" &&
+      sourceIndex !== undefined &&
+      sourceFact &&
+      !isImageMediaFact(sourceFact)
+    ) {
+      return { kind, factIndex: sourceIndex };
+    }
     const factIndex =
       sourceIndex === undefined && canInferByPosition
         ? availableFactIndexes.values().next().value
@@ -53,6 +61,9 @@ export function buildPersistedMediaImageLayout(params: {
   });
   for (const factIndex of availableFactIndexes) {
     slots.push({ kind: "offloaded", factIndex });
+  }
+  if (!slots.some((slot) => slot.factIndex !== undefined) && suppressedFactIndexes.length === 0) {
+    return undefined;
   }
   return {
     slots,
