@@ -13,6 +13,7 @@ import {
   BrowserPanelController,
   type BrowserPanelControllerHost,
 } from "./browser-panel-controller.ts";
+import { defineBrowserPanelElement } from "./browser-panel-registration.tsx";
 import { browserPanelHostedTabs } from "./browser-panel-tabs.ts";
 import {
   browserTabKey,
@@ -323,4 +324,8 @@ declare global {
   interface HTMLElementTagNameMap {
     "openclaw-browser-panel": BrowserPanelElement;
   }
+}
+
+if (!customElements.get("openclaw-browser-panel")) {
+  defineBrowserPanelElement((element) => new BrowserPanelPresentation(element));
 }

@@ -10,6 +10,7 @@ import "./resizable-divider.ts";
 
 type DockLayoutHost = ReactiveControllerHost & {
   readonly isConnected: boolean;
+  readonly embedded?: boolean;
   hasAttribute?(name: string): boolean;
 };
 
@@ -218,7 +219,8 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   // and inline hosts are laid out by their parent, and the standalone dock of the same
   // panel can be open at the same time, so they neither reserve nor clear its properties.
   private reservesViewport(): boolean {
-    return !this.isFullscreen() && !this.host.hasAttribute?.("embedded");
+    const embedded = this.host.embedded ?? this.host.hasAttribute?.("embedded") ?? false;
+    return !this.isFullscreen() && !embedded;
   }
 
   private isFullscreen(): boolean {

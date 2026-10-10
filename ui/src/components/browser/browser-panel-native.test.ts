@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { startNativeLinkRouting } from "../../app/native-link-routing.ts";
 import { acquireNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { promoteToPopoverTopLayer } from "../menu-surface.ts";
 import {
   createInspectedNode,
@@ -329,7 +330,7 @@ describe("native Browser panel ownership", () => {
     const panel = document.createElement("openclaw-browser-panel");
     panel.available = true;
     panel.remoteAvailable = false;
-    document.body.append(panel);
+    mountSolid(() => panel);
     const routing = startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => false });
     const link = document.createElement("a");
     link.href = "https://example.test/article";
@@ -369,7 +370,7 @@ describe("native Browser panel ownership", () => {
       panel.remoteAvailable = false;
       panel.embedded = true;
       panel.presented = true;
-      document.body.append(panel);
+      mountSolid(() => panel);
       await panel.updateComplete;
       const stage = panel.renderRoot?.querySelector<HTMLElement>(".bp-stage--native");
       expect(stage).not.toBeNull();

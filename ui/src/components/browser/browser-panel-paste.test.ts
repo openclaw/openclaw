@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createBrowserClient,
@@ -71,7 +72,7 @@ describe("Browser panel text and touch input", () => {
     panel.presented = true;
     panel.refreshOnPresentation = false;
     panel.client = client;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
       .browserPanelController;

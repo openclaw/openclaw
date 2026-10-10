@@ -57,11 +57,6 @@ openclaw-browser-panel {
   .bp-toolbar .bp-icon[aria-busy="true"] > svg {
     animation: bp-toolbar-spin 1s linear infinite;
   }
-  @keyframes bp-toolbar-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
     .bp-toolbar .bp-icon[aria-busy="true"] > svg {
       animation: none;
@@ -247,5 +242,11 @@ openclaw-browser-panel {
   }
   .bp-note--error {
     color: var(--danger);
+  }
+}
+
+@keyframes bp-toolbar-spin {
+  to {
+    transform: rotate(360deg);
   }
 }

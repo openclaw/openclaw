@@ -30,6 +30,7 @@ import {
 } from "./desktop-panel-connection.ts";
 import * as desktopAuth from "./desktop-panel-credentials.ts";
 import { desktopPanelLayout } from "./desktop-panel-layout.ts";
+import { defineDesktopPanelElement } from "./desktop-panel-registration.tsx";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
@@ -155,7 +156,6 @@ export class DesktopPanelController extends SolidPanelController {
   );
 
   override connectedCallback(): void {
-    super.connectedCallback();
     if (!this.embedded) {
       window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     }
@@ -178,7 +178,6 @@ export class DesktopPanelController extends SolidPanelController {
     }
     this.sessionSource.clearDesktopSource();
     this.credentials = undefined;
-    super.disconnectedCallback();
   }
 
   override updated(changed: Map<PropertyKey, unknown>): void {
@@ -325,7 +324,6 @@ export class DesktopPanelController extends SolidPanelController {
     if (!retainViewer) {
       this.sessionSource.invalidate();
       this.loading = false;
-      this.requestUpdate();
       this.launcher.clear();
     }
   }
@@ -732,4 +730,8 @@ export class DesktopPanelController extends SolidPanelController {
       },
     };
   }
+}
+
+if (!customElements.get("openclaw-desktop-panel")) {
+  defineDesktopPanelElement((element) => new DesktopPanelController(element));
 }

@@ -153,7 +153,7 @@ describe("Terminal panel hosted tabs", () => {
     expect(panel.activeHostedTabId).toBe(firstId);
     await panel.closeHostedTab(firstId);
     expect(panel.hostedTabs.some((tab) => tab.id === firstId)).toBe(false);
-    expect(panel.isUpdatePending).toBe(false);
+    expect(panel.renderRoot.querySelector(".tp-host")).toBeNull();
   });
 
   it("notifies on tab, selection, booting and header handoff changes, without repeating unrelated renders", async () => {

@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { cleanup, render } from "@solidjs/testing-library";
-import { createSignal, flush } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createDataTransferStub } from "../test-helpers/drag-data.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { flush } from "../test-helpers/solid-settle.ts";
 import { PanelTabStrip, type SolidPanelTabStripTab } from "./panel-tab-strip-solid.tsx";
 
 const first: SolidPanelTabStripTab = {
@@ -19,7 +20,10 @@ const second: SolidPanelTabStripTab = {
   label: "Second",
   closeLabel: "Close second",
 };
-type Group = HTMLElement & { updateComplete: Promise<unknown> };
+type Group = HTMLElement & {
+  updateComplete: Promise<unknown>;
+  getUpdateComplete(): Promise<unknown>;
+};
 
 function mountStrip(
   initial = [first, second],
@@ -31,7 +35,7 @@ function mountStrip(
 ) {
   const [tabs, setTabs] = createSignal(initial);
   const [activeId, setActiveId] = createSignal<string | null>(initial[0]?.id ?? null);
-  const view = render(() => (
+  const view = mountSolid(() => (
     <PanelTabStrip
       tabs={tabs()}
       activeId={activeId()}
@@ -48,7 +52,6 @@ function mountStrip(
 }
 
 afterEach(() => {
-  cleanup();
   Reflect.deleteProperty(customElements.get("wa-tab-group")?.prototype ?? {}, "updateComplete");
   document.documentElement.removeAttribute("dir");
   vi.unstubAllGlobals();
@@ -77,7 +80,7 @@ it("keeps keyed tab nodes while publishing controlled selection and new labels",
   expect(view.container.querySelector<HTMLButtonElement>("#tab-first-close")?.tabIndex).toBe(-1);
 });
 
-it("omits the empty group and removes it after closing the final tab", () => {
+it("tracks empty and populated tab lists without creating an empty group", () => {
   const view = mountStrip([]);
   expect(view.group()).toBeNull();
   expect(view.container.querySelector(".tabstrip-new")?.hasAttribute("slot")).toBe(false);
@@ -151,9 +154,12 @@ it("does not install late measurement observers after disposal", async () => {
     },
   );
   const view = mountStrip();
+  // Let Web Awesome create its shadow scroller while holding the public layout
+  // promise that the Solid measurement owner awaits.
+  await view.group()!.getUpdateComplete();
+  const initialObservers = observer.mock.calls.length;
   view.unmount();
   gate.resolve(true);
   await gate.promise;
-  await Promise.resolve();
-  expect(observer).not.toHaveBeenCalled();
+  expect(observer).toHaveBeenCalledTimes(initialObservers);
 });

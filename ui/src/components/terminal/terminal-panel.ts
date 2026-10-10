@@ -35,7 +35,7 @@ import { renderTerminalSessionPickerTrigger } from "./terminal-session-picker.ts
 
 type TerminalDock = Exclude<DockPanelPlacement, "left">;
 
-const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
+export const CATALOG_TERMINAL_READY_TIMEOUT_MS = 30_000;
 
 export class TerminalPanelController extends SolidPanelController {
   context?: ApplicationContext;

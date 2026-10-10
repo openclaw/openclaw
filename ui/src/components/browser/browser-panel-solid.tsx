@@ -4,9 +4,6 @@ import { DockResizer } from "../dock-layout-solid.tsx";
 import { usePanelController } from "../solid-panel-controller.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 import type { BrowserPanelPresentation } from "./browser-panel.ts";
-import "../dock-panel-solid.css";
-import "../panel-tab-strip-solid.css";
-import "./browser-panel.css";
 
 export function BrowserPanelContent(props: { controller: BrowserPanelPresentation }) {
   const controller = untrack(() => props.controller);

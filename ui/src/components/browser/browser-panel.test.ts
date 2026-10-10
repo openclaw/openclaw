@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./browser-panel.ts";
 import { createBrowserClient, createView } from "./browser-panel-controller-test-support.ts";
 import type { BrowserPanelController } from "./browser-panel-controller.ts";
@@ -99,7 +100,7 @@ describe("normalizeBrowserUrlDraft", () => {
     const tagName = `test-lazy-browser-panel-${crypto.randomUUID()}`;
     const element = document.createElement(tagName) as HTMLElement & { available: boolean };
     element.available = true;
-    document.body.append(element);
+    mountSolid(() => element);
 
     const BrowserPanel = customElements.get("openclaw-browser-panel");
     if (!BrowserPanel) {
@@ -125,7 +126,7 @@ describe("normalizeBrowserUrlDraft", () => {
     };
     panel.available = true;
     panel.embedded = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
 
     expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
@@ -140,7 +141,7 @@ describe("normalizeBrowserUrlDraft", () => {
     };
     panel.available = true;
     panel.embedded = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
 
     const empty = panel.renderRoot.querySelector("openclaw-panel-empty-state");
@@ -169,7 +170,7 @@ describe("normalizeBrowserUrlDraft", () => {
       panel.presented = true;
       panel.refreshOnPresentation = false;
       panel.client = createBrowserClient(async () => response.promise).client;
-      document.body.append(panel);
+      mountSolid(() => panel);
       await panel.updateComplete;
 
       panel.browserPanelController.activeTargetId = "tab-a";
@@ -220,12 +221,12 @@ describe("normalizeBrowserUrlDraft", () => {
       updateComplete: Promise<unknown>;
     };
     panel.available = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
 
     expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
     panel.suppressed = true;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".bp")).toBeNull());
+    await waitForSolid(() => expect(panel.renderRoot.querySelector(".bp")).toBeNull());
 
     expect(document.documentElement.style.getPropertyValue("--oc-browser-reserve-right")).toBe(
       "0px",
@@ -235,7 +236,7 @@ describe("normalizeBrowserUrlDraft", () => {
     });
 
     panel.suppressed = false;
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".bp")).not.toBeNull());
+    await waitForSolid(() => expect(panel.renderRoot.querySelector(".bp")).not.toBeNull());
 
     expect(panel.renderRoot.querySelector(".bp")).not.toBeNull();
   });
@@ -256,7 +257,7 @@ describe("normalizeBrowserUrlDraft", () => {
     // Chat side panels mount their Browser with the static `embedded` attribute.
     embedded.setAttribute("embedded", "");
     dock.available = embedded.available = true;
-    document.body.append(dock, embedded);
+    mountSolid(() => [dock, embedded]);
     await Promise.all([dock.updateComplete, embedded.updateComplete]);
     const reservation = () =>
       document.documentElement.style.getPropertyValue("--oc-browser-reserve-right");
@@ -286,7 +287,7 @@ describe("normalizeBrowserUrlDraft", () => {
       updateComplete: Promise<unknown>;
     };
     panel.suppressed = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
 
     panel.suppressed = false;
@@ -294,7 +295,7 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(panel.browserPanelIsOpen()).toBe(false);
 
     panel.available = true;
-    await waitForFast(() => expect(panel.browserPanelIsOpen()).toBe(true));
+    await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
   });
 
   it("mounts closed inside a takeover instead of refreshing a hidden dock", async () => {
@@ -319,7 +320,7 @@ describe("normalizeBrowserUrlDraft", () => {
     panel.client = client;
     panel.available = true;
     panel.suppressed = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     await Promise.resolve();
 
@@ -327,7 +328,7 @@ describe("normalizeBrowserUrlDraft", () => {
     expect(requests).toEqual([]);
 
     panel.suppressed = false;
-    await waitForFast(() => expect(panel.browserPanelIsOpen()).toBe(true));
+    await waitForSolid(() => expect(panel.browserPanelIsOpen()).toBe(true));
   });
 
   it("keeps an already closed panel closed for an explicit close request", () => {
@@ -337,7 +338,7 @@ describe("normalizeBrowserUrlDraft", () => {
       handleToggleRequest: (event: Event) => void;
     };
     panel.available = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
 
     panel.handleToggleRequest(
       new CustomEvent("openclaw:browser-toggle", { detail: { open: false } }),
@@ -362,7 +363,7 @@ describe("normalizeBrowserUrlDraft", () => {
         updateComplete: Promise<unknown>;
       };
       panel.available = true;
-      document.body.append(panel);
+      mountSolid(() => panel);
       await panel.updateComplete;
       const { capturedPointers, dispatchPointer } = attachAnnotationOverlay(panel);
 
@@ -393,7 +394,7 @@ describe("normalizeBrowserUrlDraft", () => {
       updateComplete: Promise<unknown>;
     };
     panel.embedded = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
 
     expect(panel.browserPanelIsOpen()).toBe(false);
@@ -417,7 +418,7 @@ describe("normalizeBrowserUrlDraft", () => {
     panel.available = true;
     panel.embedded = true;
     panel.presented = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
 
     panel.handleToggleRequest(

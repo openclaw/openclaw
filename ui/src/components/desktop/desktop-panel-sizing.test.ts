@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import {
   clickPanelButton,
@@ -11,8 +11,9 @@ import {
   createPanel,
   desktopEnvironment,
   selectSizing,
-  settleTasks,
   sizingMenu,
+  mountPanel,
+  updatePanel,
 } from "./desktop-panel.test-support.ts";
 
 describe("desktop panel sizing", () => {
@@ -63,15 +64,17 @@ describe("desktop panel sizing", () => {
       createConnectionHandle(),
     );
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
 
-    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(connect.mock.calls[0]![0].credentials).toEqual(credentials);
   });
 
@@ -102,18 +105,20 @@ describe("desktop panel sizing", () => {
       const handle = createConnectionHandle();
       const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) => handle);
       const panel = createPanel();
-      panel.client = createGatewayClient(request).client;
-      panel.available = true;
-      panel.embedded = true;
-      panel.presented = true;
-      panel.documentMode = documentMode;
-      panel.documentControl = control;
-      panel.requestedSource = desktopEnvironment.id;
-      panel.desktopClientFactory = () => ({ connect });
-      document.body.append(panel);
+      updatePanel(panel, {
+        client: createGatewayClient(request).client,
+        available: true,
+        embedded: true,
+        presented: true,
+        documentMode,
+        documentControl: control,
+        requestedSource: desktopEnvironment.id,
+        desktopClientFactory: () => ({ connect }),
+      });
+      mountPanel(panel);
 
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-      await settleTasks();
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      await panel.updateComplete;
       const options = connect.mock.calls[0]![0];
       expect(options).toMatchObject({ canResize, viewOnly: !control, sizingMode: "fit" });
       expect(sizingMenu(panel).value).toBe("fit");
@@ -177,23 +182,25 @@ describe("desktop panel sizing", () => {
         return handle;
       });
       const panel = createPanel();
-      panel.client = createGatewayClient(request).client;
-      panel.available = true;
-      panel.embedded = true;
-      panel.presented = true;
-      panel.documentMode = true;
-      panel.documentControl = true;
-      panel.requestedSource = desktopEnvironment.id;
-      panel.desktopClientFactory = () => ({ connect });
-      document.body.append(panel);
-      await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-      await settleTasks();
+      updatePanel(panel, {
+        client: createGatewayClient(request).client,
+        available: true,
+        embedded: true,
+        presented: true,
+        documentMode: true,
+        documentControl: true,
+        requestedSource: desktopEnvironment.id,
+        desktopClientFactory: () => ({ connect }),
+      });
+      mountPanel(panel);
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      await panel.updateComplete;
       selectSizing(panel, "match");
       await panel.updateComplete;
 
       const original = connect.mock.calls[0]![0];
       if (transition === "source change") {
-        panel.requestedSource = replacement.id;
+        updatePanel(panel, { requestedSource: replacement.id });
       } else if (transition === "demotion") {
         original.onDisconnect?.({ clean: true, code: 4000, reason: "control-taken" });
       } else {
@@ -202,8 +209,8 @@ describe("desktop panel sizing", () => {
         await panel.updateComplete;
         clickPanelButton(panel, ".desktop-status button");
       }
-      await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
-      await settleTasks();
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+      await panel.updateComplete;
       expect(handles[0]!.disconnect).toHaveBeenCalledOnce();
       expect(original.isCurrent()).toBe(false);
       expect(connect.mock.calls[1]![0].sizingMode).toBe(transition === "retry" ? "match" : "fit");
@@ -236,17 +243,19 @@ describe("desktop panel sizing", () => {
       async (_options: Parameters<DesktopClient["connect"]>[0]) => handles[connectionIndex++]!,
     );
     const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.documentMode = true;
-    panel.documentControl = true;
-    panel.requestedSource = desktopEnvironment.id;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
-    await waitForFast(() => expect(connect).toHaveBeenCalledOnce());
-    await settleTasks();
+    updatePanel(panel, {
+      client: createGatewayClient(request).client,
+      available: true,
+      embedded: true,
+      presented: true,
+      documentMode: true,
+      documentControl: true,
+      requestedSource: desktopEnvironment.id,
+      desktopClientFactory: () => ({ connect }),
+    });
+    mountPanel(panel);
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+    await panel.updateComplete;
     const initial = connect.mock.calls[0]![0];
     initial.onConnect?.();
     await panel.updateComplete;
@@ -254,8 +263,8 @@ describe("desktop panel sizing", () => {
     initial.onDisconnect?.({ clean: false, code: 1006 });
     await panel.updateComplete;
     clickPanelButton(panel, ".desktop-status button");
-    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
-    await settleTasks();
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+    await panel.updateComplete;
     const pending = connect.mock.calls[1]![0];
     expect(pending.sizingMode).toBe("match");
     expect(sizingMenu(panel).value).toBe("match");

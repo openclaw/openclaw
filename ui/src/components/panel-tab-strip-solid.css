@@ -134,14 +134,15 @@
     flex: 0 0 auto;
     align-self: center;
   }
-  @keyframes tabstrip-pulse {
-    50% {
-      opacity: 0.35;
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
     .tabstrip-tab.is-connecting .tabstrip-tab__icon {
       animation: none;
     }
+  }
+}
+
+@keyframes tabstrip-pulse {
+  50% {
+    opacity: 0.35;
   }
 }

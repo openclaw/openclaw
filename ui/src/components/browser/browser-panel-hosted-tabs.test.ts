@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { icons } from "../icons.ts";
 import { PANEL_HOSTED_TABS_CHANGE_EVENT, readPanelHostedTabs } from "../panel-hosted-tabs.ts";
@@ -31,7 +32,7 @@ describe("Browser panel hosted tabs", () => {
     panel.available = true;
     panel.embedded = embedded;
     panel.tabsInHeader = tabsInHeader;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const controller = (panel as unknown as { browserPanelController: BrowserPanelController })
       .browserPanelController;
@@ -130,7 +131,7 @@ describe("Browser panel hosted tabs", () => {
     panel.remoteAvailable = false;
     panel.embedded = true;
     panel.presented = true;
-    document.body.append(panel);
+    mountSolid(() => panel);
     await panel.updateComplete;
     const changed = vi.fn();
     panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);

@@ -2,8 +2,6 @@ import { untrack } from "solid-js";
 import { usePanelController } from "../solid-panel-controller.ts";
 import type { DesktopPanelController } from "./desktop-panel.ts";
 import { DesktopPresentation } from "./desktop-presentation.tsx";
-import "../dock-panel-solid.css";
-import "./desktop-panel.css";
 
 export function DesktopPanelContent(props: { controller: DesktopPanelController }) {
   const controller = untrack(() => props.controller);

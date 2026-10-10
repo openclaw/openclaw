@@ -1,10 +1,9 @@
-import { cleanup, render as mountSolid } from "@solidjs/testing-library";
-import { createSignal, flush, untrack } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createSignal, untrack } from "solid-js";
+import { describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import { DesktopSizing } from "./desktop-panel-view.tsx";
-
-afterEach(cleanup);
 
 describe.runIf("__vitest_browser__" in globalThis)("pending desktop sizing selection", () => {
   it("cancels retained Match with a native Fit selection before authentication completes", async () => {

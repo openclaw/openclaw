@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { BROWSER_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import { BROWSER_ANNOTATION_EVENT, type BrowserAnnotationEvent } from "./browser-annotation.ts";
 import {
@@ -95,7 +96,7 @@ async function mountPanel(client: Panel["client"], presented = true) {
   panel.client = client;
   panel.sessionKey = "agent:main:first";
   panel.preferredTab = { tab: hostTab, revision: "first" };
-  document.body.append(panel);
+  mountSolid(() => panel);
   await panel.updateComplete;
   return panel;
 }
@@ -153,12 +154,12 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client, false);
     expect(gateway.request).not.toHaveBeenCalled();
     panel.presented = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     expect(panel.renderRoot?.querySelector(".bp-profile")?.textContent).toBe("managed");
     expect(focusCount()).toBe(0);
 
     chooseCard(panel, nodeTab);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
     const afterClick = focusCount();
     expect(afterClick).toBe(1);
     panel.preferredTab = { tab: { ...hostTab }, revision: "first" };
@@ -168,7 +169,7 @@ describe("browser panel route handoff", () => {
     expect(pageTitle(panel)).toBe("work");
 
     panel.preferredTab = { tab: hostTab, revision: "second" };
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     expect(focusCount()).toBe(afterClick);
     await controllerFor(panel).selectTab("t2");
     panel.preferredTab = { tab: { ...hostTab }, revision: "second" };
@@ -183,7 +184,7 @@ describe("browser panel route handoff", () => {
     await panel.updateComplete;
     expect(gateway.request).toHaveBeenCalledTimes(hiddenCount);
     panel.presented = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
 
     await controllerFor(panel).closeTab("t1");
     panel.preferredTab = { tab: { ...nodeTab }, revision: "third" };
@@ -193,15 +194,15 @@ describe("browser panel route handoff", () => {
 
     panel.sessionKey = "agent:main:second";
     panel.preferredTab = undefined;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("default"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("default"));
     expect(panel.renderRoot?.querySelector(".bp-profile")).toBeNull();
     panel.sessionKey = "agent:main:first";
     panel.preferredTab = { tab: hostTab, revision: "second" };
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     const replacement = browserGateway();
     panel.client = replacement.client;
     panel.preferredTab = undefined;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("default"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("default"));
     expect(
       [...gateway.request.mock.calls, ...replacement.request.mock.calls].every(
         ([method]) => method === "browser.request",
@@ -212,7 +213,7 @@ describe("browser panel route handoff", () => {
   it("defers a retained panel refresh to its pending card choice", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     vi.useFakeTimers();
     const controller = controllerFor(panel);
     controller.handleViewportResize(640, 480);
@@ -229,7 +230,7 @@ describe("browser panel route handoff", () => {
 
     chooseCard(panel, nodeTab);
     panel.refreshOnPresentation = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
     controller.handleViewportResize(700, 500);
     await vi.advanceTimersByTimeAsync(1_000);
     const requests = gateway.request.mock.calls
@@ -277,7 +278,7 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client, false);
     panel.preferredTab = { tab: { ...hostTab, targetId: "dead-target" }, revision: "stale" };
     panel.presented = true;
-    await waitForFast(() => expect(controllerFor(panel).running).toBe(false));
+    await waitForSolid(() => expect(controllerFor(panel).running).toBe(false));
     await panel.updateComplete;
 
     const paths = () =>
@@ -302,7 +303,7 @@ describe("browser panel route handoff", () => {
     await flushBrowserResponses();
 
     start?.click();
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     expect(paths()).toEqual(expect.arrayContaining(["/start", "/screenshot"]));
     expect(paths()).not.toContain("/tabs/focus");
   });
@@ -344,7 +345,7 @@ describe("browser panel route handoff", () => {
       );
       const panel = await mountPanel(gateway.client, hasPriorView);
       if (hasPriorView) {
-        await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+        await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
       }
       const controller = controllerFor(panel);
       const previousView = controller.view;
@@ -354,7 +355,7 @@ describe("browser panel route handoff", () => {
         revision: "missing-history",
       };
       panel.presented = true;
-      await waitForFast(() => expect(controller.errorText).toBeTruthy());
+      await waitForSolid(() => expect(controller.errorText).toBeTruthy());
 
       const missingCaptures = () =>
         gateway.request.mock.calls
@@ -379,7 +380,7 @@ describe("browser panel route handoff", () => {
     panel.preferredTab = { tab: { ...hostTab, targetId: "raw-t2" }, revision: "raw-target" };
     panel.presented = true;
 
-    await waitForFast(() => expect(controllerFor(panel).activeTargetId).toBe("t2"));
+    await waitForSolid(() => expect(controllerFor(panel).activeTargetId).toBe("t2"));
     expect(gateway.request).toHaveBeenCalledWith(
       "browser.request",
       expect.objectContaining({
@@ -398,7 +399,7 @@ describe("browser panel route handoff", () => {
       const panel = await mountPanel(gateway.client, false);
       panel.preferredTab = { tab, revision: "routed" };
       panel.presented = true;
-      await waitForFast(() => expect(pageTitle(panel)).toBe(tab.profile));
+      await waitForSolid(() => expect(pageTitle(panel)).toBe(tab.profile));
       const controller = controllerFor(panel);
       await controller.startBrowserNow();
       await controller.selectTab("t2");
@@ -407,7 +408,7 @@ describe("browser panel route handoff", () => {
       controller.goHistory(-1);
       controller.handleWheel(new WheelEvent("wheel", { deltaY: 40, cancelable: true }));
       controller.handleViewportResize(700, 500);
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(
           gateway.request.mock.calls.some(
             ([, value]) => (value as BrowserRequestEnvelope).body?.kind === "resize",
@@ -431,7 +432,7 @@ describe("browser panel route handoff", () => {
       await clickCompleted.promise;
       controller.setMode("inspect");
       controller.handleOverlayPointerMove(createPointer(10, 20));
-      await waitForFast(() => expect(controller.inspected?.name).toBe("Selected"));
+      await waitForSolid(() => expect(controller.inspected?.name).toBe("Selected"));
       vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
         drawImage: vi.fn(),
         clearRect: vi.fn(),
@@ -495,7 +496,7 @@ describe("browser panel route handoff", () => {
   it("drops queued input when a card changes the browser route", async () => {
     const gateway = browserGateway();
     const panel = await mountPanel(gateway.client);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
     vi.useFakeTimers();
     controllerFor(panel).handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
     chooseCard(panel, nodeTab);
@@ -528,7 +529,7 @@ describe("browser panel route handoff", () => {
       return await respond(method, envelope);
     });
     const panel = await mountPanel(gateway.client);
-    await waitForFast(() =>
+    await waitForSolid(() =>
       expect(
         gateway.request.mock.calls.some(
           ([, value]) => (value as BrowserRequestEnvelope).path === "/screenshot",
@@ -536,7 +537,7 @@ describe("browser panel route handoff", () => {
       ).toBe(true),
     );
     chooseCard(panel, nodeTab);
-    await waitForFast(() => expect(pageTitle(panel)).toBe("work"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("work"));
     pending.resolve({ path: "/stale.png", targetId: "t1", url: "https://managed.example/" });
     await flushBrowserResponses();
     expect(controllerFor(panel).loading).toBe(false);
@@ -580,7 +581,7 @@ describe("browser panel route handoff", () => {
     const panel = await mountPanel(gateway.client, false);
     panel.preferredTab = undefined;
     panel.presented = true;
-    await waitForFast(() => expect(pageTitle(panel)).toBe("Allowed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("Allowed"));
     const beforeBlocked = gateway.request.mock.calls.length;
     await controllerFor(panel).selectTab("t1");
     await panel.updateComplete;
@@ -589,7 +590,7 @@ describe("browser panel route handoff", () => {
     );
     expect(gateway.request).toHaveBeenCalledTimes(beforeBlocked);
     await controllerFor(panel).closeTab("t1");
-    await waitForFast(() => expect(pageTitle(panel)).toBe("Allowed"));
+    await waitForSolid(() => expect(pageTitle(panel)).toBe("Allowed"));
     expect(controllerFor(panel).tabs.map((tab) => tab.id)).toEqual(["t2"]);
   });
 
@@ -598,7 +599,7 @@ describe("browser panel route handoff", () => {
     async (deniedPath) => {
       const gateway = browserGateway();
       const panel = await mountPanel(gateway.client);
-      await waitForFast(() => expect(pageTitle(panel)).toBe("managed"));
+      await waitForSolid(() => expect(pageTitle(panel)).toBe("managed"));
       const respond = gateway.request.getMockImplementation()!;
       gateway.request.mockImplementation(async (method, envelope) => {
         if ((envelope as BrowserRequestEnvelope).path === deniedPath) {
@@ -657,7 +658,7 @@ describe("browser panel route handoff", () => {
         return { ok: true };
       });
       const panel = await mountPanel(gateway.client);
-      await waitForFast(() =>
+      await waitForSolid(() =>
         expect(panel.renderRoot?.querySelector(".bp-status")?.textContent).toContain(
           reason === "navigation_blocked"
             ? "Select another tab or enter an allowed address."
@@ -673,7 +674,7 @@ describe("browser panel route handoff", () => {
       ).toBe(false);
       blocked = false;
       panel.renderRoot?.querySelector<HTMLButtonElement>('button[aria-label="Reload"]')?.click();
-      await waitForFast(() => expect(pageTitle(panel)).toBe("Recovered"));
+      await waitForSolid(() => expect(pageTitle(panel)).toBe("Recovered"));
       expect(controllerFor(panel).tabs[0]?.urlUnavailableReason).toBeUndefined();
       expect(panel.renderRoot?.querySelector(".bp-status")).toBeNull();
     },
