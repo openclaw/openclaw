@@ -105,6 +105,57 @@ describe("msteamsPlugin", () => {
     },
   );
 
+  it("reports each enabled Doctor route with the authored recovery and compatibility paths", async () => {
+    const support = {
+      appId: "support-app",
+      webhook: { path: "/healthz" },
+      legacyWebhook: { port: 3979 },
+    };
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          legacyWebhook: { port: 3978 },
+          accounts: {
+            Default: { appId: "default-app", webhook: { path: "/api/default" } },
+            "Support Team": support,
+            sibling: { appId: "sibling-app" },
+            disabled: { enabled: false, webhook: { path: "/ready" } },
+          },
+        },
+      },
+    };
+    const result = await msteamsPlugin.doctor?.runConfigSequence?.({
+      cfg,
+      env: {},
+      shouldRepair: false,
+    });
+    expect(result?.changeNotes).toEqual([]);
+    expect(result?.warningNotes).toEqual([
+      expect.stringContaining(
+        "Set channels.msteams.accounts.Support Team.webhook.path to /api/messages/support-team",
+      ),
+    ]);
+    expect(result?.warningNotes?.[0]).toContain(
+      "before removing channels.msteams.accounts.Support Team.legacyWebhook",
+    );
+    expect(result?.infoNotes).toEqual([
+      expect.stringContaining("remove the channels.msteams.legacyWebhook pin"),
+      expect.stringContaining(
+        "Microsoft Teams (sibling) webhooks use Gateway port 18789/api/messages/sibling; no compatibility listener",
+      ),
+    ]);
+    support.webhook.path = "/api/messages/support-team";
+    const repaired = await msteamsPlugin.doctor?.runConfigSequence?.({
+      cfg,
+      env: {},
+      shouldRepair: false,
+    });
+    expect(repaired?.warningNotes).toEqual([]);
+    expect(repaired?.infoNotes).toContainEqual(
+      expect.stringContaining("Gateway port 18789/api/messages/support-team"),
+    );
+  });
+
   it("preserves the default account and allowlist across runtime and setup", () => {
     const cfg: OpenClawConfig = {
       channels: {

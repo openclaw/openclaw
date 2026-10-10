@@ -201,7 +201,11 @@ export async function monitorMSTeamsProvider(
   cfg = withAccountScopedMSTeamsConfig({ cfg, accountId, accountConfig: msteamsCfg });
 
   const legacyListener = resolveMSTeamsLegacyWebhook(msteamsCfg);
-  const pathIssue = resolveMSTeamsWebhookPathIssue({ cfg });
+  const pathIssue = resolveMSTeamsWebhookPathIssue({
+    cfg: accountPolicyCfg,
+    accountId,
+    accountConfig: msteamsCfg,
+  });
   if (pathIssue) {
     if (!legacyListener) {
       throw new Error(pathIssue);

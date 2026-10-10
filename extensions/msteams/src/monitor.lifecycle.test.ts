@@ -865,14 +865,36 @@ describe("Microsoft Teams Gateway webhook lifecycle", () => {
     expect(routeState.unregister).toHaveBeenCalledOnce();
   });
 
-  it.each(["/api/:tenant/messages", "/healthz"])(
-    "fails visibly when %s cannot serve Gateway-only callbacks",
-    async (path) => {
+  it.each(
+    ["/api/:tenant/messages", "/healthz"].flatMap((path) => [
+      { path, accountId: "default", accountKey: undefined },
+      { path, accountId: "support-team", accountKey: "Support Team" },
+    ]),
+  )(
+    "directs $accountId recovery when $path cannot serve Gateway-only callbacks",
+    async ({ path, accountId, accountKey }) => {
       const cfg = createConfig();
-      updateMSTeamsConfig(cfg, { webhook: { path } });
+      updateMSTeamsConfig(
+        cfg,
+        accountKey
+          ? {
+              accounts: {
+                [accountKey]: {
+                  appId: "support-app",
+                  appPassword: "support-secret",
+                  webhook: { path },
+                },
+              },
+            }
+          : { webhook: { path } },
+      );
       await expect(
-        monitorMSTeamsProvider({ cfg, runtime: createRuntime(), ...createStores() }),
-      ).rejects.toThrow("Set channels.msteams.webhook.path to /api/messages");
+        monitorMSTeamsProvider({ cfg, accountId, runtime: createRuntime(), ...createStores() }),
+      ).rejects.toThrow(
+        accountKey
+          ? `Set channels.msteams.accounts.${accountKey}.webhook.path to /api/messages/${accountId}`
+          : "Set channels.msteams.webhook.path to /api/messages",
+      );
       expect(routeState.routes).toEqual([]);
     },
   );

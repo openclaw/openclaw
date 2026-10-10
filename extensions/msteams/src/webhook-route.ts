@@ -6,7 +6,12 @@ import {
   resolveGatewayPort,
   resolvePluginRoutePathContext,
 } from "openclaw/plugin-sdk/gateway-config-runtime";
-import { listMSTeamsAccountIds, resolveMSTeamsAccountConfig } from "./accounts.js";
+import {
+  listMSTeamsAccountIds,
+  resolveMSTeamsAccountConfig,
+  resolveMSTeamsAccountConfigPath,
+  resolveMSTeamsAccountEntryKey,
+} from "./accounts.js";
 
 export function resolveMSTeamsWebhookCollisionIssue(cfg: OpenClawConfig): string | undefined {
   const owners = new Map<string, string>();
@@ -47,14 +52,25 @@ export function resolveMSTeamsLegacyWebhook(
   return listener || undefined;
 }
 
+export function resolveMSTeamsLegacyWebhookConfigPath(cfg: OpenClawConfig, accountId: string) {
+  const accountKey = resolveMSTeamsAccountEntryKey(cfg.channels?.msteams?.accounts, accountId);
+  return accountKey && cfg.channels?.msteams?.accounts?.[accountKey]?.legacyWebhook
+    ? `${resolveMSTeamsAccountConfigPath(cfg, accountId)}.legacyWebhook`
+    : "channels.msteams.legacyWebhook";
+}
+
 export function resolveMSTeamsWebhookPathIssue({
   cfg,
   env,
+  accountId = DEFAULT_ACCOUNT_ID,
+  accountConfig = resolveMSTeamsAccountConfig(cfg, accountId),
 }: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  accountId?: string;
+  accountConfig?: MSTeamsConfig;
 }): string | undefined {
-  const channel = cfg.channels?.msteams;
+  const channel = accountConfig;
   const path = channel?.webhook?.path || "/api/messages";
   const legacy = resolveMSTeamsLegacyWebhook(channel);
   const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
@@ -72,11 +88,14 @@ export function resolveMSTeamsWebhookPathIssue({
   if (!reason) {
     return undefined;
   }
+  const configPath = resolveMSTeamsAccountConfigPath(cfg, accountId);
+  const recoveryPath =
+    accountId === DEFAULT_ACCOUNT_ID ? "/api/messages" : `/api/messages/${accountId}`;
   return (
     `Microsoft Teams webhook path ${path} ${reason}. ` +
-    `Set channels.msteams.webhook.path to /api/messages and update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${resolveGatewayPort(cfg, env)}/api/messages; verify delivery before removing channels.msteams.legacyWebhook.` +
+    `Set ${configPath}.webhook.path to ${recoveryPath} and update the Azure Bot messaging endpoint or reverse-proxy upstream to Gateway port ${resolveGatewayPort(cfg, env)}${recoveryPath}.` +
     (legacy
-      ? ` Compatibility port ${legacy.port} continues serving the current path.`
+      ? ` Compatibility port ${legacy.port} continues serving the current path; verify delivery before removing ${resolveMSTeamsLegacyWebhookConfigPath(cfg, accountId)}.`
       : " The compatibility listener is disabled, so this path cannot receive Teams callbacks.")
   );
 }
