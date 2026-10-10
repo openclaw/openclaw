@@ -982,7 +982,7 @@ struct ChatOutboxStatusLabel: View {
         case .sending:
             ("Sending…", "arrow.up.circle", "Sending")
         case .confirming:
-            ("Sent", "checkmark.circle", "Sent, waiting for chat history confirmation")
+            ("Confirming…", "checkmark.circle", "Sent, waiting for chat history confirmation")
         case let .failed(reason) where reason == OpenClawChatSQLiteTranscriptCache.outboxUnconfirmedError:
             ("Delivery unknown", "questionmark.circle", "Delivery unconfirmed, touch and hold to retry or delete")
         case .failed:
