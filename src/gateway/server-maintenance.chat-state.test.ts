@@ -98,72 +98,61 @@ describe("gateway chat-state maintenance", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps stale buffers for active runs that still have abort controllers", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-active";
-    deps.chatAbortControllers.set(runId, {
-      controller: new AbortController(),
-      sessionId: "maintenance-session",
-      sessionKey: "main",
-      startedAtMs: Date.now(),
-      expiresAtMs: Date.now() + ABORTED_RUN_TTL_MS,
-    });
-    seedStaleRunBuffers(deps, runId);
+  it.each(["progress", "registration", "aborted", "recent"] as const)(
+    "sweeps abandoned records while retaining recent activity (%s)",
+    async (kind) => {
+      const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
+      const runId = `orphan-${kind}`;
+      vi.setSystemTime(staleRunTimestamp());
+      if (kind === "registration") {
+        deps.chatRunState.registry.add(runId, { sessionKey: "main", clientRunId: runId });
+      } else if (kind === "progress") {
+        deps.chatRunState.recordProgressEvent(runId, {
+          runId,
+          seq: 1,
+          ts: Date.now(),
+          stream: "tool",
+          data: { phase: "start", toolCallId: "read-1", name: "read" },
+        });
+      } else if (kind === "recent") {
+        deps.chatRunState.getOrCreate(runId).agentText = { thinking: { lastSentAt: Date.now() } };
+      }
+      vi.setSystemTime(now);
+      if (kind === "recent") {
+        deps.chatRunState.getOrCreate(runId).rawBuffer = "Fresh output";
+      } else if (kind === "aborted") {
+        deps.chatRunState.getOrCreate(runId).abortMarker =
+          createChatAbortMarker(staleRunTimestamp());
+        seedStaleRunBuffers(deps, runId);
+        seedBufferedAgentEvent(deps, runId);
+        const assistant = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
+        expect(assistant).toBeDefined();
+        if (assistant) {
+          assistant.lastSentAt = staleRunTimestamp();
+        }
+      }
+      const timers = startGatewayMaintenanceTimers(deps);
+      try {
+        expect(deps.chatRunState.runs.has(runId)).toBe(true);
+        await vi.advanceTimersByTimeAsync(60_000);
+        if (kind === "recent") {
+          expect(deps.chatRunState.resolveBuffer(runId).text).toBe("Fresh output");
+        } else {
+          expect(deps.chatRunState.runs.has(runId)).toBe(false);
+          if (kind === "aborted") {
+            expectStaleRunBuffersSwept(deps, runId);
+            expect(deps.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
+            expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
+          }
+        }
+      } finally {
+        await stopMaintenanceTimers(timers);
+      }
+    },
+  );
 
-    const timers = startGatewayMaintenanceTimers(deps);
-
-    await vi.advanceTimersByTimeAsync(60_000);
-
-    expectStaleRunBuffersPresent(deps, runId);
-
-    await stopMaintenanceTimers(timers);
-  });
-
-  it.each(["progress", "registration"])("sweeps abandoned %s records", async (kind) => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    vi.setSystemTime(staleRunTimestamp());
-    const runId = `orphan-${kind}`;
-    if (kind === "registration") {
-      deps.chatRunState.registry.add(runId, { sessionKey: "main", clientRunId: runId });
-    } else {
-      deps.chatRunState.recordProgressEvent(runId, {
-        runId,
-        seq: 1,
-        ts: Date.now(),
-        stream: "tool",
-        data: { phase: "start", toolCallId: "read-1", name: "read" },
-      });
-    }
-    vi.setSystemTime(now);
-    const timers = startGatewayMaintenanceTimers(deps);
-    try {
-      expect(deps.chatRunState.runs.has(runId)).toBe(true);
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(deps.chatRunState.runs.has(runId)).toBe(false);
-    } finally {
-      await stopMaintenanceTimers(timers);
-    }
-  });
-
-  it("keeps recently updated records despite an old thinking timestamp", async () => {
-    const { startGatewayMaintenanceTimers, deps, now } = await createTimedMaintenanceScenario();
-    vi.setSystemTime(staleRunTimestamp());
-    deps.chatRunState.getOrCreate("recent").agentText = {
-      thinking: { lastSentAt: Date.now() },
-    };
-    vi.setSystemTime(now);
-    deps.chatRunState.getOrCreate("recent").rawBuffer = "Fresh output";
-    const timers = startGatewayMaintenanceTimers(deps);
-    try {
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(deps.chatRunState.resolveBuffer("recent").text).toBe("Fresh output");
-    } finally {
-      await stopMaintenanceTimers(timers);
-    }
-  });
-
-  it.each(["execution", "embedded", "queued"] as const)(
-    "preserves a live %s owner without a chat abort controller until release",
+  it.each(["execution", "embedded", "queued", "abort"] as const)(
+    "preserves a live %s owner until release",
     async (kind) => {
       const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
       const runId = `live-${kind}`;
@@ -185,6 +174,15 @@ describe("gateway chat-state maintenance", () => {
         setActiveEmbeddedRun("maintenance-session", handle, "main");
       }
       const controller = new AbortController();
+      if (kind === "abort") {
+        deps.chatAbortControllers.set(runId, {
+          controller,
+          sessionId: "maintenance-session",
+          sessionKey: "main",
+          startedAtMs: Date.now(),
+          expiresAtMs: Date.now() + ABORTED_RUN_TTL_MS,
+        });
+      }
       if (kind === "queued") {
         registerQueuedChatTurn({
           chatQueuedTurns: deps.chatQueuedTurns,
@@ -195,6 +193,7 @@ describe("gateway chat-state maintenance", () => {
         });
       }
       const release = () => {
+        deps.chatAbortControllers.delete(runId);
         releaseAgentRunContext(runId, claim);
         completeQueuedChatTurn(deps.chatQueuedTurns, runId, controller);
         if (kind === "embedded") {
@@ -214,27 +213,47 @@ describe("gateway chat-state maintenance", () => {
       }
     },
   );
+  it("prunes idle tool-event recipients while preserving grace and registered run state", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const deps = {
+      ...createGatewayMaintenanceStateForTest(),
+      logHealth: { info: vi.fn(), error: vi.fn() },
+      runWorktreeGc: async () => undefined,
+      runDeliveryQueueMediaGc: async () => undefined,
+      runManagedOutgoingMediaGc: async () => undefined,
+    };
+    const { toolEventRecipients, registry, runs } = deps.chatRunState;
+    toolEventRecipients.add("active-expired", "conn-active");
+    toolEventRecipients.add("registered-expired", "conn-registered");
+    registry.add("registered-expired", { sessionKey: "session-1", clientRunId: "client-1" });
 
-  it("clears assistant snapshot scope when aborted runs age out", async () => {
-    const { startGatewayMaintenanceTimers, deps } = await createTimedMaintenanceScenario();
-    const runId = "run-aborted";
-    deps.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker(staleRunTimestamp());
-    seedStaleRunBuffers(deps, runId);
-    seedBufferedAgentEvent(deps, runId);
-    const agentText = deps.chatRunState.getOrCreate(runId).agentText?.assistant;
-    expect(agentText).toBeDefined();
-    if (agentText) {
-      agentText.lastSentAt = staleRunTimestamp();
-    }
-
+    await vi.advanceTimersByTimeAsync(9 * 60_000 + 2_000);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const timers = startGatewayMaintenanceTimers(deps);
+    try {
+      await vi.advanceTimersByTimeAsync(29_000);
+      toolEventRecipients.add("finalized-expired", "conn-final");
+      toolEventRecipients.markFinal("finalized-expired");
+      toolEventRecipients.add("recent", "conn-recent");
+      await vi.advanceTimersByTimeAsync(2_000);
+      toolEventRecipients.add("finalized-grace", "conn-grace");
+      toolEventRecipients.markFinal("finalized-grace");
 
-    await vi.advanceTimersByTimeAsync(60_000);
+      // The first maintenance tick is the first operation after either expiry.
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(runs.has("active-expired")).toBe(false);
+      expect(runs.has("finalized-expired")).toBe(false);
+      expect(runs.get("registered-expired")?.toolRecipient).toBeUndefined();
+      expect(registry.peek("registered-expired")?.clientRunId).toBe("client-1");
+      expect(toolEventRecipients.get("finalized-grace")).toEqual(new Set(["conn-grace"]));
+      expect(toolEventRecipients.get("recent")).toEqual(new Set(["conn-recent"]));
 
-    expect(deps.chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
-    expectStaleRunBuffersSwept(deps, runId);
-    expect(deps.chatRunState.runs.get(runId)?.agentText).toBeUndefined();
-
-    await stopMaintenanceTimers(timers);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(runs.has("finalized-grace")).toBe(false);
+      expect(runs.has("recent")).toBe(true);
+    } finally {
+      await stopMaintenanceTimers(timers);
+    }
   });
 });

@@ -9,6 +9,8 @@ import type {
 } from "../../state/worker-operation-registry.js";
 import { drainWorkerSessionPlacement } from "./placement-drain.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
+import { createPlacementPendingFailureOps } from "./placement-pending-failure.js";
+import { readWorkerSessionPlacementProjectionInDatabase } from "./placement-read-projection.js";
 import {
   advanceCursor,
   normalizeEpoch,
@@ -19,6 +21,7 @@ import {
 } from "./placement-record.js";
 import { find, getRequired, query } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { createPlacementTransitionOps } from "./placement-transitions.worker.js";
 import { createPlacementTurnClaimOps } from "./placement-turn-claims.js";
 import type {
   PlacementAckCursorInput,
@@ -33,6 +36,11 @@ import {
 } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
+type TransitionOps = ReturnType<typeof createPlacementTransitionOps>;
+type TransitionInput<Method extends keyof TransitionOps> = Parameters<TransitionOps[Method]>[0] & {
+  nowMs?: number;
+};
+
 type ClaimInput = {
   claim: WorkerSessionTurnClaim;
   nowMs?: number;
@@ -44,7 +52,11 @@ function operation<
     nowMs?: number;
     gatewayInstanceId?: string;
     sessionEntryCurrentSource?: SessionEntryCurrentSource;
-  } & ({ claim: { sessionId: string } } | { pending: WorkerWorkspacePendingResult }),
+  } & (
+    | { claim: { sessionId: string } }
+    | { pending: WorkerWorkspacePendingResult }
+    | { sessionId: string }
+  ),
 >(
   type: string,
   execute: (runtime: PlacementStoreRuntime, input: Input) => PlacementTurnClaimReceipt,
@@ -54,7 +66,12 @@ function operation<
     const database = open();
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const sessionId = "claim" in input ? input.claim.sessionId : input.pending.sessionId;
+        const sessionId =
+          "claim" in input
+            ? input.claim.sessionId
+            : "pending" in input
+              ? input.pending.sessionId
+              : input.sessionId;
         const move = () =>
           type === "placementTurns.updateWorkspaceBaseManifest" ||
           type === "placementTurns.completeResult"
@@ -63,12 +80,7 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit(
-          "transaction",
-          guardedWorkspaceWrite
-            ? { placement: find(db, sessionId), placementMove: move() }
-            : undefined,
-        );
+        admit("transaction", { placement: find(db, sessionId), placementMove: move() });
         const receipt = execute(
           {
             path: database.path,
@@ -79,8 +91,24 @@ function operation<
           },
           input,
         );
-        receipt.workspaceResult =
-          listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        if (
+          receipt.placement?.state === "local" &&
+          (type === "placementTurns.claim" ||
+            type === "placementTurns.release" ||
+            type === "placementTurns.releaseIfOwned")
+        ) {
+          // Replace the existing result read with complete presentation facts in
+          // this transaction, avoiding another projection request after commit.
+          receipt.projection = readWorkerSessionPlacementProjectionInDatabase(
+            db,
+            [sessionId],
+            [],
+          ).projection;
+          receipt.workspaceResult = receipt.projection.pendingResults.get(sessionId) ?? null;
+        } else {
+          receipt.workspaceResult =
+            listPendingWorkerWorkspaceResultsInDatabase(db, sessionId)[0] ?? null;
+        }
         receipt.placementMove = move();
         admit("commit", receipt);
         deferSqliteWorkerCommitReceipt(db, receipt);
@@ -93,6 +121,36 @@ function operation<
 }
 
 export const placementTurnClaimOperations = {
+  "placementTurns.transition": operation(
+    "placementTurns.transition",
+    (runtime, input: TransitionInput<"transition">) =>
+      createPlacementTransitionOps(runtime).transition(input),
+  ),
+  "placementTurns.startDrain": operation(
+    "placementTurns.startDrain",
+    (runtime, input: TransitionInput<"startDrain">) =>
+      createPlacementTransitionOps(runtime).startDrain(input),
+  ),
+  "placementTurns.startReconcile": operation(
+    "placementTurns.startReconcile",
+    (runtime, input: TransitionInput<"startReconcile">) =>
+      createPlacementTransitionOps(runtime).startReconcile(input),
+  ),
+  "placementTurns.fail": operation(
+    "placementTurns.fail",
+    (runtime, input: TransitionInput<"fail">) => createPlacementTransitionOps(runtime).fail(input),
+  ),
+  "placementTurns.failResult": operation(
+    "placementTurns.failResult",
+    (
+      runtime,
+      input: { pending: WorkerWorkspacePendingResult; recoveryError: string; nowMs?: number },
+    ) =>
+      createPlacementPendingFailureOps(runtime).failWorkspaceResultAndReleaseTurn(
+        input.pending,
+        input.recoveryError,
+      ),
+  ),
   "placementTurns.claimReclaimResult": operation(
     "placementTurns.claimReclaimResult",
     (

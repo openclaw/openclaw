@@ -4,8 +4,7 @@ import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identi
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import type { WorkerLaunchPlan } from "./launch-descriptor.js";
-import type { WorkerToolAuthority } from "./tool-authority.js";
+import type { WorkerLaunchPlan, WorkerToolAuthority } from "./launch-descriptor.js";
 
 export const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
@@ -55,6 +54,8 @@ export function createWorkerPlacementTools(params: {
         ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
         : undefined,
       config: WORKER_TOOL_CONFIG,
+      // The Gateway secret store is not delegated to the worker's scratch state.
+      preparedStoreEnvironment: Object.freeze({}),
       ...(params.github ? { preparedRunEnvironment: params.github } : {}),
       commandHighlighting: false,
       agentId: params.agentId,

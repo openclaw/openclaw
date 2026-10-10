@@ -1,6 +1,7 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
+import { formatThreadBindingDurationLabel } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -22,7 +23,10 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  summarizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
@@ -31,10 +35,8 @@ import { parseApplicationIdFromToken } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { setDiscordTranscriptsVoiceManager } from "../voice/transcripts-source.js";
-import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
-import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
 import { registerDiscordListener } from "./listeners.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
@@ -43,7 +45,6 @@ import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
-import { logDiscordResolvedConfig } from "./provider.config-log.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
 import { logDiscordStartupPhase } from "./provider.startup-log.js";
@@ -77,6 +78,11 @@ const DEFAULT_DISCORD_MEDIA_MAX_MB = 100;
 type DiscordVoiceManager = import("../voice/voice-runtime.js").DiscordVoiceManager;
 
 const DISCORD_DISALLOWED_INTENTS_CODE = GatewayCloseCodes.DisallowedIntents;
+
+function formatThreadBindingDurationForConfigLabel(durationMs: number): string {
+  const label = formatThreadBindingDurationLabel(durationMs);
+  return label === "disabled" ? "off" : label;
+}
 
 function isDiscordDisallowedIntentsError(err: unknown): boolean {
   if (!err) {
@@ -184,7 +190,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
     providerSetting: discordCfg.commands?.nativeSkills,
     globalSetting: cfg.commands?.nativeSkills,
   });
-  const useAccessGroups = true;
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
@@ -216,23 +221,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
   });
 
   if (discordProviderRuntime.shouldLogVerbose()) {
-    logDiscordResolvedConfig({
-      dmEnabled,
-      dmPolicy,
-      allowFrom,
-      groupDmEnabled,
-      groupDmChannels,
-      groupPolicy,
-      guildEntries,
-      historyLimit,
-      mediaMaxBytes,
-      nativeEnabled,
-      nativeSkillsEnabled,
-      useAccessGroups,
-      threadBindingsEnabled,
-      threadBindingIdleTimeoutMs,
-      threadBindingMaxAgeMs,
-    });
+    const summarize = (entries: readonly string[] | undefined) =>
+      summarizeStringEntries({ entries, limit: 4, emptyText: "any" });
+    const allowFromSummary = summarize(allowFrom);
+    const groupDmChannelSummary = summarize(groupDmChannels);
+    const guildSummary = summarize(Object.keys(guildEntries ?? {}));
+    logVerbose(
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${allowFromSummary} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${groupDmChannelSummary} groupPolicy=${groupPolicy} guilds=${guildSummary} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} nativeSkills=${nativeSkillsEnabled ? "on" : "off"} accessGroups=on threadBindings=${threadBindingsEnabled ? "on" : "off"} threadIdleTimeout=${formatThreadBindingDurationForConfigLabel(threadBindingIdleTimeoutMs)} threadMaxAge=${formatThreadBindingDurationForConfigLabel(threadBindingMaxAgeMs)}`,
+    );
   }
 
   logStartupPhase("fetch-application-id:start");
@@ -324,7 +320,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       }
       if (uncertainProbeKeys.size > 0) {
         logVerbose(
-          `discord: ACP thread-binding health probe uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
+          `discord: ACP thread-binding health check uncertain for account ${account.accountId}: ${[...uncertainProbeKeys].join(", ")}`,
         );
       }
     }
@@ -344,7 +340,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       nativeEnabled,
       voiceEnabled,
       groupPolicy,
-      useAccessGroups,
       sessionPrefix,
       ephemeralDefault,
       threadBindings,
@@ -376,9 +371,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       runtime,
       commandDeployHashStore: opts.commandDeployHashStore,
       createClient: discordProviderRuntime.createClient,
-      createGatewayPlugin: createDiscordGatewayPlugin,
-      createGatewaySupervisor: createDiscordGatewaySupervisor,
-      createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
     });
     lifecycleGateway = gateway;
@@ -421,6 +413,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       runtime,
       logStartupPhase,
     });
+    const monitorOptions = {
+      readPolicy,
+      client,
+      cfg,
+      discordConfig: discordCfg,
+      accountId: account.accountId,
+      runtime,
+      botUserId,
+    };
     let voiceManager: DiscordVoiceManager | null = null;
     if (voiceEnabled) {
       const {
@@ -431,14 +432,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
         DiscordVoiceStateUpdateListener,
       } = await discordProviderRuntime.loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
+        ...monitorOptions,
         scheduler,
-        readPolicy,
-        client,
-        cfg,
-        discordConfig: discordCfg,
-        accountId: account.accountId,
-        runtime,
-        botUserId,
       });
       setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
@@ -451,17 +446,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       registerDiscordListener(client.listeners, new DiscordVoiceStateUpdateListener(voiceManager));
     }
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
-      readPolicy,
-      client,
-      cfg,
-      discordConfig: discordCfg,
-      accountId: account.accountId,
+      ...monitorOptions,
       token,
-      runtime,
       buildContext: pluginChannelRuntime?.inbound.buildContext,
       setStatus: opts.setStatus,
       abortSignal: opts.abortSignal,
-      botUserId,
       guildHistories,
       historyLimit,
       mediaMaxBytes,
@@ -485,13 +474,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
         }
       : undefined;
     stopMonitorListeners = registerDiscordMonitorListeners({
-      readPolicy,
-      cfg,
-      client,
-      accountId: account.accountId,
-      discordConfig: discordCfg,
-      runtime,
-      botUserId,
+      ...monitorOptions,
       dmEnabled,
       groupDmEnabled,
       groupDmChannels,

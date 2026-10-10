@@ -37,7 +37,6 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -206,13 +205,7 @@ function extractMattermostToolSend(args: Record<string, unknown>): ChannelToolSe
 function resolveMattermostAutoThreadId(params: {
   to: string;
   replyToId?: string | null;
-  toolContext?: {
-    currentChannelId?: string;
-    currentThreadTs?: string;
-    currentMessageId?: string | number;
-    replyToMode?: "off" | "first" | "all" | "batched";
-    hasRepliedRef?: { value: boolean };
-  };
+  toolContext?: ChannelThreadingToolContext;
 }): string | undefined {
   const replyToId = normalizeOptionalString(params.replyToId);
   const context = params.toolContext;
@@ -448,11 +441,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
   },
 };
 
-function parseMattermostReactActionParams(params: Record<string, unknown>): {
-  postId: string;
-  emojiName: string;
-  remove: boolean;
-} {
+function parseMattermostReactActionParams(params: Record<string, unknown>) {
   const postId =
     normalizeOptionalString(params.messageId) ?? normalizeOptionalString(params.postId);
   if (!postId) {
@@ -722,9 +711,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         if (!token || !baseUrl) {
           return { ok: false, error: "bot token or baseUrl missing" };
         }
-        return await (
-          await loadMattermostChannelRuntime()
-        ).probeMattermost(baseUrl, token, timeoutMs, isPrivateNetworkOptInEnabled(account.config));
+        const channelRuntime = await loadMattermostChannelRuntime();
+        const allowPrivateNetwork = account.config.network?.dangerouslyAllowPrivateNetwork === true;
+        return await channelRuntime.probeMattermost(baseUrl, token, timeoutMs, allowPrivateNetwork);
       },
       resolveAccountSnapshot: ({ account, runtime }) => ({
         accountId: account.accountId,

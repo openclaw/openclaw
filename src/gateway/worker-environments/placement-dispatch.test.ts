@@ -286,7 +286,7 @@ describe("worker placement dispatch", () => {
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    const draining = placementStore.startDrain({
+    const draining = await placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -560,7 +560,7 @@ describe("worker placement dispatch", () => {
     async (interruptedState) => {
       let interrupted = await placementStore.startDispatch(REQUEST);
       if (interruptedState !== "requested") {
-        interrupted = placementStore.transition({
+        interrupted = await placementStore.transition({
           sessionId: REQUEST.sessionId,
           from: "requested",
           to: "provisioning",
@@ -573,7 +573,7 @@ describe("worker placement dispatch", () => {
         });
       }
       if (interruptedState === "syncing") {
-        interrupted = placementStore.transition({
+        interrupted = await placementStore.transition({
           sessionId: REQUEST.sessionId,
           from: "provisioning",
           to: "syncing",

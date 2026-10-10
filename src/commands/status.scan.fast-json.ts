@@ -1,21 +1,11 @@
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusJsonScanResult } from "./status.scan-result.ts";
-
-const statusGatewayModuleLoader = createLazyImportLoader(() => import("./status.scan.gateway.js"));
-
-const statusScanMemoryModuleLoader = createLazyImportLoader(
-  () => import("./status.scan-memory.js"),
-);
-const statusScanPluginStatusModuleLoader = createLazyImportLoader(
-  () => import("../plugins/status.js"),
-);
 
 const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 const STATUS_JSON_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
@@ -40,7 +30,8 @@ function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
   );
 }
 
-function hasStatusJsonChannelEnvConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+function hasStatusJsonChannelEnvConfig(): boolean {
+  const env = process.env;
   return Object.entries(env).some(
     ([key, value]) =>
       typeof value === "string" &&
@@ -56,7 +47,7 @@ export async function scanStatusJsonFast(
   },
   runtime: RuntimeEnv,
 ): Promise<StatusJsonScanResult> {
-  const online = await (await statusGatewayModuleLoader.load()).scanStatusJsonGateway(opts);
+  const online = await (await import("./status.scan.gateway.js")).scanStatusJsonGateway(opts);
   if (online.scan) {
     return online.scan;
   }
@@ -76,11 +67,9 @@ export async function scanStatusJsonFast(
     gatewaySnapshot: online.gatewaySnapshot,
   });
   const pluginCompatibility = opts.all
-    ? await statusScanPluginStatusModuleLoader
-        .load()
-        .then(({ buildPluginCompatibilitySnapshotNotices }) =>
-          buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
-        )
+    ? await import("../plugins/status.js").then(({ buildPluginCompatibilitySnapshotNotices }) =>
+        buildPluginCompatibilitySnapshotNotices({ config: overview.cfg }),
+      )
     : [];
   return await executeStatusScanFromOverview({
     overview,
@@ -89,7 +78,7 @@ export async function scanStatusJsonFast(
         return null;
       }
       const { resolveDefaultMemoryDatabasePath, resolveStatusMemoryStatusSnapshot } =
-        await statusScanMemoryModuleLoader.load();
+        await import("./status.scan-memory.js");
       return await resolveStatusMemoryStatusSnapshot({
         cfg,
         agentStatus,

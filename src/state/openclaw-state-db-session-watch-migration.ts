@@ -14,6 +14,8 @@ import {
 
 const SESSION_WATCH_PROVENANCE_SCHEMA_VERSION = 4;
 const LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX = "ambient-group-watch:";
+// The legacy writer used this exact lowercase prefix; binary bounds use the cursor primary key.
+const LEGACY_AMBIENT_GROUP_WATCH_MARKER_END = "ambient-group-watch;";
 const SESSION_WATCH_PROVENANCE_COLUMN_SQL =
   `provenance TEXT NOT NULL DEFAULT '${SESSION_WATCH_PROVENANCE_EXPLICIT}' ` +
   `CHECK (provenance IN ('${SESSION_WATCH_PROVENANCE_EXPLICIT}', '${SESSION_WATCH_PROVENANCE_AMBIENT_GROUP}'))`;
@@ -37,7 +39,8 @@ function hasLegacyAmbientWatchSentinels(db: DatabaseSync): boolean {
       getSessionWatchCursorKysely(db)
         .selectFrom("session_watch_cursors")
         .select("watcher_session_key")
-        .where("watcher_session_key", "like", `${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`)
+        .where("watcher_session_key", ">=", LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX)
+        .where("watcher_session_key", "<", LEGACY_AMBIENT_GROUP_WATCH_MARKER_END)
         .limit(1),
     ) !== undefined
   );
@@ -89,7 +92,8 @@ export function migrateSessionWatchCursorProvenance(
     kysely
       .selectFrom("session_watch_cursors")
       .select(["watcher_session_key", "target_session_key", "updated_at"])
-      .where("watcher_session_key", "like", `${LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX}%`),
+      .where("watcher_session_key", ">=", LEGACY_AMBIENT_GROUP_WATCH_MARKER_PREFIX)
+      .where("watcher_session_key", "<", LEGACY_AMBIENT_GROUP_WATCH_MARKER_END),
   ).rows;
   let migratedAmbientWatches = 0;
   for (const marker of legacyMarkers) {

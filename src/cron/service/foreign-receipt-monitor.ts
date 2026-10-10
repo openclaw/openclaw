@@ -1,5 +1,5 @@
 import type { GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
-import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import type { CronRunReceiptRecoveryCandidate } from "../store/run-receipt.types.js";
 import type { CronServiceState } from "./state.js";
 

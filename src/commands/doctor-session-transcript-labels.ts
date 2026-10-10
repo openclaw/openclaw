@@ -1,22 +1,15 @@
-import type { DatabaseSync } from "node:sqlite";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { INBOUND_CONTEXT_MARKER } from "../auto-reply/reply/inbound-context-marker.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
-import {
-  readTranscriptEventRows,
-  type SqliteTranscriptSnapshotRow,
-} from "../config/sessions/session-accessor.sqlite-read.js";
+import { readTranscriptEventRows } from "../config/sessions/session-accessor.sqlite-read.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
-import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "../infra/session-sqlite-migration-readers.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
+import {
+  scanDoctorSessionTranscripts,
+  transcriptSnapshotsMatch,
+} from "./doctor-session-transcript-scan.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Session transcript labels";
@@ -107,18 +100,14 @@ function applyLegacyInboundLabelRewrites(text: string): string {
 }
 
 function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!isRecord(event) || event.type !== "message") {
     return false;
   }
-  const entry = event as { message?: unknown; type?: unknown };
-  if (entry.type !== "message" || !entry.message || typeof entry.message !== "object") {
-    return false;
-  }
-  const message = entry.message as { content?: unknown; role?: unknown };
+  const message = asOptionalObjectRecord(event.message);
   // Assistant turns can echo a context block into their output, and the shipped label-based strippers
   // removed those too (gateway/chat-sanitize.ts, replay-history.ts, session-cost-usage.ts). Skipping
   // them here would leave old assistant blocks unmarked, so they would leak on replay after upgrade.
-  if (message.role !== "user" && message.role !== "assistant") {
+  if (!message || (message.role !== "user" && message.role !== "assistant")) {
     return false;
   }
   if (typeof message.content === "string") {
@@ -134,33 +123,16 @@ function normalizeLegacyInboundContextLabels(event: TranscriptEvent): boolean {
   }
   let changed = false;
   for (const part of message.content) {
-    if (!part || typeof part !== "object" || Array.isArray(part)) {
+    if (!isRecord(part) || typeof part.text !== "string") {
       continue;
     }
-    const textPart = part as { text?: unknown };
-    if (typeof textPart.text !== "string") {
-      continue;
-    }
-    const normalized = applyLegacyInboundLabelRewrites(textPart.text);
-    if (normalized !== textPart.text) {
-      textPart.text = normalized;
+    const normalized = applyLegacyInboundLabelRewrites(part.text);
+    if (normalized !== part.text) {
+      part.text = normalized;
       changed = true;
     }
   }
   return changed;
-}
-
-function snapshotsMatch(
-  expected: readonly SqliteTranscriptSnapshotRow[],
-  current: readonly SqliteTranscriptSnapshotRow[],
-): boolean {
-  return (
-    expected.length === current.length &&
-    expected.every(
-      (row, index) =>
-        row.seq === current[index]?.seq && row.eventJson === current[index]?.eventJson,
-    )
-  );
 }
 
 export async function noteSessionTranscriptLabelHealth(params: {
@@ -174,98 +146,79 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let repairedSessions = 0;
   let repairedEvents = 0;
 
-  for (const target of projectExistingAgentDatabaseTargets(
-    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
-    env,
-    params.cfg,
-  )) {
-    const databaseOptions = resolveTargetSqliteOptions(target, env);
-    const sqlitePath = target.sqlitePath;
-    const { agentId } = target;
-
-    let readDatabase: DatabaseSync | undefined;
-    try {
-      readDatabase = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-      const reader = new ReadOnlySqliteTranscriptReader(readDatabase);
-      // Detect read-only, then repair each session in its own transaction as it is found, so a large
-      // store never buffers every plan at once. Enumerate from transcript_events, not sessions: the
-      // latter gained its columns post-ship and is not safe to assume on old databases.
-      for (const sessionId of reader.sessionIds()) {
-        const readResult = reader.repairSnapshot(
-          sessionId,
-          normalizeLegacyInboundContextLabels,
-          mayContainLegacyInboundContextLabels,
+  scanDoctorSessionTranscripts(
+    {
+      cfg: params.cfg,
+      env,
+      title: NOTE_TITLE,
+      failureLabel: "Failed to inspect or rewrite labels",
+    },
+    ({ reader, target, databaseOptions, reportError, sessionId }) => {
+      const { agentId } = target;
+      const readResult = reader.repairSnapshot(
+        sessionId,
+        normalizeLegacyInboundContextLabels,
+        mayContainLegacyInboundContextLabels,
+      );
+      if (!readResult.ok) {
+        reportError(
+          `- Failed to read transcript for session ${sessionId} (${agentId})`,
+          readResult.error,
         );
-        if (!readResult.ok) {
-          const detail = formatErrorMessage(readResult.error).replace(/\s+/g, " ").trim();
-          note(
-            `- Failed to read transcript for session ${sessionId} (${agentId}): ${detail}`,
-            NOTE_TITLE,
-          );
+        return;
+      }
+
+      const updates: Array<{ seq: number; eventJson: string }> = [];
+      let hasMalformedRow = false;
+      for (const row of readResult.rows) {
+        let event: TranscriptEvent;
+        try {
+          event = JSON.parse(row.eventJson) as TranscriptEvent;
+        } catch {
+          // A malformed sibling cannot produce a valid deferred projection after repair.
+          hasMalformedRow = true;
           continue;
         }
-
-        const updates: Array<{ seq: number; eventJson: string }> = [];
-        let hasMalformedRow = false;
-        for (const row of readResult.rows) {
-          let event: TranscriptEvent;
-          try {
-            event = JSON.parse(row.eventJson) as TranscriptEvent;
-          } catch {
-            // A malformed sibling cannot produce a valid deferred projection after repair.
-            hasMalformedRow = true;
-            continue;
-          }
-          if (normalizeLegacyInboundContextLabels(event)) {
-            updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
-          }
-        }
-
-        if (updates.length === 0) {
-          continue;
-        }
-
-        foundSessions += 1;
-        foundEvents += updates.length;
-
-        if (params.shouldRepair) {
-          try {
-            if (hasMalformedRow) {
-              throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
-            }
-            runOpenClawAgentWriteTransaction(
-              (writeDatabase) => {
-                const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
-                if (!snapshotsMatch(readResult.rows, currentRows)) {
-                  throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
-                }
-                // Surgical per-row update: preserves seq, created_at, and sessions row.
-                updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);
-              },
-              databaseOptions,
-              { operationLabel: "doctor.session-transcript-labels" },
-            );
-            repairedSessions += 1;
-            repairedEvents += updates.length;
-          } catch (repairError) {
-            const detail = formatErrorMessage(repairError).replace(/\s+/g, " ").trim();
-            note(
-              `- Failed to rewrite labels for session ${sessionId} (${agentId}): ${detail}`,
-              NOTE_TITLE,
-            );
-          }
+        if (normalizeLegacyInboundContextLabels(event)) {
+          updates.push({ seq: row.seq, eventJson: JSON.stringify(event) });
         }
       }
-    } catch (error) {
-      const detail = formatErrorMessage(error).replace(/\s+/g, " ").trim();
-      note(
-        `- Failed to inspect or rewrite labels for ${agentId} (${sqlitePath}): ${detail}`,
-        NOTE_TITLE,
-      );
-    } finally {
-      readDatabase?.close();
-    }
-  }
+
+      if (updates.length === 0) {
+        return;
+      }
+
+      foundSessions += 1;
+      foundEvents += updates.length;
+
+      if (params.shouldRepair) {
+        try {
+          if (hasMalformedRow) {
+            throw new Error(`transcript contains malformed event JSON for ${sessionId}`);
+          }
+          runOpenClawAgentWriteTransaction(
+            (writeDatabase) => {
+              const currentRows = readTranscriptEventRows(writeDatabase, sessionId);
+              if (!transcriptSnapshotsMatch(readResult.rows, currentRows)) {
+                throw new Error(`transcript changed while preparing rewrite for ${sessionId}`);
+              }
+              // Surgical per-row update: preserves seq, created_at, and sessions row.
+              updateSqliteTranscriptEventJsonInTransaction(writeDatabase, sessionId, updates);
+            },
+            databaseOptions,
+            { operationLabel: "doctor.session-transcript-labels" },
+          );
+          repairedSessions += 1;
+          repairedEvents += updates.length;
+        } catch (repairError) {
+          reportError(
+            `- Failed to rewrite labels for session ${sessionId} (${agentId})`,
+            repairError,
+          );
+        }
+      }
+    },
+  );
 
   if (params.shouldRepair && repairedSessions > 0) {
     note(

@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -165,7 +166,7 @@ describe("worker store session change publications", () => {
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      active = store.transition({
+      active = await store.transition({
         sessionId: SESSION.sessionId,
         from: active.state,
         expectedGeneration: active.generation,
@@ -208,7 +209,6 @@ describe("worker store session change publications", () => {
       }),
     );
     const ref = "refs/openclaw/worker-results/pending-row-change";
-    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
     let refused = 0;
     let current = true;
     const assertCurrent = () => {
@@ -216,23 +216,19 @@ describe("worker store session change publications", () => {
         throw new Error("rollback pending row");
       }
     };
-    const admission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          if (
-            request.stage === "commit" &&
-            isRecord(request.facts) &&
-            isRecord(request.facts.placement) &&
-            request.facts.placement.sessionId === claim.sessionId
-          ) {
-            refused++;
-            expect(observed).toEqual([]);
-            current = false;
-          }
-          admit(request, grant);
-        }, attachment),
-      );
+    const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+      if (
+        request.stage === "commit" &&
+        isRecord(request.facts) &&
+        isRecord(request.facts.placement) &&
+        request.facts.placement.sessionId === claim.sessionId
+      ) {
+        refused++;
+        expect(observed).toEqual([]);
+        current = false;
+      }
+      admit(request, grant);
+    });
     try {
       await expect(
         store.recordStagedWorkspaceResult(claim, ref, undefined, assertCurrent),
@@ -248,26 +244,22 @@ describe("worker store session change publications", () => {
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).not.toThrow();
     let commitGrants = 0;
-    const successfulAdmission = vi
-      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
-      .mockImplementation((admit, attachment) =>
-        createAdmission((request, grant) => {
-          admit(request, () => {
-            if (
-              request.stage === "commit" &&
-              isRecord(request.facts) &&
-              isRecord(request.facts.placement) &&
-              request.facts.placement.sessionId === claim.sessionId
-            ) {
-              commitGrants++;
-              expect(authority.isCurrent()).toBe(true);
-              expect(() => observation.assertCurrent()).toThrow("placement authority changed");
-              expect(observed).toEqual([]);
-            }
-            return grant();
-          });
-        }, attachment),
-      );
+    const successfulAdmission = probe.admission(operationAdmission, (request, grant, admit) => {
+      admit(request, () => {
+        if (
+          request.stage === "commit" &&
+          isRecord(request.facts) &&
+          isRecord(request.facts.placement) &&
+          request.facts.placement.sessionId === claim.sessionId
+        ) {
+          commitGrants++;
+          expect(authority.isCurrent()).toBe(true);
+          expect(() => observation.assertCurrent()).toThrow("placement authority changed");
+          expect(observed).toEqual([]);
+        }
+        return grant();
+      });
+    });
     try {
       await store.recordStagedWorkspaceResult(claim, ref);
     } finally {

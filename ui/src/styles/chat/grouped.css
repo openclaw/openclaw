@@ -286,7 +286,8 @@
   line-height: 1;
 }
 
-.chat-reaction-chip[aria-pressed="true"] {
+.chat-reaction-chip[aria-pressed="true"],
+.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
   border-color: var(--accent);
   background: var(--accent-subtle);
   color: var(--accent);
@@ -296,12 +297,6 @@
   border-color: color-mix(in srgb, var(--muted) 45%, var(--border));
   background: var(--bg-hover);
   color: var(--text);
-}
-
-.chat-reaction-chip[aria-pressed="true"]:enabled:hover {
-  border-color: var(--accent);
-  background: var(--accent-subtle);
-  color: var(--accent);
 }
 
 .chat-reaction-chip:focus-visible {
@@ -461,10 +456,7 @@
   letter-spacing: -0.02em;
 }
 
-.chat-author-avatar__fallback {
-  display: none;
-}
-
+.chat-author-avatar__fallback,
 .chat-author-avatar.is-fallback .chat-author-avatar__image {
   display: none;
 }
@@ -482,9 +474,9 @@
   white-space: nowrap;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
 .chat-group-footer .chat-send-status__action,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
 .chat-comment-preview__actions button {
   background: none;
   border: none;
@@ -517,20 +509,14 @@
 }
 
 .chat-group:hover
-  .chat-group-footer-actions
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-.chat-group:hover
-  .chat-message-actions-row
+  :is(.chat-group-footer-actions, .chat-message-actions-row)
   :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
   opacity: 0.6;
   pointer-events: auto;
 }
 
 .chat-group.user.chat-group--peer
-  .chat-message-actions-row
-  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-.chat-group.user.chat-group--peer
-  .chat-group-footer-actions
+  :is(.chat-message-actions-row, .chat-group-footer-actions)
   :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
   opacity: 0;
   pointer-events: none;
@@ -606,10 +592,7 @@
 
 @media (hover: hover) {
   .chat-group:focus-within
-    .chat-group-footer-actions
-    :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind),
-  .chat-group:focus-within
-    .chat-message-actions-row
+    :is(.chat-group-footer-actions, .chat-message-actions-row)
     :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) {
     opacity: 0.6;
     pointer-events: auto;
@@ -632,16 +615,17 @@
   pointer-events: none;
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind):hover,
 .chat-comment-preview__actions button:hover {
   opacity: 1 !important;
   background: transparent;
   color: var(--accent);
 }
 
-.chat-group-footer-actions :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) svg,
-.chat-message-actions-row :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind) svg,
+:is(.chat-group-footer-actions, .chat-message-actions-row)
+  :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)
+  svg,
 .chat-comment-preview__actions button svg {
   width: 14px;
   height: 14px;
@@ -842,10 +826,7 @@ img.chat-avatar.user {
   display: grid;
 }
 
-.chat-avatar-slot > :not(img, .identity-avatar__hat) {
-  display: none;
-}
-
+.chat-avatar-slot > :not(img, .identity-avatar__hat),
 .chat-avatar-slot.is-fallback > img.chat-avatar,
 .chat-avatar-slot.is-fallback > .identity-avatar__hat {
   display: none;
@@ -1239,7 +1220,8 @@ button.chat-reply-attribution__target:disabled {
   /* Every control in message content, including openable attachment cards,
      wins hit-testing over that upward extension; plain text keeps the tap
      area. Zero specificity keeps any position or stacking they already
-     declare. Tool cards and the action row keep their own stacking. */
+     declare. Tool cards and the action row keep their own stacking.
+     GitHub reference chips reset their link positioning; lift them too. */
   :where(.chat-group-messages)
     :where(
       a,
@@ -1253,12 +1235,7 @@ button.chat-reply-attribution__target:disabled {
       label,
       video,
       audio
-    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)) {
-    position: relative;
-    z-index: 1;
-  }
-
-  /* GitHub reference chips reset their link positioning; lift them too. */
+    ):where(:not(.chat-tool-card *, .chat-message-actions-row *)),
   .chat-group-messages .chat-text a.markdown-github-item {
     position: relative;
     z-index: 1;
@@ -1268,7 +1245,6 @@ button.chat-reply-attribution__target:disabled {
 /* In chat these render bare (no .btn chrome) so the ghost footer-button rules
    above own their look; the muted color also covers .btn hosts like the file
    preview header. */
-.chat-copy-btn,
 .chat-reply-btn {
   color: var(--muted);
 }
@@ -1280,43 +1256,6 @@ button.chat-reply-attribution__target:disabled {
   --chat-persistent-footer-opacity: 1;
 }
 
-.chat-copy-btn__icon {
-  display: inline-flex;
-  width: 14px;
-  height: 14px;
-  position: relative;
-}
-
-.chat-copy-btn__icon-copy,
-.chat-copy-btn__icon-check {
-  display: flex;
-  position: absolute;
-  top: 0;
-  left: 0;
-  transition: opacity 150ms ease;
-}
-
-.chat-copy-btn__icon-check,
-.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
-  opacity: 0;
-}
-
-.chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
-  opacity: 1;
-}
-
-.chat-copy-btn[data-copy-state="copying"] {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.chat-copy-btn[data-copy-state="error"] {
-  border-color: var(--danger-subtle);
-  background: var(--danger-subtle);
-  color: var(--danger);
-}
-
-.chat-copy-btn[data-copy-state="copied"],
 .chat-group
   :is(.chat-group-footer-actions, .chat-message-actions-row)
   :is(.chat-copy-btn, .chat-reply-btn, .chat-group-rewind)[data-copy-state="copied"] {
@@ -1326,21 +1265,6 @@ button.chat-reply-attribution__target:disabled {
   color: var(--ok);
 }
 
-/* The check is the visible confirmation; retain the live status for assistive
-   technology and the footer's transient-feedback disclosure. */
-.chat-group .chat-copy-btn[data-copy-state="copied"] + [data-copy-feedback] {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
-}
-
-.chat-copy-btn:focus-visible,
 .chat-reply-btn:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -1366,6 +1290,12 @@ button.chat-reply-attribution__target:disabled {
 .chat-group.user .chat-bubble {
   --chat-bubble-background: var(--accent-subtle);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
   border-color: transparent;
 }
 
@@ -1386,6 +1316,12 @@ button.chat-reply-attribution__target:disabled {
   --chat-bubble-background: color-mix(in srgb, var(--accent) 15%, var(--bg));
   border-color: transparent;
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
   color: var(--text-strong);
   box-shadow: none;
 }
@@ -1407,6 +1343,12 @@ button.chat-reply-attribution__target:disabled {
 .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
   --chat-bubble-background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
 }
 
 .chat-group.user.chat-group--sender-tint .chat-bubble:hover {
@@ -1563,17 +1505,26 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .agent-chat__typing-preview-text::after {
+  /* Preserve the final blank line even when the caret moves elsewhere. */
+  content: "\200b";
+}
+
+.agent-chat__typing-caret {
+  position: relative;
+}
+
+.agent-chat__typing-caret::after {
   content: "";
-  display: inline-block;
+  position: absolute;
+  inset-inline-start: 0;
+  bottom: -0.12em;
   width: 2px;
   height: 1em;
-  margin-inline-start: 2px;
   background: currentColor;
-  vertical-align: -0.12em;
   animation: chat-typing-pulse 1s step-end infinite;
 }
 
-.agent-chat__typing-preview-text[data-paused]::after {
+.agent-chat__typing-preview-text[data-paused] .agent-chat__typing-caret::after {
   animation: none;
   opacity: 0;
 }
@@ -1619,7 +1570,7 @@ button.chat-reply-attribution__target:disabled {
     opacity: 1;
   }
 
-  .agent-chat__typing-preview-text::after,
+  .agent-chat__typing-caret::after,
   .agent-chat__typing-bubble > span {
     animation: none;
   }
@@ -1675,6 +1626,12 @@ button.chat-reply-attribution__target:disabled {
   padding: 10px 14px;
   border-radius: var(--radius-md);
   background: var(--chat-bubble-background);
+
+  &:where(.shell[data-background-managed] *) {
+    background:
+      linear-gradient(var(--chat-bubble-background), var(--chat-bubble-background)),
+      var(--bg-content, var(--bg));
+  }
 }
 
 :where(:root[data-theme-mode="light"])

@@ -16,6 +16,7 @@ import * as libraryBundle from "../../skills/library/bundle.js";
 import { seedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { mutateSkillLibrary, saveSkillLibrary } from "../../skills/library/service.js";
 import type { SkillLibraryAuthority } from "../../skills/library/store.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   cleanupSessionStateForTest,
@@ -326,7 +327,7 @@ describe("skill library retained support files", () => {
         details: { code: "SKILL_LIBRARY_NOT_FOUND" },
       }),
     ]);
-    mutateSkillLibrary(actor(alice.id), {
+    await mutateSkillLibrary(actor(alice.id), {
       skillId: saved.entry.skillId,
       expectedRevision: saved.entry.revision,
       action: "share",
@@ -351,7 +352,7 @@ describe("read-only session skill library projection", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
-    const cfg = { agents: { list: [{ id: "main", workspace: path.join(root, "workspace") }] } };
+    const cfg = { agents: { entries: { main: { workspace: path.join(root, "workspace") } } } };
     const actor = (profileId: string): SkillLibraryAuthority => ({
       profileId,
       scopes: ["operator.read", "operator.write"],
@@ -368,7 +369,7 @@ describe("read-only session skill library projection", () => {
       content,
       expectedRevision: null,
     });
-    const pins = seedSkillLibrarySelection(actor(alice.id));
+    const pins = await seedSkillLibrarySelection(actor(alice.id));
     const key = "agent:main:library-session";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: key },
@@ -400,10 +401,16 @@ describe("read-only session skill library projection", () => {
       } as unknown as GatewayRequestHandlerOptions);
       return respond.mock.calls[0]!;
     };
-    const listed = await call("skills.library.list", { sessionKey: key });
+    using reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    const listed = await call("skills.library.list", { sessionKey: key, scope: "team" });
     expect(listed[0]).toBe(true);
     const projection = listed[1] as SkillsLibraryListResult;
-    expect(projection.entries.map((entry) => entry.skillId)).toEqual([bobSkill.entry.skillId]);
+    expect(projection.entries).toEqual([]);
+    expect(
+      reads.mock.calls.filter(
+        ([, command]) => command.type === "skillLibrary.read" && command.input.kind === "list",
+      ),
+    ).toHaveLength(1);
     expect(projection.session?.selections).toMatchObject([
       {
         skillId: saved.entry.skillId,

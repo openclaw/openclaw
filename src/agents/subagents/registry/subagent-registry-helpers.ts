@@ -2,17 +2,17 @@ import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES } from "../../../config/agent-limits.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import {
-  resolveAgentIdFromSessionKey,
-  resolveSessionStorePathCore,
-} from "../../../config/sessions.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type {
   SessionEntryCurrentCheck,
   SessionEntryCurrentFacts,
 } from "../../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
-import type { InternalSessionEntry, SessionEntry } from "../../../config/sessions/types.js";
+import {
+  isTerminalSessionStatus,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
@@ -23,6 +23,7 @@ import {
 } from "../../../sessions/session-run-error.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
 import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import { getDeliveryLastError } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -117,12 +118,12 @@ export async function persistSubagentSessionTiming(
   }
 
   const cfg = getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+  const { agentId, storePath: configuredStorePath } = resolveSubagentChildSessionOwner(entry, cfg);
   const storePath =
     options?.sessionEntryCurrent?.source.path ??
     options?.session?.storePath ??
     options?.settledQueuedCancellation?.storePath ??
-    resolveSessionStorePathCore(cfg.session?.store, { agentId });
+    configuredStorePath;
   const refused = new Error("Subagent timing owner changed before commit");
   const assertGenerationCurrent = () => {
     if (options?.isCurrentGeneration?.() === false) {
@@ -133,11 +134,15 @@ export async function persistSubagentSessionTiming(
   const startedAt = getSubagentSessionStartedAt(entry);
   const endedAt = asFiniteNumber(entry.execution.endedAt);
   const runtimeMs = getSubagentSessionRuntimeMs(entry, endedAt);
-  const status = resolveSubagentSessionStatus(entry);
+  const projectedStatus = resolveSubagentSessionStatus(entry);
+  const status = isTerminalSessionStatus(projectedStatus) ? projectedStatus : undefined;
 
-  const lastRunError = status
-    ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
-    : undefined;
+  const lastRunError =
+    status === "interrupted"
+      ? "Run interrupted by a Gateway restart."
+      : status
+        ? resolveSessionRunError(entry.execution.outcome ?? {}, status)
+        : undefined;
   const update = (sessionEntry: InternalSessionEntry) => {
     const settled = options?.settledQueuedCancellation;
     if (
@@ -193,17 +198,15 @@ export async function persistSubagentSessionTiming(
       }
     }
 
-    if (status) {
-      next.status = status;
-    } else {
-      delete next.status;
-    }
+    next.status = status;
     if (lastRunError) {
       next.lastRunError = lastRunError;
-    } else if (status === "done" || status === "interrupted") {
+    } else if (status === "done") {
       delete next.lastRunError;
     }
-    if (status && status !== "killed") {
+    if (status === "interrupted") {
+      next.abortedLastRun = true;
+    } else if (status && status !== "killed") {
       delete next.abortedLastRun;
     }
     return next;
@@ -259,7 +262,7 @@ export async function persistSubagentSessionTiming(
       }
       return undefined;
     });
-    if (persisted && lastRunError) {
+    if (persisted && lastRunError && status !== "interrupted") {
       await recordGatewaySessionRunFailure({
         target: {
           agentId,

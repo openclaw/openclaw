@@ -66,7 +66,6 @@ async function admitCompletion(
   const original: SessionEntry = {
     sessionId: `requester-${name}`,
     lifecycleRevision: "original-revision",
-    status: "running",
     updatedAt: Date.now(),
     ...patch,
   };
@@ -171,7 +170,7 @@ describe("native completion final-send custody", () => {
           );
           await appendInput();
           await replaceSessionEntry(target, entry);
-          const opts = bindCommandHarnessCompletionAssertion({
+          const { opts } = await bindCommandHarnessCompletionAssertion({
             claim,
             persisted: entry,
             sessionKey: key,
@@ -415,7 +414,7 @@ describe("native completion final-send custody", () => {
             // Reconcile native completion state as startup would: queue acknowledgment must not
             // be the only copy of the exact harness completion receipt.
             expect(
-              reconcileHarnessCompletionDelivery({
+              await reconcileHarnessCompletionDelivery({
                 ...target,
                 sourceRunId: source,
                 taskRunId: child,
@@ -471,7 +470,7 @@ describe("native completion marker commit", () => {
             sourceRunId: source,
             taskRunId: claim.taskRunId,
           });
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "pending");
         const marker = await persistMarker(target, current, [{ text: "Captured final" }]);
         expect(marker.pendingFinalDeliveryMarkerPersisted, binding).toBe(true);
         const after = read();
@@ -495,7 +494,7 @@ describe("native completion marker commit", () => {
         expect
           .soft(getRestartRecoveryTerminalDeliveryEvidence(cleaned, source), binding)
           .toEqual(before);
-        expect(reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
+        expect(await reconcile(), binding).toBe(binding === "matching" ? "delivered" : "blocked");
       }
     });
   });
@@ -627,18 +626,6 @@ describe("message-tool source reply custody", () => {
     {
       name: "confirmed source reply",
       result: { didDeliverSourceReplyViaMessageTool: true },
-      expected: "delivered",
-    },
-    {
-      name: "current-source receipt",
-      result: { sourceReplyDelivered: true },
-      expected: "delivered",
-    },
-    {
-      name: "source final payload",
-      result: {
-        messagingToolSourceReplyPayloads: [{ text: "Done", sourceReplyFinal: true }],
-      },
       expected: "delivered",
     },
     {

@@ -46,7 +46,8 @@ vi.mock("./push-apns-store-transaction.js", () => ({
   clearApnsRegistrationFromDatabase: mocks.native,
   nextApnsRegistrationVersion: mocks.native,
 }));
-vi.mock("./push-apns.relay.js", () => ({
+// mock-isolation: Worker-read forwarding must not decode or validate APNs rows on the host.
+vi.mock("./push-apns-relay-url.js", () => ({
   normalizeApnsRelayBaseUrl: mocks.native,
   normalizePersistedApnsRelayBaseUrl: mocks.native,
 }));
@@ -81,14 +82,26 @@ describe("APNs registration worker reads", () => {
     expect(mocks.execute).not.toHaveBeenCalled();
     expect(mocks.native).not.toHaveBeenCalled();
   });
-  it("retains the single lookup's nonempty overlong-ID behavior", async () => {
-    const nodeId = "x".repeat(257);
-    mocks.execute.mockResolvedValue(null);
-    await expect(loadApnsRegistration(` ${nodeId} `, "/synthetic/apns-a")).resolves.toBeNull();
+  it.each([
+    { nodeId: "x".repeat(257), failure: undefined },
+    { nodeId: "device-a", failure: new Error("invalid APNs registration row") },
+  ])("keeps the single lookup's worker result for $nodeId", async ({ nodeId, failure }) => {
+    if (failure) {
+      mocks.execute.mockRejectedValue(failure);
+    } else {
+      mocks.execute.mockResolvedValue(null);
+    }
+    const pending = loadApnsRegistration(` ${nodeId} `, "/synthetic/apns-a");
+    if (failure) {
+      await expect(pending).rejects.toBe(failure);
+    } else {
+      await expect(pending).resolves.toBeNull();
+    }
     expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
       type: "apns.registration.read",
       input: nodeId,
     });
+    expect(mocks.native).not.toHaveBeenCalled();
   });
   it("captures the original inputs and relative state path before waiting", async () => {
     const ready = createDeferredCore<Map<string, ApnsRegistration>>();
@@ -112,12 +125,6 @@ describe("APNs registration worker reads", () => {
       type: "apns.registrations.read",
       input: ["device-a", "missing"],
     });
-    expect(mocks.native).not.toHaveBeenCalled();
-  });
-  it("keeps a worker rejection without a synchronous fallback", async () => {
-    const failure = new Error("invalid APNs registration row");
-    mocks.execute.mockRejectedValue(failure);
-    await expect(loadApnsRegistration("device-a", "/synthetic/apns-a")).rejects.toBe(failure);
     expect(mocks.native).not.toHaveBeenCalled();
   });
 });

@@ -132,11 +132,17 @@ async function activate(admission: () => void, current: () => void = () => {}) {
   );
 }
 
-it("restores within the native deadline when each fresh private snapshot costs two seconds", async () => {
+it("restores within the native deadline when cold source observations cost two seconds", async () => {
   const { admission, family, assertIsolation } = fixture();
   const before = family();
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+  const observe = snapshots.readSqliteSourceContentVersionSync;
+  vi.spyOn(snapshots, "readSqliteSourceContentVersionSync").mockImplementation((pathname) => {
+    const version = observe(pathname);
+    elapsed += 2_000;
+    return version;
+  });
   const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation((pathname) => {
     const prepared = prepare(pathname);

@@ -52,8 +52,6 @@ export type TranscriptsLogger = {
 
 export type TranscriptsRuntimeContext = {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
@@ -292,7 +290,7 @@ export function resolveTranscriptSourceOwnership(params: {
   const providerSource = ownership
     ? { ...sourceForResolution, accountId: resolvedAccountId }
     : sourceForResolution;
-  if (params.configuredLifecycle && ownership && !providerSource.accountId?.trim()) {
+  if (params.configuredLifecycle && ownership && !resolvedAccountId) {
     throw new Error(
       `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
     );

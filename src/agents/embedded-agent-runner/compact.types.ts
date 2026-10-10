@@ -7,7 +7,6 @@ import type { AgentRuntimeAuthPlan, AgentRuntimePlan } from "../runtime-plan/typ
 export type CompactEmbeddedAgentSessionParams = Pick<
   import("./run/params.js").RunEmbeddedAgentParams,
   | "requireWorkspaceOnly"
-  | "requireWritableSandbox"
   | "sessionTarget"
   | "sessionId"
   | "sessionKey"
@@ -122,6 +121,8 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   maxAttempts?: number;
   /** @internal Refreshes the host watchdog when delegated native compaction makes progress. */
   compactionTimeoutReset?: () => void;
+  /** @internal Host watchdog ceiling (epoch ms); the summary request ends one window before it. */
+  compactionDeadlineAt?: number;
   onCompactionHookMessages?: (payload: {
     phase: "before" | "after";
     messages: string[];
@@ -136,12 +137,4 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
 > & {
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
-};
-
-export type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
 };

@@ -52,10 +52,9 @@ function buildCodexEffectiveMcpCatalog(
   statuses: readonly CodexMcpServerStatus[],
   toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"],
 ): McpToolCatalog {
-  const statusByName = new Map(statuses.map((status) => [status.name, status] as const));
-  const orderedStatuses = [...statusByName.values()].toSorted((left, right) =>
-    left.name.localeCompare(right.name),
-  );
+  const orderedStatuses = [
+    ...new Map(statuses.map((status) => [status.name, status] as const)).values(),
+  ].toSorted((left, right) => left.name.localeCompare(right.name));
   const safeNames = assignMcpCatalogSafeServerNames(orderedStatuses.map((status) => status.name));
   const serverEntries: Array<[string, McpToolCatalog["servers"][string]]> = [];
   const tools: McpToolCatalog["tools"] = [];
@@ -67,11 +66,15 @@ function buildCodexEffectiveMcpCatalog(
     const deniedNames = new Set(
       denialMap && Object.hasOwn(denialMap, status.name) ? denialMap[status.name] : [],
     );
-    const observedNames = new Set<string>();
-    for (const [toolName, raw] of Object.entries(status.tools).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    )) {
-      observedNames.add(toolName);
+    const observedNames = new Set(Object.keys(status.tools));
+    const toolEntries = [
+      ...Object.entries(status.tools).toSorted(([left], [right]) => left.localeCompare(right)),
+      ...[...deniedNames]
+        .filter((name) => !observedNames.has(name))
+        .toSorted()
+        .map((name) => [name, undefined] as const),
+    ];
+    for (const [toolName, raw] of toolEntries) {
       const deniedBySession = deniedNames.has(toolName) ? true : undefined;
       const tool = catalogTool({
         serverName: status.name,
@@ -80,32 +83,14 @@ function buildCodexEffectiveMcpCatalog(
         raw,
         ...(deniedBySession ? { deniedBySession } : {}),
       });
-      if (deniedBySession) {
-        sessionDeniedTools.push(tool);
-      } else {
-        tools.push(tool);
-      }
-    }
-    for (const toolName of [...deniedNames].toSorted()) {
-      if (observedNames.has(toolName)) {
-        continue;
-      }
-      sessionDeniedTools.push(
-        catalogTool({
-          serverName: status.name,
-          safeServerName,
-          toolName,
-          deniedBySession: true,
-        }),
-      );
+      (deniedBySession ? sessionDeniedTools : tools).push(tool);
     }
     serverEntries.push([
       status.name,
       {
         ...projectCodexMcpServerMetadata(status),
         safeServerName,
-        toolCount:
-          observedNames.size + [...deniedNames].filter((name) => !observedNames.has(name)).length,
+        toolCount: toolEntries.length,
       },
     ]);
   }
@@ -205,17 +190,6 @@ export async function acquireCodexMcpAppRuntime(
   const acquired = retained;
   const admittedBinding = binding;
   try {
-    params.assertCurrent();
-    const current = options.bindingStore.read(identity);
-    if (
-      !current ||
-      current.clientId !== binding.clientId ||
-      current.threadId !== binding.threadId
-    ) {
-      throw new Error("Native MCP session binding changed");
-    }
-    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
-    params.assertCurrent();
     const assertBinding = () => {
       const latest = options.bindingStore.read(identity);
       if (
@@ -226,6 +200,10 @@ export async function acquireCodexMcpAppRuntime(
         throw new Error("Native MCP session binding changed");
       }
     };
+    params.assertCurrent();
+    assertBinding();
+    const { createNativeMcpRuntime } = await import("./native-mcp-app.js");
+    params.assertCurrent();
     const runtime = createNativeMcpRuntime({
       client: retained.client,
       threadId: binding.threadId,

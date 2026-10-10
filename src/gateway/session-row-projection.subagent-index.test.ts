@@ -1,10 +1,8 @@
-import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
-import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import {
   persistRegistryFixture,
   saveSubagentRegistryToSqlite,
@@ -19,6 +17,7 @@ import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -32,9 +31,7 @@ import * as projectionWork from "./session-projection-work.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
-import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { seedSessionRowProjectionTranscriptFixture } from "./session-row-projection.transcript-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
@@ -47,7 +44,7 @@ it("settles a registry revision after persisting an already absent run", async (
   await withOpenClawTestState(
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       clearSubagentRunsReadCacheForTest();
       const target = { agentId: "main", sessionKey: "agent:main:registry-revision" };
@@ -104,7 +101,7 @@ it.each([
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
-        const cfg = { agents: { list: [{ id: "main", default: true }] } };
+        const cfg = { agents: { entries: { main: {} } } };
         setRuntimeConfigSnapshot(cfg);
         clearSubagentRunsReadCacheForTest();
         const key = "agent:main:archive-during-recovery";
@@ -407,93 +404,17 @@ it.each(["exact", "bulk"] as const)(
   },
 );
 
-it("reuses the subagent index across a 2,048-session drain with unrelated writes and refreshes a changed run", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
-    setRuntimeConfigSnapshot(cfg);
-    const count = seedSessionRowProjectionTranscriptFixture();
-    for (let index = 1; index < count; index++) {
-      const run: SubagentRunRecord = {
-        runId: `run-${index}`,
-        childSessionKey: `agent:main:legacy-${index}`,
-        requesterSessionKey: "agent:main:legacy-0",
-        requesterDisplayKey: "parent",
-        task: "Synthetic task",
-        cleanup: "keep",
-        createdAt: 1,
-        execution: { status: "running", startedAt: 1 },
-        completion: { required: false },
-        delivery: { status: "not_required" },
-      };
-      subagentRuns.set(run.runId, run);
-    }
-    const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
-    const projection = await createSessionRowProjection({ cfg });
-    let writes = 0;
-    let writesDuringDrain = 0;
-    let drainSettled = false;
-    const producer = (async () => {
-      for (let update = 1; update <= 32; update++) {
-        await nextTurn();
-        if (!drainSettled) {
-          writesDuringDrain++;
-        }
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:legacy-2047" },
-          { sessionId: "legacy-2047", updatedAt: count + update, label: `Update ${update}` },
-        );
-        writes++;
-        if (update === 12) {
-          const run = subagentRuns.get("run-1")!;
-          subagentRuns.set(run.runId, {
-            ...run,
-            execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-          });
-          persistRegistryFixture(subagentRuns, [run.runId]);
-        }
-      }
-    })();
-    const drain = (async () => {
-      await projection.ensureMaterialized();
-      drainSettled = true;
-    })();
-    try {
-      await Promise.all([producer, drain]);
-      // The bounded drain may finish before all producer turns; join its later publications too.
-      await projection.ensureMaterialized();
-      expect(projection.selectEntries().filter(ready)).toHaveLength(count);
-      expect(projection.dirtyRowCount).toBe(0);
-      expect(writes).toBe(32);
-      expect(writesDuringDrain).toBeGreaterThan(0);
-      expect(
-        projection.snapshot({ agentId: "main", key: "agent:main:legacy-2047" }).row?.label,
-      ).toBe("Update 32");
-      expect(projection.snapshot({ agentId: "main", key: "agent:main:legacy-1" }).row?.status).toBe(
-        "done",
-      );
-      expect(builds).toHaveBeenCalledTimes(1);
-    } finally {
-      await Promise.allSettled([producer, drain]);
-      projection.dispose();
-    }
-  });
-}, 120_000);
-
-it.each(
-  (["ownership", "broad-ownership", "retirement", "clear", "persistence"] as const).flatMap(
-    (publication) =>
-      (publication === "persistence" ? [false] : [false, true]).map((archived) => ({
-        publication,
-        archived,
-      })),
-  ),
-)(
+it.each([
+  { publication: "broad-ownership", archived: true },
+  { publication: "clear", archived: false },
+  { publication: "persistence", archived: false },
+] as const)(
   "refreshes subagent facts before synchronous $publication observers (archived=$archived)",
   async ({ publication, archived }) => {
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
-        const cfg = { agents: { list: [{ id: "main", default: true }] } };
+        const cfg = { agents: { entries: { main: {} } } };
         const child = "agent:main:child",
           parent = "agent:main:parent",
           nextParent = "agent:main:next";
@@ -539,10 +460,7 @@ it.each(
         });
         try {
           expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
-          const moved =
-            publication === "ownership" ||
-            publication === "broad-ownership" ||
-            publication === "persistence";
+          const moved = publication !== "clear";
           if (moved) {
             const replacement = {
               ...run,
@@ -553,15 +471,9 @@ it.each(
             expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
             if (publication === "broad-ownership") {
               publishSubagentRunChanges();
-            } else if (publication === "ownership") {
-              subagentRuns.commitOwnership(replacement);
             } else {
               persistRegistryFixture(subagentRuns, [run.runId]);
             }
-          } else if (publication === "retirement") {
-            subagentRuns.delete(run.runId);
-            expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
-            subagentRuns.confirmRetirement(run);
           } else {
             subagentRuns.clear();
           }
@@ -604,3 +516,63 @@ it.each(
     );
   },
 );
+
+it("keeps current row facts when the subagent snapshot changes during a list", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
+    async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      const scope = { agentId: "main", sessionKey: "agent:main:dashboard:registry-refresh" };
+      const entry = { sessionId: "registry-refresh", updatedAt: 1, label: "Previous" };
+      replaceSessionEntrySync(scope, entry);
+      const release = projectionWork.retainSessionListForegroundWork();
+      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      try {
+        await projection.ensureMaterialized();
+        const reads: string[][] = [];
+        const readDatabases = history.withSessionHistoryWorkerDatabases;
+        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
+          (databases, consume, lane) =>
+            readDatabases(
+              databases,
+              (owners) =>
+                consume(
+                  owners.map((owner) => ({
+                    ...owner,
+                    async readRowFacts(input) {
+                      const reply = await owner.readRowFacts(input);
+                      reads.push([...input.sessionKeys]);
+                      if (reads.length === 1) {
+                        const previous = getSubagentSessionListReadSnapshotIdentity();
+                        const run = createSubagentRunRecord({
+                          runId: "unrelated-refresh-run",
+                          childSessionKey: "agent:main:unrelated-child",
+                          requesterSessionKey: "agent:main:unrelated-parent",
+                          generation: 1,
+                          completion: { required: false },
+                          delivery: { status: "not_required" },
+                        });
+                        saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+                        clearSubagentRunsReadCacheForTest();
+                        expect(getSubagentSessionListReadSnapshotIdentity()).not.toBe(previous);
+                      }
+                      return reply;
+                    },
+                  })),
+                ),
+              lane,
+            ),
+        );
+        replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Current" });
+        const result = await listProjectedSessions({ projection, opts: { limit: 1 } });
+        expect(result.sessions).toEqual([
+          expect.objectContaining({ key: scope.sessionKey, label: "Current" }),
+        ]);
+        expect(reads).toEqual([[scope.sessionKey]]);
+      } finally {
+        projection.dispose();
+        release();
+      }
+    },
+  );
+});

@@ -28,7 +28,7 @@ it("drains an admitted custom agent outside the state root and retains original 
     const sharedPath = resolveOpenClawStateSqlitePath(state.env);
     const generations = readUpdateDatabaseGenerations([sharedPath, pathname]);
     const controller = new AbortController();
-    const maintenance = createDoctorMaintenanceState({
+    const maintenance = await createDoctorMaintenanceState({
       params: {
         root: null,
         options: { repair: true, nonInteractive: true },

@@ -164,9 +164,10 @@ describe("buildStatusText global subagent scope", () => {
     const text = await renderTelegramStatus({
       cfg: {
         agents: {
+          defaults: { systemAgent: { agentId: "ops" } },
           entries: {
             research: {},
-            ops: { default: true },
+            ops: {},
           },
         },
         session: { scope: "global" },

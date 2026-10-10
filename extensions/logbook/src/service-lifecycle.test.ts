@@ -151,7 +151,7 @@ describe("Logbook service disposal", () => {
           status: "done",
           error: undefined,
         });
-        const frames = await peer.batchFrames(batch.id);
+        const frames = (await peer.batchImages(batch.id)).map(({ frame }) => frame);
         expect(frames).toEqual(
           prune
             ? []
@@ -175,7 +175,7 @@ describe("Logbook service disposal", () => {
         try {
           expect(await reopened.cardsForDay(day)).toEqual(cards);
           expect(await reopened.latestBatch()).toEqual(batch);
-          expect(await reopened.batchFrames(batch.id)).toEqual(frames);
+          expect((await reopened.batchImages(batch.id)).map(({ frame }) => frame)).toEqual(frames);
           expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
         } finally {
           await reopened.close();

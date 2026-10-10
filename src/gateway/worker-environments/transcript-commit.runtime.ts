@@ -33,6 +33,7 @@ import {
 } from "../../sessions/transcript-events.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
+import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { prepareWorkerTurnTranscriptMessage } from "./placement-turn-claim-events.js";
 import type {
@@ -62,6 +63,7 @@ async function applyWorkerTranscriptCommit(params: {
   config: OpenClawConfig;
   identity: WorkerConnectionIdentity;
   messages: readonly CommittedAgentMessage[];
+  assistantItemIds: ReadonlyMap<string, string>;
   recoverPersistedBatch: boolean;
   requestedBaseLeafId: string | null;
   runId: string | null;
@@ -143,9 +145,13 @@ async function applyWorkerTranscriptCommit(params: {
         { moduleUrl, input: undefined },
       );
       const value = await worker.run(async (writer): Promise<ApplyTranscriptCommitResult> => {
+        const databaseIdentity = execution.fileIdentity;
+        if (!databaseIdentity) {
+          throw new Error("Worker transcript has no prepared database identity");
+        }
         const plan = await writer.execute({
           type: "transcript.prepare",
-          input: { ...input, scope: { ...scope, storePath: execution.path } },
+          input: { ...input, scope: { ...scope, storePath: databaseIdentity.nativeLocation } },
         });
         assertCurrent();
         if (!plan.ok || plan.messages.length === input.messages.length) {
@@ -156,16 +162,12 @@ async function applyWorkerTranscriptCommit(params: {
           return { ok: false, reason: "invalid-batch" };
         }
         assertCurrent();
-        const databaseIdentity = execution.fileIdentity?.physicalIdentity;
-        if (!databaseIdentity) {
-          throw new Error("Worker transcript has no prepared database identity");
-        }
         const committed = await writer.execute({ type: "transcript.commit", input: { messages } });
         if (committed.result.ok && committed.result.messages.some((message) => message.appended)) {
           publishSessionEntryWorkerMetadataInvalidation({
             agentId: target.agentId,
             storePath: execution.path,
-            databaseIdentity,
+            databaseIdentity: databaseIdentity.physicalIdentity,
             sessionKey: target.sessionKey,
           });
         }
@@ -219,7 +221,13 @@ async function applyWorkerTranscriptCommit(params: {
   }
 
   for (const message of applied.messages) {
-    if (!message.appended) {
+    const itemId =
+      message.message.role === "assistant"
+        ? params.assistantItemIds.get(readTranscriptMessageIdempotencyKey(message.message) ?? "")
+        : undefined;
+    // Pending recovery can find a committed row whose original publication was lost.
+    // A recovered sequence certifies active-branch membership; abandoned rows stay silent.
+    if (!message.appended && (!itemId || message.messageSeq === undefined)) {
       continue;
     }
     const runId = resolveTerminalAssistantTranscriptRunId(message.message, params.runId);
@@ -228,6 +236,7 @@ async function applyWorkerTranscriptCommit(params: {
       message: message.message,
       messageId: message.messageId,
       messageSeq: message.messageSeq,
+      ...(itemId ? { assistantItemIds: [itemId] } : {}),
       ...(runId ? { runId } : {}),
     });
   }
@@ -257,13 +266,21 @@ export async function commitWorkerTranscript(
     expectedLifecycleRevision: params.sessionTarget.expectedLifecycleRevision,
     expectedWriterRunId: params.sessionTarget.expectedWriterRunId,
   });
-  // Ingress validated the closed schema; clone every admitted field before transcript redaction.
-  const messages = params.request.messages.map((message, index) => ({
-    ...structuredClone(message),
-    idempotencyKey: `worker-commit-${sha256Base64Url(
+  const assistantItemIds = new Map<string, string>();
+  // Correlation belongs to the commit receipt, never stored or provider-visible content.
+  const messages = params.request.messages.map((message, index) => {
+    const idempotencyKey = `worker-commit-${sha256Base64Url(
       [sessionId, params.request.runEpoch, params.request.seq, index].join("\0"),
-    )}`,
-  }));
+    )}`;
+    if (message.role === "assistant") {
+      const { itemId, ...assistant } = structuredClone(message);
+      if (itemId) {
+        assistantItemIds.set(idempotencyKey, itemId);
+      }
+      return { ...assistant, idempotencyKey };
+    }
+    return { ...structuredClone(message), idempotencyKey };
+  });
   const requestedBaseLeafId = params.request.baseLeafId;
   params.assertCurrent();
   const started = await store.begin(input, params.assertCurrent);
@@ -291,6 +308,7 @@ export async function commitWorkerTranscript(
       config,
       identity: params.identity,
       messages,
+      assistantItemIds,
       recoverPersistedBatch: started.kind === "recover",
       requestedBaseLeafId,
       runId: params.identity.runId,

@@ -36,8 +36,15 @@ function emitRuntime(harness: ReturnType<typeof createGatewayHarness>, session: 
 }
 
 describe("cached session list freshness", () => {
-  it("keeps a background run visible when a later request replays a pre-event page", async () => {
+  it("orders runtime events and cached list pages by their sampling clock", async () => {
     const row = background;
+    const running: GatewaySessionRow = {
+      ...row,
+      snapshotAt: 200,
+      status: "running",
+      hasActiveRun: true,
+      activeRunIds: ["background-run"],
+    };
     let page = sessionsResult([row], 100);
     const harness = createGatewayHarness(
       createTestGatewayClient(async () => structuredClone(page)),
@@ -45,13 +52,7 @@ describe("cached session list freshness", () => {
     const sessions = createTestSessionCapability(harness.gateway);
     try {
       await sessions.refresh({ agentId: "main", force: true });
-      emitRuntime(harness, {
-        ...row,
-        snapshotAt: 200,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["background-run"],
-      });
+      emitRuntime(harness, running);
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         status: "running",
         hasActiveRun: true,
@@ -67,7 +68,8 @@ describe("cached session list freshness", () => {
         snapshotAt: 200,
       });
 
-      page = sessionsResult([{ ...row, snapshotAt: 300 }], 300);
+      const completed = { ...row, snapshotAt: 300 };
+      page = sessionsResult([completed], 300);
       await sessions.refresh({ agentId: "main", force: true });
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         status: "done",
@@ -75,51 +77,14 @@ describe("cached session list freshness", () => {
         activeRunIds: [],
         snapshotAt: 300,
       });
-    } finally {
-      sessions.dispose();
-    }
-  });
+      emitRuntime(harness, running);
+      expect(sessions.state.result?.sessions[0]).toMatchObject(completed);
 
-  it("does not revive a finished run when its older sampled event arrives after a list", async () => {
-    const row = { ...background, snapshotAt: 300 };
-    const harness = createGatewayHarness(
-      createTestGatewayClient(async () => sessionsResult([structuredClone(row)], 300)),
-    );
-    const sessions = createTestSessionCapability(harness.gateway);
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      emitRuntime(harness, {
-        ...row,
-        snapshotAt: 200,
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["background-run"],
-      });
-      expect(sessions.state.result?.sessions[0]).toMatchObject(row);
-    } finally {
-      sessions.dispose();
-    }
-  });
-
-  it("settles a runtime-only run from a newer sampled event without a persisted write", async () => {
-    const row: GatewaySessionRow = {
-      ...background,
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: ["background-run"],
-    };
-    const harness = createGatewayHarness(
-      createTestGatewayClient(async () => sessionsResult([structuredClone(row)], 100)),
-    );
-    const sessions = createTestSessionCapability(harness.gateway);
-    try {
+      page = sessionsResult([{ ...running, snapshotAt: 400 }], 400);
       await sessions.refresh({ agentId: "main", force: true });
       const settled: GatewaySessionRow = {
         ...row,
-        snapshotAt: 200,
-        status: "done",
-        hasActiveRun: false,
-        activeRunIds: [],
+        snapshotAt: 500,
       };
       emitRuntime(harness, settled);
       expect(sessions.state.result?.sessions[0]).toMatchObject(settled);

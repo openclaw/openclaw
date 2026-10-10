@@ -90,6 +90,37 @@ describe("DraftSubmissionFlow submit gates", () => {
     );
   });
 
+  it("waits for the configured default repository before admitting the first session", async () => {
+    const discovery = createDeferred<ProjectsListResult>();
+    const { place, flow, context } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: (method) => (method === "projects.list" ? discovery.promise : Promise.resolve({})),
+    });
+    const read = place.browser.refreshProjects();
+    flow.setMessage("inspect the repository");
+    expect(place.browser.projectsLoading).toBe(true);
+    expect(flow.canSubmit()).toBe(false);
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+    discovery.resolve({
+      projects: [],
+      defaultRepository: {
+        identity: "acme/private-repo",
+        url: "https://github.com/acme/private-repo.git",
+        ref: "main",
+      },
+    });
+    await read;
+    place.restorePreferenceSelections();
+    expect(flow.canSubmit()).toBe(true);
+    await flow.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledWith(
+      expect.objectContaining({ projectGitUrl: "https://github.com/acme/private-repo.git" }),
+      expect.objectContaining({ reconciliation: "background" }),
+    );
+  });
+
   it.each([
     {
       reason: "missing-auth",

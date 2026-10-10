@@ -19,7 +19,7 @@ function sessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("resolveSessionNavigation", () => {
-  it("keeps a categorized spawned conversation discoverable without selecting or loading its parent", () => {
+  it("keeps persistent spawned conversations discoverable without selecting or loading their parent", () => {
     const parentKey = "agent:main:discord:channel:parent";
     const office = {
       key: "agent:main:dashboard:office-ha",
@@ -47,7 +47,11 @@ describe("resolveSessionNavigation", () => {
       resultAgentId: "main",
       sessionKey: wake.key,
     });
-    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([office.key, wake.key]);
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual([
+      office.key,
+      "agent:main:dashboard:uncategorized",
+      wake.key,
+    ]);
   });
 
   it("hides cron sessions unless showCron opts in", () => {
@@ -187,6 +191,26 @@ describe("resolveSessionNavigation", () => {
       "agent:main:explicit:incident-debug",
     ]);
     expect(navigation.activeRowKey).toBe("agent:main:explicit:incident-debug");
+  });
+
+  it("keeps a selected dock conversation readable without adding it to the sidebar", () => {
+    const dock: GatewaySessionRow = {
+      key: "agent:main:board-agent",
+      kind: "direct",
+      isDock: true,
+      createdVia: "operator",
+      createdSurface: "plugin-dock",
+    };
+    const navigation = resolveSessionNavigation({
+      result: sessionsResult([{ key: "agent:main:chat", kind: "direct" }, dock]),
+      resultAgentId: "main",
+      sessionKey: dock.key,
+      activeSession: dock,
+      showSystem: true,
+    });
+    expect(navigation.visibleSessions.map((row) => row.key)).toEqual(["agent:main:chat"]);
+    expect(navigation.selectedSession?.key).toBe(dock.key);
+    expect(navigation.activeRowKey).toBeNull();
   });
 
   it("uses the caller's sort order before applying the recent-session projection", () => {

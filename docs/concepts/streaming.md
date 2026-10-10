@@ -79,6 +79,18 @@ the nested shape before starting the Gateway. See the
   output. Still uses the chunker if the buffered text exceeds `maxChars`, so it
   can emit multiple chunks at the end.
 
+### Pending text phases
+
+Transports that resolve commentary at the tool boundary withhold durable block
+replies until the phase is known. Chat Completions and native Ollama (`api:
+"ollama"`, `/api/chat`) wait until the assistant message finishes, including with
+`blockStreamingBreak: "text_end"`: earlier text can still become tool narration.
+A long tool-free answer therefore produces no durable chunks during generation.
+
+Ordinary final answers and length-limited partial answers remain deliverable.
+The independent live assistant/preview stream can still update while generating
+when enabled and supported by the channel.
+
 ### Media delivery with block streaming
 
 When a plugin uses `before_agent_finalize` to validate the built-in runtime's
@@ -206,16 +218,17 @@ instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
-Discord defaults to `off` when `streaming` is unset, Telegram and Slack default
-to `progress`, and Mattermost and MS Teams default to `partial`.
+Discord, Telegram, and Slack default to `progress` when `streaming` is unset.
+Mattermost and MS Teams default to `partial`. Explicitly configured modes remain
+unchanged; `off` disables previews.
 
-| Channel    | `off`         | `partial` | `block` | `progress`                                    |
-| ---------- | ------------- | --------- | ------- | --------------------------------------------- |
-| Telegram   | Yes           | Yes       | Yes     | editable progress draft (default)             |
-| Discord    | Yes (default) | Yes       | Yes     | editable progress draft (opt-in)              |
-| Slack      | Yes           | Yes       | Yes     | native card in threads; quiet outside threads |
-| Mattermost | Yes           | Yes       | Yes     | Yes                                           |
-| MS Teams   | Yes           | Yes       | Yes     | native progress stream                        |
+| Channel    | `off` | `partial` | `block` | `progress`                                    |
+| ---------- | ----- | --------- | ------- | --------------------------------------------- |
+| Telegram   | Yes   | Yes       | Yes     | editable progress draft (default)             |
+| Discord    | Yes   | Yes       | Yes     | editable progress draft (default)             |
+| Slack      | Yes   | Yes       | Yes     | native card in threads; quiet outside threads |
+| Mattermost | Yes   | Yes       | Yes     | Yes                                           |
+| MS Teams   | Yes   | Yes       | Yes     | native progress stream                        |
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -260,7 +273,9 @@ Slack-only:
 - `progress` mode keeps tool progress in an editable status draft, materializes
   the status label when answer streaming is active but no tool line is
   available yet, clears the draft at completion, and sends the final answer
-  through normal delivery.
+  through normal delivery. When the parent yields to accepted subagents, the
+  same draft keeps updating until they settle; see
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 - Plan previews use native checkboxes when `channels.telegram.richMessages`
   is `true`; otherwise they use readable HTML checklists. Completed steps are
   checked, and the active step is marked "in progress".
@@ -280,21 +295,20 @@ Slack-only:
 ### Discord
 
 - Uses send + edit preview messages.
-- `block` mode uses draft chunking (`draftChunk`).
+- `block` mode updates the preview at chunk boundaries while preserving the
+  answer's paragraph separators and code fences in the edited message.
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval requests. Intermediate tool failures and nonzero
-  command exits are hidden. The same default applies on
-  other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
-  the rolling tool log with its icons.
-- When a parent yields to accepted subagents, `progress` mode can transfer its
-  confirmed card to core. The same message keeps its checklist and receives
-  child activity and terminal updates; the final answer is separate. See
-  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
-- Without that handoff, `progress` mode deletes the status draft once the final
-  answer is delivered, so busy channels keep no orphaned tool log above the
-  reply. Error finals keep the draft as the record of the failed turn.
+  plan milestones, approval requests, and safe current-operation and delegated-task
+  status. Status does not require a utility model or a model-authored preamble.
+  Intermediate tool failures and nonzero command exits are hidden.
+  `streaming.progress.toolProgress: true` adds the rolling tool log with its icons.
+  Telegram shares the safe work-status presentation; other channels retain their
+  existing progress layouts.
+- `progress` mode deletes the status draft once the final answer is delivered,
+  so busy channels keep no orphaned tool log above the reply. Error finals keep
+  the draft as the record of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 
@@ -453,6 +467,10 @@ in the draft:
   the same preamble supplies the status headline even when this optional lane
   is off; other channels keep their existing progress behavior. See
   [Progress drafts](/concepts/progress-drafts#status-headline).
+
+When verbose logging owns standalone commentary, each preamble is sent once.
+Buffered commentary and tool summaries settle before the answer preview;
+text-only progress arriving after final delivery starts is suppressed.
 
 ```json
 {

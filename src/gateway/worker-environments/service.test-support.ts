@@ -34,7 +34,7 @@ import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js"
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
-  bindWorkerTurnToolSurface,
+  bindWorkerTurnCapabilities,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -713,7 +713,7 @@ export async function bindPlacementHarness(
     workerService,
     source,
     releaseSource,
-    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnToolSurface>[2]) =>
-      bindWorkerTurnToolSurface(executionStore, claim, surface),
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
   };
 }

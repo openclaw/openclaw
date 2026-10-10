@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadExactSessionEntry,
@@ -8,11 +9,13 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readLegacyAcpMigrationContext } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
 import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
-import * as entryPublication from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import * as entryPublication from "../../config/sessions/session-accessor.sqlite-entry-worker-publication.js";
 import * as historyMaintenance from "../../config/sessions/session-history-eviction.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as admissions from "../../infra/sqlite-worker-operation-admission.js";
+import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawAgentDatabase,
@@ -25,7 +28,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as entryWorker from "./session-meta-entry.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
-import { readAcpSessionMeta, writeAcpSessionMetaForMigration } from "./session-meta.js";
+import { readAcpSessionEntry, writeAcpSessionMetaForMigration } from "./session-meta.js";
 
 const META: SessionAcpMeta = {
   backend: "fixture-backend",
@@ -36,155 +39,263 @@ const META: SessionAcpMeta = {
   lastActivityAt: 100,
 };
 
-it("preserves incognito entry mutations without spilling the process-held session to disk", async () => {
-  await withOpenClawTestState({ label: "acp-write-incognito" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-    const scope = {
-      cfg,
-      env: state.env,
-      agentId: "main",
-      sessionKey: "agent:main:dashboard:incognito-private",
-      skipMaintenance: true,
-    };
-    await replaceSessionEntry(scope, {
-      sessionId: "private-session",
-      lifecycleRevision: "private-revision",
-      updatedAt: 100,
-      label: "private-session-label",
-      skillsSnapshot: { prompt: "private-session-prompt", skills: [] },
-    });
-    const initial = loadExactSessionEntry(scope)?.entry;
-    if (!initial) {
-      throw new Error("Expected the process-held incognito entry");
-    }
-    const paths = [
-      resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-      resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-    ].flatMap((database) => [database, `${database}-wal`, `${database}-shm`]);
-    paths.push(path.join(state.sessionsDir("main"), "sessions.json"));
-    expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
-    const set = await upsertAcpSessionMeta({ ...scope, mutate: () => META });
-    expect(set?.acp).toEqual(META);
-    expect(readAcpSessionMeta(scope)).toEqual(META);
-    const updatedMeta = { ...META, state: "running" as const, lastActivityAt: 200 };
-    const update = await upsertAcpSessionMeta({
-      ...scope,
-      mutate: (current) => {
-        expect(current).toEqual(META);
-        return updatedMeta;
-      },
-    });
-    expect(update?.acp).toEqual(updatedMeta);
-    expect(readAcpSessionMeta(scope)).toEqual(updatedMeta);
-    const cleared = await upsertAcpSessionMeta({ ...scope, mutate: () => null });
-    expect(cleared?.acp).toBeUndefined();
-    expect(readAcpSessionMeta(scope)).toBeUndefined();
-    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
-      sessionId: initial.sessionId,
-      lifecycleRevision: initial.lifecycleRevision,
-      label: initial.label,
-      skillsSnapshot: initial.skillsSnapshot,
-    });
-    expect(loadExactSessionEntry(scope)?.entry.acp).toBeUndefined();
-    expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
-  });
-});
-
-it("creates, updates, and closes file-backed ACP metadata without host data SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal", label: "acp-write-worker" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-    await state.writeConfig({ ...cfg, session: { maintenance: { mode: "warn", maxEntries: 37 } } });
-    const scope = {
-      cfg,
-      env: state.env,
-      agentId: "main",
-      sessionKey: "agent:main:acp:worker",
-      skipMaintenance: true,
-    };
-    const observe = observeHostDataSql();
-    const maintenance = vi.spyOn(historyMaintenance, "kickSessionHistoryDiskBudgetMaintenance");
-    const initialize = vi.fn(() => META);
-    const update = vi.fn((current: SessionAcpMeta | undefined) => {
-      if (!current) {
-        throw new Error("Expected initialized ACP metadata");
-      }
-      return { ...current, state: "running" as const };
-    });
-    try {
-      const created = await upsertAcpSessionMeta({ ...scope, mutate: initialize });
-      expect(created?.acp).toEqual(META);
-      if (!created) {
-        throw new Error("Expected the initialized ACP session");
-      }
-      const retainedMembership: boolean[] = [];
-      const releases: Array<() => void> = [];
-      const retainPublication = entryPublication.retainSessionEntryWorkerPublication;
-      const publication = vi
-        .spyOn(entryPublication, "retainSessionEntryWorkerPublication")
-        .mockImplementation((input) => {
-          const retained = retainPreparedSessionSharingFacts({
-            databaseIdentity: `file:${input.databaseIdentity}`,
-            sessionKey: scope.sessionKey,
-            entry: projectSessionSharingEntry(created),
-            membership: new Set(["existing-reader"]),
+it("does not publish a delayed ACP postimage over a newer native publication", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", label: "acp-receipt-native-order" },
+    async (state) => {
+      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      const scope = {
+        cfg,
+        env: state.env,
+        agentId: "main",
+        sessionKey: "agent:main:acp:native-order",
+        skipMaintenance: true,
+      };
+      const entry = await upsertAcpSessionMeta({ ...scope, mutate: () => META });
+      expect(entry).toBeDefined();
+      const native = { ...META, runtimeSessionName: "newer-native" };
+      const changes: Array<SessionRowFacts | undefined> = [];
+      const release = sessionChanges.subscribeFacts((change) => {
+        if (
+          "sessionKey" in change &&
+          change.sessionKey === scope.sessionKey &&
+          change.scope === "acp"
+        ) {
+          changes.push(change.facts);
+        }
+      });
+      const observe = admissions.observeSqliteWorkerCommittedFacts;
+      let superseded = false;
+      const intercept = vi
+        .spyOn(admissions, "observeSqliteWorkerCommittedFacts")
+        .mockImplementation((admission, consume) => {
+          observe(admission, (receipt) => {
+            const facts = receipt.facts;
+            if (
+              !superseded &&
+              facts &&
+              typeof facts === "object" &&
+              "facts" in facts &&
+              facts.facts &&
+              typeof facts.facts === "object" &&
+              "kind" in facts.facts &&
+              facts.facts.kind === "acp"
+            ) {
+              superseded = true;
+              writeAcpSessionMetaForMigration({
+                env: state.env,
+                sessionKey: buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId),
+                sessionId: entry!.sessionId,
+                lifecycleRevision: entry!.lifecycleRevision,
+                meta: native,
+              });
+            }
+            consume(receipt);
           });
-          releases.push(retained.release);
-          const owner = retainPublication(input);
-          return {
-            ...owner,
-            begin(...args) {
-              owner.begin(...args);
-              retainedMembership.push(
-                retained.readCurrent()?.membership.has("existing-reader") === true,
-              );
-            },
-          };
         });
       try {
-        const updated = await upsertAcpSessionMeta({ ...scope, mutate: update });
-        expect(updated?.acp?.state).toBe("running");
-        expect(retainedMembership.length).toBeGreaterThan(0);
-        expect(retainedMembership.every(Boolean)).toBe(true);
+        await upsertAcpSessionMeta({
+          ...scope,
+          mutate: () => ({ ...META, runtimeSessionName: "older-worker" }),
+        });
+        expect(superseded).toBe(true);
+        expect(changes.length).toBeGreaterThan(0);
+        expect(changes.every((change) => change === undefined)).toBe(true);
+        expect(readAcpSessionEntry(scope)?.acp).toEqual(native);
       } finally {
-        publication.mockRestore();
-        for (const release of releases) {
-          release();
-        }
+        release();
+        intercept.mockRestore();
       }
-      expect(initialize).toHaveBeenCalledOnce();
-      expect(update).toHaveBeenCalledOnce();
-      expect(update.mock.calls[0]?.[0]).toEqual(META);
-      await upsertAcpSessionMeta({ ...scope, mutate: () => null });
-      expect(observe.queries).toEqual([]);
-      expect(maintenance.mock.calls.length).toBeGreaterThan(0);
-      expect(
-        maintenance.mock.calls.every(([input]) => input.maintenanceConfig?.maxEntries === 37),
-      ).toBe(true);
-    } finally {
-      observe.restore();
-      maintenance.mockRestore();
-    }
-    expect(readAcpSessionMeta(scope)).toBeUndefined();
-    const persisted = loadExactSessionEntry(scope)?.entry;
-    expect(persisted?.sessionId).toBeTruthy();
-    expect(persisted?.acp).toBeUndefined();
-    expect(
-      openOpenClawStateDatabase({ env: state.env })
-        .db.prepare("SELECT count(*) AS count FROM acp_sessions")
-        .get(),
-    ).toEqual({ count: 0 });
-  });
+    },
+  );
 });
 
+it.each(["incognito", "file"] as const)(
+  "creates, updates, and closes %s metadata through its storage owner",
+  async (storage) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", label: `acp-write-${storage}` },
+      async (state) => {
+        const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
+        await state.writeConfig({
+          ...cfg,
+          session: { maintenance: { mode: "warn", maxEntries: 37 } },
+        });
+        const incognito = storage === "incognito";
+        const scope = {
+          cfg,
+          env: state.env,
+          agentId: "main",
+          skipMaintenance: true,
+          sessionKey: incognito
+            ? "agent:main:dashboard:incognito-private"
+            : "agent:main:acp:worker",
+        };
+        if (incognito) {
+          await replaceSessionEntry(scope, {
+            sessionId: "private-session",
+            lifecycleRevision: "private-revision",
+            updatedAt: 100,
+            label: "private-session-label",
+            skillsSnapshot: { prompt: "private-session-prompt", skills: [] },
+          });
+        }
+        const initial = incognito ? loadExactSessionEntry(scope)?.entry : undefined;
+        const paths = [
+          resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+          resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        ].flatMap((database) => [database, `${database}-wal`, `${database}-shm`]);
+        paths.push(path.join(state.sessionsDir("main"), "sessions.json"));
+        if (incognito) {
+          expect(initial).toBeDefined();
+          expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
+        }
+        const observe = observeHostDataSql();
+        let latestAcp: Extract<SessionRowFacts, { kind: "acp" }> | undefined;
+        const observedAcp: Array<Extract<SessionRowFacts, { kind: "acp" }>> = [];
+        const releaseFacts = sessionChanges.subscribeFacts((change) => {
+          if (
+            "sessionKey" in change &&
+            change.sessionKey === scope.sessionKey &&
+            change.scope === "acp"
+          ) {
+            latestAcp = change.facts?.kind === "acp" ? change.facts : undefined;
+          }
+        });
+        const releaseObservers = sessionChanges.subscribe((change) => {
+          if (
+            "sessionKey" in change &&
+            change.sessionKey === scope.sessionKey &&
+            change.scope === "acp" &&
+            latestAcp
+          ) {
+            observedAcp.push(latestAcp);
+          }
+        });
+        const maintenance = vi.spyOn(historyMaintenance, "kickSessionHistoryDiskBudgetMaintenance");
+        const initialize = vi.fn(() => META);
+        const updatedMeta = { ...META, state: "running" as const, lastActivityAt: 200 };
+        const update = vi.fn((current: SessionAcpMeta | undefined) => {
+          expect(current).toEqual(META);
+          return updatedMeta;
+        });
+        try {
+          const created = await upsertAcpSessionMeta({ ...scope, mutate: initialize });
+          expect(created?.acp).toEqual(META);
+          expect(observedAcp.at(-1)).toMatchObject({
+            kind: "acp",
+            sessionId: created?.sessionId,
+            lifecycleRevision: created?.lifecycleRevision ?? null,
+            acp: META,
+          });
+          if (!created) {
+            throw new Error("Expected the initialized ACP session");
+          }
+          if (incognito) {
+            expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
+          }
+          const retainedMembership: boolean[] = [];
+          const releases: Array<() => void> = [];
+          const retainPublication = entryPublication.retainSessionEntryWorkerPublication;
+          const publication = vi
+            .spyOn(entryPublication, "retainSessionEntryWorkerPublication")
+            .mockImplementation((input) => {
+              const retained = retainPreparedSessionSharingFacts({
+                databaseIdentity: `file:${input.databaseIdentity}`,
+                sessionKey: scope.sessionKey,
+                entry: projectSessionSharingEntry(created),
+                membership: new Set(["existing-reader"]),
+              });
+              releases.push(retained.release);
+              const owner = retainPublication(input);
+              return {
+                ...owner,
+                begin(...args) {
+                  owner.begin(...args);
+                  retainedMembership.push(
+                    retained.readCurrent()?.membership.has("existing-reader") === true,
+                  );
+                },
+              };
+            });
+          try {
+            const updated = await upsertAcpSessionMeta({ ...scope, mutate: update });
+            expect(updated?.acp).toEqual(updatedMeta);
+            expect(observedAcp.at(-1)?.acp).toEqual(updatedMeta);
+            if (incognito) {
+              expect(readAcpSessionEntry(scope)?.acp).toEqual(updatedMeta);
+            } else {
+              expect(retainedMembership.length).toBeGreaterThan(0);
+              expect(retainedMembership.every(Boolean)).toBe(true);
+            }
+          } finally {
+            publication.mockRestore();
+            for (const release of releases) {
+              release();
+            }
+          }
+          expect(initialize).toHaveBeenCalledOnce();
+          expect(update).toHaveBeenCalledOnce();
+          expect(update.mock.calls[0]?.[0]).toEqual(META);
+          const cleared = await upsertAcpSessionMeta({ ...scope, mutate: () => null });
+          expect(cleared?.acp).toBeUndefined();
+          expect(observedAcp.at(-1)?.acp).toBeNull();
+          if (!incognito) {
+            expect(observe.queries).toEqual([]);
+            expect(maintenance.mock.calls.length).toBeGreaterThan(0);
+            expect(
+              maintenance.mock.calls.every(([input]) => input.maintenanceConfig?.maxEntries === 37),
+            ).toBe(true);
+          }
+        } finally {
+          releaseFacts();
+          releaseObservers();
+          observe.restore();
+          maintenance.mockRestore();
+        }
+        expect(readAcpSessionEntry(scope)?.acp).toBeUndefined();
+        const persisted = loadExactSessionEntry(scope)?.entry;
+        expect(persisted?.sessionId).toBeTruthy();
+        expect(persisted?.acp).toBeUndefined();
+        if (incognito) {
+          expect(persisted).toMatchObject({
+            sessionId: initial?.sessionId,
+            lifecycleRevision: initial?.lifecycleRevision,
+            label: initial?.label,
+            skillsSnapshot: initial?.skillsSnapshot,
+          });
+          expect(paths.filter((filename) => fs.existsSync(filename))).toEqual([]);
+        } else {
+          expect(
+            openOpenClawStateDatabase({ env: state.env })
+              .db.prepare("SELECT count(*) AS count FROM acp_sessions")
+              .get(),
+          ).toEqual({ count: 0 });
+          const invalid = { ...scope, sessionKey: `${scope.sessionKey}-uncloneable` };
+          await expect(
+            upsertAcpSessionMeta({
+              ...invalid,
+              mutate: () => ({ ...META, uncloneable: () => undefined }),
+            }),
+          ).rejects.toThrow(/could not be cloned/);
+          expect(loadExactSessionEntry(invalid)?.entry).toBeUndefined();
+        }
+      },
+    );
+  },
+);
+
 it.each([
+  ["before-touch", "same-lifecycle"],
   ["before-touch", "session-id"],
   ["before-touch", "lifecycle-revision"],
   ["before-touch", "control-owner"],
-  ["after-cleanup", "session-id"],
-  ["after-cleanup", "lifecycle-revision"],
-  ["after-cleanup", "control-owner"],
+  ["after-touch", "session-id"],
+  ["after-touch", "lifecycle-revision"],
+  ["after-touch", "control-owner"],
 ] as const)(
-  "rejects a %s replacement of %s without changing its ACP binding",
+  "fences a %s concurrent %s change at the original ACP lifecycle",
   async (boundary, replacement) => {
     await withOpenClawTestState(
       { scenario: "minimal", label: `acp-write-${boundary}-${replacement}` },
@@ -223,14 +334,15 @@ it.each([
               await release.promise;
             }
             const result = await original(input);
-            if (!paused && boundary === "after-cleanup" && input.mutation.kind === "clear-legacy") {
+            if (!paused && boundary === "after-touch" && input.mutation.kind === "touch") {
               paused = true;
               reached.resolve();
               await release.promise;
             }
             return result;
           });
-        const mutate = vi.fn(() => ({ ...META, runtimeSessionName: "obsolete-update" }));
+        const updatedMeta = { ...META, runtimeSessionName: "same-lifecycle-update" };
+        const mutate = vi.fn(() => updatedMeta);
         const expectedControlBinding =
           replacement === "control-owner"
             ? {
@@ -251,12 +363,11 @@ it.each([
           (error: unknown) => ({ ok: false as const, error }),
         );
         try {
-          await Promise.race([
+          await awaitGateBeforeSettlement(
             reached.promise,
-            outcome.then(() => {
-              throw new Error("ACP update settled before the requested mutation boundary");
-            }),
-          ]);
+            outcome,
+            "ACP update settled before the requested mutation boundary",
+          );
           const next = {
             ...originalEntry,
             sessionId:
@@ -265,8 +376,8 @@ it.each([
               replacement === "lifecycle-revision"
                 ? "replacement-revision"
                 : originalEntry.lifecycleRevision,
-            updatedAt: 200,
-            label: "replacement-owner",
+            updatedAt: originalEntry.updatedAt + 1,
+            label: "concurrent-label",
             spawnedBy:
               replacement === "control-owner" ? "agent:main:new-owner" : originalEntry.spawnedBy,
           };
@@ -279,22 +390,34 @@ it.each([
             expectedControlBinding.ownerKey = "agent:main:new-owner";
           }
           const replacementMeta = { ...META, runtimeSessionName: "replacement-runtime" };
-          writeAcpSessionMetaForMigration({
-            env: state.env,
-            sessionKey: buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId),
-            sessionId: replacementEntry.sessionId,
-            lifecycleRevision: replacementEntry.lifecycleRevision,
-            meta: replacementMeta,
-          });
+          if (replacement !== "same-lifecycle") {
+            writeAcpSessionMetaForMigration({
+              env: state.env,
+              sessionKey: buildAcpDatabaseSessionKey(scope.sessionKey, scope.agentId),
+              sessionId: replacementEntry.sessionId,
+              lifecycleRevision: replacementEntry.lifecycleRevision,
+              meta: replacementMeta,
+            });
+          }
           release.resolve();
           const settled = await outcome;
-          expect(settled.ok).toBe(false);
+          expect(settled.ok).toBe(replacement === "same-lifecycle");
           if (!settled.ok) {
             expect(String(settled.error)).toMatch(/Canonical ACP session changed before/);
           }
           expect(mutate).toHaveBeenCalledOnce();
-          expect(loadExactSessionEntry(scope)?.entry).toEqual(replacementEntry);
-          expect(readAcpSessionMeta(scope)).toEqual(replacementMeta);
+          if (replacement === "same-lifecycle") {
+            expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+              sessionId: originalEntry.sessionId,
+              lifecycleRevision: originalEntry.lifecycleRevision,
+              label: "concurrent-label",
+            });
+          } else {
+            expect(loadExactSessionEntry(scope)?.entry).toEqual(replacementEntry);
+          }
+          expect(readAcpSessionEntry(scope)?.acp).toEqual(
+            replacement === "same-lifecycle" ? updatedMeta : replacementMeta,
+          );
         } finally {
           release.resolve();
           await outcome;
@@ -304,73 +427,6 @@ it.each([
     );
   },
 );
-
-it("preserves concurrent metadata changes within the original lifecycle", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", label: "acp-write-same-lifecycle" },
-    async (state) => {
-      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-      await state.writeConfig(cfg);
-      const scope = {
-        cfg,
-        env: state.env,
-        agentId: "main",
-        sessionKey: "agent:main:acp:metadata-race",
-        skipMaintenance: true,
-      };
-      await upsertAcpSessionMeta({ ...scope, mutate: () => META });
-      const entry = loadExactSessionEntry(scope)?.entry;
-      if (!entry) {
-        throw new Error("Expected the initialized lifecycle");
-      }
-      const reached = createDeferredCore();
-      const release = createDeferredCore();
-      const original = entryWorker.updateAcpSessionStoreEntry;
-      let paused = false;
-      const intercepted = vi
-        .spyOn(entryWorker, "updateAcpSessionStoreEntry")
-        .mockImplementation(async (input) => {
-          if (!paused && input.mutation.kind === "touch") {
-            paused = true;
-            reached.resolve();
-            await release.promise;
-          }
-          return original(input);
-        });
-      const updatedMeta = { ...META, runtimeSessionName: "same-lifecycle-update" };
-      const updating = upsertAcpSessionMeta({ ...scope, mutate: () => updatedMeta });
-      const outcome = updating.then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
-      try {
-        await Promise.race([
-          reached.promise,
-          outcome.then(() => {
-            throw new Error("ACP update settled before entry mutation");
-          }),
-        ]);
-        await replaceSessionEntry(scope, {
-          ...entry,
-          label: "concurrent-label",
-          updatedAt: entry.updatedAt + 1,
-        });
-        release.resolve();
-        expect((await outcome).ok).toBe(true);
-        expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
-          sessionId: entry.sessionId,
-          lifecycleRevision: entry.lifecycleRevision,
-          label: "concurrent-label",
-        });
-        expect(readAcpSessionMeta(scope)).toEqual(updatedMeta);
-      } finally {
-        release.resolve();
-        await outcome;
-        intercepted.mockRestore();
-      }
-    },
-  );
-});
 
 it("does not close a lifecycle that appears after an absent-entry close was prepared", async () => {
   await withOpenClawTestState(
@@ -417,12 +473,11 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
         (error: unknown) => ({ ok: false as const, error }),
       );
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           reached.promise,
-          outcome.then(() => {
-            throw new Error("ACP close settled before shared publication");
-          }),
-        ]);
+          outcome,
+          "ACP close settled before shared publication",
+        );
         await replaceSessionEntry(scope, {
           sessionId: "appeared-session",
           lifecycleRevision: "appeared-revision",
@@ -447,50 +502,12 @@ it("does not close a lifecycle that appears after an absent-entry close was prep
         }
         expect(mutate).toHaveBeenCalledOnce();
         expect(loadExactSessionEntry(scope)?.entry).toEqual(appeared);
-        expect(readAcpSessionMeta(scope)).toEqual(META);
+        expect(readAcpSessionEntry(scope)?.acp).toEqual(META);
       } finally {
         release.resolve();
         await outcome;
         intercepted.mockRestore();
       }
-    },
-  );
-});
-
-it("does not replay a callback or mutate either store after callback authority is revoked", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", label: "acp-write-revoked" },
-    async (state) => {
-      const cfg: OpenClawConfig = { agents: { ownership: "explicit", entries: { main: {} } } };
-      await state.writeConfig(cfg);
-      const scope = {
-        cfg,
-        env: state.env,
-        agentId: "main",
-        sessionKey: "agent:main:acp:revoked",
-        skipMaintenance: true,
-      };
-      await upsertAcpSessionMeta({ ...scope, mutate: () => META });
-      const before = loadExactSessionEntry(scope)?.entry;
-      let current = true;
-      const mutate = vi.fn(() => {
-        current = false;
-        return null;
-      });
-      await expect(
-        upsertAcpSessionMeta({
-          ...scope,
-          assertCommitAllowed: () => {
-            if (!current) {
-              throw new Error("revoked ACP actor");
-            }
-          },
-          mutate,
-        }),
-      ).rejects.toThrow("revoked ACP actor");
-      expect(mutate).toHaveBeenCalledOnce();
-      expect(loadExactSessionEntry(scope)?.entry).toEqual(before);
-      expect(readAcpSessionMeta(scope)).toEqual(META);
     },
   );
 });

@@ -194,7 +194,7 @@ async function createBuildRecoveryHarness(
     resolveMoveDestination: async () => undefined,
     runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
     runReclaimBarrier: async ({ begin, reclaim }) =>
-      await reclaim({ kind: "local", path: root }, begin()),
+      await reclaim({ kind: "local", path: root }, await begin()),
     runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
     workspaceOperations,
     ...createWorkerWorkspaceRecoveryFixture({
@@ -644,6 +644,39 @@ describe("worker turn launcher build recovery", () => {
       }
     },
   );
+
+  it("clears the reconnect deadline when runtime refresh preparation fails", async () => {
+    const harness = await createBuildRecoveryHarness({
+      rejection: "pending refresh",
+      refreshInPlace: true,
+    });
+    const preparationError = new Error("runtime refresh preparation failed");
+    const prepareRuntimeRefresh = placements.prepareRuntimeRefresh.bind(placements);
+    const scheduled = vi.spyOn(globalThis, "setTimeout");
+    const cleared = vi.spyOn(globalThis, "clearTimeout");
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    const preparation = vi
+      .spyOn(placements, "prepareRuntimeRefresh")
+      .mockImplementationOnce(prepareRuntimeRefresh)
+      .mockImplementationOnce(async () => {
+        reconnectTimer = scheduled.mock.results.at(-1)?.value;
+        expect(scheduled.mock.lastCall?.[1]).toBe(5_000);
+        throw preparationError;
+      });
+    try {
+      await expect(harness.execute()).rejects.toBe(preparationError);
+      expect(preparation).toHaveBeenCalledTimes(2);
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      expect(reconnectTimer).toBeDefined();
+      expect(cleared).toHaveBeenCalledWith(reconnectTimer);
+    } finally {
+      clearTimeout(reconnectTimer);
+      preparation.mockRestore();
+      scheduled.mockRestore();
+      cleared.mockRestore();
+    }
+  });
 
   it("bounds reconnect admission by the caller's timeout", async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });

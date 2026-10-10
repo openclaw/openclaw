@@ -37,7 +37,8 @@
             "strict": false
           }
         }
-      ]
+      ],
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -102,6 +103,9 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "contextUsage": {
           "state": "available",
           "promptTokens": 8,
@@ -159,7 +163,8 @@
           }
         }
       ],
-      "max_completion_tokens": 4096
+      "max_completion_tokens": 4096,
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -219,6 +224,9 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "cacheTelemetry": {
+          "state": "available"
+        },
         "reasoningTokens": 1,
         "contextUsage": {
           "state": "available",

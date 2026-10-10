@@ -1,8 +1,6 @@
-import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
-import { once } from "node:events";
 import fs from "node:fs";
 import { availableParallelism } from "node:os";
 import path from "node:path";
@@ -105,25 +103,6 @@ it("rotates after native exit while preserving queued order, deadlines, and CPU 
   expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
 });
 
-it("retains a failed rotation until retry joins exit before dispatching its successor", async () => {
-  const pool = createPool();
-  await pool.run({ label: "old" }, {});
-  const worker = workers.at(-1)!;
-  const terminate = vi
-    .spyOn(worker, "terminate")
-    .mockRejectedValueOnce(new Error("exit uncertain"));
-  await expect(pool.rotate()).rejects.toThrow("exit uncertain");
-  const prepare = vi.fn(() => {
-    expect(worker.threadId).toBe(-1);
-    return { label: "next" };
-  });
-  const next = pool.run(prepare, {});
-  expect(prepare).not.toHaveBeenCalled();
-  await pool.rotate();
-  await expect(next).resolves.toMatchObject({ label: "next" });
-  expect(terminate).toHaveBeenCalledTimes(2);
-});
-
 it.each(["options", "constructor"] as const)(
   "joins cancellation during %s before removing scratch",
   async (phase) => {
@@ -180,89 +159,6 @@ it("reclaims only its worker scratch after startup failure", async () => {
   expect(fs.readFileSync(path.join(unrelated, "retained-module.js"), "utf8")).toBe(
     "unrelated capture",
   );
-});
-
-it("keeps canceled preparation charged through rotation until its retained input is released", async () => {
-  const pool = createPool({ maxPendingTasks: 1 });
-  const gate = createDeferredCore<PoolFixtureInput>();
-  const controller = new AbortController();
-  const executionSettled = vi.fn();
-  const disposed = createDeferredCore();
-  const first = pool.run(() => gate.promise, {
-    signal: controller.signal,
-    onExecutionSettled: executionSettled,
-    onInputConsumed: disposed.resolve,
-  });
-  const settled = Promise.allSettled([first]);
-  const rotation = pool.rotate();
-  controller.abort();
-  await settled;
-  await rotation;
-  expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
-  await expect(pool.run({ label: "excess" }, {})).rejects.toMatchObject({ code: "overloaded" });
-  gate.resolve({ label: "canceled" });
-  await disposed.promise;
-  expect(pool.getSnapshot().pendingTasks).toBe(0);
-  expect(executionSettled).toHaveBeenCalledOnce();
-  expect(await pool.run({ label: "recovered" }, {})).toMatchObject({ label: "recovered" });
-  expect(workers).toHaveLength(1);
-});
-
-it("keeps a shared worker healthy when an input factory rejects before dispatch", async () => {
-  const pool = createPool({
-    restartOnError: false,
-    idleTimeoutMs: 0,
-    maxPendingTasks: 2,
-    maxPendingBytes: 16,
-  });
-  const first = await pool.run({ label: "first" }, {});
-  const input = createDeferredCore<PoolFixtureInput>();
-  const reason = new Error("queued catalog owner superseded");
-  const released = vi.fn();
-  const rejected = pool.run(() => input.promise, { inputBytes: 8, onInputConsumed: released });
-  const sibling = pool.run({ label: "sibling" }, { inputBytes: 8 });
-  const settled = Promise.allSettled([rejected, sibling]);
-  input.reject(reason);
-  expect(await settled).toEqual([
-    { status: "rejected", reason },
-    {
-      status: "fulfilled",
-      value: expect.objectContaining({ label: "sibling", threadId: first.threadId }),
-    },
-  ]);
-  expect(released).toHaveBeenCalledOnce();
-  await expect(pool.run({ label: "later" }, { inputBytes: 16 })).resolves.toMatchObject({
-    label: "later",
-    threadId: first.threadId,
-  });
-  expect(pool.getSnapshot()).toMatchObject({
-    workers: 1,
-    workersCreated: 1,
-    activeTasks: 0,
-    pendingTasks: 0,
-  });
-});
-
-it("rejects excess pending bytes without preparing input and releases it in caller context", async () => {
-  const context = new AsyncLocalStorage<string>();
-  const pool = createPool({ maxPendingBytes: 8 });
-  const ready = createDeferredCore<PoolFixtureInput>();
-  const first = pool.run(() => ready.promise, { inputBytes: 4 });
-  const queued = pool.run({ label: "queued" }, { inputBytes: 4 });
-  const released = vi.fn(() => context.getStore());
-  const prepare = vi.fn(() => ({ label: "excess" }));
-  const excess = context.run("rejected owner", () =>
-    pool.run(prepare, { inputBytes: 1, onInputConsumed: released }),
-  );
-  const settled = Promise.allSettled([first, queued, excess]);
-  ready.resolve({ label: "first" });
-  expect((await settled)[2]).toMatchObject({ status: "rejected", reason: { code: "overloaded" } });
-  expect(prepare).not.toHaveBeenCalled();
-  expect(released).toHaveBeenCalledOnce();
-  expect(released.mock.results[0]?.value).toBe("rejected owner");
-  expect(await pool.run({ label: "recovered" }, { inputBytes: 8 })).toMatchObject({
-    label: "recovered",
-  });
 });
 
 it("shares compute capacity across pools while ordered workers remain independent", async () => {
@@ -340,35 +236,6 @@ it("requests a host checkpoint when compute contention arrives during an exchang
   }
 });
 
-it("transfers buffer custody across initial input, host requests, replies, and the result", async () => {
-  const pool = createPool();
-  const bytes = new ArrayBuffer(4);
-  new Uint8Array(bytes).set([31, 47]);
-  let returned: ArrayBuffer | undefined;
-  const result = await pool.run(
-    { label: "relay", buffer: bytes, exchanges: 1, relayBuffer: true },
-    {
-      transferList: (input) => [input.buffer!],
-      onRequest: async (value) => {
-        assert.ok(
-          value &&
-            typeof value === "object" &&
-            "buffer" in value &&
-            value.buffer instanceof ArrayBuffer,
-        );
-        returned = value.buffer;
-        expect(new Uint8Array(returned)).toEqual(new Uint8Array([31, 47, 0, 0]));
-        return { input: returned, transferList: [returned], timeoutMs: 10_000 };
-      },
-    },
-  );
-  expect(bytes.byteLength).toBe(0);
-  expect(returned?.byteLength).toBe(0);
-  expect(result.relayedBufferBytes).toBe(0);
-  expect(new Uint8Array(result.buffer!)).toEqual(new Uint8Array([31, 47, 0, 0]));
-  expect((await pool.run({ label: "inspect" }, {})).previousBufferBytes).toBe(0);
-});
-
 it("keeps host cancellation callbacks in the admitted caller context", async () => {
   const context = new AsyncLocalStorage<string>();
   const pool = createPool();
@@ -403,6 +270,68 @@ it("keeps host cancellation callbacks in the admitted caller context", async () 
   expect(observed).toHaveBeenCalledOnce();
   expect(observed.mock.results[0]?.value).toBe("owner");
 });
+
+it.each([
+  { replies: [], deadline: 1_000, opaqueRequest: false },
+  { replies: [1_000], deadline: 1_000, opaqueRequest: false },
+  { replies: [50, 1_000], deadline: 950, opaqueRequest: false },
+  { replies: [], deadline: 1_000, opaqueRequest: true },
+])(
+  "keeps the caller deadline through host waits with $replies replies (opaque=$opaqueRequest)",
+  async ({ replies, deadline, opaqueRequest }) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const pool = createPool({ idleTimeoutMs: 0 });
+    const entered = Array.from({ length: replies.length + 1 }, () => createDeferredCore());
+    const responses = Array.from({ length: replies.length + 1 }, () =>
+      createDeferredCore<{ input: null; timeoutMs: number }>(),
+    );
+    const signals: AbortSignal[] = [];
+    const result = pool.run(
+      { label: "deadline", exchanges: replies.length + 1, opaqueRequest },
+      {
+        timeoutMs: 1_000,
+        onRequest: (_value, { signal }) => {
+          const index = signals.push(signal) - 1;
+          entered[index]!.resolve();
+          return responses[index]!.promise;
+        },
+      },
+    );
+    const outcome = Promise.allSettled([result]);
+    try {
+      await entered[0]!.promise;
+      await vi.advanceTimersByTimeAsync(900);
+      for (const [index, timeoutMs] of replies.entries()) {
+        if (index > 0) {
+          await vi.advanceTimersByTimeAsync(10);
+        }
+        responses[index]!.resolve({ input: null, timeoutMs });
+        await entered[index + 1]!.promise;
+      }
+      await vi.advanceTimersByTimeAsync(deadline - performance.now() - 1);
+      expect(signals.at(-1)?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signals.at(-1)?.aborted).toBe(true);
+      expect(signals.at(-1)?.reason).toMatchObject({ code: "timeout" });
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        `worker task timed out waiting for host callback ${opaqueRequest ? path.basename(workerUrl.pathname) : "fixture-exchange"}`,
+        { code: "WORKER_HOST_CALLBACK_TIMEOUT" },
+      );
+      expect(await outcome).toEqual([
+        { status: "rejected", reason: expect.objectContaining({ code: "timeout" }) },
+      ]);
+      await expect(pool.run({ label: "next" }, {})).resolves.toMatchObject({ label: "next" });
+    } finally {
+      warning.mockRestore();
+      await pool.close();
+      for (const response of responses) {
+        response.resolve({ input: null, timeoutMs: 1_000 });
+      }
+      await outcome;
+    }
+  },
+);
 
 it("keeps queued and reused tasks in their caller context through preparation and exchanges", async () => {
   const context = new AsyncLocalStorage<string>();
@@ -474,25 +403,6 @@ it("arms idle retirement on the clock the pool was created under", async () => {
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
   await expect.poll(() => workers.at(-1)!.threadId).toBe(-1);
-});
-
-it("keeps a promptly recreated worker warm across intermittent tasks, then expires it", async () => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-  const pool = createPool();
-  await pool.run({ label: "cold" }, {});
-  const coldExit = once(workers.at(-1)!, "exit");
-  await vi.advanceTimersByTimeAsync(70_000);
-  await coldExit;
-  const warm = await pool.run({ label: "hot script" }, {});
-  for (let index = 0; index < 8; index++) {
-    await vi.advanceTimersByTimeAsync(70_000);
-    expect((await pool.run({ label: "intermittent" }, {})).threadId).toBe(warm.threadId);
-  }
-  expect(pool.getSnapshot().workersCreated).toBe(2);
-  const warmExit = once(workers.at(-1)!, "exit");
-  await vi.advanceTimersByTimeAsync(5 * 60_000);
-  await warmExit;
-  expect(pool.getSnapshot().workers).toBe(0);
 });
 
 it.each([

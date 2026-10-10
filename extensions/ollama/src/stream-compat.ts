@@ -16,14 +16,21 @@ import {
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
+import { isOllamaCloudOrigin, OLLAMA_CLOUD_PROVIDER_ID } from "./defaults.js";
+import {
+  readOllamaThinkingMapValue,
+  supportsOllamaCloudFullThinkingEffort,
+  type OllamaThinkValue,
+} from "./model-reasoning.js";
+import { readProviderBaseUrl, resolveOllamaBaseUrlForRun } from "./provider-base-url.js";
 import { isOllamaCloudKimiModelRef } from "./sanitizers/kimi-inline-reasoning.js";
 
-export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
+export type { OllamaThinkValue } from "./model-reasoning.js";
 
 const loadProviderStreamRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/provider-stream-shared"),
 );
+const loadToolNameAliases = createLazyRuntimeModule(() => import("./tool-name-aliases.js"));
 
 function createLazyPayloadPatchStreamWrapper(
   baseFn: StreamFn | undefined,
@@ -118,12 +125,20 @@ export function wrapOllamaCompatNumCtx(baseFn: StreamFn | undefined, numCtx: num
 function normalizeOllamaThinkValue(
   value: unknown,
   nativeMax: boolean,
+  model?: ProviderRuntimeModel,
 ): OllamaThinkValue | undefined {
   if (typeof value === "boolean") {
     return value;
   }
   if (value === "off") {
     return false;
+  }
+  const level = value === "adaptive" ? "high" : value;
+  const mapped = readOllamaThinkingMapValue(
+    Object.entries(model?.thinkingLevelMap ?? {}).find(([key]) => key === level)?.[1],
+  );
+  if (mapped !== undefined) {
+    return mapped;
   }
   if (value === "low" || value === "medium" || value === "high") {
     return value;
@@ -137,36 +152,46 @@ function normalizeOllamaThinkValue(
     return "low";
   }
   if (value === "xhigh" || value === "adaptive") {
-    // These OpenClaw-only tiers are not advertised by Ollama; keep their established high mapping.
+    // Without discovered tiers, preserve the legacy high mapping.
     return "high";
   }
   return undefined;
 }
 
-export function resolveOllamaThinkParamValue(
-  params: Record<string, unknown> | undefined,
-  nativeMax = false,
-): OllamaThinkValue | undefined {
-  return normalizeOllamaThinkValue(params?.think ?? params?.thinking, nativeMax);
-}
-
 export function supportsNativeOllamaMax(
   model: Pick<ProviderRuntimeModel, "id" | "provider"> | undefined,
+  baseUrl: string | undefined,
   providerId?: string,
 ): boolean {
-  const isCloudProvider =
-    normalizeProviderId(model?.provider ?? "") === "ollama-cloud" ||
-    normalizeProviderId(providerId ?? "") === "ollama-cloud";
-  return isCloudProvider && supportsOllamaCloudFullThinkingEffort(model?.id ?? "");
+  // Gate on the server receiving the request, not where the model runs: ollama.com
+  // accepts max, but Ollama 0.21.2 and earlier reject it, also when relaying `:cloud`.
+  const sendsToOllamaCloud =
+    normalizeProviderId(model?.provider ?? "") === OLLAMA_CLOUD_PROVIDER_ID ||
+    normalizeProviderId(providerId ?? "") === OLLAMA_CLOUD_PROVIDER_ID ||
+    isOllamaCloudOrigin(baseUrl);
+  return sendsToOllamaCloud && supportsOllamaCloudFullThinkingEffort(model?.id ?? "");
 }
 
-export function shouldForwardNativeOllamaThink(
+function shouldForwardNativeOllamaThink(
   model: ProviderRuntimeModel | undefined,
   think: OllamaThinkValue,
 ): boolean {
   // Ollama accepts top-level `think` as the native chat contract, but rejects
   // truthy values for models known not to expose thinking support.
   return think === false || model?.reasoning !== false;
+}
+
+/** Configured `think` that the native transport sends, when the model accepts it. */
+export function resolveOllamaConfiguredThink(
+  model: ProviderRuntimeModel,
+  nativeMax: boolean,
+): OllamaThinkValue | undefined {
+  const think = normalizeOllamaThinkValue(
+    model.params?.think ?? model.params?.thinking,
+    nativeMax,
+    model,
+  );
+  return think !== undefined && shouldForwardNativeOllamaThink(model, think) ? think : undefined;
 }
 
 export function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
@@ -212,17 +237,24 @@ export function createConfiguredOllamaCompatStreamWrapper(
     }
   }
 
-  const nativeMax = supportsNativeOllamaMax(model, ctx.provider);
+  // Same precedence as the transport from createStreamFn: provider URL, then model URL.
+  const baseUrl = resolveOllamaBaseUrlForRun({
+    modelBaseUrl: model?.baseUrl,
+    providerBaseUrl: readProviderBaseUrl(
+      resolveConfiguredOllamaProviderConfig({ config: ctx.config, providerId: ctx.provider }),
+    ),
+  });
+  const nativeMax = supportsNativeOllamaMax(model, baseUrl, ctx.provider);
   const configuredThinkValue = model
-    ? resolveOllamaThinkParamValue(model.params, nativeMax)
+    ? normalizeOllamaThinkValue(model.params?.think ?? model.params?.thinking, nativeMax, model)
     : undefined;
   const runtimeThinkValue = isNativeOllamaTransport
-    ? normalizeOllamaThinkValue(ctx.thinkingLevel, nativeMax)
+    ? normalizeOllamaThinkValue(ctx.thinkingLevel, nativeMax, model)
     : undefined;
   // "off" is also the implicit agent default. Preserve explicit native Ollama
   // model config unless the active run requests a non-off thinking level.
   const ollamaThinkValue =
-    runtimeThinkValue === false && configuredThinkValue !== undefined
+    ctx.thinkingLevel === "off" && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
   if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
@@ -239,5 +271,17 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = createMoonshotThinkingWrapper(streamFn, thinkingType);
   }
 
+  if (model?.api === "openai-completions" && isOllamaCompatProvider(model)) {
+    const underlying = streamFn;
+    const loadStream = createLazyRuntimeSurface(loadToolNameAliases, (runtime) =>
+      runtime.wrapOllamaToolNames(underlying),
+    );
+    return async (selectedModel, context, options) => {
+      options?.signal?.throwIfAborted();
+      const stream = await loadStream();
+      options?.signal?.throwIfAborted();
+      return stream(selectedModel, context, options);
+    };
+  }
   return streamFn;
 }

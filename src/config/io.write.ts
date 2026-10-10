@@ -77,6 +77,7 @@ import {
 import { logConfigWarningsOnce } from "./io.warnings.js";
 import {
   ConfigWritePostCommitError,
+  createConfigWriteSafetyRejectionError,
   createConfigValidationFailedError,
   type ConfigWriteRollbackStatus,
 } from "./io.write-errors.js";
@@ -90,17 +91,18 @@ import {
   resolveConfigWriteBlockingReasons,
   resolveConfigWriteSuspiciousReasons,
   rollbackConfigFileWriteIfUnchanged,
-  tightenStateDirPermissionsIfNeeded,
 } from "./io.write-safety.js";
 import { prepareConfigWriteTopology } from "./io.write-topology.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import { warnIfJSON5CommentsWillBeStripped } from "./json5-comments.js";
 import { applyMergePatch, createMergePatch } from "./merge-patch.js";
+import { resolveStateDir } from "./paths.js";
 import { setConfigResolutionFacts } from "./resolution-facts.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
 import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
+import { composeConfigWriteAssertions } from "./write-authority.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 
 export async function writeConfigFileFromContext(
@@ -117,10 +119,10 @@ export async function writeConfigFileFromContext(
     const original = options;
     options = {
       ...options,
-      assertConfigPathForWrite: () => {
-        sourceGuard();
-        original.assertConfigPathForWrite?.();
-      },
+      assertConfigPathForWrite: composeConfigWriteAssertions(
+        sourceGuard,
+        original.assertConfigPathForWrite,
+      ),
       beforeCommit: async () => {
         await original.beforeCommit?.();
         sourceGuard();
@@ -243,7 +245,7 @@ export async function writeConfigFileFromContext(
   );
   const resolveValidationCandidate = (candidate: unknown) => {
     // Validate removals now; apply them once to the final authored output after materialization.
-    const config = applyUnsetPathsForWrite(candidate as OpenClawConfig, unsetPaths);
+    const config = applyUnsetPathsForWrite(candidate, unsetPaths);
     if (containsConfigIncludeDirective(config)) {
       return context.resolveRuntimePreflightSourceConfig(
         config,
@@ -304,13 +306,6 @@ export async function writeConfigFileFromContext(
 
   options.assertConfigPathForWrite?.();
   await deps.fs.promises.mkdir(path.dirname(configPath), { recursive: true, mode: 0o700 });
-  await tightenStateDirPermissionsIfNeeded({
-    configPath,
-    env: deps.env,
-    homedir: deps.homedir,
-    fsModule: deps.fs,
-    assertConfigPathForWrite: options.assertConfigPathForWrite,
-  });
   const tildeRestoredOutputConfig = restoreAuthoredTildePathsForWrite(
     persistCandidate,
     snapshot.parsed,
@@ -321,6 +316,7 @@ export async function writeConfigFileFromContext(
     sourceConfig: snapshot.parsed,
     nextConfig: applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths),
     pending: deferredPluginMigrations,
+    writeOptions: { unsetPaths: options.unsetPaths },
   });
   const stampedOutputConfig = stampConfigWriteMetadata(
     outputConfig,
@@ -453,15 +449,19 @@ export async function writeConfigFileFromContext(
     const saveDetail = rejectedSave.ok
       ? `Rejected payload saved to ${rejectedPath}.`
       : `Rejected payload could not be saved to ${rejectedPath}: ${formatErrorMessage(rejectedSave.error)}.`;
-    const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
-    const error = Object.assign(new Error(message), {
+    const diagnosticMessage = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). ${saveDetail}`;
+    const diagnosticError = Object.assign(new Error(diagnosticMessage), {
       code: "CONFIG_WRITE_REJECTED",
       ...(rejectedSave.ok ? { rejectedPath } : {}),
       reasons: blockingReasons,
     });
-    deps.logger.warn(message);
-    await appendWriteAudit("rejected", error);
-    throw error;
+    const userFacingError = createConfigWriteSafetyRejectionError({
+      reasons: blockingReasons,
+      ...(rejectedSave.ok ? { rejectedPath } : {}),
+    });
+    deps.logger.warn(diagnosticMessage);
+    await appendWriteAudit("rejected", diagnosticError);
+    throw userFacingError;
   }
 
   const preCommitRuntimePreflight =
@@ -485,6 +485,10 @@ export async function writeConfigFileFromContext(
   };
   let restoreFile: ((assertCurrent: () => void) => Promise<boolean>) | undefined;
   let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
+  const stateDirectory = {
+    path: resolveStateDir(deps.env, deps.homedir),
+    warn: (message: string) => deps.logger.warn(message),
+  };
   try {
     options.assertConfigPathForWrite?.();
     if (options.baseSnapshot) {
@@ -505,6 +509,7 @@ export async function writeConfigFileFromContext(
       options.assertConfigPathForWrite,
       {
         snapshot,
+        stateDirectory,
         includeGraph: { hashes: includeFileHashes, targets: includeFileTargets },
         onRootRemoved: () => {
           publication.phase = "removed";
@@ -521,6 +526,7 @@ export async function writeConfigFileFromContext(
         previousSnapshot: snapshot,
         committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
         fsModule: deps.fs,
+        stateDirectory,
         ...writeGuard.captureRollbackProof(assertCurrent),
         withPublication: (publish, didMutate) =>
           withDeferredPluginConfigRollback(

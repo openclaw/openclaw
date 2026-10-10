@@ -3,8 +3,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export type WorkerRuntimeRefreshInFlight = {
@@ -28,35 +30,19 @@ type WorkerRuntimeRefreshOptions = Pick<
   WorkerProviderLifecycleOptions,
   | "store"
   | "callBootstrap"
-  | "serviceError"
   | "isStopping"
   | "placementStore"
   | "ensureNodeWorkerBundle"
   | "bootstrapWorker"
   | "credentialBroker"
-> & {
-  requireCurrentOwner: (record: WorkerEnvironmentRecord) => WorkerEnvironmentRecord;
-  stopOwner: (
-    record: WorkerEnvironmentRecord,
-    reason: undefined,
-    runtimeRefresh: { assertCurrent: () => void },
-  ) => Promise<WorkerEnvironmentRecord>;
-  identityResolverFor: (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => Parameters<WorkerProviderLifecycleOptions["bootstrapWorker"]>[0]["resolveIdentity"];
-};
+> &
+  Pick<
+    ReturnType<typeof createWorkerProviderOwnerLifecycle>,
+    "requireCurrentOwner" | "stopOwner" | "identityResolverFor"
+  >;
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
-  const {
-    store,
-    callBootstrap,
-    serviceError,
-    requireCurrentOwner,
-    stopOwner,
-    identityResolverFor,
-  } = options;
+  const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;
   const { ensurePendingCredential } = options.credentialBroker;
   const inFlight = new Map<string, WorkerRuntimeRefreshInFlight>();
   const refresh = async (

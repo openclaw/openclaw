@@ -240,7 +240,7 @@ test("identity changes fence archive before cancellation and force fresh authori
 
     let sharingSettled = false;
     const sharing = track(
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("archive", {
         scope: sharingTarget.storePath,
         identities: [
           sharingTarget.canonicalKey,
@@ -430,7 +430,7 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
     const reclaim = vi.fn(async () => {
       reclaimEntered.resolve();
       await allowNestedReclaim.promise;
-      await runExclusiveSessionLifecycleMutation({
+      await runExclusiveSessionLifecycleMutation("archive", {
         scope: storePath,
         identities: [aliasKey, sessionKey, sessionId],
         run: async () => {},
@@ -456,7 +456,7 @@ test("alias archive lets an earlier alias mutation finish before canonical recla
     );
     await racePromiseWithAbortSignal(reclaimEntered.promise, signal);
     const contender = track(
-      runExclusiveSessionLifecycleMutation({
+      runExclusiveSessionLifecycleMutation("archive", {
         scope: storePath,
         identities: [aliasKey],
         run: async () => {
@@ -481,7 +481,11 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:archive-worker-recheck";
   const sessionId = "session-archive-worker-recheck";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const retained = {
+    abortedLastRun: true,
+    lifecycleRunId: "retained-worker-run",
+  };
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId, retained) } });
   const release = vi.fn();
   const workerEnvironmentService = createWorkerInferenceDrainService(() => ({
     drained: Promise.resolve(),
@@ -502,6 +506,7 @@ test("sessions.patch rechecks authoritative worker work before projection and re
   expect(archived.ok).toBe(false);
   expect(archived.error).toMatchObject({ code: "UNAVAILABLE", retryable: true });
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+  expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject(retained);
   expect(release).toHaveBeenCalledOnce();
 });
 

@@ -1,17 +1,10 @@
 import type { Command } from "commander";
-import { createLazyCliRuntimeLoader } from "../live-transports/shared/live-transport-cli.js";
 import { runWithMantisCliInterrupts } from "./cli-interrupts.js";
 import type { MantisDesktopBrowserSmokeOptions } from "./desktop-browser-smoke.runtime.js";
 import type { MantisDiscordSmokeOptions } from "./discord-smoke.runtime.js";
 import type { MantisBeforeAfterOptions } from "./run.runtime.js";
 import type { MantisSlackDesktopSmokeOptions } from "./slack-desktop-smoke.runtime.js";
 import type { MantisVisualDriverOptions, MantisVisualTaskOptions } from "./visual-task.runtime.js";
-
-type MantisCliRuntime = typeof import("./cli.runtime.js");
-
-const loadMantisCliRuntime = createLazyCliRuntimeLoader<MantisCliRuntime>(
-  () => import("./cli.runtime.js"),
-);
 
 type MantisDiscordSmokeCommanderOptions = Omit<
   MantisDiscordSmokeOptions,
@@ -22,13 +15,6 @@ type MantisBeforeAfterCommanderOptions = Omit<
   MantisBeforeAfterOptions,
   "commandRunner" | "fastMode" | "now"
 > & { fast?: boolean };
-
-async function runBeforeAfter(opts: MantisBeforeAfterOptions) {
-  await runWithMantisCliInterrupts(async (signal) => {
-    const runtime = await loadMantisCliRuntime();
-    await runtime.runMantisBeforeAfterCommand({ ...opts, signal });
-  });
-}
 
 type MantisDesktopBrowserSmokeCommanderOptions = Omit<
   MantisDesktopBrowserSmokeOptions,
@@ -103,7 +89,10 @@ export function registerMantisCli(qa: Command) {
     .option("--skip-build", "Skip pnpm build in baseline/candidate worktrees", false)
     .action(async (opts: MantisBeforeAfterCommanderOptions) => {
       const { fast, ...options } = opts;
-      await runBeforeAfter({ ...options, fastMode: fast });
+      await runWithMantisCliInterrupts(async (signal) => {
+        const runtime = await import("./cli.runtime.js");
+        await runtime.runMantisBeforeAfterCommand({ ...options, fastMode: fast, signal });
+      });
     });
 
   mantis
@@ -119,7 +108,7 @@ export function registerMantisCli(qa: Command) {
     .option("--message <text>", "Smoke message to post")
     .option("--skip-post", "Only check Discord API visibility; do not post or react", false)
     .action(async (opts: MantisDiscordSmokeCommanderOptions) => {
-      const runtime = await loadMantisCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMantisDiscordSmokeCommand(opts);
     });
 
@@ -152,7 +141,7 @@ export function registerMantisCli(qa: Command) {
     .action(async (opts: MantisDesktopBrowserSmokeCommanderOptions) => {
       const { class: machineClassAlias, videoDuration, ...options } = opts;
       const videoDurationSeconds = parseOptionalInteger(videoDuration, "--video-duration");
-      const runtime = await loadMantisCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMantisDesktopBrowserSmokeCommand({
         ...options,
         machineClass: options.machineClass ?? machineClassAlias,
@@ -203,7 +192,7 @@ export function registerMantisCli(qa: Command) {
         throw new Error("--approval-checkpoints cannot be used with --gateway-setup.");
       }
       const { altModel, class: machineClassAlias, fast, model, scenario, ...options } = opts;
-      const runtime = await loadMantisCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMantisSlackDesktopSmokeCommand({
         ...options,
         alternateModel: altModel,
@@ -242,7 +231,7 @@ export function registerMantisCli(qa: Command) {
       const { class: machineClassAlias, ...options } = opts;
       const settleMs = parseOptionalInteger(opts.settleMs, "--settle-ms");
       const visionTimeoutMs = parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms");
-      const runtime = await loadMantisCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMantisVisualTaskCommand({
         ...options,
         machineClass: options.machineClass ?? machineClassAlias,
@@ -271,7 +260,7 @@ export function registerMantisCli(qa: Command) {
     .action(async (opts: MantisVisualDriverCommanderOptions) => {
       const settleMs = parseOptionalInteger(opts.settleMs, "--settle-ms");
       const visionTimeoutMs = parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms");
-      const runtime = await loadMantisCliRuntime();
+      const runtime = await import("./cli.runtime.js");
       await runtime.runMantisVisualDriverCommand({ ...opts, settleMs, visionTimeoutMs });
     });
 }

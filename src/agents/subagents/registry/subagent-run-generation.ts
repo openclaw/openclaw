@@ -106,14 +106,26 @@ export function isSameSubagentRunOwner(
   if (!current || !expected) {
     return false;
   }
+  if (current === expected) {
+    return true;
+  }
   const key = runtimeKeys.get(current);
-  const shared = current === expected || (key !== undefined && key === runtimeKeys.get(expected));
   return (
-    shared &&
+    key !== undefined &&
+    key === runtimeKeys.get(expected) &&
     (isSameSubagentRun(current, expected) ||
       isQueuedSubagentRunRekey(expected, current) ||
       isQueuedSubagentRunRekey(current, expected))
   );
+}
+
+/** The live row when `observed`'s owner still holds its run id; otherwise `observed` itself. */
+export function currentSubagentRunOrObserved<T extends SubagentRunIdentity>(
+  runs: ReadonlyMap<string, T>,
+  observed: T,
+): T {
+  const current = runs.get(observed.runId);
+  return current && isSameSubagentRunOwner(current, observed) ? current : observed;
 }
 
 export function copySubagentRunRuntimeOwner<T extends object>(source: object, copy: T): T {

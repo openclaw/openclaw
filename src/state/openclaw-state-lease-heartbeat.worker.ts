@@ -32,6 +32,7 @@ import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js
 const params = workerData as LeaseHeartbeatWorkerData;
 const shared = new BigInt64Array(params.shared);
 const renewalProgress = new BigInt64Array(params.renewalProgress);
+const completedRequest = new BigInt64Array(params.completedRequest);
 Atomics.store(shared, state.startupPhase, startupPhase["body-entry"]);
 function observeDurableExpiry(expiresAt: number | undefined) {
   Atomics.store(shared, state.expiresAt, BigInt(expiresAt ?? 0));
@@ -121,7 +122,7 @@ const renewInWorker = (explicit: boolean, path: LeaseHeartbeatLoss["path"]): num
               processOwner?.identity,
             );
           },
-          { logger: { warn() {} } },
+          { operationLabel: "state.lease.renew", logger: { warn() {} } },
         ),
       { lockFailureReporting: "suppress" },
     );
@@ -283,6 +284,8 @@ parentPort?.on("message", (request: LeaseHeartbeatParentMessage) => {
       // Preserve the first loss before the existing request rejection can escape.
       recordLoss({ path, outcome });
     }
+    // Parent deadlines can run before delivery of this completed request's reply.
+    Atomics.store(completedRequest, 0, BigInt(request.id));
     parentPort?.postMessage(reply, []);
     if (lost) {
       lose({ path, outcome });

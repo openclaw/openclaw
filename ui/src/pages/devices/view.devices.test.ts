@@ -1015,7 +1015,7 @@ describe("devices access gating", () => {
           },
         ],
       },
-      configForm: { agents: { entries: [{ id: "main", default: true }] } },
+      configForm: { agents: { entries: { main: {} } } },
       configDirty: true,
     });
 

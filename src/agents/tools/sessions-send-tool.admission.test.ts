@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -15,6 +16,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -43,6 +45,7 @@ import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 vi.mock("./sessions-send-tool.a2a.js", () => ({
@@ -102,6 +105,43 @@ describe("sessions_send dispatch admission", () => {
     await state.cleanup();
   });
 
+  it("applies peer preferences to new notifications without revoking accepted events", async () => {
+    const callGateway = vi.fn();
+    callGateway.mockResolvedValue({ key: targetSessionKey, agentId: "main" });
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterSessionKey,
+      config,
+      callGateway,
+      idempotencyKey: runId,
+    });
+    const first = await tool.execute("notify-peer", {
+      sessionKey: targetSessionKey,
+      message: "accepted notice",
+      mode: "notify",
+    });
+    expect(first.details).toMatchObject({
+      status: "queued",
+      durability: "process",
+      runStarted: false,
+    });
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: targetSessionKey },
+      { sessionId: "target-session", updatedAt: 2, communication: { receive: "never" } },
+    );
+    expect(peekSystemEvents(targetSessionKey)).toHaveLength(1);
+    const second = await tool.execute("notify-denied", {
+      sessionKey: targetSessionKey,
+      message: "unaccepted notice",
+      mode: "notify",
+    });
+    expect(second.details).toMatchObject({ status: "forbidden" });
+    const consumed = drainSystemEvents(targetSessionKey);
+    expect(consumed).toHaveLength(1);
+    expect(consumed[0]).toContain("accepted notice");
+    expect(consumed[0]).not.toContain("unaccepted notice");
+    expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+  });
+
   const callerKeys = [requesterSessionKey, "agent:main:telegram:direct:peer-1"];
   it.each(callerKeys)("retains accepted reply source (%s)", async (sourceKey) => {
     if (sourceKey !== requesterSessionKey) {
@@ -115,6 +155,8 @@ describe("sessions_send dispatch admission", () => {
       );
     }
     const context = createContext();
+    // The admitted Gateway owns one current snapshot, not the factory's fresh {} per read.
+    context.getRuntimeConfig = () => config;
     const owner = createOperatorClient({ profileName: "send-owner", scopes: ["operator.write"] });
     const source = captureGatewayDeviceRevocation(
       context,
@@ -212,7 +254,15 @@ describe("sessions_send dispatch admission", () => {
             },
           ),
       );
-      await capturing.promise;
+      await awaitGateBeforeSettlement(
+        capturing.promise,
+        pending.then((result) => {
+          throw new Error(
+            `Send settled before reply-source capture: ${JSON.stringify(result.details)}`,
+          );
+        }),
+        "Send completed without reaching reply-source capture",
+      );
       vi.useFakeTimers();
       await vi.advanceTimersByTimeAsync(0);
       vi.useRealTimers();
@@ -315,6 +365,9 @@ describe("sessions_send dispatch admission", () => {
       const gateway = vi
         .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
         .mockImplementation(callGateway);
+      const mutation = vi
+        .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+        .mockImplementation(callGateway);
       // This routing fixture supplies a run-scoped Gateway, not a native task
       // receipt. Keep its real A2A/route assertions at that explicit boundary;
       // retained core authority and custody have separate owner/integration proof.
@@ -369,6 +422,7 @@ describe("sessions_send dispatch admission", () => {
       } finally {
         prepareFollowup.mockRestore();
         gateway.mockRestore();
+        mutation.mockRestore();
       }
     },
   );
@@ -422,6 +476,9 @@ describe("sessions_send dispatch admission", () => {
     const gateway = vi
       .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
       .mockImplementation(callGateway);
+    const mutation = vi
+      .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+      .mockImplementation(callGateway);
     try {
       const tool = createOpenClawTools({
         agentSessionKey: sessionKey,
@@ -474,6 +531,7 @@ describe("sessions_send dispatch admission", () => {
       expect(sendParams).not.toHaveProperty("sessionGeneration");
     } finally {
       gateway.mockRestore();
+      mutation.mockRestore();
     }
   });
 

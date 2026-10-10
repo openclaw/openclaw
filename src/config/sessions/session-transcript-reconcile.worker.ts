@@ -1,6 +1,7 @@
 /** Worker entrypoint for transcript parsing and active-branch resolution only. */
 import { MessagePort } from "node:worker_threads";
-import { readSqliteSchemaCookie } from "../../infra/sqlite-schema-contract.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import {
@@ -19,7 +20,6 @@ import {
   runSqliteReconciliationLifecyclePhase,
   type SqliteMutationWorkerCoordination,
 } from "./session-accessor.sqlite-worker-coordination.js";
-import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
 import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
@@ -42,7 +42,7 @@ type ReconcileWorkerOwner = {
 type ReconcileWorkerPlanInput = ReconcileWorkerOwner & {
   agentId: string;
   path: string;
-  preferredSessionId?: string;
+  sessionIds: string[];
 };
 
 export type SessionTranscriptReconcileWorkerInput =
@@ -74,22 +74,25 @@ export type SessionTranscriptReconcileWorkerMessage =
       rows: PreparedSessionTranscriptProjection["activeRows"];
       sessionId: string;
     }
-  | { type: "done" }
+  | { type: "done"; yielded: boolean }
   | { type: "failed"; error: string }
   | { type: "lease-released" }
   | { type: "lease-release-failed"; error: string }
   | { type: "fts-chunk"; chunk: EncodedTranscriptFtsChunk; sessionId: string }
-  | { type: "plan-finish"; sessionId: string }
+  | { type: "plan-finish"; sessionId: string; remainingSessions: number }
   | { type: "plan-start"; plan: PreparedSessionTranscriptProjectionMetadata }
   | { type: "source-read"; sessionId: string };
 
-type SessionTranscriptReconcileWorkerCommand = { accepted: boolean; type: "continue" };
+type SessionTranscriptReconcileWorkerCommand = {
+  accepted: boolean;
+  type: "continue";
+  yield?: true;
+};
 
-function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function parseWorkerInput(input: unknown): SessionTranscriptReconcileWorkerInput | undefined {
+  if (!isRecord(input)) {
     return undefined;
   }
-  const input = value as Record<string, unknown>;
   if (
     input.mode === "memory" &&
     Array.isArray(input.sessionIds) &&
@@ -108,34 +111,24 @@ function parseWorkerInput(value: unknown): SessionTranscriptReconcileWorkerInput
   ) {
     return { ...owner, mode: "release", leaseId: input.leaseId, path: input.path };
   }
-  if (typeof input.agentId !== "string" || typeof input.path !== "string") {
-    return undefined;
-  }
-  if (input.preferredSessionId !== undefined && typeof input.preferredSessionId !== "string") {
+  if (
+    typeof input.agentId !== "string" ||
+    typeof input.path !== "string" ||
+    !Array.isArray(input.sessionIds) ||
+    !input.sessionIds.every((sessionId) => typeof sessionId === "string")
+  ) {
     return undefined;
   }
   const plan = {
     ...owner,
     agentId: input.agentId,
     path: input.path,
-    ...(typeof input.preferredSessionId === "string"
-      ? { preferredSessionId: input.preferredSessionId }
-      : {}),
+    sessionIds: input.sessionIds,
   };
   if (input.mode === "disk" && typeof input.leaseId === "string") {
     return { ...plan, mode: "disk", leaseId: input.leaseId };
   }
   return undefined;
-}
-
-function orderSessionIds(sessionIds: string[], preferredSessionId: string | undefined): string[] {
-  if (!preferredSessionId || !sessionIds.includes(preferredSessionId)) {
-    return sessionIds;
-  }
-  return [
-    preferredSessionId,
-    ...sessionIds.filter((sessionId) => sessionId !== preferredSessionId),
-  ];
 }
 
 function resolveLeaseEnvironment(owner: ReconcileWorkerOwner) {
@@ -173,14 +166,23 @@ function releaseLease(
   port.close();
 }
 
-function waitForContinue(port: MessagePort): Promise<boolean> {
+function waitForContinue(port: MessagePort): Promise<SessionTranscriptReconcileWorkerCommand> {
   return new Promise((resolve, reject) => {
-    port.once("message", (message: SessionTranscriptReconcileWorkerCommand) => {
-      if (message?.type !== "continue" || typeof message.accepted !== "boolean") {
+    port.once("message", (message: unknown) => {
+      if (
+        !isRecord(message) ||
+        message.type !== "continue" ||
+        typeof message.accepted !== "boolean" ||
+        (message.yield !== undefined && message.yield !== true)
+      ) {
         reject(new Error("session transcript reconcile worker received an invalid command"));
         return;
       }
-      resolve(message.accepted);
+      resolve({
+        accepted: message.accepted,
+        type: "continue",
+        ...(message.yield === true ? { yield: true } : {}),
+      });
     });
   });
 }
@@ -189,7 +191,7 @@ async function postAndWait(
   port: MessagePort,
   message: SessionTranscriptReconcileWorkerMessage,
   transferList: ArrayBuffer[] = [],
-): Promise<boolean> {
+): Promise<SessionTranscriptReconcileWorkerCommand> {
   port.postMessage(message, transferList);
   return await waitForContinue(port);
 }
@@ -231,36 +233,40 @@ function takeFtsChunkEnd(rows: readonly TranscriptIndexEntry[], start: number): 
 async function streamPreparedProjection(
   plan: PreparedSessionTranscriptProjection,
   port: MessagePort,
-): Promise<void> {
+  remainingSessions: number,
+): Promise<boolean> {
   const { activeRows, ftsRows, ...metadata } = plan;
-  if (!(await postAndWait(port, { type: "plan-start", plan: metadata }))) {
-    return;
+  if (!(await postAndWait(port, { type: "plan-start", plan: metadata })).accepted) {
+    return false;
   }
   for (let offset = 0; offset < activeRows.length; offset += ACTIVE_ROWS_PER_CHUNK) {
     if (
-      !(await postAndWait(port, {
-        type: "active-chunk",
-        rows: activeRows.slice(offset, offset + ACTIVE_ROWS_PER_CHUNK),
-        sessionId: plan.sessionId,
-      }))
+      !(
+        await postAndWait(port, {
+          type: "active-chunk",
+          rows: activeRows.slice(offset, offset + ACTIVE_ROWS_PER_CHUNK),
+          sessionId: plan.sessionId,
+        })
+      ).accepted
     ) {
-      return;
+      return false;
     }
   }
   for (let offset = 0; offset < ftsRows.length;) {
     const end = takeFtsChunkEnd(ftsRows, offset);
     const chunk = encodeFtsChunk(ftsRows.slice(offset, end));
-    const accepted = await postAndWait(
-      port,
-      { type: "fts-chunk", chunk, sessionId: plan.sessionId },
-      [chunk.textBytes.buffer],
-    );
-    if (!accepted) {
-      return;
+    const reply = await postAndWait(port, { type: "fts-chunk", chunk, sessionId: plan.sessionId }, [
+      chunk.textBytes.buffer,
+    ]);
+    if (!reply.accepted) {
+      return false;
     }
     offset = end;
   }
-  await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId });
+  return (
+    (await postAndWait(port, { type: "plan-finish", sessionId: plan.sessionId, remainingSessions }))
+      .yield === true
+  );
 }
 
 async function prepareMemoryProjection(sessionId: string, port: MessagePort) {
@@ -359,9 +365,9 @@ async function run(
           throw new Error("Transcript worker lost its admitted shared-state handle");
         }
         const shared = sharedBorrow.database;
-        const sharedSchema = readSqliteSchemaCookie(shared.db);
-        const agentSchema = readSqliteSchemaCookie(opened.database.db);
-        if (typeof sharedSchema !== "number" || typeof agentSchema !== "number") {
+        const sharedSchema = getAdmittedSqliteSchemaFacts(shared.db)?.admissionId;
+        const agentSchema = getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId;
+        if (!sharedSchema || !agentSchema) {
           throw new Error("Transcript worker cannot retain its admitted schema identities");
         }
         // Reentry is a new native phase, never adoption of a schema changed while yielding.
@@ -369,8 +375,8 @@ async function run(
           sharedBorrow?.assertCurrent();
           if (
             !shared.db.isOpen ||
-            readSqliteSchemaCookie(shared.db) !== sharedSchema ||
-            readSqliteSchemaCookie(opened.database.db) !== agentSchema
+            getAdmittedSqliteSchemaFacts(shared.db)?.admissionId !== sharedSchema ||
+            getAdmittedSqliteSchemaFacts(opened.database.db)?.admissionId !== agentSchema
           ) {
             throw new Error("Transcript worker schema changed between lifecycle phases");
           }
@@ -383,25 +389,23 @@ async function run(
       }
       return opened.database;
     });
-    const sessionIds =
-      reconcileInput.mode === "memory"
-        ? reconcileInput.sessionIds
-        : orderSessionIds(
-            listSessionsNeedingTranscriptIndexReconcile(database!.db),
-            reconcileInput.preferredSessionId,
-          );
-    for (const sessionId of sessionIds) {
+    const sessionIds = reconcileInput.sessionIds;
+    let yielded = false;
+    for (const [index, sessionId] of sessionIds.entries()) {
       assertSource();
       const plan =
         reconcileInput.mode === "memory"
           ? await prepareMemoryProjection(sessionId, port)
           : prepareSessionTranscriptProjection(database!.db, sessionId);
       if (plan) {
-        await streamPreparedProjection(plan, port);
+        yielded = await streamPreparedProjection(plan, port, sessionIds.length - index - 1);
         assertSource();
+        if (yielded) {
+          break;
+        }
       }
     }
-    terminalMessage = { type: "done" };
+    terminalMessage = { type: "done", yielded };
   } catch (error) {
     if (unsettled) {
       throw error;

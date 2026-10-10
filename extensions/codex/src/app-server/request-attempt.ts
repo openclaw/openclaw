@@ -4,6 +4,7 @@ import type {
   CodexRequestWaiterSummary,
   CodexRequestWireOutcome,
 } from "./request-observation.js";
+import { CodexAppServerRpcError } from "./rpc-error.js";
 
 type CodexRequestWaitOptions = {
   timeoutMs?: number;
@@ -54,6 +55,7 @@ export function createCodexRequestAttempt(params: {
   diagnosticIdentity?: Pick<CodexRequestWaiterSummary, "clientInstanceId" | "rpcId">;
   observe?: (event: CodexRequestAttemptObservation) => void;
   onSettled: () => void;
+  onIngressRejected?: () => void;
   /** A correlated native response, never local cancellation or transport closure. */
   onResponse?: (mayHaveWritten: boolean) => void;
   cancellationError: (
@@ -126,18 +128,15 @@ export function createCodexRequestAttempt(params: {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let removeAbort: (() => void) | undefined;
         const waiterAttachedAtMs = diagnostics && observe ? performance.now() : 0;
-        const cleanup = () => {
-          clearTimeout(timer);
-          timer = undefined;
-          removeAbort?.();
-          removeAbort = undefined;
-        };
         const detach = (waiterOutcome: CodexRequestWaiterOutcome) => {
           if (!waiter) {
             return false;
           }
           waiter = undefined;
-          cleanup();
+          clearTimeout(timer);
+          timer = undefined;
+          removeAbort?.();
+          removeAbort = undefined;
           if (!params.retainWritten || !mayHaveWritten) {
             finish(mayHaveWritten ? "correlation-closed" : "not-written");
           }
@@ -229,11 +228,15 @@ export function createCodexRequestAttempt(params: {
         // elapsed before its timer runs. Preserve that fact before projection.
         if (definitelyNotEnqueued) {
           mayHaveWritten = false;
+          params.onIngressRejected?.();
         }
         params.onResponse?.(mayHaveWritten);
         const current = currentWaiterError();
         waiter?.reject(
-          current?.error ?? params.localError(error, mayHaveWritten),
+          current?.error ??
+            (error instanceof CodexAppServerRpcError
+              ? error
+              : params.localError(error, mayHaveWritten)),
           current?.outcome ?? "native-error",
         );
       }

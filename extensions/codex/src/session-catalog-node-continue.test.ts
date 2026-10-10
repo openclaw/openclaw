@@ -170,9 +170,7 @@ describe("Codex supervision actions", () => {
     adopted.archivedAt = 123;
     adopted.archivedBy = { type: "human", id: "operator-1" };
     adopted.archiveReason = "manual";
-    runtimeConfig = {
-      agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
-    } as OpenClawConfig;
+    runtimeConfig = compatibilityOwnerConfig("beta");
     const second = await provider?.continueSession?.({
       agentId: "alpha",
       hostId: "node:devbox",
@@ -238,7 +236,7 @@ describe("Codex supervision actions", () => {
     expect(restored?.archivedBy).toBeUndefined();
     expect(restored?.archiveReason).toBeUndefined();
 
-    const listed = await provider?.list({ hostIds: ["node:devbox"] });
+    const listed = await provider?.list({ agentId: "alpha", hostIds: ["node:devbox"] });
     expect(listed?.[0]?.sessions[0]).toMatchObject({
       threadId: remoteThreadId,
       sessionKey: first?.sessionKey,
@@ -248,7 +246,7 @@ describe("Codex supervision actions", () => {
   it("keeps Gateway-first upgrades compatible with the released node selector and separates concurrent owners", async () => {
     const threadId = "123e4567-e89b-12d3-a456-426614174001";
     const runtimeConfig = {
-      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     } as OpenClawConfig;
     // v2026.9.4 resolves every catalog packet through the node's configured agent roster.
     const selectReleasedNodeAgent = (params: unknown) =>

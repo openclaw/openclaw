@@ -389,48 +389,36 @@ actor GatewayConnection: Observable {
         method: String,
         params: [String: AnyCodable]?,
         timeoutMs: Double? = nil,
-        retryTransportFailures: Bool = true) async throws -> Data
-    {
-        try await self.request(
-            method: method,
-            params: params,
-            timeoutMs: timeoutMs,
-            retryTransportFailures: retryTransportFailures,
-            allowTLSRepair: true)
-    }
-
-    private func request(
-        method: String,
-        params: [String: AnyCodable]?,
-        timeoutMs: Double?,
-        retryTransportFailures: Bool,
-        allowTLSRepair: Bool) async throws -> Data
+        retryTransportFailures: Bool = true,
+        preflightRoute: Route? = nil) async throws -> Data
     {
         let shutdownGeneration = shutdownGeneration
         let endpoint = try await currentEndpoint()
+        if let preflightRoute {
+            try self.requireCurrentPreflightRoute(
+                preflightRoute, endpoint: endpoint, shutdownGeneration: shutdownGeneration)
+        }
         let cfg = endpoint.config
         let client = try await configure(
             endpoint: endpoint,
             shutdownGeneration: shutdownGeneration)
+        let route = Route(
+            endpoint: endpoint,
+            generation: self.routeGeneration,
+            activationBindingKey: self.configuredConnection?.activationBindingKey)
 
         do {
             return try await client.request(method: method, params: params, timeoutMs: timeoutMs)
         } catch {
             try Task.checkCancellation()
             if GatewayCompatibilityIssue(error: error) != nil { throw error }
-            if allowTLSRepair,
-               let tlsError = error as? GatewayTLSValidationError,
-               await GatewayTLSRepairCoordinator.shared.repair(
-                   route: endpoint.tls,
-                   url: cfg.url,
-                   failure: tlsError.failure)
+            if let tlsError = error as? GatewayTLSValidationError,
+               let replacement = try await self.renewLearnedPin(
+                   after: tlsError.failure, route: route, shutdownGeneration: shutdownGeneration)
             {
-                return try await self.request(
-                    method: method,
-                    params: params,
-                    timeoutMs: timeoutMs,
-                    retryTransportFailures: retryTransportFailures,
-                    allowTLSRepair: false)
+                // The typed handshake failure precedes dispatch. Retry it once;
+                // never recursively discover a different endpoint or repair again.
+                return try await replacement.request(method: method, params: params, timeoutMs: timeoutMs)
             }
             if !retryTransportFailures || error is GatewayResponseError || error is GatewayDecodingError {
                 throw error
@@ -507,6 +495,60 @@ actor GatewayConnection: Observable {
                 throw error
             }
         }
+    }
+
+    /// A delayed TLS failure has no authority to repair credentials or a route that
+    /// changed while the handshake was in flight. Returns the renewed route's client.
+    private func renewLearnedPin(
+        after failure: GatewayTLSValidationFailure,
+        route: Route,
+        shutdownGeneration: UInt64) async throws -> GatewayChannelActor?
+    {
+        let current = try await self.currentEndpoint()
+        try self.requireCurrentPreflightRoute(route, endpoint: current, shutdownGeneration: shutdownGeneration)
+        guard GatewayTLSRepairCoordinator.repairOnCurrentExecutor(route: route.tls, url: route.url, failure: failure)
+        else { return nil }
+        let refreshed = try await self.currentEndpoint()
+        try self.requireCurrentPreflightRoute(route, endpoint: refreshed, shutdownGeneration: shutdownGeneration)
+        return try await self.configure(endpoint: refreshed, shutdownGeneration: shutdownGeneration)
+    }
+
+    /// Automatic reconnects have no request to retry: renew through the same owner
+    /// checks, then reconnect only the replacement socket.
+    private func renewLearnedPinAfterReconnectFailure(
+        _ error: GatewayTLSValidationError,
+        routeGeneration: UInt64) async
+    {
+        guard routeGeneration == self.routeGeneration, let connection = self.configuredConnection else { return }
+        let route = Route(
+            endpoint: connection.endpoint,
+            generation: routeGeneration,
+            activationBindingKey: connection.activationBindingKey)
+        guard let replacement = try? await self.renewLearnedPin(
+            after: error.failure, route: route, shutdownGeneration: connection.shutdownGeneration)
+        else { return }
+        // Retiring the old channel cancels the task that reported this failure.
+        Task { try? await replacement.connect() }
+    }
+
+    /// Learned-pin renewal can be shared with another connection. Only that TLS
+    /// metadata may change; the configured client, credentials and route owner stay fixed.
+    private func requireCurrentPreflightRoute(
+        _ route: Route,
+        endpoint: EndpointSnapshot,
+        shutdownGeneration: UInt64) throws
+    {
+        try self.requireCurrentShutdownGeneration(shutdownGeneration)
+        try Task.checkCancellation()
+        guard let configuredConnection,
+              route.matches(configuredConnection.endpoint),
+              route.generation == self.routeGeneration,
+              route.matches(config: endpoint.config),
+              route.authority == endpoint.routeAuthority,
+              route.deviceAuthGatewayID == endpoint.deviceAuthGatewayID,
+              route.browserSession == endpoint.browserSession,
+              GatewayTLSRoute.hasSameTrustPolicy(route.tls, endpoint.tls)
+        else { throw CancellationError() }
     }
 
     private func retryRequest(
@@ -661,41 +703,6 @@ extension GatewayConnection {
         try await self.request(method: method.rawValue, params: params, timeoutMs: timeoutMs)
     }
 
-    func request(
-        _ request: OpenClawChatGatewayRequest,
-        retryTransportFailures: Bool = true) async throws -> Data
-    {
-        try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            retryTransportFailures: retryTransportFailures)
-    }
-
-    func request(
-        _ request: OpenClawChatGatewayRequest,
-        ifCurrentRoute route: Route,
-        distinguishPreDispatchRouteChange: Bool = false) async throws -> Data
-    {
-        try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentRoute: route,
-            distinguishPreDispatchRouteChange: distinguishPreDispatchRouteChange)
-    }
-
-    func request(
-        _ request: OpenClawChatGatewayRequest,
-        ifCurrentServerLease lease: ServerLease) async throws -> Data
-    {
-        try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
-            ifCurrentServerLease: lease)
-    }
-
     func requestDecoded<T: Decodable>(
         method: Method,
         params: [String: AnyCodable]? = nil,
@@ -780,16 +787,18 @@ extension GatewayConnection {
         return lease
     }
 
-    private func acquireServerLease(
+    func acquireServerLease(
         timeoutMs: Double,
-        retryTransportFailures: Bool) async throws -> ServerLease
+        retryTransportFailures: Bool,
+        preflightRoute: Route? = nil) async throws -> ServerLease
     {
         let shutdownGeneration = self.shutdownGeneration
         _ = try await self.request(
             method: Method.health.rawValue,
             params: nil,
             timeoutMs: timeoutMs,
-            retryTransportFailures: retryTransportFailures)
+            retryTransportFailures: retryTransportFailures,
+            preflightRoute: preflightRoute)
         try self.requireCurrentShutdownGeneration(shutdownGeneration)
         let endpoint = try await currentEndpoint()
         guard let client = configuredClient(
@@ -1051,6 +1060,9 @@ extension GatewayConnection {
             },
             extraHeadersProvider: browserSession.map { session in
                 { @Sendable in (try? session.headers(for: config.url)) ?? [:] }
+            },
+            reconnectTLSFailureHandler: { [weak self] error in
+                await self?.renewLearnedPinAfterReconnectFailure(error, routeGeneration: configuredRouteGeneration)
             })
         self.configuredConnection = ConfiguredConnection(
             client: client,
@@ -1447,20 +1459,9 @@ extension GatewayConnection {
             continuation.yield(delivery)
         }
         if case .event = push, let socketGeneration = self.socketGenerationState.activeGeneration {
-            var terminatedSubscriberIDs: [UUID] = []
             for (id, continuation) in self.realtimeTalkSubscribers[socketGeneration] ?? [:] {
-                switch continuation.yield(delivery) {
-                case .enqueued:
-                    break
-                case .dropped, .terminated:
-                    continuation.finish()
-                    terminatedSubscriberIDs.append(id)
-                @unknown default:
-                    continuation.finish()
-                    terminatedSubscriberIDs.append(id)
-                }
-            }
-            for id in terminatedSubscriberIDs {
+                if case .enqueued = continuation.yield(delivery) { continue }
+                continuation.finish()
                 self.removeRealtimeTalkSubscriber(id, socketGeneration: socketGeneration)
             }
         }

@@ -267,7 +267,7 @@ export function createWorkerSessionPlacementGate(
         pending.stagedResultRef === null &&
         pending.workspaceAcceptedAtMs === null
       ) {
-        store.failWorkspaceResultAndReleaseTurn(pending, error);
+        await store.failWorkspaceResultAndReleaseTurn(pending, error, assertCurrent);
         return;
       }
       await store.handoffWorkspaceResultRecovery(claim, assertCurrent);

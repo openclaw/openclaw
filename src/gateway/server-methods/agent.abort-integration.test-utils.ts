@@ -247,10 +247,10 @@ describe("gateway agent handler chat.abort integration", () => {
       isWebchatConnect: () => false,
     });
 
-    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
-      aborted: true,
-      runIds: [runId],
-    });
+    expect(stopRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ aborted: true, runIds: [runId] }),
+    );
     expect(active.controller.signal.aborted).toBe(true);
     expect(active.projectSessionActive).toBe(false);
     await execution.completion;
@@ -343,13 +343,15 @@ describe("gateway agent handler chat.abort integration", () => {
       runId,
       status: "timeout",
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
   });
 
   it("keeps selected-global alias scope when aborting during pre-accept setup", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: { entries: { main: {}, work: {} } },
       session: { scope: "global" },
     };
     mocks.loadSessionEntry.mockReturnValue({
@@ -490,10 +492,10 @@ describe("gateway agent handler chat.abort integration", () => {
       isWebchatConnect: () => false,
     });
 
-    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
-      aborted: true,
-      runIds: [runId],
-    });
+    expect(stopRespond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ aborted: true, runIds: [runId] }),
+    );
     expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
       runId,
       sessionKey: "agent:main:main",
@@ -1649,7 +1651,7 @@ describe("gateway agent handler chat.abort integration", () => {
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("drain", {
       scope: "/tmp/sessions.json",
       identities: [sessionKey, sessionId],
       run: async () => {
@@ -1700,13 +1702,12 @@ describe("gateway agent handler chat.abort integration", () => {
         resolveAgentRunExpiresAtMs({ now: abortEntry.startedAtMs, timeoutMs: 120_000 }),
       );
 
-      nowMs += 120_000;
-      const executionStartedAtMs = nowMs;
+      nowMs += 119_999;
       const executionStarted = requireValue(onExecutionStarted, "execution-start callback missing");
       await executionStarted();
       expect(abortEntry.startedAtMs).toBe(admissionStartedAtMs + 90_000);
       expect(abortEntry.expiresAtMs).toBe(
-        resolveAgentRunExpiresAtMs({ now: executionStartedAtMs, timeoutMs: 120_000 }),
+        resolveAgentRunExpiresAtMs({ now: nowMs, timeoutMs: 120_000 }),
       );
 
       const firstExecutionExpiryMs = abortEntry.expiresAtMs;
@@ -1759,7 +1760,8 @@ describe("gateway agent handler chat.abort integration", () => {
 
       expect(abortEntry.startedAtMs).toBe(startedAtMs);
       expect(abortEntry.expiresAtMs).toBe(queueExpiresAtMs);
-      expect(abortEntry.controller.signal.aborted).toBe(false);
+      expect(abortEntry.controller.signal.aborted).toBe(true);
+      expect(abortEntry.abortStopReason).toBe("timeout");
 
       nowMs = queueExpiresAtMs - 1;
       await executionStarted();

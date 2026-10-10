@@ -55,7 +55,7 @@ export async function findSecretStorePlaintextResidueFindings(params: {
   }
   const namesByValue = new Map<string, string[]>();
   for (const entry of entries) {
-    const result = readSecretStoreValue({
+    const result = await readSecretStoreValue({
       scope: { kind: "team" },
       name: entry.name,
       database: params.database,

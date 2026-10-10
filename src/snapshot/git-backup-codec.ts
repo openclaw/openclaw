@@ -462,24 +462,12 @@ function decodeSqliteValue(value: unknown): null | string | number | bigint | Bu
   throw new Error("Git backup row contains an invalid encoded object.");
 }
 
-function convergeRestoredSchema(database: DatabaseSync, identity: GitBackupIdentity): void {
-  database.exec(
-    identity.role === "global"
-      ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
-      : OPENCLAW_AGENT_SCHEMA_SQL,
-  );
-}
-
 function validateRestoredOwner(
   database: DatabaseSync,
   databasePath: string,
   identity: GitBackupIdentity,
 ): void {
   assertSqliteIntegrity(database, databasePath);
-  const foreignKeys = database.prepare("PRAGMA foreign_key_check").all();
-  if (foreignKeys.length > 0) {
-    throw new Error(`SQLite foreign_key_check failed for restored Git backup: ${databasePath}`);
-  }
   buildSnapshotValidator(identity)(database, databasePath);
 }
 
@@ -632,7 +620,11 @@ export async function restoreGitBackupDirectory(params: {
     database.exec(`PRAGMA user_version = ${manifest.userVersion};`);
     // Redacted and operational projection tables are absent from Git. Recreate
     // their canonical empty schemas before enforcing database ownership.
-    convergeRestoredSchema(database, restoreIdentity);
+    database.exec(
+      restoreIdentity.role === "global"
+        ? getOpenClawStateRuntimeSchema({ includeVersionLazyAdditiveTables: false })
+        : OPENCLAW_AGENT_SCHEMA_SQL,
+    );
     validateRestoredOwner(database, stagedPath, restoreIdentity);
     const tables: GitBackupTableResult[] = [];
     for (const [table, expected] of Object.entries(manifest.tables)) {

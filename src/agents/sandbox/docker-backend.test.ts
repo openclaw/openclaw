@@ -6,7 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { managedGitHubIdentityEnvironment } from "../github-tool-identity.js";
+import { managedGitHubIdentityEnvironment } from "../github-tool-identity-env.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -62,7 +62,7 @@ function createConfig(): OpenClawConfig {
           },
         },
       },
-      list: [],
+      entries: {},
     },
   };
 }
@@ -79,6 +79,20 @@ async function createDockerExecBackend() {
     agentWorkspaceDir: "/workspace",
     cfg: resolveSandboxConfigForAgent(createConfig()),
   });
+}
+
+function runtimeEntry(backendId = "docker") {
+  const containerName = backendId === "podman" ? "sandbox-podman" : "sandbox-1";
+  return {
+    containerName,
+    backendId,
+    runtimeLabel: containerName,
+    sessionKey: "agent:coder:main",
+    createdAtMs: 1,
+    lastUsedAtMs: 1,
+    image: "openclaw-sandbox:bookworm-slim",
+    ...(backendId === "podman" ? { backendTarget: { key: "local", globalArgs: [] } } : {}),
+  };
 }
 
 describe("docker sandbox backend manager", () => {
@@ -108,38 +122,11 @@ describe("docker sandbox backend manager", () => {
     });
   });
 
-  it("rechecks runtime authority after awaited engine validation before filesystem exec", async () => {
-    let current = true;
-    dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
-      containerName: "sandbox-container",
-      containerId: "a".repeat(64),
-    });
-    const backend = await createDockerSandboxBackend({
-      sessionKey: "agent:coder:main",
-      scopeKey: "agent:coder:main",
-      workspaceDir: "/workspace",
-      agentWorkspaceDir: "/workspace",
-      cfg: resolveSandboxConfigForAgent(createConfig()),
-      assertRuntimeCurrent: () => {
-        if (!current) {
-          throw new Error("runtime revoked");
-        }
-      },
-    });
-    dockerMocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
-      await Promise.resolve();
-      current = false;
-    });
-    await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
-      "runtime revoked",
-    );
-    expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
-  });
-
-  it.each(["allocation", "mount inspection"] as const)(
-    "does not execute a mount probe after authority retires during %s",
+  it.each(["allocation", "mount inspection", "engine validation"] as const)(
+    "rechecks authority after awaited %s before filesystem execution",
     async (stage) => {
       let current = true;
+      const message = stage === "engine validation" ? "runtime revoked" : "runtime retired";
       const execute = dockerMocks.execContainer.getMockImplementation()!;
       dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
         const result = await execute(engine, args, options);
@@ -158,45 +145,62 @@ describe("docker sandbox backend manager", () => {
         }
         return { containerName: "sandbox-container", containerId: "a".repeat(64) };
       });
-      await expect(
-        createDockerSandboxBackend({
-          sessionKey: "agent:coder:main",
-          scopeKey: "agent:coder:main",
-          workspaceDir: "/workspace",
-          agentWorkspaceDir: "/workspace",
-          cfg: resolveSandboxConfigForAgent(createConfig()),
-          assertRuntimeCurrent: () => {
-            if (!current) {
-              throw new Error("runtime retired");
-            }
-          },
-        }),
-      ).rejects.toThrow("runtime retired");
-      expect(dockerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "exec")).toBe(
-        false,
-      );
+      const operation = createDockerSandboxBackend({
+        sessionKey: "agent:coder:main",
+        scopeKey: "agent:coder:main",
+        workspaceDir: "/workspace",
+        agentWorkspaceDir: "/workspace",
+        cfg: resolveSandboxConfigForAgent(createConfig()),
+        assertRuntimeCurrent: () => {
+          if (!current) {
+            throw new Error(message);
+          }
+        },
+      });
+      if (stage === "engine validation") {
+        const backend = await operation;
+        dockerMocks.validateSandboxContainerEngineTarget.mockImplementationOnce(async () => {
+          await Promise.resolve();
+          current = false;
+        });
+        await expect(backend.runShellCommand({ script: "write should not run" })).rejects.toThrow(
+          message,
+        );
+        expect(dockerMocks.execContainerRaw).not.toHaveBeenCalled();
+      } else {
+        await expect(operation).rejects.toThrow(message);
+        expect(dockerMocks.execContainer.mock.calls.some(([, args]) => args[0] === "exec")).toBe(
+          false,
+        );
+      }
     },
   );
 
-  it("pins retained termination when the name is replaced after allocation", async () => {
-    const execute = dockerMocks.execContainer.getMockImplementation()!;
-    dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
-      if (args.includes("{{.Id}}") && args.at(-1) === "sandbox-container") {
-        return { code: 0, stdout: "b".repeat(64), stderr: "" };
+  it.each(["cleanup", "filesystem"])(
+    "pins %s execution when the allocated name is replaced",
+    async (operation) => {
+      const execute = dockerMocks.execContainer.getMockImplementation()!;
+      dockerMocks.execContainer.mockImplementation(async (engine, args, options) => {
+        if (args.includes("{{.Id}}") && args.at(-1) === "sandbox-container") {
+          return { code: 0, stdout: "b".repeat(64), stderr: "" };
+        }
+        return execute(engine, args, options);
+      });
+      const backend = await createDockerExecBackend();
+      dockerMocks.execContainerRaw.mockResolvedValueOnce({
+        code: 0,
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+      });
+      // Allocation returned A, while any later lookup of its stable name finds B.
+      if (operation === "cleanup") {
+        await backend.prepareProcessCleanup!({}).terminate();
+      } else {
+        await backend.runShellCommand({ script: "true" });
       }
-      return execute(engine, args, options);
-    });
-    const backend = await createDockerExecBackend();
-    const cleanup = backend.prepareProcessCleanup!({});
-    dockerMocks.execContainerRaw.mockResolvedValueOnce({
-      code: 0,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-    });
-    // Allocation returned A, while any later lookup of its stable name finds B.
-    await cleanup.terminate();
-    expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
-  });
+      expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
+    },
+  );
 
   it.each(["removed", "stopped", "paused", "unreachable", "still present"] as const)(
     "settles retained cleanup only for confirmed generation termination: %s",
@@ -233,17 +237,6 @@ describe("docker sandbox backend manager", () => {
       ]);
     },
   );
-
-  it("pins ordinary filesystem dispatch to the same prepared generation", async () => {
-    const backend = await createDockerExecBackend();
-    dockerMocks.execContainerRaw.mockResolvedValueOnce({
-      code: 0,
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-    });
-    await backend.runShellCommand({ script: "true" });
-    expect(dockerMocks.execContainerRaw.mock.calls.at(-1)?.[1]?.[2]).toBe("a".repeat(64));
-  });
 
   it("forwards the canonical scope key to container provisioning", async () => {
     dockerMocks.ensureSandboxContainer.mockResolvedValueOnce({
@@ -599,6 +592,7 @@ describe("docker sandbox backend manager", () => {
       fs.writeFileSync(hosts, "github.com:\n  oauth_token: synthetic-before-launch\n", {
         mode: 0o600,
       });
+      fs.writeFileSync(path.join(root, "package.json"), '{"type":"commonjs"}\n');
       fs.writeFileSync(
         path.join(root, engine),
         `#!${process.execPath}
@@ -750,197 +744,89 @@ process.stdout.write(JSON.stringify({
     }
   });
 
-  it("matches browser runtimes against sandbox.browser.image", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "openclaw-sandbox-browser:bookworm-slim\n",
-      stderr: "",
-    });
+  it.each([
+    { configLabelKind: "BrowserImage", image: "openclaw-sandbox-browser:bookworm-slim" },
+    { configLabelKind: undefined, image: "openclaw-sandbox:bookworm-slim" },
+  ])(
+    "matches the configured image for registry label $configLabelKind",
+    async ({ configLabelKind, image }) => {
+      dockerMocks.execContainer.mockResolvedValueOnce({
+        code: 0,
+        stdout: `${image}\n`,
+        stderr: "",
+      });
+      await expect(
+        dockerSandboxBackendManager.describeRuntime({
+          entry: { ...runtimeEntry(), image: "stale-entry-image", configLabelKind },
+          config: createConfig(),
+          agentId: "coder",
+        }),
+      ).resolves.toEqual({ running: true, actualConfigLabel: image, configLabelMatch: true });
+    },
+  );
 
-    const result = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "browser-1",
-        backendId: "docker",
-        runtimeLabel: "browser-1",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "stale-entry-image",
-        configLabelKind: "BrowserImage",
-      },
-      config: createConfig(),
-      agentId: "coder",
-    });
-
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "openclaw-sandbox-browser:bookworm-slim",
-      configLabelMatch: true,
-    });
-  });
-
-  it("defaults docker-backed runtime matching to sandbox.docker.image when label kind is missing", async () => {
-    // Older registry entries did not record configLabelKind; keep ordinary
-    // sandbox matching stable for those existing containers.
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "openclaw-sandbox:bookworm-slim\n",
-      stderr: "",
-    });
-
-    const result = await dockerSandboxBackendManager.describeRuntime({
-      entry: {
-        containerName: "sandbox-legacy",
-        backendId: "docker",
-        runtimeLabel: "sandbox-legacy",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "stale-entry-image",
-      },
-      config: createConfig(),
-      agentId: "coder",
-    });
-
-    expect(result).toEqual({
-      running: true,
-      actualConfigLabel: "openclaw-sandbox:bookworm-slim",
-      configLabelMatch: true,
-    });
-  });
-
-  it("reports Docker runtime removal failures", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
+  it.each([
+    {
+      backend: "docker",
       code: 1,
-      stdout: "",
       stderr: "permission denied",
-    });
-
-    await expect(
-      dockerSandboxBackendManager.removeRuntime({
-        entry: {
-          containerName: "sandbox-1",
-          backendId: "docker",
-          runtimeLabel: "sandbox-1",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).rejects.toThrow("Failed to remove Docker sandbox runtime sandbox-1: permission denied");
-  });
-
-  it("treats already-missing Docker runtimes as removed", async () => {
-    // Prune/remove flows are idempotent; Docker may have already removed the
-    // container by the time the manager runs.
-    dockerMocks.execContainer.mockResolvedValueOnce({
+      error: "Failed to remove Docker sandbox runtime sandbox-1: permission denied",
+    },
+    {
+      backend: "docker",
       code: 1,
-      stdout: "",
       stderr: "Error response from daemon: No such container: sandbox-1",
-    });
+      error: undefined,
+    },
+    { backend: "podman", code: 0, stderr: "", error: undefined },
+  ])(
+    "removes $backend runtimes or reports the engine failure: $stderr",
+    async ({ backend, code, stderr, error }) => {
+      dockerMocks.execContainer.mockResolvedValueOnce({ code, stdout: "", stderr });
+      const manager =
+        backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
+      const entry = runtimeEntry(backend);
+      const operation = manager.removeRuntime({ entry, config: createConfig() });
+      if (error) {
+        await expect(operation).rejects.toThrow(error);
+      } else {
+        await expect(operation).resolves.toBeUndefined();
+      }
+      if (backend === "podman") {
+        expect(dockerMocks.execContainer).toHaveBeenCalledWith(
+          expect.objectContaining({ id: "podman", command: "podman" }),
+          ["rm", "-f", "sandbox-podman"],
+          { allowFailure: true },
+        );
+        expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
+          expect.objectContaining({ id: "podman", command: "podman" }),
+          { key: "local", globalArgs: [] },
+        );
+      }
+    },
+  );
 
-    await expect(
-      dockerSandboxBackendManager.removeRuntime({
-        entry: {
-          containerName: "sandbox-1",
-          backendId: "docker",
-          runtimeLabel: "sandbox-1",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).resolves.toBeUndefined();
-  });
-
-  it("uses Podman for Podman registry entries", async () => {
-    dockerMocks.execContainer.mockResolvedValueOnce({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
-
-    await podmanSandboxBackendManager.removeRuntime({
-      entry: {
-        containerName: "sandbox-podman",
-        backendId: "podman",
-        backendTarget: { key: "local", globalArgs: [] },
-        runtimeLabel: "sandbox-podman",
-        sessionKey: "agent:coder:main",
-        createdAtMs: 1,
-        lastUsedAtMs: 1,
-        image: "openclaw-sandbox:bookworm-slim",
-      },
-      config: createConfig(),
-    });
-
-    expect(dockerMocks.execContainer).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "podman", command: "podman" }),
-      ["rm", "-f", "sandbox-podman"],
-      { allowFailure: true },
-    );
-    expect(dockerMocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "podman", command: "podman" }),
-      { key: "local", globalArgs: [] },
-    );
-  });
-
-  it("rejects a stale Podman registry target before inspecting the runtime", async () => {
-    const targetError = new Error("active Podman connection changed");
-    dockerMocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
-
-    await expect(
-      podmanSandboxBackendManager.describeRuntime({
-        entry: {
-          containerName: "sandbox-podman",
-          backendId: "podman",
-          backendTarget: {
-            key: `machine:${"a".repeat(32)}`,
-            globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+  it.each(["describeRuntime", "removeRuntime"] as const)(
+    "rejects a stale Podman registry target before %s",
+    async (operation) => {
+      const targetError = new Error("active Podman connection changed");
+      dockerMocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
+      await expect(
+        podmanSandboxBackendManager[operation]({
+          entry: {
+            ...runtimeEntry("podman"),
+            backendTarget: {
+              key: `machine:${"a".repeat(32)}`,
+              globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
+            },
           },
-          runtimeLabel: "sandbox-podman",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).rejects.toBe(targetError);
-
-    expect(dockerMocks.containerState).not.toHaveBeenCalled();
-    expect(dockerMocks.execContainer).not.toHaveBeenCalled();
-  });
-
-  it("rejects a stale Podman registry target before removing the runtime", async () => {
-    const targetError = new Error("active Podman connection changed");
-    dockerMocks.validateSandboxContainerEngineTarget.mockRejectedValueOnce(targetError);
-
-    await expect(
-      podmanSandboxBackendManager.removeRuntime({
-        entry: {
-          containerName: "sandbox-podman",
-          backendId: "podman",
-          backendTarget: {
-            key: `machine:${"a".repeat(32)}`,
-            globalArgs: ["--url", "ssh://core@127.0.0.1:60001/run/podman/podman.sock"],
-          },
-          runtimeLabel: "sandbox-podman",
-          sessionKey: "agent:coder:main",
-          createdAtMs: 1,
-          lastUsedAtMs: 1,
-          image: "openclaw-sandbox:bookworm-slim",
-        },
-        config: createConfig(),
-      }),
-    ).rejects.toBe(targetError);
-
-    expect(dockerMocks.execContainer).not.toHaveBeenCalled();
-  });
+          config: createConfig(),
+        }),
+      ).rejects.toBe(targetError);
+      expect(dockerMocks.containerState).not.toHaveBeenCalled();
+      expect(dockerMocks.execContainer).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects browser sandboxing on the explicit Podman backend", async () => {
     const config = createConfig();

@@ -3,12 +3,14 @@ import {
   buildRemoteBaseUrlPolicy,
   debugEmbeddingsLog,
   embeddingProviderOwnsDestination,
+  formatEmbeddingTaskText,
   normalizeEmbeddingModelWithPrefixes,
   resolveEmbeddingEndpointUrl,
   sanitizeAndNormalizeEmbedding,
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import {
@@ -23,7 +25,6 @@ import {
   readProviderJsonObjectResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -31,11 +32,7 @@ import {
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
-export type GeminiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+export type GeminiEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   modelPath: string;
   apiKeys: string[];
   outputDimensionality?: number;
@@ -61,15 +58,6 @@ const GOOGLE_RETRY_DELAY_RE = /^(\d+)(?:\.(\d{1,9}))?s$/u;
 // Mirrors core's own error-body read limit (extractProviderErrorInfo in
 // provider-http-errors.ts) so the clone read below stays bounded like core's.
 const GOOGLE_RETRY_INFO_BODY_LIMIT_BYTES = 16 * 1024;
-const GEMINI_EMBEDDING_2_TASK_PREFIXES: Record<GeminiTaskType, string> = {
-  RETRIEVAL_QUERY: "task: search result | query:",
-  RETRIEVAL_DOCUMENT: "title: none | text:",
-  SEMANTIC_SIMILARITY: "task: sentence similarity | query:",
-  CLASSIFICATION: "task: classification | query:",
-  CLUSTERING: "task: clustering | query:",
-  QUESTION_ANSWERING: "task: question answering | query:",
-  FACT_VERIFICATION: "task: fact checking | query:",
-};
 
 export type GeminiEmbeddingRequest = {
   content: { parts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> };
@@ -122,7 +110,7 @@ export function buildGeminiEmbeddingRequest(params: {
   modelPath?: string;
 }): GeminiEmbeddingRequest {
   const input = typeof params.input === "string" ? { text: params.input } : params.input;
-  const parts = input.parts?.map((part) =>
+  const parts: GeminiEmbeddingRequest["content"]["parts"] = input.parts?.map((part) =>
     part.type === "text"
       ? { text: part.text }
       : {
@@ -141,7 +129,7 @@ export function buildGeminiEmbeddingRequest(params: {
           params.taskType === "FACT_VERIFICATION")
           ? "RETRIEVAL_DOCUMENT"
           : params.taskType;
-      first.text = `${GEMINI_EMBEDDING_2_TASK_PREFIXES[taskType]} ${first.text}`;
+      first.text = formatEmbeddingTaskText(first.text, taskType);
     }
   } else if (!isStableEmbedding2) {
     request.taskType = params.taskType;

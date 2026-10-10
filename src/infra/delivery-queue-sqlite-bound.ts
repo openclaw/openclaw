@@ -5,6 +5,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
@@ -182,6 +183,10 @@ export function inflateDeliveryQueueRow(
   };
 }
 
+export function inflateDeliveryQueueRows(rows: readonly DeliveryQueueSqliteRow[]) {
+  return rows.flatMap((row) => inflateDeliveryQueueRow(row) ?? []);
+}
+
 function deliveryQueueMetadata(
   queueName: string,
   entry: DeliveryQueueEntryState | Record<string, unknown>,
@@ -286,21 +291,16 @@ function createDeliveryQueueUpsert(database: DatabaseSync, mode: DeliveryQueueUp
   });
 }
 
-const deliveryQueueUpserts = new WeakMap<
-  DatabaseSync,
+const deliveryQueueUpserts = createSqliteQueryCache<
   Partial<Record<DeliveryQueueUpsertMode, ReturnType<typeof createDeliveryQueueUpsert>>>
->();
+>(() => ({}));
 
 /** Mutates only the exact supplied shared-state handle; never opens or hardens a file. */
 export function upsertBoundDeliveryQueueEntryInDatabase(
   bound: BoundDeliveryQueueEntry,
   database: OpenClawStateDatabase,
 ): boolean {
-  let queries = deliveryQueueUpserts.get(database.db);
-  if (!queries) {
-    queries = {};
-    deliveryQueueUpserts.set(database.db, queries);
-  }
+  const queries = deliveryQueueUpserts(database.db);
   const query = (queries[bound.mode] ??= createDeliveryQueueUpsert(database.db, bound.mode));
   return query(bound.row).numAffectedRows === 1n;
 }
@@ -342,10 +342,9 @@ function createDeliveryQueueRead(database: OpenClawStateDatabase, mode: Delivery
   );
 }
 
-const deliveryQueueReads = new WeakMap<
-  DatabaseSync,
+const deliveryQueueReads = createSqliteQueryCache<
   Partial<Record<DeliveryQueueReadMode, ReturnType<typeof createDeliveryQueueRead>>>
->();
+>(() => ({}));
 
 /** Reads one row from the exact supplied handle for cross-owner invariant validation. */
 export function loadDeliveryQueueEntryInDatabase(
@@ -354,13 +353,8 @@ export function loadDeliveryQueueEntryInDatabase(
   id: string,
   mode: DeliveryQueueReadMode = "all",
 ): DeliveryQueueEntryState | null {
-  let queries = deliveryQueueReads.get(database.db);
-  if (!queries) {
-    queries = {};
-    deliveryQueueReads.set(database.db, queries);
-  }
-  const readMode = mode === "all" || mode === "pending" ? mode : "unfinished";
-  const query = (queries[readMode] ??= createDeliveryQueueRead(database, readMode));
+  const queries = deliveryQueueReads(database.db);
+  const query = (queries[mode] ??= createDeliveryQueueRead(database, mode));
   const row = query({ queueName, id });
   return row ? inflateDeliveryQueueRow(row) : null;
 }

@@ -3,6 +3,7 @@ import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "../config/agent-limits.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -54,13 +55,13 @@ export function normalizeWorkspaceConfig(
 /** Keeps source roster ownership when runtime migration materializes an implicit main agent. */
 export function withAuthoredAgentRoster(
   config: OpenClawConfig,
-  source: OpenClawConfig | undefined,
-): OpenClawConfig {
+  source: OpenClawConfigWithLegacyRoster | undefined,
+): OpenClawConfigWithLegacyRoster {
   const sourceAgents = source?.agents;
   if (!sourceAgents) {
     return config;
   }
-  const agents = { ...config.agents };
+  const agents: OpenClawConfigWithLegacyRoster["agents"] = { ...config.agents };
   if (Object.hasOwn(sourceAgents, "entries") && sourceAgents.entries !== undefined) {
     agents.entries = structuredClone(sourceAgents.entries);
     delete agents.list;

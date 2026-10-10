@@ -7,21 +7,19 @@ import { createQuotaNativeAuthObserver } from "./quota-reset-diagnostics.mjs";
 const options = new URL(import.meta.url).searchParams;
 const fixture = new URL(options.get("fixture"));
 const clockFile = options.get("clock");
-if (options.has("catalog")) {
-  const workers = createRequire(import.meta.url)("node:worker_threads");
-  const Worker = workers.Worker;
-  // Production workers intentionally clear execArgv. Carry this fixture's
-  // network boundary into the real worker without replacing its catalog logic.
-  workers.Worker = class extends Worker {
-    constructor(url, workerOptions) {
-      super(url, {
-        ...workerOptions,
-        execArgv: [...(workerOptions?.execArgv ?? process.execArgv), "--import", import.meta.url],
-      });
-    }
-  };
-  syncBuiltinESMExports();
-}
+const workers = createRequire(import.meta.url)("node:worker_threads");
+const Worker = workers.Worker;
+// Production workers clear execArgv. Quota writers need the fixture's clock
+// as well as its network routing.
+workers.Worker = class extends Worker {
+  constructor(url, workerOptions) {
+    super(url, {
+      ...workerOptions,
+      execArgv: [...(workerOptions?.execArgv ?? process.execArgv), "--import", import.meta.url],
+    });
+  }
+};
+syncBuiltinESMExports();
 const storageFaultFile = options.get("storageFault");
 if (storageFaultFile) {
   // CLI respawns reset inherited signal handling; let SQLite receive EFBIG.
@@ -135,13 +133,15 @@ globalThis.fetch = (input, init) => {
   const route =
     options.has("catalog") && url.startsWith("https://chatgpt.com/backend-api/codex/models?")
       ? "/catalog/models"
-      : url === "https://chatgpt.com/backend-api/wham/usage"
-        ? "/core-wham/usage"
-        : url === "https://chatgpt.com/backend-api/codex/responses"
-          ? "/direct/responses"
-          : url === "https://auth.openai.com/oauth/token"
-            ? "/oauth/token"
-            : undefined;
+      : options.has("platformCatalog") && url === "https://api.openai.com/v1/models"
+        ? "/platform/models"
+        : url === "https://chatgpt.com/backend-api/wham/usage"
+          ? "/core-wham/usage"
+          : url === "https://chatgpt.com/backend-api/codex/responses"
+            ? "/direct/responses"
+            : url === "https://auth.openai.com/oauth/token"
+              ? "/oauth/token"
+              : undefined;
   if (!route) {
     return originalFetch(input, init);
   }

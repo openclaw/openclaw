@@ -61,8 +61,8 @@ function normalizeScopeAccountId(accountId: string | undefined): string {
 }
 
 export function normalizeCreatorSender(value: string): string {
-  const creatorSender = value.trim();
-  if (!creatorSender || creatorSender.toLowerCase() === "unknown") {
+  const creatorSender = readKnownCreatorSender(value);
+  if (!creatorSender) {
     throw new Error("creating sender is unavailable for this turn");
   }
   return creatorSender;
@@ -137,10 +137,6 @@ function parseStoredChannelScope(value: string | null): {
   return { scope: "anywhere", identity: null };
 }
 
-function parseStoredSenderScope(value: string | null): string | null {
-  return parseStoredScope(value, 4)?.[3] ?? null;
-}
-
 export function rowToIntent(row: StandingIntentRow): StandingIntent {
   const channelScope = parseStoredChannelScope(row.channel_scope);
   return {
@@ -150,7 +146,7 @@ export function rowToIntent(row: StandingIntentRow): StandingIntent {
     triggerEmbedding: row.trigger_embedding,
     scope: channelScope.scope,
     channelScope: channelScope.identity,
-    senderScope: parseStoredSenderScope(row.sender_scope),
+    senderScope: parseStoredScope(row.sender_scope, 4)?.[3] ?? null,
     creatorSender: readKnownCreatorSender(row.creator_sender),
     status: row.status,
     expiresAt: row.expires_at,
@@ -178,14 +174,6 @@ export function tokenizeIntentText(text: string): string[] {
   return text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
 }
 
-function buildFtsQuery(promptTokens: ReadonlySet<string>): string | null {
-  const unique = [...promptTokens];
-  if (unique.length === 0) {
-    return null;
-  }
-  return unique.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR ");
-}
-
 export type StandingIntentMatchInput = {
   promptTokens: string[];
   ftsQuery: string;
@@ -202,27 +190,22 @@ export function prepareStandingIntentMatch(params: {
   senderId?: string;
   nowMs?: number;
 }): StandingIntentMatchInput | undefined {
-  const promptTokens = new Set(tokenizeIntentText(params.prompt));
-  const ftsQuery = buildFtsQuery(promptTokens);
-  if (!ftsQuery) {
+  const promptTokens = [...new Set(tokenizeIntentText(params.prompt))];
+  if (promptTokens.length === 0) {
     return undefined;
   }
   const channel = params.channel?.trim() || undefined;
   const provider = params.provider?.trim().toLowerCase() || undefined;
   const senderId = params.senderId?.trim() || undefined;
-  const channelScopes = new Set<string>();
+  const channelScopes: string[] = [];
   if (provider) {
-    channelScopes.add(
-      encodeStandingIntentChannelScope({
-        scope: "channel",
-        provider,
-        accountId: params.accountId,
-      }),
-    );
-    if (channel) {
-      channelScopes.add(
+    for (const scope of ["channel", "conversation"] as const) {
+      if (scope === "conversation" && !channel) {
+        continue;
+      }
+      channelScopes.push(
         encodeStandingIntentChannelScope({
-          scope: "conversation",
+          scope,
           provider,
           accountId: params.accountId,
           conversationId: channel,
@@ -239,9 +222,9 @@ export function prepareStandingIntentMatch(params: {
         })
       : undefined;
   return {
-    promptTokens: [...promptTokens],
-    ftsQuery,
-    channelScopes: [...channelScopes],
+    promptTokens,
+    ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
+    channelScopes,
     senderScope: storedSenderScope,
     nowMs: params.nowMs,
   };

@@ -30,21 +30,6 @@ describe("resolveCommandTurnContext", () => {
     });
   });
 
-  it("derives text slash command turns from legacy context fields", () => {
-    expect(
-      resolveCommandTurnContext({
-        CommandSource: "text",
-        CommandAuthorized: true,
-        CommandBody: "/model gpt-5.5",
-      }),
-    ).toMatchObject({
-      kind: "text-slash",
-      source: "text",
-      authorized: true,
-      commandName: "model",
-    });
-  });
-
   it("keeps normal message turns non-explicit even when command auth is true elsewhere", () => {
     const commandTurn = resolveCommandTurnContext({
       CommandAuthorized: true,

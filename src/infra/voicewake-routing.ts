@@ -1,4 +1,3 @@
-// Persists and resolves voice wake routing rules.
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -32,7 +31,6 @@ const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
   updatedAtMs: 0,
 };
 
-/** Normalize a voice wake trigger phrase for matching and duplicate checks. */
 function normalizeVoiceWakeTriggerWord(value: string): string {
   return value
     .toLowerCase()
@@ -82,8 +80,7 @@ function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
   return { trigger, target };
 }
 
-/** Normalize persisted or user-provided voice wake routing config. */
-export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
+function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutingConfig {
   const rec = asOptionalObjectRecord(input);
   if (!rec) {
     return { ...DEFAULT_ROUTING };
@@ -106,7 +103,6 @@ export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutin
   };
 }
 
-/** Load persisted voice wake routing config from state. */
 export async function loadVoiceWakeRoutingConfig(
   baseDir?: string,
 ): Promise<VoiceWakeRoutingConfig> {
@@ -134,17 +130,13 @@ function resolveVoiceWakeRouteTarget(
   return { mode: "current" };
 }
 
-/** Resolve the route target for a normalized wake trigger. */
 export function resolveVoiceWakeRouteByTrigger(params: {
   trigger: string | undefined;
   config: VoiceWakeRoutingConfig;
 }): VoiceWakeResolvedRoute {
   const normalizedTrigger = normalizeVoiceWakeTriggerWord(params.trigger ?? "");
-  if (normalizedTrigger) {
-    const matched = params.config.routes.find((route) => route.trigger === normalizedTrigger);
-    if (matched) {
-      return resolveVoiceWakeRouteTarget(matched.target);
-    }
-  }
-  return resolveVoiceWakeRouteTarget(params.config.defaultTarget);
+  const matched = normalizedTrigger
+    ? params.config.routes.find((route) => route.trigger === normalizedTrigger)
+    : undefined;
+  return resolveVoiceWakeRouteTarget(matched ? matched.target : params.config.defaultTarget);
 }

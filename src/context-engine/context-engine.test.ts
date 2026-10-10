@@ -1,10 +1,9 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  createContextEngineLogicalTurnLease,
-  selectContextEngineForTranscriptHost,
-} from "../agents/harness/context-engine-logical-turn.js";
+import { createContextEngineLogicalTurnLease } from "../agents/harness/context-engine-logical-turn.js";
+import * as turnAdmission from "../agents/harness/context-engine-turn-attempt.js";
+import { beginContextEngineLogicalTurn } from "../agents/harness/context-engine-turn-begin.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -19,6 +18,7 @@ import {
   setActivePluginRegistry,
   withPluginRegistrationContext,
 } from "../plugins/runtime.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import {
   createPassthroughEngineMethods,
   MockContextEngine,
@@ -435,16 +435,16 @@ describe("Default engine selection", () => {
   it("keeps repeated baseline transcript-host selection stable after the turn starts", async () => {
     const warn = vi.fn();
     const lease = await createLease(undefined, warn);
+    const recorder = createUserTurnTranscriptRecorder({ target: () => undefined });
+    recorder.markRuntimePersisted();
     const selection = {
       lease,
       host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
-      operation: "agent-run" as const,
-      recorder: { getAdmissionReceipt: () => undefined, hasPersisted: () => true },
+      recorder,
     };
 
-    const first = selectContextEngineForTranscriptHost(selection);
-    lease.begin();
-    const second = selectContextEngineForTranscriptHost(selection);
+    const first = await beginContextEngineLogicalTurn(selection);
+    const second = await beginContextEngineLogicalTurn(selection);
 
     expect(second).toMatchObject({ registeredId: "legacy", mode: "configured" });
     expect(second.engine).toBe(first.engine);
@@ -646,16 +646,18 @@ describe("Default engine selection", () => {
       const warn = vi.fn();
       const lease = await createLease(engineId, warn);
 
-      const selected = selectContextEngineForTranscriptHost({
+      const recorder = createUserTurnTranscriptRecorder({ target: () => undefined });
+      if (persisted) {
+        recorder.markRuntimePersisted();
+      }
+      const drain = vi
+        .spyOn(turnAdmission, "drainPendingContextEngineTurnsBeforeRun")
+        .mockResolvedValue(undefined);
+      const selected = await beginContextEngineLogicalTurn({
         lease,
         host: { id: "agent-harness:test", label: "test harness", capabilities: [] },
-        operation: "agent-run",
-        recorder: {
-          getAdmissionReceipt: () => undefined,
-          hasPersisted: () => persisted,
-        },
-      });
-      lease.begin();
+        recorder,
+      }).finally(() => drain.mockRestore());
 
       expect(selected.engine.info.id).toBe(expectedEngine === "configured" ? engineId : "legacy");
       expect(lease.degradedReason).toBe(expectedReason);

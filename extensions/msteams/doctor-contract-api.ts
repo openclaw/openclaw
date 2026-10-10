@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   archiveLegacyStateSource,
@@ -22,17 +21,23 @@ export * from "./config-doctor-api.js";
 
 const MSTEAMS_PLUGIN_ID = "Microsoft Teams";
 
-function listAgentIds(config: OpenClawConfig): string[] {
+function listAgentIds(config: unknown): string[] {
+  // State migration receives the preserved config from before core roster migration.
   const ids = new Set<string>(["main"]);
-  if (isRecord(config.agents?.entries)) {
-    for (const agentId of Object.keys(config.agents.entries)) {
+  const agents = isRecord(config) && isRecord(config.agents) ? config.agents : undefined;
+  if (isRecord(agents?.entries)) {
+    for (const agentId of Object.keys(agents.entries)) {
       if (agentId.trim()) {
         ids.add(agentId.trim());
       }
     }
   }
-  for (const agent of config.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
+  const legacyList =
+    Object.prototype.propertyIsEnumerable.call(agents ?? {}, "list") && Array.isArray(agents?.list)
+      ? agents.list
+      : [];
+  for (const agent of legacyList) {
+    if (isRecord(agent) && typeof agent.id === "string" && agent.id.trim()) {
       ids.add(agent.id.trim());
     }
   }

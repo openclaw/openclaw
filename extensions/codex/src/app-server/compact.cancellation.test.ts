@@ -199,10 +199,11 @@ describe("maybeCompactCodexAppServerSession", () => {
         queued = withCodexAppServerThreadMutation(binding.threadId, nextMutation);
         await vi.advanceTimersByTimeAsync(1_000);
 
+        expect(await retirementOutcome.promise).toBe("settled");
         expect(harness.writes.map((line) => JSON.parse(line).method)).toEqual([
           "thread/compact/start",
+          ...(rejection === "generation" ? ["thread/unsubscribe"] : []),
         ]);
-        expect(await retirementOutcome.promise).toBe("settled");
         await expect(pending).resolves.toMatchObject({
           ok: false,
           compacted: false,
@@ -225,7 +226,11 @@ describe("maybeCompactCodexAppServerSession", () => {
           storePath: scope.storePath,
         });
         expect(recovered.binding).toEqual(binding);
-        if (rejection === "abort") {
+        if (rejection === "generation") {
+          await expect(
+            consumeCodexAppServerLiveThread(harness.client, binding.threadId),
+          ).resolves.toBeUndefined();
+        } else if (rejection === "abort") {
           await expect(
             consumeCodexAppServerLiveThread(harness.client, binding.threadId),
           ).resolves.toEqual(expect.objectContaining({ release: expect.any(Function) }));

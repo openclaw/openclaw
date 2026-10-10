@@ -1,6 +1,6 @@
-// Persists short-lived gateway restart handoff metadata.
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Selectable } from "kysely";
@@ -8,11 +8,27 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import type {
+  GatewayRestartHandoff,
+  GatewayRestartHandoffRestartKind,
+  GatewayRestartHandoffSource,
+  GatewayRestartHandoffSupervisorMode,
+} from "./restart-lifecycle.types.js";
+import {
+  createSqliteWorkerOperationAdmission,
+  type SqliteWorkerOperationAdmission,
+} from "./sqlite-worker-operation-admission.js";
+import type { SqliteWorkerRuntimePreparation } from "./sqlite-worker-runtime-preparation.types.js";
+
+export type { GatewayRestartHandoff } from "./restart-lifecycle.types.js";
+export { prepareOpenClawStateWorkerRuntime as prepareGatewayRestartHandoffRuntime } from "../state/openclaw-state-worker-store.js";
 
 // Restart handoff rows let a supervisor explain a recent gateway restart after
 // the old process exits. The row is short-lived, bounded, and replaced on write.
@@ -31,34 +47,6 @@ type GatewayRestartHandoffRow = Omit<
   Selectable<GatewayRestartHandoffDatabase["gateway_restart_handoff"]>,
   "handoff_key" | "updated_at_ms"
 >;
-
-type GatewayRestartHandoffRestartKind = "full-process" | "update-process";
-type GatewayRestartHandoffSource =
-  | "config-write"
-  | "gateway-update"
-  | "operator-restart"
-  | "plugin-change"
-  | "signal"
-  | "unknown";
-type GatewayRestartHandoffSupervisorMode = "launchd" | "systemd" | "schtasks" | "external";
-
-export type GatewayRestartHandoff = {
-  kind: typeof GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND;
-  version: typeof GATEWAY_RESTART_HANDOFF_SCHEMA_VERSION;
-  intentId: string;
-  pid: number;
-  processInstanceId?: string;
-  createdAt: number;
-  expiresAt: number;
-  reason?: string;
-  source: GatewayRestartHandoffSource;
-  restartKind: GatewayRestartHandoffRestartKind;
-  supervisorMode: GatewayRestartHandoffSupervisorMode;
-  restartTrace?: {
-    startedAt: number;
-    lastAt: number;
-  };
-};
 
 type GatewayRestartHandoffConsumeResult =
   | {
@@ -91,16 +79,11 @@ function formatShortDuration(ms: number): string {
 
 const DIAGNOSTIC_WHITESPACE = new RegExp(String.raw`[\u0000-\u001f\u007f\s]+`, "gu");
 
-function formatDiagnosticValue(value: string): string {
-  return value.replaceAll(DIAGNOSTIC_WHITESPACE, " ").trim();
-}
-
-/** Format a compact diagnostic for a recently consumed restart handoff. */
 export function formatGatewayRestartHandoffDiagnostic(
   handoff: GatewayRestartHandoff,
   now = Date.now(),
 ): string {
-  const reason = handoff.reason ? formatDiagnosticValue(handoff.reason) : undefined;
+  const reason = handoff.reason?.replaceAll(DIAGNOSTIC_WHITESPACE, " ").trim();
   const detail = [
     `${handoff.restartKind} via ${handoff.supervisorMode}`,
     `source=${handoff.source}`,
@@ -154,13 +137,7 @@ function normalizeRestartTraceHandoff(
   };
 }
 
-function normalizeSource(
-  source: GatewayRestartHandoffSource | undefined,
-  reason: string | undefined,
-): GatewayRestartHandoffSource {
-  if (source) {
-    return source;
-  }
+function normalizeSource(reason: string | undefined): GatewayRestartHandoffSource {
   if (!reason) {
     return "unknown";
   }
@@ -290,29 +267,26 @@ function readGatewayRestartHandoffRowSync(env: NodeJS.ProcessEnv) {
 }
 
 /** Write the bounded supervisor restart handoff atomically. */
-export function writeGatewayRestartHandoffSync(opts: {
-  env?: NodeJS.ProcessEnv;
-  pid?: number;
-  processInstanceId?: string;
-  reason?: string;
-  source?: GatewayRestartHandoffSource;
-  restartKind: GatewayRestartHandoffRestartKind;
-  supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
-  restartTrace?: GatewayRestartHandoff["restartTrace"];
-  ttlMs?: number;
-  createdAt?: number;
-}): GatewayRestartHandoff | null {
+export async function writeGatewayRestartHandoff(
+  opts: {
+    env?: NodeJS.ProcessEnv;
+    pid?: number;
+    processInstanceId?: string;
+    reason?: string;
+    restartKind: GatewayRestartHandoffRestartKind;
+    supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
+    restartTrace?: GatewayRestartHandoff["restartTrace"];
+    ttlMs?: number;
+    createdAt?: number;
+    runtimePreparation?: SqliteWorkerRuntimePreparation;
+  },
+  assertCurrent?: () => void,
+): Promise<GatewayRestartHandoff | null> {
   const pid = asPositiveSafeInteger(opts.pid ?? process.pid) ?? null;
-  if (pid === null || !isRestartKind(opts.restartKind)) {
-    return null;
-  }
-  if (opts.source !== undefined && !isSource(opts.source)) {
+  if (pid === null) {
     return null;
   }
   const supervisorMode = opts.supervisorMode ?? "external";
-  if (!isSupervisorMode(supervisorMode)) {
-    return null;
-  }
 
   const env = opts.env ?? process.env;
   const createdAt = normalizeCreatedAt(opts.createdAt);
@@ -329,44 +303,41 @@ export function writeGatewayRestartHandoffSync(opts: {
     createdAt,
     expiresAt: createdAt + ttlMs,
     ...(reason ? { reason } : {}),
-    source: normalizeSource(opts.source, reason),
+    source: normalizeSource(reason),
     restartKind: opts.restartKind,
     supervisorMode,
     ...(restartTrace ? { restartTrace } : {}),
   };
 
+  const context = captureOpenClawStateWorkerContext({ env });
+  const check = () => {
+    context.admission.assertCurrent();
+    assertCurrent?.();
+  };
+  let admission: SqliteWorkerOperationAdmission | undefined;
   try {
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const stateDb = getNodeSqliteKysely<GatewayRestartHandoffDatabase>(db);
-        const row = {
-          kind: payload.kind,
-          version: payload.version,
-          intent_id: payload.intentId,
-          pid: payload.pid,
-          process_instance_id: payload.processInstanceId ?? null,
-          created_at: payload.createdAt,
-          expires_at: payload.expiresAt,
-          reason: payload.reason ?? null,
-          restart_trace_started_at: payload.restartTrace?.startedAt ?? null,
-          restart_trace_last_at: payload.restartTrace?.lastAt ?? null,
-          source: payload.source,
-          restart_kind: payload.restartKind,
-          supervisor_mode: payload.supervisorMode,
-          updated_at_ms: Date.now(),
-        };
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("gateway_restart_handoff")
-            .values({ handoff_key: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY, ...row })
-            .onConflict((conflict) => conflict.column("handoff_key").doUpdateSet(row)),
-        );
+    await runOpenClawStateWorkerOperation(
+      context,
+      (scope) => scope.execute({ type: "restartLifecycle.writeHandoff", input: payload }),
+      {
+        runtimePreparation: opts.runtimePreparation,
+        assertCurrent: check,
+        createAdmission: () => {
+          admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+            check();
+            grant();
+          });
+          return { admission, nativeLocations: [context.admission.databasePath] };
+        },
       },
-      { env },
     );
+    check();
     return payload;
   } catch (err) {
+    check();
+    if (admission?.committed && isDeepStrictEqual(admission.committed.facts, payload)) {
+      return payload;
+    }
     handoffLog.warn(`failed to write gateway restart handoff: ${String(err)}`);
     return null;
   }

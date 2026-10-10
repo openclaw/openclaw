@@ -5,7 +5,27 @@ import type { RuntimeEnv } from "../runtime.js";
 import { t } from "../wizard/i18n/index.js";
 import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 
-type HostDeps = NonNullable<Parameters<typeof runQuickstartForegroundGateway>[1]>;
+const mocks = vi.hoisted(() => ({
+  readConfigSnapshot: vi.fn(),
+  runGateway: vi.fn<typeof import("../cli/gateway-cli/run.js").runGatewayCommand>(),
+  waitForGateway: vi.fn<typeof import("./onboard-helpers.js").waitForGatewayReachable>(),
+  runBrowserHandoff: vi.fn<typeof import("./onboard-browser-handoff.js").runBrowserHatchHandoff>(),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: mocks.readConfigSnapshot,
+}));
+// mock-isolation: Keep foreground Gateway process-lifecycle state outside this handoff fixture.
+vi.mock("../cli/gateway-cli/run.js", () => ({ runGatewayCommand: mocks.runGateway }));
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
+  waitForGatewayReachable: mocks.waitForGateway,
+}));
+vi.mock("./onboard-browser-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-browser-handoff.js")>()),
+  runBrowserHatchHandoff: mocks.runBrowserHandoff,
+}));
 
 function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "none" } } }) {
   const events: string[] = [];
@@ -22,27 +42,26 @@ function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "
     error: vi.fn(),
     exit: vi.fn(),
   };
-  const deps = {
-    readConfigSnapshot: vi.fn(async () => ({ config })),
-    runGateway: vi.fn<NonNullable<HostDeps["runGateway"]>>(() => {
-      events.push("gateway started");
-      return gateway.promise;
-    }),
-    waitForGateway: vi.fn<NonNullable<HostDeps["waitForGateway"]>>(() => {
-      events.push("readiness probe");
-      probing.resolve();
-      return readiness.promise;
-    }),
-    runBrowserHandoff: vi.fn<NonNullable<HostDeps["runBrowserHandoff"]>>(async () => {
-      events.push("browser handoff");
-      return { handedOff: true };
-    }),
-  } satisfies HostDeps;
-  return { config, events, gateway, readiness, probing, summary, runtime, deps };
+  mocks.readConfigSnapshot.mockResolvedValue({ config });
+  mocks.runGateway.mockImplementation(() => {
+    events.push("gateway started");
+    return gateway.promise;
+  });
+  mocks.waitForGateway.mockImplementation(() => {
+    events.push("readiness probe");
+    probing.resolve();
+    return readiness.promise;
+  });
+  mocks.runBrowserHandoff.mockImplementation(async () => {
+    events.push("browser handoff");
+    return { handedOff: true };
+  });
+  return { config, events, gateway, readiness, probing, summary, runtime };
 }
 
 describe("runQuickstartForegroundGateway", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
     vi.stubEnv("OPENCLAW_GATEWAY_PORT", "");
@@ -73,12 +92,12 @@ describe("runQuickstartForegroundGateway", () => {
           controlUi: { basePath: "/dashboard" },
         },
       });
-      const host = runQuickstartForegroundGateway({ runtime: h.runtime }, h.deps);
+      const host = runQuickstartForegroundGateway({ runtime: h.runtime });
       await h.probing.promise;
 
       expect(h.events).toEqual(["gateway started", "readiness probe"]);
-      expect(h.deps.runBrowserHandoff).not.toHaveBeenCalled();
-      expect(h.deps.waitForGateway).toHaveBeenCalledWith(
+      expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
+      expect(mocks.waitForGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           url: "ws://127.0.0.1:19431/dashboard",
           token: mode === "token" ? "synthetic-token" : undefined,
@@ -89,7 +108,7 @@ describe("runQuickstartForegroundGateway", () => {
       h.readiness.resolve({ ok: true });
       await h.summary.promise;
       expect(h.events).toEqual(["gateway started", "readiness probe", "browser handoff"]);
-      expect(h.deps.runBrowserHandoff).toHaveBeenCalledWith(
+      expect(mocks.runBrowserHandoff).toHaveBeenCalledWith(
         expect.objectContaining({ config: h.config }),
       );
       expect(h.runtime.log).toHaveBeenCalledWith("Dashboard: http://127.0.0.1:19431/dashboard/");
@@ -107,26 +126,26 @@ describe("runQuickstartForegroundGateway", () => {
 
   it("surfaces startup failure without waiting for the readiness timeout", async () => {
     const h = createHostHarness();
-    const host = runQuickstartForegroundGateway({ runtime: h.runtime }, h.deps);
+    const host = runQuickstartForegroundGateway({ runtime: h.runtime });
     const failed = expect(host).rejects.toThrow("startup failed");
     await h.probing.promise;
     h.gateway.reject(new Error("startup failed"));
 
     await failed;
-    expect(h.deps.runBrowserHandoff).not.toHaveBeenCalled();
+    expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
   });
 
   it.each(["timeout", "error"] as const)(
     "keeps owning the Gateway after a browser handoff %s",
     async (failure) => {
       const h = createHostHarness();
-      h.deps.runBrowserHandoff.mockImplementation(async () => {
+      mocks.runBrowserHandoff.mockImplementation(async () => {
         if (failure === "error") {
           throw new Error("browser unavailable");
         }
         return { handedOff: false, reason: "timeout" };
       });
-      const host = runQuickstartForegroundGateway({ runtime: h.runtime }, h.deps);
+      const host = runQuickstartForegroundGateway({ runtime: h.runtime });
       const stopped = expect(host).rejects.toThrow("later Gateway failure");
       await h.probing.promise;
       h.readiness.resolve({ ok: true });
@@ -143,11 +162,11 @@ describe("runQuickstartForegroundGateway", () => {
     const h = createHostHarness();
     const handoffStarted = createDeferred();
     const handoff = createDeferred<{ handedOff: true }>();
-    h.deps.runBrowserHandoff.mockImplementation(() => {
+    mocks.runBrowserHandoff.mockImplementation(() => {
       handoffStarted.resolve();
       return handoff.promise;
     });
-    const host = runQuickstartForegroundGateway({ runtime: h.runtime }, h.deps);
+    const host = runQuickstartForegroundGateway({ runtime: h.runtime });
     const stopped = expect(host).rejects.toThrow("Gateway failed during handoff");
     await h.probing.promise;
     h.readiness.resolve({ ok: true });
@@ -161,13 +180,13 @@ describe("runQuickstartForegroundGateway", () => {
 
   it("keeps the foreground Gateway alive when readiness is not confirmed", async () => {
     const h = createHostHarness();
-    const host = runQuickstartForegroundGateway({ runtime: h.runtime }, h.deps);
+    const host = runQuickstartForegroundGateway({ runtime: h.runtime });
     const stopped = expect(host).rejects.toThrow("later Gateway failure");
     await h.probing.promise;
     h.readiness.resolve({ ok: false });
     await h.summary.promise;
 
-    expect(h.deps.runBrowserHandoff).not.toHaveBeenCalled();
+    expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
     expect(h.runtime.log).toHaveBeenCalledWith(t("wizard.guided.quickstartGatewayPending"));
     h.gateway.reject(new Error("later Gateway failure"));
     await stopped;

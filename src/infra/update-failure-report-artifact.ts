@@ -91,7 +91,10 @@ export async function refreshUpdateRunReportArtifact(
     const native = appendix.includes(NATIVE_FAILURE_REPORT_SECTION)
       ? ""
       : nativeFailureDiagnostics(run.steps);
-    const report = renderUpdateRunReport(run, { mode: run.target.kind });
+    const report = renderUpdateRunReport(run, {
+      mode: run.target.kind,
+      markdownLimit: Infinity,
+    });
     await writeTextAtomic(
       outputPath,
       redactSupportString(
@@ -223,12 +226,6 @@ export async function writeUpdateRunReportArtifact(params: {
   return outputPath;
 }
 
-export type SavedUpdateFailureReport = {
-  reportCreated: boolean;
-  reportDirCreated: boolean;
-  stagedReportCreated: boolean;
-};
-
 export function bindSavedReportArtifact(
   prepared: PreparedUpdateFailureReport,
   reservationId: string,
@@ -272,33 +269,23 @@ function isAttemptArtifactName(base: path.ParsedPath, entry: string): boolean {
 
 export async function discardSavedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
-  removeExistingReport = false,
 ): Promise<void> {
   // Remove the rename source first. After receipt ownership is revoked, this
   // ordering prevents a paused publisher from moving staged content back into
   // the final report path between cleanup operations.
-  if (saved.stagedReportCreated || removeExistingReport) {
-    await fs.rm(stagedReportPath(prepared), { force: true });
-  }
-  if (saved.reportCreated || removeExistingReport) {
-    await fs.rm(prepared.savedReportPath, { force: true });
-  }
-  if (saved.reportDirCreated || removeExistingReport) {
-    await fs.rmdir(path.dirname(prepared.savedReportPath)).catch((error: unknown) => {
-      if (!hasErrorCode(error, "ENOENT", "ENOTEMPTY")) {
-        throw error;
-      }
-    });
-  }
+  await fs.rm(stagedReportPath(prepared), { force: true });
+  await fs.rm(prepared.savedReportPath, { force: true });
+  await fs.rmdir(path.dirname(prepared.savedReportPath)).catch((error: unknown) => {
+    if (!hasErrorCode(error, "ENOENT", "ENOTEMPTY")) {
+      throw error;
+    }
+  });
 }
 
 export async function discardSavedUpdateFailureReportBestEffort(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
-  removeExistingReport = false,
 ): Promise<void> {
-  await discardSavedUpdateFailureReport(prepared, saved, removeExistingReport).catch(() => {});
+  await discardSavedUpdateFailureReport(prepared).catch(() => {});
 }
 
 /** Captures the immutable retired-artifact set for one fenced sweep generation. */
@@ -332,7 +319,6 @@ export async function removeRetiredUpdateFailureReportArtifacts(
 /** Writes reviewed content to a non-public staging name under live client authority. */
 export async function savePreparedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
   hasCurrentAuthority?: () => boolean,
 ): Promise<void> {
   const ensureCurrentAuthority = () => {
@@ -342,16 +328,16 @@ export async function savePreparedUpdateFailureReport(
   };
   const reportDir = path.dirname(prepared.savedReportPath);
   ensureCurrentAuthority();
-  const created = await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
-  saved.reportDirCreated = created !== undefined;
+  await fs.mkdir(reportDir, { mode: 0o700, recursive: true });
   ensureCurrentAuthority();
+  let stagedReportCreated = false;
   try {
     await fs.writeFile(stagedReportPath(prepared), prepared.body, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
     });
-    saved.stagedReportCreated = true;
+    stagedReportCreated = true;
   } catch (error) {
     if (!hasErrorCode(error, "EEXIST")) {
       throw error;
@@ -364,7 +350,7 @@ export async function savePreparedUpdateFailureReport(
     }
   }
   ensureCurrentAuthority();
-  if (saved.stagedReportCreated) {
+  if (stagedReportCreated) {
     await fs.chmod(stagedReportPath(prepared), 0o600);
   }
   ensureCurrentAuthority();
@@ -373,10 +359,7 @@ export async function savePreparedUpdateFailureReport(
 /** Publishes staged content only after the caller acquired the durable receipt phase. */
 export async function publishPreparedUpdateFailureReport(
   prepared: PreparedUpdateFailureReport,
-  saved: SavedUpdateFailureReport,
 ): Promise<void> {
   await fs.rename(stagedReportPath(prepared), prepared.savedReportPath);
-  saved.stagedReportCreated = false;
-  saved.reportCreated = true;
   await fs.chmod(prepared.savedReportPath, 0o600);
 }

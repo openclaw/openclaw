@@ -208,7 +208,7 @@ describe("chat secret config-write recovery", () => {
     const entries = await secretStore.listSecretStoreEntries({ scope: team, includeDeleted: true });
     expect(entries).toHaveLength(1);
     const name = entries[0]!.name;
-    expect(secretStore.readSecretStoreValue({ scope: team, name })).toEqual({
+    expect(await secretStore.readSecretStoreValue({ scope: team, name })).toEqual({
       ok: true,
       value: secret,
     });

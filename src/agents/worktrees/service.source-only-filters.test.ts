@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commands from "../../process/exec.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -134,6 +135,72 @@ it.each([
   },
 );
 
+it("fast-forwards the source default without executing clean or smudge filters", async () => {
+  await git(repo, "add", ".openclaw");
+  await git(repo, "commit", "-qm", "source setup");
+  await fs.writeFile(path.join(repo, "README.md"), "remote update\n");
+  await git(repo, "add", "README.md");
+  const tree = await git(repo, "write-tree");
+  await fs.writeFile(path.join(repo, "README.md"), "base\n");
+  await git(repo, "add", "README.md");
+  const commit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "remote update");
+  await git(repo, "push", "origin", `${commit}:refs/heads/main`);
+  await git(path.join(root, "remote.git"), "symbolic-ref", "HEAD", "refs/heads/main");
+  await configure("repository", "clean", repo);
+  await configure("repository", "smudge", repo);
+  // Force status to examine file contents instead of reusing its index stat cache.
+  await fs.writeFile(path.join(repo, "README.md"), "base\n");
+
+  const created = await service.create({
+    repoRoot: repo,
+    name: "fresh-guest",
+    ownerKind: "session",
+    ownerId: "agent:main:fresh-guest",
+    runSetupScript: false,
+    provisionIgnoredFiles: false,
+  });
+
+  expect(await git(repo, "rev-parse", "HEAD")).toBe(commit);
+  expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("remote update\n");
+  expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("remote update\n");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.skipIf(process.platform === "win32")(
+  "reads signed commit age without running the host signature verifier",
+  async () => {
+    const unsigned = await git(repo, "cat-file", "commit", "HEAD");
+    const signed = unsigned.replace(
+      "\n\n",
+      "\ngpgsig -----BEGIN PGP SIGNATURE-----\n test-only\n -----END PGP SIGNATURE-----\n\n",
+    );
+    const objectFile = path.join(root, "signed-commit");
+    await fs.writeFile(objectFile, signed);
+    const commit = await git(repo, "hash-object", "-t", "commit", "-w", objectFile);
+    const verifier = path.join(root, "verify-signature");
+    await fs.writeFile(
+      verifier,
+      `#!${process.execPath}\nrequire("node:fs").appendFileSync(${JSON.stringify(marker)}, "verified\\n");\n`,
+      { mode: 0o755 },
+    );
+    await git(repo, "config", "log.showSignature", "true");
+    await git(repo, "config", "gpg.program", verifier);
+    // Prove the configured verifier is executable before exercising creation.
+    await git(repo, "show", "-s", "--format=%ct", commit);
+    expect(await fs.readFile(marker, "utf8")).toContain("verified");
+    await fs.unlink(marker);
+
+    await service.create({
+      repoRoot: repo,
+      name: "signed",
+      baseRef: commit,
+      runSetupScript: false,
+      provisionIgnoredFiles: false,
+    });
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+
 it("archives before first execution and restores without running late clean/smudge programs", async () => {
   const created = await createSourceOnly("before-run", "first-run-not-admitted");
   const ignore = path.join(root, "global-ignore");
@@ -186,33 +253,25 @@ it("does not execute a clean filter inserted after publication preflight", async
   expect(await git(created.path, "rev-parse", "HEAD")).toBe(head);
 });
 
-it.each([false, true])(
-  "keeps native lossless removal checks with filters configured (late file=%s)",
-  async (lateFile) => {
-    await git(repo, "push", "origin", "main");
-    const created = await createSourceOnly("lossless", "lossless");
-    await configure("repository", "clean", created.path);
-    await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
-    const run = commands.runCommandWithTimeout;
-    let reachedRemoval = false;
-    vi.spyOn(commands, "runCommandWithTimeout").mockImplementation(async (...args) => {
-      if (args[0][0] === "git" && args[0].includes("worktree") && args[0].includes("remove")) {
-        reachedRemoval = true;
-        if (lateFile) {
-          await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
-        }
-      }
-      return await run(...args);
-    });
-    if (lateFile) {
-      await expect(service.removeIfLossless(created.id)).rejects.toThrow();
-      expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
-        "preserved user bytes",
-      );
-    } else {
-      expect(await service.removeIfLossless(created.id)).toBe(true);
+it("keeps native lossless removal checks when a late file appears with filters configured", async () => {
+  await git(repo, "push", "origin", "main");
+  const created = await createSourceOnly("lossless", "lossless");
+  await configure("repository", "clean", created.path);
+  await fs.utimes(path.join(created.path, "README.md"), new Date(0), new Date(0));
+  const run = gitExec.executeGitCommand;
+  const removals: string[][] = [];
+  vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+    if (args[0] === "worktree" && args[1] === "remove") {
+      removals.push(args);
+      await fs.writeFile(path.join(created.path, "late.txt"), "preserved user bytes");
     }
-    expect(reachedRemoval).toBe(true);
-    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  },
-);
+    return await run(cwd, args, options);
+  });
+  await expect(service.removeIfLossless(created.id)).rejects.toThrow();
+  expect(await fs.readFile(path.join(created.path, "late.txt"), "utf8")).toBe(
+    "preserved user bytes",
+  );
+  expect(removals).toHaveLength(1);
+  expect(removals[0]).not.toContain("--force");
+  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+});

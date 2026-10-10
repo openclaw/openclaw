@@ -87,7 +87,10 @@ describe("secret store mutation lifecycle", () => {
         undefined,
         { code: "INVALID_REQUEST", message: expect.stringContaining(name) },
       ]);
-      expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({ ok: true, value });
+      expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
+        ok: true,
+        value,
+      });
       expect(reloadSecrets).not.toHaveBeenCalled();
     });
   });
@@ -139,7 +142,7 @@ describe("secret store mutation lifecycle", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
-          expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
+          expect(await readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
             ok: true,
             value,
           });
@@ -149,7 +152,7 @@ describe("secret store mutation lifecycle", () => {
             true,
             { ok: true },
           ]);
-          expect(readSecretStoreValue({ scope: { kind: "team" }, name }).ok).toBe(false);
+          expect((await readSecretStoreValue({ scope: { kind: "team" }, name })).ok).toBe(false);
         } finally {
           releaseAgentRunDelegatedAuthority(authority);
           clearAgentRunContext("delete-run");
@@ -324,7 +327,7 @@ describe("secret store mutation lifecycle", () => {
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
         expect(
-          readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
+          await readSecretStoreValue({ scope: { kind: "team" }, name: "UNRELATED_SETTING" }),
         ).toEqual({ ok: true, value: "enabled" });
         clearSecretsRuntimeSnapshot();
       });

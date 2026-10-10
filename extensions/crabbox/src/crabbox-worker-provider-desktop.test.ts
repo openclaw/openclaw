@@ -185,7 +185,7 @@ describe("Crabbox desktop provisioning", () => {
         provider: providerId,
         desktop: true,
       }),
-    ).toBe(148 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000);
+    ).toBe(163 * 60_000 + CRABBOX_LIFECYCLE_TIMEOUT_MS + 15_000);
     expect(calls.filter(({ argv }) => argv[1] === "run")).toHaveLength(1);
     expect(calls.find(({ argv }) => argv[1] === "run")?.options.timeoutMs).toBe(30 * 60_000);
     expect(setupOrder).toEqual(["enrollment", "desktop"]);

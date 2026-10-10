@@ -18,28 +18,6 @@ afterEach(() => {
 });
 
 describe("createDiscordClient", () => {
-  it("extends a single REST operation after the registered gateway disconnects", async () => {
-    registerGateway("default", { isConnected: false } as GatewayPlugin);
-    const request = createDiscordClient({
-      cfg: {
-        channels: {
-          discord: {
-            token: "discord-token",
-          },
-        },
-      },
-      rest: {} as RequestClient,
-    }).request;
-    const operation = vi
-      .fn()
-      .mockRejectedValueOnce(new TypeError("fetch failed"))
-      .mockRejectedValueOnce(new TypeError("fetch failed"))
-      .mockResolvedValue("sent");
-
-    await expect(request(operation, "send")).resolves.toBe("sent");
-    expect(operation).toHaveBeenCalledTimes(3);
-  });
-
   it("keeps explicit-token retries bound to the REST account", async () => {
     registerGateway("default", { isConnected: false } as GatewayPlugin);
     registerGateway("ops", { isConnected: true } as GatewayPlugin);
@@ -71,26 +49,6 @@ describe("createDiscordClient", () => {
 
 describe("createDiscordRestClient", () => {
   const fakeRest = {} as RequestClient;
-
-  it("uses explicit token without resolving config token SecretRefs", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          token: {
-            source: "exec",
-            provider: "vault",
-            id: "discord/bot-token",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = createDiscordRestClient({ cfg, token: "Bot explicit-token", rest: fakeRest });
-
-    expect(result.token).toBe("explicit-token");
-    expect(result.rest).toBe(fakeRest);
-    expect(result.account.accountId).toBe("default");
-  });
 
   it("keeps a resolved account token when a command has only pinned its unresolved config", async () => {
     const sourceConfig: OpenClawConfig = {

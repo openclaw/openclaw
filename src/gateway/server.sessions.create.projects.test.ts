@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, test, vi } from "vitest";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -12,7 +13,8 @@ import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireGit } from "../agents/worktrees/git.js";
 import { createManagedWorktreeOwnerPolicy } from "../agents/worktrees/owner-protection.js";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
+import { ManagedWorktreeService, managedWorktrees } from "../agents/worktrees/service.js";
 import { materializeManagedWorktreeFixture } from "../agents/worktrees/service.test-support.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -51,7 +53,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
-const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+const projectCloneMocks = vi.hoisted(() => ({
+  assertSelected: vi.fn(),
+  materialize: vi.fn(),
+  prepareIdentity: vi.fn(),
+}));
 const titleMocks = vi.hoisted(() => ({ generate: vi.fn() }));
 
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
@@ -62,6 +68,9 @@ vi.mock("../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../projects/project-clone.js")>();
   return { ...actual, materializeProjectClone: projectCloneMocks.materialize };
 });
+vi.mock("./project-github-identity.js", () => ({
+  prepareGatewayProjectGitHubIdentity: projectCloneMocks.prepareIdentity,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const directoryLinkType = process.platform === "win32" ? "junction" : "dir";
@@ -93,6 +102,8 @@ async function setupStartedBeforeSettlement(
 afterEach(async () => {
   titleMocks.generate.mockReset();
   projectCloneMocks.materialize.mockReset();
+  projectCloneMocks.prepareIdentity.mockReset();
+  projectCloneMocks.assertSelected.mockReset();
   dispatchInboundMessageMock.mockReset();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
@@ -127,6 +138,8 @@ test.each([
 ])(
   "sessions.create admits remote project work (worktree=$worktree, base=$baseRef, sandboxed=$sandboxed) before materialization and dispatches only after authoritative binding",
   async ({ worktree, sandboxed, image, baseRef }) => {
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
     const root = tempDirs.make("openclaw-session-remote-project-startup-");
     const workspace = await initializeRepository(root, "workspace");
     const projectRoot = await initializeRepository(sandboxed ? workspace : root, "project");
@@ -135,6 +148,10 @@ test.each([
     testState.agentConfig = { workspace: alias, sandbox: { mode: sandboxed ? "all" : "off" } };
     const { storePath } = await createSessionStoreDir();
     const project = await registerProjectRegistry({ path: projectRoot, name: "Project" });
+    projectCloneMocks.prepareIdentity.mockResolvedValue({
+      token: "protected-native-token",
+      assertSelected: projectCloneMocks.assertSelected,
+    });
     const materialization = createDeferredCore<typeof project>();
     projectCloneMocks.materialize.mockReturnValueOnce(materialization.promise);
     dispatchInboundMessageMock.mockImplementation(async (dispatchParams: unknown) => {
@@ -193,7 +210,10 @@ test.each([
       await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
       expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
         expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+        expect.objectContaining({
+          signal: expect.any(AbortSignal),
+          token: "protected-native-token",
+        }),
       );
       expect(events).toContainEqual(
         expect.objectContaining({
@@ -236,6 +256,7 @@ test.each([
 
       materialization.resolve(project);
       await settleWorkspaceRuns(context, storePath, key);
+      expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
       const error = broadcast.mock.calls.find(
         ([event, payload]) => event === "chat" && payload.state === "error",
       );
@@ -269,7 +290,7 @@ test.each([
             }),
       });
       if (worktree) {
-        expect(managedWorktrees.findLiveByOwner("session", key)?.baseRef).toBe("main");
+        expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
         expect(prepared?.spawnedCwd).not.toBe(projectRoot);
         expect(await fs.readFile(path.join(prepared!.spawnedCwd!, "README.md"), "utf8")).toBe(
           "project\n",
@@ -595,7 +616,7 @@ sendReceipt(process.argv[2], "started");
       const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
       expect(entry).not.toHaveProperty("pendingWorktree");
       expect(entry?.worktree?.canonicalWorkspaceDir).toBe(workspace);
-      const owned = managedWorktrees.findLiveByOwner("session", key!);
+      const owned = await managedWorktrees.findLiveByOwner("session", key!);
       expect(owned?.id).toBe(entry?.worktree?.id);
       await expect(fs.readFile(path.join(entry!.spawnedCwd!, "README.md"), "utf8")).resolves.toBe(
         "workspace\n",
@@ -608,7 +629,7 @@ sendReceipt(process.argv[2], "started");
     } finally {
       await fs.writeFile(release, "release setup\n");
       await settleWorkspaceRuns(context, storePath, key, true);
-      const owned = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
+      const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
       if (owned) {
         await managedWorktrees.remove({
           id: owned.id,
@@ -704,43 +725,35 @@ test("chat.send visibly rejects corrupt persisted project intent without default
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 
-test.each(["workspace", "registered"])(
-  "sessions.create starts in a sandboxed %s project through a workspace alias",
-  async (kind) => {
-    const root = tempDirs.make("openclaw-session-workspace-project-");
-    const workspace = path.join(root, "workspace");
-    const alias = path.join(root, "workspace-alias");
-    await fs.mkdir(workspace);
-    await fs.symlink(workspace, alias, directoryLinkType);
-    testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
-    const { storePath } = await createSessionStoreDir();
-    const projectRoot =
-      kind === "workspace" ? workspace : await initializeRepository(workspace, "project");
-    const projectId =
-      kind === "workspace"
-        ? "workspace:main"
-        : (await registerProjectRegistry({ path: projectRoot })).id;
+test("sessions.create starts in a sandboxed workspace project through a workspace alias", async () => {
+  const root = tempDirs.make("openclaw-session-workspace-project-");
+  const workspace = path.join(root, "workspace");
+  const alias = path.join(root, "workspace-alias");
+  await fs.mkdir(workspace);
+  await fs.symlink(workspace, alias, directoryLinkType);
+  testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+  const { storePath } = await createSessionStoreDir();
+  const projectRoot = workspace;
 
-    const created = await directSessionReq<{
-      key: string;
-      entry?: { sessionRoot?: string; spawnedCwd?: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", projectId },
-      { client: { connect: { scopes: ["operator.write"] } } as never },
-    );
+  const created = await directSessionReq<{
+    key: string;
+    entry?: { sessionRoot?: string; spawnedCwd?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", projectId: "workspace:main" },
+    { client: { connect: { scopes: ["operator.write"] } } as never },
+  );
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.entry).toMatchObject({
-      sessionRoot: projectRoot,
-      spawnedCwd: projectRoot,
-    });
-    expect(loadSessionEntry({ sessionKey: created.payload!.key, storePath })).toMatchObject({
-      sessionRoot: projectRoot,
-      spawnedCwd: projectRoot,
-    });
-  },
-);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    sessionRoot: projectRoot,
+    spawnedCwd: projectRoot,
+  });
+  expect(loadSessionEntry({ sessionKey: created.payload!.key, storePath })).toMatchObject({
+    sessionRoot: projectRoot,
+    spawnedCwd: projectRoot,
+  });
+});
 
 test("sessions.create with an empty message preserves its owned checkout above the 100 cleanup target", async () => {
   const state = await createOpenClawTestState({
@@ -771,18 +784,18 @@ test("sessions.create with an empty message preserves its owned checkout above t
     const kept = await managedWorktrees.listRegistryRecords();
     const key = "agent:main:worktree-above-cleanup-target";
     const scope = { agentId: "main", sessionKey: key, storePath };
-    const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
+    const originalCreate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
     const createSpy = vi
-      .spyOn(managedWorktrees, "createWithOutcome")
-      .mockImplementationOnce(async (params) => {
-        const outcome = await originalCreate(params);
+      .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+        const outcome = await originalCreate(this, params);
         const record = outcome.record;
         // GC can run after allocation but before the session row is published.
         expect(loadSessionEntry(scope)).toBeUndefined();
         expect(
           await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
         ).toMatchObject({ removed: [] });
-        expect(managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
+        expect(await managedWorktrees.findLiveByOwner("session", key)).toEqual(record);
         expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("project\n");
         return outcome;
       });
@@ -814,7 +827,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
         spawnedCwd: worktree.path,
         worktree: { id: worktree.id, repoRoot: projectRoot, canonicalWorkspaceDir: projectRoot },
       });
-      expect(managedWorktrees.findLiveByOwner("session", key)).toMatchObject({
+      expect(await managedWorktrees.findLiveByOwner("session", key)).toMatchObject({
         id: worktree.id,
         repoRoot: projectRoot,
         baseRef: "selected-base",
@@ -822,13 +835,13 @@ test("sessions.create with an empty message preserves its owned checkout above t
       expect(
         await managedWorktrees.gc(createManagedWorktreeOwnerPolicy(getRuntimeConfig())),
       ).toMatchObject({ removed: [] });
-      expect(managedWorktrees.findLiveById(worktree.id)).toBeDefined();
+      expect(getRegistryWorktree(process.env, worktree.id)).toBeDefined();
       expect(await requireGit(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
       expect(await requireGit(worktree.path, ["branch", "--show-current"])).toBe(worktree.branch);
       expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("project\n");
       expect(await managedWorktrees.listRegistryRecords()).toHaveLength(101);
       for (const record of kept) {
-        expect(managedWorktrees.findLiveById(record.id)).toEqual(record);
+        expect(getRegistryWorktree(process.env, record.id)).toEqual(record);
         expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("workspace\n");
       }
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

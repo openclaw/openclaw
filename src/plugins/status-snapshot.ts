@@ -14,6 +14,7 @@ import {
   appendPluginControlPlaneWorkspaceDiagnostic,
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
+import { createBlockedPluginDiagnosticLookup } from "./discovery-availability.js";
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import { resolveRetainedManagedNpmInstallPackageInfo } from "./managed-npm-retention.js";
 import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
@@ -64,6 +65,11 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
   return withPluginCache(cache, () => {
     const { index, byPluginId: manifests, pluginIds: scope } = params.metadata;
     const diagnostics = [...registry.diagnostics];
+    const findBlockedPluginDiagnostic = createBlockedPluginDiagnosticLookup({
+      diagnostics: params.metadata.diagnostics,
+      config: params.config,
+      env: params.env,
+    });
     const ownership = createInstalledPluginOwnershipResolver(index, params.env);
     const records = new Map(index.plugins.map((record) => [record.pluginId, record]));
     const installSelectors = new Map(
@@ -132,11 +138,18 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
     const plugins = new Map(preparedPlugins.map((plugin) => [plugin.id, plugin]));
     const config = normalizePluginsConfig(params.config?.plugins);
     for (const installOwner of Object.keys(index.installRecords)) {
+      const installId =
+        index.installRecords[installOwner]?.source === "path"
+          ? null
+          : (installSelectors.get(installOwner) ?? installOwner);
       const resolved = ownership.resolveUpdate(installOwner);
       if (!resolved.ok || resolved.value.kind === "operator-managed") {
         continue;
       }
       if (resolved.value.kind === "orphan") {
+        if (findBlockedPluginDiagnostic(installOwner)) {
+          continue;
+        }
         if (
           (!scope || scope.includes(installOwner)) &&
           resolveEffectiveEnableState({
@@ -150,7 +163,7 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
             pluginInstallIncompleteDiagnostic(
               installOwner,
               "plugin metadata is missing.",
-              installSelectors.get(installOwner) ?? installOwner,
+              installId,
             ),
           );
         }
@@ -198,7 +211,7 @@ export function projectPluginInstallHealth<T extends PluginDependencyHealthRegis
             pluginInstallIncompleteDiagnostic(
               id,
               missingManifest ? "plugin manifest is missing." : "package.json is missing.",
-              installSelectors.get(installOwner) ?? installOwner,
+              installId,
             ),
           ),
         );

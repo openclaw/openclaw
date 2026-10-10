@@ -8,7 +8,7 @@ import {
   type SessionIngestionFileState,
 } from "./dreaming-ingestion-state.js";
 import {
-  listMemorySessionTombstones,
+  findForgottenMemorySessionIds,
   recordMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
@@ -28,16 +28,15 @@ import {
 } from "./session-backfill-lifecycle.js";
 import { normalizeSessionBackfillSelection } from "./session-backfill-selection.js";
 import {
-  SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
-  SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   SESSION_INGESTION_SCORE,
   appendSessionCorpusLines,
   foreignSessionIngestionSource,
   mergeTrackedMessageHashes,
   resolveAdmissionPolicy,
+  resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
-  sessionExclusionReason,
+  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
   trimTrackedSessionScopes,
   type SessionIngestionCandidate,
@@ -48,7 +47,7 @@ import {
 import { buildPromotionMarker, hashMemoryContent } from "./short-term-promotion-memory-write.js";
 import {
   readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
+  recordShortTermRecalls,
   removeGroundedShortTermCandidates,
 } from "./short-term-promotion.js";
 
@@ -96,20 +95,19 @@ async function listSessionBackfillSources(params: {
   const corpus = await listSessionTranscriptCorpusEntriesForAgent(params.agentId, {
     includeRetainedSqlite: true,
   });
-  const forgottenSessionIds = new Set(
-    (await listMemorySessionTombstones({ agentId: params.agentId })).map(
-      (entry) => entry.sessionId,
-    ),
+  const forgottenSessionIds = await findForgottenMemorySessionIds({
+    agentId: params.agentId,
+    sessionIds: corpus.map((entry) => entry.sessionId),
+  });
+  const candidates = corpus
+    .map((entry) => sessionIngestionSourceFromCorpus(entry, "backfill"))
+    .filter((entry) => entry !== null);
+  const excludedReasons = sessionExclusionReasons(
+    candidates,
+    params.admissionPolicy,
+    forgottenSessionIds,
   );
-  const sources = corpus
-    .map(sessionIngestionSourceFromCorpus)
-    .filter(
-      (entry): entry is SessionIngestionSource =>
-        entry !== null &&
-        !entry.buildOptions.generatedByDreamingNarrative &&
-        !entry.buildOptions.generatedByCronRun &&
-        !sessionExclusionReason(entry, params.admissionPolicy, forgottenSessionIds),
-    );
+  const sources = candidates.filter((source) => !excludedReasons.has(source));
   const canonicalPaths = new Set(sources.map((entry) => path.resolve(entry.absolutePath)));
   for (const archiveFile of params.archiveFiles) {
     // Foreign files do not inherit canonical session identity from a matching basename.
@@ -152,13 +150,7 @@ async function collectSessionBackfillCandidates(params: {
 }) {
   const candidates: SessionIngestionCandidate[] = [];
   const scans: SessionBackfillScan[] = [];
-  const perFileCap = Math.min(
-    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
-    Math.max(
-      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP / Math.max(1, params.sources.length)),
-    ),
-  );
+  const perFileCap = resolveSessionIngestionFileCap(params.sources.length);
 
   for (const source of params.sources) {
     const scan = await scanSessionIngestionSource({
@@ -204,15 +196,12 @@ async function collectSessionBackfillCandidates(params: {
 function mergeSessionBackfillFileProgress(params: {
   current: Record<string, SessionIngestionFileState>;
   scans: SessionBackfillScan[];
-  selectedDays: Array<{ candidates: SessionIngestionCandidate[] }>;
+  selectedHashes: ReadonlySet<string>;
 }): Record<string, SessionIngestionFileState> {
-  const selectedHashes = new Set(
-    params.selectedDays.flatMap((day) => day.candidates.map((candidate) => candidate.hash)),
-  );
   const files = { ...params.current };
   for (const scan of params.scans) {
     const firstUnselected = scan.candidates.find(
-      (candidate) => !selectedHashes.has(candidate.hash),
+      (candidate) => !params.selectedHashes.has(candidate.hash),
     );
     const progressStops = [
       scan.scannedEndIndex,
@@ -351,10 +340,12 @@ async function applySessionBackfillDays(params: {
     if (grounded.length === 0) {
       continue;
     }
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir: params.workspaceDir,
       query: `${SESSION_BACKFILL_QUERY_PREFIX}:${day.day}`,
-      items: grounded.map((result) => ({
+      signalType: "grounded",
+      results: grounded.map((result) => ({
+        source: "memory",
         path: result.path,
         startLine: result.startLine,
         endLine: result.endLine,
@@ -523,7 +514,7 @@ async function executeSessionBackfillBatchCore(
       files: mergeSessionBackfillFileProgress({
         current: state.files,
         scans: collected.scans,
-        selectedDays,
+        selectedHashes,
       }),
       seenMessages: trimTrackedSessionScopes(nextSeenMessages),
     });

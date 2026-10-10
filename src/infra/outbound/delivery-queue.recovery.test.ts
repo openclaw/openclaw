@@ -25,6 +25,7 @@ import {
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { resolveDeliveryQueueStateEnv } from "../delivery-queue-state-context.js";
 import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
@@ -386,10 +387,9 @@ describe("delivery-queue recovery", () => {
     };
     const context = { channel: "demo-channel-a", to: "+1" };
     await replaceSessionEntry(
-      { sessionKey, storePath },
+      { sessionKey, storePath, env: resolveDeliveryQueueStateEnv(tmpDir()) },
       {
         sessionId: completion.sessionId,
-        status: "running",
         updatedAt: Date.now(),
         ...(options.withWriterAuthority
           ? { activeWriterRunId: writerRunId, lifecycleRevision }
@@ -510,7 +510,11 @@ describe("delivery-queue recovery", () => {
       const { result } = await runRecovery({ deliver });
 
       expect(
-        loadSessionEntry({ sessionKey: completion.sessionKey, storePath: completion.storePath }),
+        loadSessionEntry({
+          sessionKey: completion.sessionKey,
+          storePath: completion.storePath,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        }),
       ).toMatchObject({
         pendingFinalDelivery: {
           deliveries: [{ id: deliveryId, state: "unknown" }],
@@ -560,12 +564,17 @@ describe("delivery-queue recovery", () => {
       const current = loadSessionEntry({
         sessionKey: completion.sessionKey,
         storePath: completion.storePath,
+        env: resolveDeliveryQueueStateEnv(tmpDir()),
       });
       if (!current) {
         throw new Error("test invariant: pending-final recovery session must exist");
       }
       await replaceSessionEntry(
-        { sessionKey: completion.sessionKey, storePath: completion.storePath },
+        {
+          sessionKey: completion.sessionKey,
+          storePath: completion.storePath,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        },
         {
           ...current,
           activeWriterRunId: "replacement-writer",
@@ -598,12 +607,17 @@ describe("delivery-queue recovery", () => {
       const current = loadSessionEntry({
         sessionKey: completion.sessionKey,
         storePath: completion.storePath,
+        env: resolveDeliveryQueueStateEnv(tmpDir()),
       });
       if (!current) {
         throw new Error("test invariant: pending-final recovery session must exist");
       }
       await replaceSessionEntry(
-        { sessionKey: completion.sessionKey, storePath: completion.storePath },
+        {
+          sessionKey: completion.sessionKey,
+          storePath: completion.storePath,
+          env: resolveDeliveryQueueStateEnv(tmpDir()),
+        },
         {
           ...current,
           activeWriterRunId: "replacement-writer",

@@ -14,4 +14,18 @@ export type SecretStoreReadOperations = {
     input: SecretStoreListInput;
     output: { type: "secrets.metadata"; rows: SecretStoreRow[] };
   };
+  "secrets.execEnvironment": {
+    input: { excludeNames: readonly string[] };
+    output: {
+      type: "secrets.execEnvironment";
+      rows: Pick<SecretStoreRow, "name" | "value" | "kind" | "allowed_hosts">[];
+    };
+  };
+  "secrets.value": {
+    input: { name: string };
+    output: {
+      type: "secrets.value";
+      row: Pick<SecretStoreRow, "value" | "kind"> | undefined;
+    };
+  };
 };

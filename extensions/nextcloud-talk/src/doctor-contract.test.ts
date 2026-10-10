@@ -44,6 +44,34 @@ describe("nextcloud-talk normalizeCompatibilityConfig streaming aliases", () => 
 });
 
 describe("Nextcloud Talk webhook port migration", () => {
+  it.each([
+    { name: "absent", cfg: {}, accounts: [] },
+    {
+      name: "unconfigured",
+      cfg: talkConfig({ botSecret: "test-bot-secret" }),
+      accounts: [],
+    },
+    {
+      name: "disabled",
+      cfg: talkConfig({
+        enabled: false,
+        baseUrl: "https://cloud.example.com",
+        botSecret: "test-bot-secret",
+      }),
+      accounts: [],
+    },
+    {
+      name: "configured",
+      cfg: talkConfig({
+        baseUrl: "https://cloud.example.com",
+        botSecret: "test-bot-secret",
+      }),
+      accounts: ["default"],
+    },
+  ])("preserves historical listeners only for $name channel state", ({ cfg, accounts }) => {
+    expect(normalizeCompatibilityConfig({ cfg }).historicalWebhookAccountIds).toEqual(accounts);
+  });
+
   it("preserves explicit listeners and host-only settings with the historical port", () => {
     const cfg: CoreConfig = {
       channels: {

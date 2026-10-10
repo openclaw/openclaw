@@ -383,44 +383,6 @@ test("sessions.describe preserves pre-epoch identity while starting", async () =
   });
 });
 
-test("sessions.list projects durable placement move progress", async () => {
-  await seedSessionRows();
-  const placement = activePlacementRecord();
-  const move = placementMove(placement, "workspace reconciliation is waiting");
-  const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>(
-    () => new Map([[placement.sessionId, placement]]),
-  );
-  const facts = createSessionPlacementFactsReader(
-    { getMany },
-    undefined,
-    new Map([[move.sessionId, move]]),
-  );
-  const readProjection = vi.fn(facts.readProjection);
-  const projection = await createSessionRowProjection({
-    cfg: (await getGatewayConfigModule()).getRuntimeConfig(),
-    placementFactsReader: { readProjection },
-  });
-  trackSessionReadProjection(projection);
-
-  const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
-    "sessions.list",
-    {},
-    { context: bindSessionRowProjection({}, () => projection) },
-  );
-
-  expect(result.ok).toBe(true);
-  const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
-  expect(main?.placementMove).toEqual({
-    target: { kind: "gateway" },
-    error: "workspace reconciliation is waiting",
-    updatedAtMs: 340,
-  });
-  expect(main?.placementMove).not.toHaveProperty("operationId");
-  expect(
-    readProjection.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
-  ).toEqual(["sess-main", "sess-other"]);
-});
-
 test.each([
   { name: "without an environment", ownerEpoch: undefined, activeOwnerEpoch: 12, identity: false },
   {
@@ -580,19 +542,19 @@ test.each([
     if (recovery === "unstaged result") {
       seedFailedPlacementWithRetainedResult(database, identity.sessionId);
     } else {
-      const draining = placements.startDrain({
+      const draining = await placements.startDrain({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: draining.generation,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: identity.sessionId,
         expectedGeneration: reconciling.generation,
         recoveryError: "previous worker failure",

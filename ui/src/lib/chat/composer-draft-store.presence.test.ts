@@ -148,10 +148,17 @@ describe("durable recovery", () => {
     });
   });
 
-  it.each(["owner", "revision", "writeId", "current"] as const)(
-    "keeps recovery when its confirmed %s changes",
+  it.each(["owner", "revision", "writeId", "current", "storage"] as const)(
+    "preserves recovery when discard is blocked by %s",
     async (change) => {
-      await seedRecords([storedRecord(legacyScope.scopeKey)]);
+      await seedRecords([
+        storedRecord(
+          legacyScope.scopeKey,
+          change === "storage"
+            ? { attachments: [{ blob: new Blob(["keep bytes"]), mimeType: "text/plain" }] }
+            : {},
+        ),
+      ]);
       const entry = await recoveryEntry();
       if (change === "revision" || change === "writeId") {
         await seedRecords([
@@ -162,6 +169,12 @@ describe("durable recovery", () => {
         ]);
       }
       const before = await readDurableComposerDraft(legacyScope);
+      const write =
+        change === "storage"
+          ? vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(() => {
+              throw new DOMException("blocked", "QuotaExceededError");
+            })
+          : undefined;
       let currentChecks = 0;
       expect(
         await discardDurableComposerRecovery(
@@ -169,33 +182,20 @@ describe("durable recovery", () => {
           entry,
           () => change !== "current" || ++currentChecks === 1,
         ),
-      ).toEqual({ status: "conflict" });
-      expect(await readDurableComposerDraft(legacyScope)).toEqual(before);
+      ).toEqual({ status: change === "storage" ? "storage-failed" : "conflict" });
+      write?.mockRestore();
+      const retained = await readDurableComposerDraft(legacyScope);
+      expect(retained).toEqual(before);
+      if (change === "storage") {
+        expect(retained.status).toBe("found");
+        if (retained.status !== "found") {
+          throw new Error("Missing retained draft");
+        }
+        expect(await retained.draft.attachments[0]!.blob.text()).toBe("keep bytes");
+        expect(retained.draft.revision).toBe(entry.revision);
+      }
     },
   );
-
-  it("aborts a failed discard without releasing attachment bytes", async () => {
-    await seedRecords([
-      storedRecord(legacyScope.scopeKey, {
-        attachments: [{ blob: new Blob(["keep bytes"]), mimeType: "text/plain" }],
-      }),
-    ]);
-    const entry = await recoveryEntry();
-    const write = vi.spyOn(IDBObjectStore.prototype, "put").mockImplementation(() => {
-      throw new DOMException("blocked", "QuotaExceededError");
-    });
-    expect(await discardDurableComposerRecovery(owner, entry, () => true)).toEqual({
-      status: "storage-failed",
-    });
-    write.mockRestore();
-    const retained = await readDurableComposerDraft(legacyScope);
-    expect(retained.status).toBe("found");
-    if (retained.status !== "found") {
-      throw new Error("Missing retained draft");
-    }
-    expect(await retained.draft.attachments[0]!.blob.text()).toBe("keep bytes");
-    expect(retained.draft.revision).toBe(entry.revision);
-  });
 });
 
 describe("durable chat draft presence", () => {

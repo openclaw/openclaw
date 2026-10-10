@@ -205,7 +205,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
       ).length;
     const requests = (await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
       response.json(),
-    )) as Array<{ plannedToolName?: string; prompt?: string }>;
+    )) as Array<{ allInputText?: string; plannedToolName?: string; prompt?: string }>;
     const handoffRequests = requests.filter(
       (request) =>
         request.prompt?.includes("Subagent self yield qa worker") ||
@@ -215,7 +215,7 @@ describe("plugin subagent sessions_yield follow-up", () => {
     // reaches the original requester through one registry completion turn, and
     // the pause it superseded never wakes that requester with a notice.
     const requesterCompletionTurns = requests.filter((request) =>
-      request.prompt?.includes("A background task completed."),
+      request.allInputText?.includes("A background task completed."),
     ).length;
     const pauseNoticeRequests = requests.filter((request) =>
       request.prompt?.includes("A child is paused awaiting a continuation"),

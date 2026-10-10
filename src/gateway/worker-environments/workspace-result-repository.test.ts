@@ -532,14 +532,14 @@ describe("repository workspace result ownership", () => {
         assertCurrent: () => {},
         mutate: async () => {
           await fs.writeFile(path.join(f.remote, "interrupted.txt"), "must remain recoverable\n");
-          expect(() =>
+          await expect(
             placements.startDrain({
               sessionId: SESSION_ID,
               environmentId: activeTurn.placement.environmentId,
               ownerEpoch: activeTurn.placement.activeOwnerEpoch,
               expectedGeneration: activeTurn.placement.generation,
             }),
-          ).toThrow("pending cloud workspace result");
+          ).rejects.toThrow("pending cloud workspace result");
           const claim = projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!);
           expect(claim).toBeDefined();
           await placements.startWorkspaceResultDrain(claim!);
@@ -677,7 +677,7 @@ describe("repository workspace result ownership", () => {
       const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: SESSION_ID,
           source: {
             generation: owned.placement.generation,

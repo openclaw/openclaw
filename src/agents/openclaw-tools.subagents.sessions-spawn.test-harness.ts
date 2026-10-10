@@ -385,17 +385,13 @@ vi.mock("./runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../plugins/registry-empty.js");
   return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
 });
-vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
-      hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
-    runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>
-      hoisted.state.runSubagentAnnounceFlowOverride(params),
-  };
-});
+vi.mock("./subagents/announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagents/announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: (sessionKey: Parameters<CaptureSubagentCompletionReply>[0]) =>
+    hoisted.state.captureSubagentCompletionReplyOverride(sessionKey),
+  runSubagentAnnounceFlow: (params: Parameters<RunSubagentAnnounceFlow>[0]) =>
+    hoisted.state.runSubagentAnnounceFlowOverride(params),
+}));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.configOverride,
   resolveGatewayPort: () => 18789,
@@ -404,10 +400,8 @@ vi.mock("../config/config.js", () => ({
 vi.mock("../config/sessions.js", async () => ({
   isPerAgentSessionStoreConfig: (await import("../config/sessions/session-store-config.js"))
     .isPerAgentSessionStoreConfig,
-  isConfiguredSessionStoreAgentId: (
-    cfg: { agents?: { list?: Array<{ id?: string }> } },
-    agentId: string,
-  ) => agentId === "main" || cfg.agents?.list?.some((agent) => agent.id === agentId) === true,
+  isConfiguredSessionStoreAgentId: (cfg: SessionsSpawnTestConfig, agentId: string) =>
+    agentId === "main" || Object.hasOwn(cfg.agents?.entries ?? {}, agentId),
   loadSessionStore: () => hoisted.sessionStore,
   mergeSessionEntry: (existing: object | undefined, patch: object) => ({
     ...existing,

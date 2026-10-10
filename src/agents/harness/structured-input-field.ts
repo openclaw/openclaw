@@ -164,9 +164,7 @@ export function readStructuredInputChoice(
     value: ownValue(entry, "const"),
     label: ownValue(entry, "title"),
     description: ownValue(entry, "description"),
-    thumbnail: options.allowRichForms
-      ? (ownValue(entry, "x-openai-thumbnail") ?? ownValue(entry, "x-openai-preview"))
-      : undefined,
+    thumbnail: options.allowRichForms ? ownValue(entry, "x-openai-thumbnail") : undefined,
   };
 }
 
@@ -304,16 +302,15 @@ export function normalizeChoices(
 }
 
 export function validateChoices(choices: readonly Choice[]): string | undefined {
-  const values = new Set<string>();
-  const labels = new Set<string>();
+  const aliases = new Set<string>();
   for (const choice of choices) {
     const value = choice.value.toLowerCase();
     const label = choice.label.trim().toLowerCase();
-    if (values.has(value) || labels.has(label) || values.has(label) || labels.has(value)) {
+    if (aliases.has(value) || aliases.has(label)) {
       return "contains duplicate choice values or titles.";
     }
-    values.add(value);
-    labels.add(label);
+    aliases.add(value);
+    aliases.add(label);
   }
   return undefined;
 }
@@ -339,16 +336,12 @@ export function invalid(context: FieldContext, message: string): DecodeValue {
   };
 }
 
-export function matchesStringFormat(value: string, format: string): boolean {
+function matchesStringFormat(value: string, format: string): boolean {
   if (format === "email") {
     return /^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value);
   }
   if (format === "uri") {
-    try {
-      return Boolean(new URL(value).protocol);
-    } catch {
-      return false;
-    }
+    return URL.canParse(value);
   }
   if (format === "date") {
     if (!/^\d{4}-\d{2}-\d{2}$/u.test(value)) {

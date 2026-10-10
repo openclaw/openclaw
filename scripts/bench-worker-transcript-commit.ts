@@ -138,7 +138,7 @@ function percentile(samples: number[], fraction: number): number {
 async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   const storePath = path.join(state.sessionsDir("main"), "sessions.json");
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     session: {
       mainKey: "main",
       store: path.join(state.stateDir, "agents", "{agentId}", "sessions", "sessions.json"),

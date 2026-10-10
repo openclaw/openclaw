@@ -283,10 +283,8 @@ function readHistoricalDisplayEventRange(
   const ranged = [...older.toReversed(), ...newer].map((row, index) =>
     Object.assign(row, { displaySeq: start + index + 1 }),
   );
-  const selected = (() => {
-    if (maxBytes === undefined) {
-      return ranged;
-    }
+  let selected = ranged;
+  if (maxBytes !== undefined) {
     const limit = Math.max(1_024, Math.floor(maxBytes));
     let bytes = 2;
     let selectedStart = ranged.length;
@@ -298,8 +296,8 @@ function readHistoricalDisplayEventRange(
       bytes += nextBytes;
       selectedStart--;
     }
-    return ranged.slice(selectedStart);
-  })();
+    selected = ranged.slice(selectedStart);
+  }
   if (selected.length === 0) {
     return [];
   }
@@ -360,6 +358,20 @@ export function resolveHistoricalHistoryEvent(
     eventSeq: row.event_seq,
     seq: countHistoricalDisplayEvents(projection, interval, row.active_position) + 1,
   };
+}
+
+export function readHistoricalHistoryPrecedingEvent(
+  projection: CurrentTranscriptProjection,
+  row: NonNullable<ReturnType<typeof readDisplayableActiveEventById>>,
+  event: SessionTranscriptMessageEvent,
+): SessionTranscriptMessageEvent | undefined {
+  const interval = resolveClosedResetIntervalForDisplayable(projection, row);
+  return interval && event.seq > 1
+    ? readHistoricalDisplayEventRange(projection, undefined, interval, event.seq - 2, 1, {
+        activePosition: row.active_position,
+        displayPosition: event.seq - 1,
+      })[0]
+    : undefined;
 }
 
 export function readHistoricalHistoryAnchorPage(

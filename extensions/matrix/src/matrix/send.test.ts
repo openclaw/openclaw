@@ -244,15 +244,6 @@ describe("Matrix formatted chunk boundaries", () => {
     expect(chunks.join("")).not.toContain("</u>");
   });
 
-  it("drops padding-only chunks from long authored underline tags", () => {
-    const markdown = `<u title="${"x".repeat(60)}">content</u>`;
-    const chunks = chunksFor(markdown, 20);
-
-    expect(
-      chunks.every((chunk) => chunk.replaceAll("<u>", "").replaceAll("</u>", "").trim().length > 0),
-    ).toBe(true);
-  });
-
   it("keeps spoiler and underline nesting valid across chunks", () => {
     const markdown = `||<u><ins>nested</ins> ${"nested ".repeat(8).trim()}</u>||`;
     const chunks = chunksFor(markdown, 24);
@@ -479,41 +470,6 @@ describe("sendMessageMatrix media", () => {
     }
   });
 
-  it("records each media and overflow event with its actual kind and reply relation", async () => {
-    resolveTextChunkLimitMock.mockReturnValue(6);
-    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
-    sendMessage.mockReset().mockResolvedValueOnce("$image").mockResolvedValueOnce("$overflow");
-    const onDeliveryResult = vi.fn();
-
-    const result = await send("first|second", {
-      mediaUrl: "file:///tmp/photo.png",
-      replyToId: "$reply",
-      onDeliveryResult,
-    });
-
-    expect(sentContent(0)).toMatchObject({
-      msgtype: "m.image",
-      "m.relates_to": { "m.in_reply_to": { event_id: "$reply" } },
-    });
-    expect(sentContent(1)).toMatchObject({ msgtype: "m.text" });
-    expect(sentContent(1)).not.toHaveProperty("m.relates_to");
-    expect(result.messageId).toBe("$overflow");
-    expect(result.primaryMessageId).toBe("$image");
-    expect(result.receipt.platformMessageIds).toEqual(["$image", "$overflow"]);
-    expect(result.receipt.parts).toMatchObject([
-      { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
-      { platformMessageId: "$overflow", kind: "text", index: 1 },
-    ]);
-    expect(result.receipt.parts[1]).not.toHaveProperty("replyToId");
-    expect(
-      onDeliveryResult.mock.calls.map(([progress]) => progress.receipt.parts[0]),
-    ).toMatchObject([
-      { platformMessageId: "$image", kind: "media", replyToId: "$reply" },
-      { platformMessageId: "$overflow", kind: "text" },
-    ]);
-    expect(onDeliveryResult.mock.calls[1]?.[0]?.receipt.parts[0]).not.toHaveProperty("replyToId");
-  });
-
   it.each([false, true])(
     "uses the correct image and thumbnail payload (encrypted=%s)",
     async (encrypted) => {
@@ -528,7 +484,8 @@ describe("sendMessageMatrix media", () => {
         .mockResolvedValueOnce("mxc://example/main")
         .mockResolvedValueOnce("mxc://example/thumb");
       const mediaAccess = { localRoots: ["/tmp/openclaw"], workspaceDir: "/tmp/openclaw" };
-      await send("caption", {
+      await send("    caption @room", {
+        cfg: { channels: { matrix: { mediaMaxMb: 0 } } },
         mediaUrl: "chart.png",
         mediaAccess,
         mediaLocalRoots: mediaAccess.localRoots,
@@ -543,8 +500,11 @@ describe("sendMessageMatrix media", () => {
         msgtype: "m.image",
         filename: "photo.png",
         format: "org.matrix.custom.html",
+        body: "    caption @room",
+        formatted_body: "<pre><code>caption @room\n</code></pre>",
       });
-      expect(content.formatted_body).toContain("caption");
+      expect(content["m.mentions"]).toEqual({});
+      expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[1].maxBytes).toBeUndefined();
       expect(info.mimetype).toBe("image/png");
       expect(info.thumbnail_info).toEqual({ w: 800, h: 600, mimetype: "image/jpeg", size: 5 });
       if (encrypted) {
@@ -662,26 +622,9 @@ describe("sendMessageMatrix media", () => {
     expect(mediaOptions.mediaLocalRoots).toBeUndefined();
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
-
-  it("leaves outbound media uncapped when mediaMaxMb is zero", async () => {
-    await send("caption", {
-      cfg: { channels: { matrix: { mediaMaxMb: 0 } } },
-      mediaUrl: "file:///tmp/photo.png",
-    });
-    expect(loadOutboundMediaFromUrlMock.mock.calls[0]?.[1].maxBytes).toBeUndefined();
-  });
 });
 
 describe("sendMessageMatrix mentions", () => {
-  it("keeps indented mentions inert in media captions", async () => {
-    await send("    @room", { mediaUrl: "file:///tmp/photo.png" });
-    expect(sentContent()).toMatchObject({
-      body: "    @room",
-      formatted_body: "<pre><code>@room\n</code></pre>",
-    });
-    expect(sentContent()["m.mentions"]).toEqual({});
-  });
-
   it("does not emit mentions from fallback filenames when there is no caption", async () => {
     loadOutboundMediaFromUrlMock.mockResolvedValue({
       buffer: Buffer.from("media"),
@@ -1035,23 +978,6 @@ describe("editMessageMatrix mentions", () => {
     },
   );
 
-  it.each([
-    { name: "relation read", method: "getRelations", options: {} },
-    {
-      name: "quiet edit thread validation",
-      method: "getEvent",
-      options: { includeMentions: false, threadId: "$thread" },
-    },
-  ] as const)("does not edit after $name fails", async ({ method, options }) => {
-    const original = createBundledReplacementEvent("$original");
-    delete original.unsigned;
-    getEvent.mockResolvedValue(original);
-    const reads = { getEvent, getRelations };
-    reads[method].mockRejectedValue(new Error("Matrix history unavailable"));
-    await expect(edit("Hello", options)).rejects.toThrow("Matrix history unavailable");
-    expect(sendMessage).not.toHaveBeenCalled();
-  });
-
   it("does not suppress mentions using a redacted original", async () => {
     getEvent.mockResolvedValue(
       createBundledReplacementEvent("$original", {
@@ -1067,24 +993,6 @@ describe("editMessageMatrix mentions", () => {
     );
     await edit("Hello @bob:example.org");
     expect(sentContent()["m.mentions"]).toEqual({ user_ids: ["@bob:example.org"] });
-  });
-
-  it("uses full prior mentions from replacement content", async () => {
-    const previousContent = {
-      body: "hello @alice:example.org",
-      "m.mentions": { user_ids: ["@alice:example.org"] },
-    };
-    getEvent.mockResolvedValue({
-      content: { "m.new_content": previousContent, "m.mentions": {} },
-    });
-
-    await edit("hello @alice:example.org and @bob:example.org");
-
-    const content = sentContent();
-    expect(content["m.mentions"]).toEqual({ user_ids: ["@bob:example.org"] });
-    expect(newContent(content)["m.mentions"]).toEqual({
-      user_ids: ["@alice:example.org", "@bob:example.org"],
-    });
   });
 
   it("supports quiet draft preview edits without mention metadata or history reads", async () => {

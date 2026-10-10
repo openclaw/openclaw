@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sleepWithAbort } from "@openclaw/retry";
-import type { OpenClawConfig } from "../config/config.js";
 import { createConfigIO } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -28,15 +27,6 @@ type NodeUpdateRuntime = {
   tryPauseForUpdate(): Promise<boolean>;
   resumeAfterUpdate(): void;
 };
-
-function updatesEnabled(config: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return (
-    config.nodeHost?.autoUpdate?.enabled !== false &&
-    config.update?.checkOnStart !== false &&
-    !isTruthyEnvValue(env.OPENCLAW_NO_AUTO_UPDATE) &&
-    !isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
-  );
-}
 
 /** Owns discovery and idle admission; the launcher owns executable activation. */
 export function startNodeHostAutoUpdate(params: {
@@ -68,7 +58,12 @@ export function startNodeHostAutoUpdate(params: {
       installKind: "package",
     }).channel;
     return {
-      enabled: updatesEnabled(snapshot.config, env) && (channel === "stable" || channel === "beta"),
+      enabled:
+        snapshot.config.nodeHost?.autoUpdate?.enabled !== false &&
+        snapshot.config.update?.checkOnStart !== false &&
+        !isTruthyEnvValue(env.OPENCLAW_NO_AUTO_UPDATE) &&
+        !isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN) &&
+        (channel === "stable" || channel === "beta"),
       channel,
     };
   };

@@ -1,4 +1,5 @@
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
+import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
@@ -48,6 +49,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       (await loadGatewayPluginRuntime()).openPluginPanelForRequester(params),
     readSessionFacts: async (params) =>
       (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
+    withSessionFacts: async (select, run) =>
+      (await loadGatewayPluginRuntime()).withTrustedPluginSessionFacts(select, run),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {
@@ -59,6 +62,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.withTrustedPluginUserProfileIdentity(captured, run);
     },
+    resolveGitHubAccount: async ({ login, signal }) =>
+      (await loadGatewayPluginRuntime()).resolveTrustedPluginGitHubAccount({ login, signal }),
   };
 }
 
@@ -152,20 +157,60 @@ function createRuntimeWorktrees(): PluginRuntime["worktrees"] {
       return await hasSelfContainedGitMetadata(params.path);
     },
     async create(params) {
-      const { managedWorktrees } = await loadService();
-      const record = await managedWorktrees.create(params);
-      await managedWorktrees.acquire(record.id);
-      return { id: record.id, path: record.path, branch: record.branch };
+      return runWithLocalStateOwner({
+        method: "worktrees.create",
+        params: {},
+        target: params.repoRoot,
+        onForeignOwner: "refuse",
+        runLocal: async ({ env, config, signal, assertCurrent }) => {
+          const { ManagedWorktreeService } = await loadService();
+          const commitGuard = () => {
+            assertCurrent();
+            params.commitGuard?.();
+          };
+          commitGuard();
+          const service = new ManagedWorktreeService({ env, getConfig: () => config });
+          const record = await service.create({ ...params, signal, commitGuard });
+          commitGuard();
+          await service.acquire(record.id, { signal, commitGuard });
+          return { id: record.id, path: record.path, branch: record.branch };
+        },
+      });
     },
     async release(params) {
-      const { managedWorktrees } = await loadService();
-      await managedWorktrees.releaseByPath(params.path);
+      return runWithLocalStateOwner({
+        method: "worktrees.release",
+        params: {},
+        target: params.path,
+        onForeignOwner: "refuse",
+        runLocal: async ({ env, config, signal, assertCurrent }) => {
+          const { ManagedWorktreeService } = await loadService();
+          assertCurrent();
+          await new ManagedWorktreeService({ env, getConfig: () => config }).releaseByPath(
+            params.path,
+            { signal, commitGuard: assertCurrent },
+          );
+        },
+      });
     },
     async removeIfLossless(params) {
-      const { managedWorktrees } = await loadService();
-      return managedWorktrees.removeIfLosslessByPath(params.path, {
-        ownerKind: params.ownerKind,
-        ownerId: params.ownerId,
+      return runWithLocalStateOwner({
+        method: "worktrees.removeIfLossless",
+        params: {},
+        target: params.path,
+        onForeignOwner: "refuse",
+        runLocal: async ({ env, config, signal, assertCurrent }) => {
+          const { ManagedWorktreeService } = await loadService();
+          assertCurrent();
+          return new ManagedWorktreeService({
+            env,
+            getConfig: () => config,
+          }).removeIfLosslessByPath(
+            params.path,
+            { ownerKind: params.ownerKind, ownerId: params.ownerId },
+            { signal, commitGuard: assertCurrent },
+          );
+        },
       });
     },
   };
@@ -212,6 +257,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
   let modelConfig = _options.modelConfig;
   const runtime: PluginRuntime = {
     version: VERSION,
+    capabilities: base.capabilities,
     decisions: {
       evaluate: async (...args) =>
         (await import("../../decisions/runtime.js")).evaluateDecision(...args),

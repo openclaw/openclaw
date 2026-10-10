@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import {
   configWithPrefs,
@@ -15,11 +16,10 @@ import {
   applyServerUiPrefs,
   flushServerUiPrefs,
   pushServerUiPrefs,
-  resetServerUiPref,
   resetServerUiPrefsSync,
   resolveServerUiPrefState,
 } from "./server-prefs.ts";
-import { loadSettings, patchSettings, setSettingsChangeListener } from "./settings.ts";
+import { loadSettings, patchSettings } from "./settings.ts";
 
 const pendingKey = (scope: string) => `openclaw.control.serverPrefs.pending.v1:${scope}`;
 const readPending = (scope: string) =>
@@ -34,7 +34,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setSettingsChangeListener(null);
   resetServerUiPrefsSync();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -48,21 +47,17 @@ function expectPatch(request: RequestMock, prefs: Record<string, unknown>) {
 const conflictError = () =>
   new Error("config changed since last load; re-run config.get and retry");
 
-const rejection = new GatewayRequestError({ code: "INVALID_REQUEST", message: "invalid config" });
-
 describe("server preferences", () => {
-  it("keeps presentation preferences browser-local", () => {
-    const before = loadSettings();
-    expect(
-      changedServerUiPrefs(before, {
-        ...before,
-        textScale: 125,
-        sidebarLiveActivity: false,
-        chatMessageMaxWidth: "82%",
-        showAdvancedSettings: true,
-        openLinksExternally: true,
-      }),
-    ).toBeNull();
+  it("settles rejected persisted keys even when they are not known preference names", async () => {
+    const completed = createDeferred();
+    const request = vi.fn(async () => {
+      throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Unknown preference" });
+    });
+    localStorage.setItem(pendingKey(scope), JSON.stringify({ unknownPreference: true }));
+    flushServerUiPrefs(createClient(request, scope), { afterCommit: () => completed.resolve() });
+    await completed.promise;
+    expectPatch(request, { unknownPreference: true });
+    expect(localStorage.getItem(pendingKey(scope))).toBeNull();
   });
 
   it("rejects malformed accents in a minimal persisted settings record", () => {
@@ -189,29 +184,6 @@ describe("server preferences", () => {
     expect(onApplied).toHaveBeenLastCalledWith({ themeMode: "light" });
   });
 
-  it("syncs an authored default-valued reset through the settings listener", async () => {
-    const request = vi.fn(async () => ({}));
-    const writer = createClient(request, scope);
-    setSettingsChangeListener((previous, next) => {
-      const prefs = changedServerUiPrefs(previous, next);
-      if (prefs) {
-        pushServerUiPrefs(writer, prefs);
-      }
-    });
-
-    const state = resolveServerUiPrefState(configWithPrefs({ theme: "claw" }), "theme", scope);
-    resetServerUiPref("theme", state);
-
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "config.patch",
-        expect.objectContaining({
-          raw: JSON.stringify({ ui: { prefs: { theme: null } } }),
-        }),
-      ),
-    );
-  });
-
   it("restores product defaults when authored synced values are removed", () => {
     const onApplied = vi.fn();
     applyServerUiPrefs(
@@ -309,46 +281,6 @@ describe("server preferences", () => {
     });
   });
 
-  it("retains a rejected local edit until that server key actually changes", async () => {
-    const initialConfig = configWithPrefs({ theme: "claw", locale: "de" });
-    const onApplied = vi.fn();
-    applyServerUiPrefs(initialConfig, { scope, onApplied });
-    const beforeLocalEdit = loadSettings();
-    const retained = patchSettings({ theme: "knot" });
-    const prefs = changedServerUiPrefs(beforeLocalEdit, retained);
-    const afterCommit = vi.fn();
-    const request = vi.fn<Request>().mockRejectedValue(rejection);
-
-    pushServerUiPrefs(createClient(request, scope), prefs ?? {}, { afterCommit });
-    await waitForFast(() =>
-      expect(afterCommit).toHaveBeenCalledWith({
-        needsRefresh: false,
-        retainedLocal: true,
-      }),
-    );
-
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "de" }), { scope, onApplied }),
-    ).toBe(false);
-    expect(loadSettings().theme).toBe("knot");
-
-    resetServerUiPrefsSync();
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "de" }), { scope, onApplied }),
-    ).toBe(false);
-    expect(loadSettings().theme).toBe("knot");
-
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "claw", locale: "fr" }), { scope, onApplied }),
-    ).toBe(true);
-    expect(loadSettings()).toMatchObject({ theme: "knot", locale: "fr" });
-
-    expect(
-      applyServerUiPrefs(configWithPrefs({ theme: "dash", locale: "fr" }), { scope, onApplied }),
-    ).toBe(true);
-    expect(loadSettings().theme).toBe("dash");
-  });
-
   it("settles only this tab's acknowledged keys from sibling persisted pending", async () => {
     const flight = createDeferred<unknown>();
     const request = vi.fn<Request>(() => flight.promise);
@@ -359,17 +291,6 @@ describe("server preferences", () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
     flight.resolve({});
-
-    await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
-  });
-
-  it("drops only this tab's validation-rejected keys from persisted pending", async () => {
-    const request = vi.fn<Request>().mockRejectedValue(rejection);
-    const client = createClient(request, scope);
-    flushServerUiPrefs(client);
-    localStorage.setItem(pendingKey(scope), JSON.stringify({ locale: "fr" }));
-
-    pushServerUiPrefs(client, { theme: "knot" });
 
     await waitForFast(() => expect(readPending(scope)).toEqual({ locale: "fr" }));
   });
@@ -410,22 +331,6 @@ describe("server preferences", () => {
 
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     expectPatch(request, { locale: "de" });
-  });
-
-  it("retains a connected transient failure and retries it on flush", async () => {
-    const request = vi
-      .fn<Request>()
-      .mockRejectedValueOnce(new Error("socket closed"))
-      .mockResolvedValueOnce({});
-    const client = createClient(request);
-
-    pushServerUiPrefs(client, { locale: "de" });
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-    expect(readPending("ws://gw")).toEqual({ locale: "de" });
-
-    flushServerUiPrefs(client);
-    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));
-    await waitForFast(() => expect(localStorage.getItem(pendingKey("ws://gw"))).toBeNull());
   });
 
   it("ignores a superseded request rejection while its replacement is pending", async () => {

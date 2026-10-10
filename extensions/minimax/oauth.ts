@@ -11,7 +11,10 @@ import {
   readProviderJsonResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
-import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import {
+  ensureGlobalUndiciEnvProxyDispatcher,
+  sleepWithAbort,
+} from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export type MiniMaxRegion = "cn" | "global";
@@ -314,33 +317,15 @@ export async function loginMiniMaxPortalOAuth(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await waitForMiniMaxOAuthPoll(Math.min(pollIntervalMs, remainingMs), params.signal);
+    params.signal?.throwIfAborted();
+    await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.signal).catch(() => {
+      throw params.signal?.reason instanceof Error
+        ? params.signal.reason
+        : new Error("MiniMax login cancelled");
+    });
     assertCurrent();
     pollIntervalMs = Math.max(pollIntervalMs, 2000);
   }
 
   throw new Error("MiniMax OAuth timed out before authorization completed.");
-}
-
-async function waitForMiniMaxOAuthPoll(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
-    return;
-  }
-  if (signal.aborted) {
-    throw signal.reason;
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timeout);
-      reject(signal.reason instanceof Error ? signal.reason : new Error("MiniMax login cancelled"));
-    };
-    const timeout = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
 }

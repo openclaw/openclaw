@@ -52,7 +52,7 @@ describe("sandbox workspace Doctor migration", () => {
   function config(
     context: ReturnType<typeof setup>,
     sandbox: AgentSandboxConfig = {},
-    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: { default: true } },
+    entries: NonNullable<OpenClawConfig["agents"]>["entries"] = { main: {} },
   ): OpenClawConfig {
     return {
       agents: {
@@ -196,7 +196,7 @@ describe("sandbox workspace Doctor migration", () => {
       context,
       {},
       {
-        main: { default: true, sandbox: { mode: "off" } },
+        main: { sandbox: { mode: "off" } },
         "main-telegram": {},
         writer: { sandbox: { workspaceAccess: "rw" } },
       },

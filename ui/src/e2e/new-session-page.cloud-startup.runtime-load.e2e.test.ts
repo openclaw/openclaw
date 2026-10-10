@@ -197,7 +197,8 @@ suite.define(() => {
           await state.handleSendChat();
           return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
         });
-        expect(held).toEqual({ draft: "later ordinary turn", queued: [] });
+        expect(held).toEqual({ draft: "", queued: ["later ordinary turn"] });
+        await composer.fill("unfinished later draft");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         if (incognito) {
@@ -387,10 +388,18 @@ suite.define(() => {
           .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
           .toBeNull();
         await page.locator(".chat-group.user", { hasText: message }).waitFor();
-        expect(await composer.inputValue()).toBe("later ordinary turn");
+        expect(await composer.inputValue()).toBe("unfinished later draft");
+        await gateway.emitChatFinal({
+          sessionKey,
+          runId: messageId,
+          text: "Initial turn finished.",
+        });
+        expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+          params: { sessionKey, message: "later ordinary turn" },
+        });
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         expect(moduleRequests).toBe(2);
         if (incognito) {
           expect(

@@ -114,8 +114,9 @@ describe("CUA Driver direct session", () => {
   });
 
   it("uses configured creation with one trusted lifecycle session", async () => {
-    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
 
+    await driver.prepareAvailability?.();
     expect(driver.isAvailable()).toBe(true);
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.createConfigured).toHaveBeenCalledWith({
@@ -139,36 +140,30 @@ describe("CUA Driver direct session", () => {
     expect(mocks.shutdown).toHaveBeenCalledOnce();
   });
 
-  it.each(["sync", "async"])(
-    "discovers windows on the first execution action with %s SDK loading",
-    async (loading) => {
-      const loadSdk = () => sdk as never;
-      const driver = createCuaDriver({
-        loadSdk: loading === "async" ? async () => loadSdk() : loadSdk,
-      });
-      const computer = await execution(driver);
-      mocks.callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
+  it("discovers windows on the first execution action with ESM SDK loading", async () => {
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
+    const computer = await execution(driver);
+    mocks.callTool.mockResolvedValueOnce(cuaToolResult(CUA_DRIVER_CONTRACT_FIXTURES.listWindows));
 
-      const listed = JSON.parse(await computer.act('{"action":"list_windows"}'));
-      expect(listed).toMatchObject({
-        ok: true,
-        details: {
-          windows: [
-            {
-              windowRef: expect.stringMatching(/^cua:v2:window:/),
-              appName: "Editor",
-              title: "Notes",
-            },
-          ],
-        },
-      });
+    const listed = JSON.parse(await computer.act('{"action":"list_windows"}'));
+    expect(listed).toMatchObject({
+      ok: true,
+      details: {
+        windows: [
+          {
+            windowRef: expect.stringMatching(/^cua:v2:window:/),
+            appName: "Editor",
+            title: "Notes",
+          },
+        ],
+      },
+    });
 
-      await computer.close("completion");
-    },
-  );
+    await computer.close("completion");
+  });
 
   it("starts the shared lifecycle session once before using driver tools", async () => {
-    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
 
     await Promise.all([driver.getDesktopState(), driver.callTool("list_windows", {})]);
     const sessionOptions = mocks.createTrustedSession.mock.calls[0]?.[1];
@@ -191,7 +186,7 @@ describe("CUA Driver direct session", () => {
   });
 
   it("targets desktop input while keeping the global cursor read untargeted", async () => {
-    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
 
     const clicked = await driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 });
     expect(clicked).toMatchObject({ isError: false, action: { effect: 0, route: 2 } });
@@ -260,7 +255,7 @@ describe("CUA Driver direct session", () => {
     });
     mocks.isToolError.mockImplementation((error) => DriverError.Tool.instanceOf(error));
     mocks.click.mockRejectedValueOnce(refusal);
-    const driver = createCuaDriver({ loadSdk: () => sdk as never });
+    const driver = createCuaDriver({ loadSdk: async () => sdk as never });
     try {
       await expect(
         driver.click({ x: 20, y: 30, button: ClickButton.Left, count: 1 }),
@@ -280,7 +275,7 @@ describe("CUA Driver direct session", () => {
   });
 
   it("keeps a missing native desktop library behind command availability", async () => {
-    const loadSdk = vi.fn(() => {
+    const loadSdk = vi.fn(async () => {
       throw new Error("libX11.so.6: cannot open shared object file");
     });
     const driver = createCuaDriver({ loadSdk });
@@ -339,7 +334,8 @@ describe("CUA Driver direct session", () => {
 
     driver.resetAvailabilityCache();
     expect(driver.isAvailable()).toBe(false);
-    await vi.waitFor(() => expect(driver.isAvailable()).toBe(true));
+    await driver.prepareAvailability?.();
+    expect(driver.isAvailable()).toBe(true);
 
     expect(loadSdk).toHaveBeenCalledTimes(2);
     await driver.dispose();

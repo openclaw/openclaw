@@ -121,7 +121,7 @@ describe("worker inference lifecycle caller", () => {
             }),
           ]);
           if (failureMode !== "refusal") {
-            await runExclusiveSessionLifecycleMutation({
+            await runExclusiveSessionLifecycleMutation("patch", {
               scope: state.statePath("sessions.sqlite"),
               identities,
               run: async () => {},

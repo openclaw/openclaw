@@ -143,7 +143,7 @@ describe("concurrent worker workspace results", () => {
           if (!pending) {
             throw new Error("expected retained result");
           }
-          placements.failWorkspaceResultAndReleaseTurn(
+          await placements.failWorkspaceResultAndReleaseTurn(
             pending,
             new Error("fixture replaced result"),
           );
@@ -386,7 +386,7 @@ describe("concurrent worker workspace results", () => {
           },
           { from: "starting", to: "active", patch: { activeOwnerEpoch: 1 } },
         ] as const) {
-          placement = placements.transition({
+          placement = await placements.transition({
             ...transition,
             sessionId,
             expectedGeneration: placement.generation,

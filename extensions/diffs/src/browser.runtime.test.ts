@@ -18,7 +18,6 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { DiffScreenshotter } from "./browser.runtime.js";
 import { registerDiffsPlugin } from "./plugin.js";
 import { createTempDiffRoot } from "./test-helpers.js";
 
@@ -27,7 +26,9 @@ const { launchMock } = vi.hoisted(() => ({
 }));
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
-type ScreenshotParams = Parameters<DiffScreenshotter["screenshotHtml"]>[0];
+type ScreenshotParams = Parameters<
+  InstanceType<typeof PlaywrightDiffScreenshotter>["screenshotHtml"]
+>[0];
 
 vi.mock("playwright-core", () => ({
   chromium: {
@@ -103,7 +104,7 @@ describe("PlaywrightDiffScreenshotter", () => {
 
   async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
     launchMock.mockResolvedValue(createMockBrowser([]));
-    const screenshotter = new PlaywrightDiffScreenshotter({ config: {}, browserIdleMs: 1_000 });
+    const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
     await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
     return firstMockCall(launchMock, "browser launch")[0] as { executablePath?: string };
   }
@@ -206,7 +207,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(browser.close).toHaveBeenCalledTimes(1);
 
     await screenshotter.screenshotHtml(screenshotParams({ theme: "light" }));
@@ -297,7 +298,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockRejectedValue(new Error("launch failed"));
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
     await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
@@ -311,7 +311,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockResolvedValue(browser);
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
     await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
@@ -327,7 +326,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     launchMock.mockResolvedValue(browser);
     const screenshotter = new PlaywrightDiffScreenshotter({
       config: createConfig(),
-      browserIdleMs: 1_000,
     });
 
     await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
@@ -716,7 +714,6 @@ async function createScreenshotterHarness(options?: {
   launchMock.mockResolvedValue(browser);
   const screenshotter = new PlaywrightDiffScreenshotter({
     config: createConfig(),
-    browserIdleMs: 1_000,
   });
   return { pages, browser, screenshotter };
 }

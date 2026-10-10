@@ -25,14 +25,6 @@ import {
   normalizeInworldBaseUrl,
 } from "./tts.js";
 
-type InworldProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-  modelId: string;
-  temperature?: number;
-};
-
 type InworldSynthesisRequest = {
   text: string;
   providerConfig: SpeechProviderConfig;
@@ -46,7 +38,7 @@ function normalizeInworldTemperature(value: unknown): number | undefined {
   return asFiniteNumberInRange(value, { min: 0, minExclusive: true, max: 2 });
 }
 
-function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): InworldProviderConfig {
+function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.inworld) ?? asOptionalRecord(rawConfig.inworld);
   return {
@@ -61,7 +53,7 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>): Inw
   };
 }
 
-function readInworldProviderConfig(config: SpeechProviderConfig): InworldProviderConfig {
+function readInworldProviderConfig(config: SpeechProviderConfig) {
   return normalizeInworldProviderConfig({
     inworld: { ...config, apiKey: trimToUndefined(config.apiKey) },
   });

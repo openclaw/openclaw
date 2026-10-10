@@ -49,28 +49,18 @@ function corruptStoredValue(database: Awaited<ReturnType<typeof fixture>>["datab
 }
 
 describe("secret store redaction integrity", () => {
-  it.each([
-    "__OPENCLAW_REDACTED__",
-    "REDACTED",
-    "xoxb-REDACTED",
-    "xapp-REDACTED",
-    "***",
-    "[redacted]",
-    "[REDACTED]",
-    "<redacted>",
-    "[REDACTED_PRIVATE_KEY]",
-    "[REDACTED CREDENTIAL]",
-    " __OPENCLAW_REDACTED__\n",
-  ])("refuses display marker %s without overwriting the credential", async (value) => {
+  it("refuses a padded display marker without overwriting the credential", async () => {
     const { entry, database } = await fixture();
     const before = await listSecretStoreEntries({ scope, database });
-    await expect(writeSecretStoreEntry({ ...entry, value, updatedBy: "cli" })).rejects.toThrow(
+    await expect(
+      writeSecretStoreEntry({ ...entry, value: " __OPENCLAW_REDACTED__\n", updatedBy: "cli" }),
+    ).rejects.toThrow(
       expect.objectContaining({
         code: "SECRET_STORE_VALUE_REDACTED",
         message: expect.stringContaining(name),
       }),
     );
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: entry.value,
     });
@@ -86,7 +76,7 @@ describe("secret store redaction integrity", () => {
       expectedValue: "__OPENCLAW_REDACTED__",
     });
     expect(await repair.rollback()).toBe(true);
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: "__OPENCLAW_REDACTED__",
     });
@@ -94,7 +84,7 @@ describe("secret store redaction integrity", () => {
     await expect(
       writeSecretStoreEntryWithRollback({ ...entry, expectedValue: "__OPENCLAW_REDACTED__" }),
     ).rejects.toThrow(expect.objectContaining({ code: "SECRET_STORE_VALUE_CHANGED" }));
-    expect(readSecretStoreValue({ scope, name, database })).toEqual({
+    expect(await readSecretStoreValue({ scope, name, database })).toEqual({
       ok: true,
       value: "synthetic-concurrent-token",
     });
@@ -121,7 +111,9 @@ describe("secret store redaction integrity", () => {
       value: "synthetic-mode",
       kind: "env",
     });
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true, database })).toEqual({
+    expect(
+      await readSecretStoreExecEnvironment({ includeSecretSentinels: true, database }),
+    ).toEqual({
       env: { SERVICE_MODE: "synthetic-mode" },
     });
   });

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspect } from "node:util";
 import JSZip from "jszip";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { buildTimeoutAbortSignal, createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -169,10 +170,10 @@ describe("managed Crabbox", () => {
   });
 
   it("upgrades an old candidate, preserves its distribution, and reuses it offline", async () => {
-    const test = await fixture("0.68.0");
+    const test = await fixture("0.72.0");
     const params = test.options;
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual(test.installed);
-    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.68.0");
+    expect(await fs.readFile(test.candidate, "utf8")).toBe("0.72.0");
     expect(
       await fs.readFile(path.join(path.dirname(test.binary), "companion-helper"), "utf8"),
     ).toBe("keep me");
@@ -183,11 +184,11 @@ describe("managed Crabbox", () => {
         );
       }
     }
-    await fs.writeFile(test.binary, "0.70.0");
+    await fs.writeFile(test.binary, "0.74.0");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(ensureManagedCrabboxBinary(params)).resolves.toEqual({
       binary: test.binary,
-      version: "0.70.0",
+      version: "0.74.0",
     });
     expect(test.fetch).toHaveBeenCalledTimes(2);
     expect(await fs.readdir(path.dirname(path.dirname(test.binary)))).toEqual([
@@ -573,9 +574,43 @@ describe("managed Crabbox", () => {
 });
 
 describe("Crabbox version admission", () => {
+  it("reports a redacted version failure without retaining private error data", async () => {
+    const token = "synthetic-version-secret-0123456789";
+    const cause = Object.assign(
+      new Error(`output capture failed token=${token}`, {
+        cause: new Error(`nested token=${token}`),
+      }),
+      { stdout: token, stderr: token },
+    );
+    const probe = await probeCrabboxVersion("crabbox", async () => {
+      throw cause;
+    });
+    expect(probe).toMatchObject({
+      status: "indeterminate",
+      reason: expect.stringContaining(
+        "Crabbox version command execution failed: output capture failed",
+      ),
+    });
+    for (
+      let current: unknown = Object.getOwnPropertyDescriptor(probe, "cause")?.value;
+      current instanceof Error;
+      current = current.cause
+    ) {
+      expect(current.message).not.toContain(token);
+    }
+    expect(inspect(probe, { depth: null })).not.toContain(token);
+    expect(probe).not.toHaveProperty("cause");
+    expect(probe).toHaveProperty("reason", expect.not.stringContaining("synthetic-version-secret"));
+  });
+
   it.each([
-    ["0.69.0-rc.1", "outdated"],
-    ["0.69.0+build.1", "supported"],
+    ["0.69.0", "outdated"],
+    ["0.70.0", "outdated"],
+    ["0.71.0", "outdated"],
+    ["0.72.0", "outdated"],
+    ["0.73.0", "supported"],
+    ["0.73.0-rc.1", "outdated"],
+    ["0.73.0+build.1", "supported"],
     ["0.9007199254740993.0", "indeterminate"],
   ])("classifies %s as %s", async (version, status) => {
     const test = await fixture(version);

@@ -13,6 +13,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { LitElement } from "lit";
 import { z } from "zod";
+import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
@@ -547,19 +548,16 @@ export function createNativeConversationBridge(
   });
   document.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
   document.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-  const stopGateway = context.gateway.subscribe(refreshConversation);
-  const stopRouter = context.router.subscribe(refreshConversation);
-  const stopSessions = context.sessions.subscribe(refreshConversation);
+  const stopStores = (["gateway", "router", "sessions"] as const).map((key) =>
+    context[key].subscribe(refreshConversation),
+  );
   refreshConversation();
   return {
     supportsSessionActions: features.includes("session-actions-v1"),
     get presentation() {
       return presentation;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     interceptNavigation,
     publishSessionFacts,
     dispose() {
@@ -567,9 +565,7 @@ export function createNativeConversationBridge(
       pending.forEach((expire) => expire());
       document.removeEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
       document.removeEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
-      stopGateway();
-      stopRouter();
-      stopSessions();
+      stopStores.forEach((stop) => stop());
       listeners.clear();
       window.removeEventListener(COMMAND_EVENT, onCommand);
       document.removeEventListener("click", onClick);

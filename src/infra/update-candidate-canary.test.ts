@@ -9,6 +9,7 @@ import { createInvalidConfigError } from "../config/io.invalid-config.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import * as diskSpace from "./disk-space.js";
+import { registerCanaryMigrationPolicyTests } from "./update-candidate-canary-migration.test-support.js";
 import {
   registerCanaryProgressWorkerTests,
   registerCanaryUncertainReceiptTests,
@@ -144,6 +145,7 @@ afterEach(() => {
 
 describe("update candidate canary", () => {
   readiness.registerCanaryReadinessBudgetTests(() => root, mocks);
+  registerCanaryMigrationPolicyTests({ mocks, canaryStateOptions, getChildEnv: () => childEnv });
   it("records a typed capacity refusal before notifying the snapshot failure", async () => {
     const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
       targetPath,
@@ -503,42 +505,6 @@ describe("update candidate canary", () => {
       }
     }
   });
-  it.each([undefined, "unknown-owned-v2"])(
-    "keeps unsupported checkpoint capability out of admission (%s)",
-    async (candidateMutation) => {
-      runtimeContract = {
-        state: 2,
-        agent: 3,
-        executorDelegation: "pid-start-v1",
-        candidateMutation,
-      };
-      stubHealthyGateway();
-      const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
-      expect(result.status).toBe("ok");
-      expect(result.candidateSchemaVersions).toEqual({ state: 2, agent: 3 });
-      expect(result).not.toHaveProperty("checkpointContinuation");
-    },
-  );
-  it("reports unavailable validation when the candidate predates the migration-continuation contract", async () => {
-    await fs.rm(path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"));
-    stubHealthyGateway();
-    const onStep = vi.fn();
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), onStep });
-    expect(result).toMatchObject({ status: "ok", phase: "runtime" });
-    expect(result.candidateSchemaVersions).toBeUndefined();
-    expect(result).not.toHaveProperty("checkpointContinuation");
-    expect(result.steps).toEqual([
-      expect.objectContaining({
-        name: "candidate-recovery",
-        exitCode: null,
-        stdoutTail: "This version uses the current updater to finish installation",
-      }),
-    ]);
-    expect(onStep).toHaveBeenCalledWith(result.steps[0]);
-    expect(mocks.snapshot).not.toHaveBeenCalled();
-    expect(mocks.spawn).not.toHaveBeenCalled();
-  });
-
   it("rehearses private state, observes readiness, and joins child close after tree signals", async () => {
     runtimeContract = {
       state: 2,

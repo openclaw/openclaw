@@ -613,6 +613,12 @@ describe("worker placement restart recovery", () => {
       let replacement: ReturnType<typeof placements.get>;
       const observedPlacements = {
         ...placements,
+        getAsync: async (sessionId: string) => {
+          const current = await placements.getAsync(sessionId);
+          return change === "session" && replacement && current
+            ? { ...current, sessionKey: "agent:main:replacement-session" }
+            : current;
+        },
         get: (sessionId: string) => {
           const current = placements.get(sessionId);
           return change === "session" && replacement && current
@@ -621,13 +627,13 @@ describe("worker placement restart recovery", () => {
         },
       };
       const replacePlacement = async () => {
-        placements.fail({
+        await placements.fail({
           sessionId: original.sessionId,
           expectedGeneration: original.generation,
           recoveryError: "superseded placement",
         });
         const requested = await placements.startDispatch(REQUEST);
-        replacement = placements.transition({
+        replacement = await placements.transition({
           sessionId: original.sessionId,
           from: "requested",
           to: "provisioning",
@@ -635,7 +641,7 @@ describe("worker placement restart recovery", () => {
           patch: { environmentId: replacementEnvironmentId },
         });
         if (state === "syncing" || state === "starting") {
-          replacement = placements.transition({
+          replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "provisioning",
             to: "syncing",
@@ -644,7 +650,7 @@ describe("worker placement restart recovery", () => {
           });
         }
         if (state === "starting") {
-          replacement = placements.transition({
+          replacement = await placements.transition({
             sessionId: original.sessionId,
             from: "syncing",
             to: "starting",

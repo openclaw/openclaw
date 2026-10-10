@@ -76,11 +76,11 @@ describe("session resource tool policy", () => {
       tools: { byProvider: { openai: { deny: ["browser"] } } },
       agents: { defaults: { model: "openai/test-model" } },
     },
-    { agents: { list: [{ id: "main", tools: { deny: ["browser"] } }] } },
+    { agents: { entries: { main: { tools: { deny: ["browser"] } } } } },
     {
       agents: {
         defaults: { model: "openai/test-model" },
-        list: [{ id: "main", tools: { byProvider: { openai: { deny: ["browser"] } } } }],
+        entries: { main: { tools: { byProvider: { openai: { deny: ["browser"] } } } } },
       },
     },
     { tools: { toolsBySender: { "*": { deny: ["browser"] } } } },

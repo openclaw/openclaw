@@ -317,9 +317,13 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("keeps a failed CSS route behind a blocked reload and reports its existing owner guard", async () => {
+  it("keeps the Reload banner while unsaved work blocks recovery, then reloads when allowed", async () => {
+    vi.useFakeTimers();
+    let allowed = false;
     const blocked = vi.fn();
-    const releaseGuard = registerControlUiReloadGuard(() => false, blocked);
+    const releaseGuard = registerControlUiReloadGuard(() => allowed, blocked);
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
     let moduleLoads = 0;
     const router = createRouter<RouteId, TestContext, TestModule, TestData>({
       routes: [
@@ -345,15 +349,35 @@ describe("openclaw-router-outlet", () => {
       await expect(router.navigate("page", context)).rejects.toThrow("Unable to preload CSS");
       await settleOutlet(outlet);
       const button = outlet.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent?.trim()).toBe("Reload");
+      expect(fetchMock).not.toHaveBeenCalled();
       button?.click();
       await settleOutlet(outlet);
       expect(blocked).toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
       expect(moduleLoads).toBe(1);
       expect(outlet.querySelector('[data-testid="unstyled-page"]')).toBeNull();
       expect(outlet.querySelector('[role="alert"]')?.textContent).toContain(
         "Unable to preload CSS",
       );
       expect(button?.disabled).toBe(false);
+
+      const target = window;
+      const replace = vi.fn();
+      vi.stubGlobal("window", {
+        location: { href: target.location.href, replace },
+        addEventListener: target.addEventListener.bind(target),
+        removeEventListener: target.removeEventListener.bind(target),
+      });
+      allowed = true;
+      button?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(replace).toHaveBeenCalledOnce();
+      expect(new URL(replace.mock.calls[0]![0]).searchParams.has("openclaw_mount_recovery")).toBe(
+        true,
+      );
+      expect(moduleLoads).toBe(1);
     } finally {
       releaseGuard();
       outlet.remove();

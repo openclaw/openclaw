@@ -84,6 +84,7 @@ async function download(
   const delays: number[] = [];
   const output: string[] = [];
   const installations: number[] = [];
+  const terminations: Array<{ pid: number; signal: string; atMs: number }> = [];
   let elapsedMs = 0;
   const aborted: string[] = [];
   const completedAt: number[] = [];
@@ -323,16 +324,22 @@ async function download(
     },
     createReadStream: (file: string) => Readable.from([files.get(file)!]),
   };
-  const processFixture = {
+  const processFixture = Object.assign(new EventEmitter(), {
     platform: "linux",
     env: { ...setup.forwardedEnv },
     execPath: "/fixture/node",
     umask: () => {},
+    kill: (pid: number, signal: string) => {
+      terminations.push({ pid, signal, atMs: Date.now() });
+      return true;
+    },
     exitCode: 0,
-  };
+  });
   const execution = runInNewContext(setup.command.split("\n").slice(2, -1).join("\n"), {
     Buffer,
     URL,
+    setTimeout,
+    clearTimeout,
     Math: Object.assign(Object.create(Math), { random: () => 0.5 }),
     AbortController,
     AbortSignal: {
@@ -377,8 +384,17 @@ async function download(
           spawnSync: () => ({ status: 0, stdout: "OpenClaw 2026.8.1" }),
           spawn: () => {
             installations.push(Date.now());
-            const child = new EventEmitter();
-            setTimeout(() => child.emit("close", install.exitCode), install.durationMs);
+            const child = Object.assign(new EventEmitter(), { pid: 1234 });
+            // Keep close delayed even after kill so the join must await actual settlement.
+            setTimeout(
+              () =>
+                child.emit(
+                  "close",
+                  terminations.length ? null : install.exitCode,
+                  terminations.length ? "SIGKILL" : null,
+                ),
+              install.durationMs,
+            );
             return child;
           },
         };
@@ -403,6 +419,7 @@ async function download(
     completedAt,
     aborted,
     installations,
+    terminations,
     output: output.join("\n"),
     published: [...files.values()],
   };
@@ -445,18 +462,25 @@ describe("bootstrap artifact download retries", () => {
     expect(result.published).toEqual([archive]);
   });
 
-  it.each([false, true])(
-    "stops after three consecutive resets without retained progress (ignore Range: %s)",
-    async (ignoreRange) => {
+  it.each(["resume", "ignore Range", "discard partial"])(
+    "stops after three consecutive failures without retained progress (%s)",
+    async (mode) => {
+      const ignoreRange = mode === "ignore Range";
       const result = await download([
         { durationMs: 0, resetAfterBytes: 1 },
+        ...(mode === "discard partial" ? [416] : []),
         { durationMs: 0, resetAfterBytes: ignoreRange ? 1 : 0, ignoreRange },
       ]);
       expect(result.code).toBe(1);
       expect(result.requests).toHaveLength(4);
-      expect(result.ranges).toEqual([undefined, "bytes=1-", "bytes=1-", "bytes=1-"]);
+      expect(result.ranges).toEqual(
+        mode === "discard partial"
+          ? [undefined, "bytes=1-", undefined, undefined]
+          : [undefined, "bytes=1-", "bytes=1-", "bytes=1-"],
+      );
       expect(result.published).toEqual([]);
       expect(result.output).toContain("download attempt 4; 3 consecutive no-progress failures");
+      expect(result.output).not.toContain("The worker could not reach");
     },
   );
 
@@ -505,7 +529,9 @@ describe("bootstrap artifact download retries", () => {
         stall === "body" ? `bytes=${Math.floor(archive.length * 0.4)}-` : undefined,
       ]);
       expect(result.aborted).toEqual(["Bearer synthetic-worker-archive-token"]);
-      expect(result.output).toContain("failed (ETIMEDOUT); retrying download attempt 2");
+      expect(result.output).toContain(
+        "failed (ETIMEDOUT) from https://gateway.example.test; retrying download attempt 2",
+      );
       expect(result.removed.filter(({ bytes }) => bytes > 0)).toEqual([]);
       expect(result.published).toEqual([archive]);
     },
@@ -526,7 +552,7 @@ describe("bootstrap artifact download retries", () => {
           : "Bearer synthetic-worker-archive-token",
       );
       expect(result.output).toContain(
-        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed: synthetic archive failure (download attempt 1)`,
+        `Cloud worker ${failed === "worker" ? "archive" : "node bootstrap"} download body failed from https://gateway.example.test: synthetic archive failure (download attempt 1)`,
       );
       expect(result.installations).toEqual([]);
       expect(result.published).toEqual([]);
@@ -541,8 +567,11 @@ describe("bootstrap artifact download retries", () => {
     );
     expect(result.code).toBe(1);
     expect(result.installations).toEqual([0]);
+    expect(result.terminations).toEqual([{ pid: -1234, signal: "SIGKILL", atMs: 1_000 }]);
     expect(result.elapsedMs).toBe(2_000);
-    expect(result.output).toContain("archive download body failed: synthetic worker failure");
+    expect(result.output).toContain(
+      "archive download body failed from https://gateway.example.test: synthetic worker failure",
+    );
     expect(result.output).not.toContain("package installation failed");
     expect(result.published).toEqual([]);
   });
@@ -639,6 +668,7 @@ describe("bootstrap artifact download retries", () => {
         (failure === 503 ? "HTTP 503" : "transport interrupted") +
           " (download attempt 3; 3 consecutive no-progress failures)",
       );
+      expect(result.output.includes("The worker could not reach")).toBe(failure !== 503);
     },
   );
 });

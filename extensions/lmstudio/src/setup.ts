@@ -79,8 +79,8 @@ type LmstudioSetupDiscovery = {
   defaultModelId: string | undefined;
 };
 
-function resolveLmstudioSetupDefaultBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return isTruthyEnvValue(env.OPENCLAW_DOCKER_SETUP)
+function resolveLmstudioSetupDefaultBaseUrl(): string {
+  return isTruthyEnvValue(process.env.OPENCLAW_DOCKER_SETUP)
     ? LMSTUDIO_DOCKER_HOST_BASE_URL
     : LMSTUDIO_DEFAULT_BASE_URL;
 }
@@ -298,7 +298,6 @@ async function discoverLmstudioSetupModels(params: {
   headers?: Record<string, string>;
   requestedModelId?: string;
   resetPreflight?: boolean;
-  timeoutMs?: number;
 }): Promise<
   | { value: LmstudioSetupDiscovery }
   | { failure: NonNullable<ReturnType<typeof resolveLmstudioDiscoveryFailure>> }
@@ -307,7 +306,7 @@ async function discoverLmstudioSetupModels(params: {
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
     ...(params.headers ? { headers: params.headers } : {}),
-    timeoutMs: params.timeoutMs ?? 5000,
+    timeoutMs: 5000,
   });
   const failure = resolveLmstudioDiscoveryFailure({
     baseUrl: params.baseUrl,
@@ -554,7 +553,6 @@ export async function promptAndConfigureLmstudioInteractive(params: {
       baseUrl,
       apiKey: setupDiscoveryApiKey,
       ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
-      timeoutMs: 5000,
     });
     params.signal?.throwIfAborted();
     return result;
@@ -719,7 +717,6 @@ async function validateNonInteractiveLmstudioDiscovery(
     ...(resolvedHeaders ? { headers: resolvedHeaders } : {}),
     requestedModelId,
     resetPreflight,
-    timeoutMs: 5000,
   });
   if ("failure" in setupDiscovery) {
     throw new Error(setupDiscovery.failure.noteLines.join("\n"));
@@ -889,8 +886,7 @@ export async function configureLmstudioNonInteractive(
   };
 }
 
-/** Discovers provider settings, merging explicit config with live model discovery. */
-// The published helper stays advisory; the registered catalog opts into strict acquisition.
+/** Acquires live inventory for the registered catalog; public helper calls stay advisory. */
 export function discoverLmstudioProvider(ctx: ProviderCatalogContext): Promise<{
   provider: ModelProviderConfig;
 } | null>;
@@ -912,7 +908,6 @@ export async function discoverLmstudioProvider(
     apiKey: _apiKey,
     ...explicitWithoutHeaders
   } = explicit ?? {};
-  const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);
   let resolvedHeaders: Record<string, string> | undefined;
   let hasAuthorizationHeader: boolean;
@@ -943,15 +938,16 @@ export async function discoverLmstudioProvider(
   const baseUrl = resolveLmstudioInferenceBase(explicit?.baseUrl);
   const quiet = !apiKey && !explicit && !resolvedDiscoveryApiKey;
   const run = async () => {
-    const models = hasExplicitModels
-      ? explicit.models
-      : await discoverLmstudioModels({
-          baseUrl,
-          apiKey: resolvedDiscoveryApiKey ?? "",
-          headers: resolvedHeaders,
-          quiet,
-          ...(!quiet && options ? options : {}),
-        });
+    const models =
+      !options && explicit?.models?.length
+        ? explicit.models
+        : await discoverLmstudioModels({
+            baseUrl,
+            apiKey: resolvedDiscoveryApiKey ?? "",
+            headers: resolvedHeaders,
+            quiet,
+            ...(!quiet && options ? options : {}),
+          });
     if (models.length === 0 && (options ? quiet : !apiKey && !explicit?.apiKey)) {
       return null;
     }
@@ -975,7 +971,7 @@ export async function discoverLmstudioProvider(
       },
     };
   };
-  return options && !hasExplicitModels
+  return options
     ? await runLiveProviderCatalog({
         providerId: PROVIDER_ID,
         profileId:

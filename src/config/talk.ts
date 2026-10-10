@@ -1,4 +1,5 @@
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { asFiniteNumberInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -15,10 +16,19 @@ import type {
   TalkRealtimeConfig,
 } from "./types.gateway.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
-import { coerceSecretRef } from "./types.secrets.js";
+import { parseSecretRef } from "./types.secrets.js";
 
 function normalizeInteger(value: unknown, min: number): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value >= min ? value : undefined;
+}
+
+function omitUndefinedTalkFields<T extends object>(fields: T): T | undefined {
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) {
+      Reflect.deleteProperty(fields, key);
+    }
+  }
+  return Object.keys(fields).length > 0 ? fields : undefined;
 }
 
 function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undefined {
@@ -29,7 +39,7 @@ function normalizeTalkProviderConfig(value: unknown): TalkProviderConfig | undef
   const provider: TalkProviderConfig = {};
   for (const [key, raw] of Object.entries(value)) {
     const normalized =
-      key === "apiKey" ? (normalizeOptionalString(raw) ?? coerceSecretRef(raw) ?? undefined) : raw;
+      key === "apiKey" ? (normalizeOptionalString(raw) ?? parseSecretRef(raw) ?? undefined) : raw;
     if (normalized !== undefined) {
       provider[key] = normalized;
     }
@@ -65,63 +75,37 @@ export function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig 
     return undefined;
   }
   const source = value;
-  const normalized: TalkRealtimeConfig = {};
-
-  const provider = normalizeOptionalString(source.provider);
-  if (provider) {
-    normalized.provider = provider;
-  }
-  const providers = normalizeTalkProviders(source.providers);
-  if (providers) {
-    normalized.providers = providers;
-  }
-  for (const key of ["model", "speakerVoice", "speakerVoiceId", "instructions"] as const) {
-    const text = normalizeOptionalString(source[key]);
-    if (text) {
-      normalized[key] = text;
-    }
-  }
-  if (source.mode === "realtime" || source.mode === "stt-tts" || source.mode === "transcription") {
-    normalized.mode = source.mode;
-  }
-  if (
-    source.transport === "webrtc" ||
-    source.transport === "provider-websocket" ||
-    source.transport === "gateway-relay" ||
-    source.transport === "managed-room"
-  ) {
-    normalized.transport = source.transport;
-  }
-  const vadThreshold = asFiniteNumberInRange(source.vadThreshold, { min: 0, max: 1 });
-  if (vadThreshold !== undefined) {
-    normalized.vadThreshold = vadThreshold;
-  }
-  const silenceDurationMs = normalizeInteger(source.silenceDurationMs, 1);
-  if (silenceDurationMs !== undefined) {
-    normalized.silenceDurationMs = silenceDurationMs;
-  }
-  const prefixPaddingMs = normalizeInteger(source.prefixPaddingMs, 0);
-  if (prefixPaddingMs !== undefined) {
-    normalized.prefixPaddingMs = prefixPaddingMs;
-  }
-  const reasoningEffort = normalizeOptionalString(source.reasoningEffort);
-  if (reasoningEffort) {
-    normalized.reasoningEffort = reasoningEffort;
-  }
-  if (
-    source.brain === "agent-consult" ||
-    source.brain === "direct-tools" ||
-    source.brain === "none"
-  ) {
-    normalized.brain = source.brain;
-  }
-  if (
-    source.consultRouting === "provider-direct" ||
-    source.consultRouting === "force-agent-consult"
-  ) {
-    normalized.consultRouting = source.consultRouting;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return omitUndefinedTalkFields<TalkRealtimeConfig>({
+    provider: normalizeOptionalString(source.provider),
+    providers: normalizeTalkProviders(source.providers),
+    model: normalizeOptionalString(source.model),
+    speakerVoice: normalizeOptionalString(source.speakerVoice),
+    speakerVoiceId: normalizeOptionalString(source.speakerVoiceId),
+    instructions: normalizeOptionalString(source.instructions),
+    mode:
+      source.mode === "realtime" || source.mode === "stt-tts" || source.mode === "transcription"
+        ? source.mode
+        : undefined,
+    transport:
+      source.transport === "webrtc" ||
+      source.transport === "provider-websocket" ||
+      source.transport === "gateway-relay" ||
+      source.transport === "managed-room"
+        ? source.transport
+        : undefined,
+    vadThreshold: asFiniteNumberInRange(source.vadThreshold, { min: 0, max: 1 }),
+    silenceDurationMs: normalizeInteger(source.silenceDurationMs, 1),
+    prefixPaddingMs: normalizeInteger(source.prefixPaddingMs, 0),
+    reasoningEffort: normalizeOptionalString(source.reasoningEffort),
+    brain:
+      source.brain === "agent-consult" || source.brain === "direct-tools" || source.brain === "none"
+        ? source.brain
+        : undefined,
+    consultRouting:
+      source.consultRouting === "provider-direct" || source.consultRouting === "force-agent-consult"
+        ? source.consultRouting
+        : undefined,
+  });
 }
 
 function activeProviderFromTalk(talk: TalkConfig): string | undefined {
@@ -158,45 +142,18 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     return undefined;
   }
 
-  const source = value as Record<string, unknown>;
-  const normalized: TalkConfig = {};
-  for (const key of ["agentId", "speechLocale"] as const) {
-    const text = normalizeOptionalString(source[key]);
-    if (text) {
-      normalized[key] = text;
-    }
-  }
-  if (typeof source.interruptOnSpeech === "boolean") {
-    normalized.interruptOnSpeech = source.interruptOnSpeech;
-  }
-  const consultThinkingLevel = normalizeThinkLevel(
-    normalizeOptionalString(source.consultThinkingLevel),
-  );
-  if (consultThinkingLevel) {
-    normalized.consultThinkingLevel = consultThinkingLevel;
-  }
-  const consultFastMode = normalizeFastMode(source.consultFastMode);
-  if (typeof consultFastMode === "boolean") {
-    normalized.consultFastMode = consultFastMode;
-  }
-  const silenceTimeoutMs = normalizeInteger(source.silenceTimeoutMs, 1);
-  if (silenceTimeoutMs !== undefined) {
-    normalized.silenceTimeoutMs = silenceTimeoutMs;
-  }
-
-  const providers = normalizeTalkProviders(source.providers);
-  const realtime = normalizeTalkRealtimeConfig(source.realtime);
-  const provider = normalizeOptionalString(source.provider);
-  if (providers) {
-    normalized.providers = providers;
-  }
-  if (realtime) {
-    normalized.realtime = realtime;
-  }
-  if (provider) {
-    normalized.provider = provider;
-  }
-  return Object.keys(normalized).length > 0 ? normalized : undefined;
+  return omitUndefinedTalkFields<TalkConfig>({
+    agentId: normalizeOptionalString(value.agentId),
+    speechLocale: normalizeOptionalString(value.speechLocale),
+    interruptOnSpeech:
+      typeof value.interruptOnSpeech === "boolean" ? value.interruptOnSpeech : undefined,
+    consultThinkingLevel: normalizeThinkLevel(normalizeOptionalString(value.consultThinkingLevel)),
+    consultFastMode: parseBoolean(normalizeFastMode(value.consultFastMode)),
+    silenceTimeoutMs: normalizeInteger(value.silenceTimeoutMs, 1),
+    providers: normalizeTalkProviders(value.providers),
+    realtime: normalizeTalkRealtimeConfig(value.realtime),
+    provider: normalizeOptionalString(value.provider),
+  });
 }
 
 /** Return a config copy with `talk` normalized when a valid Talk section is present. */

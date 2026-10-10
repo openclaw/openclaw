@@ -2,13 +2,13 @@ import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CurrentReadAuthority } from "../../shared/current-read-authority.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 
 export const chatMetadataSessionFields = [
   "sessionId",
   "lifecycleRevision",
   "sessionStartedAt",
-  "acp",
   "agentHarnessId",
   "agentRuntimeOverride",
   "modelSelectionLocked",
@@ -29,22 +29,34 @@ export type ChatMetadataSessionEntry = Partial<
 
 export type ChatMetadataReadParams = {
   agentId: string;
+  includeModels?: boolean;
+  ifRevision?: string;
   sessionKey?: string;
   storePath?: string;
   requesterProfileId?: string;
   sessionEntry?: ChatMetadataSessionEntry;
+  /** Exact active placement fact prepared by the worker placement owner. */
+  workerInference?: "worker";
   /** Saved reads retain their selected row and physical store until response settlement. */
   isCurrent?: () => boolean;
   assertCurrent?: () => void;
+  /** Refresh saved-session authority and begin preparation before yielding again. */
+  withCurrent?: CurrentReadAuthority["withCurrent"];
+  /** Synchronous saved-session authority at credential-bearing provider dispatch. */
+  beforeRequest?: () => void;
   release?: () => void;
   draftAccountSelection?: UserModelAccountSelection;
 };
 
 export type ChatMetadataResult = {
+  revision?: string;
+  unchanged?: true;
   commands?: unknown[];
   models?: ModelChoice[];
   modelSelectionPolicy?: ModelsListResult["modelSelectionPolicy"];
   swarmEnabled: boolean;
   runtimeSelectionLocked?: boolean;
+  /** Current required worker-inference policy, not placement readiness or send authority. */
+  requiredWorkerInferenceProfileId?: string;
   accountSelection?: ChatAccountSelection;
 };

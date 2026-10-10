@@ -1,5 +1,3 @@
-// Update gateway methods run self-update flows, report status, write restart
-// sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
@@ -68,7 +66,7 @@ import {
 } from "../../utils/message-channel.js";
 import { VERSION } from "../../version.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { recordLatestUpdateRestartSentinel } from "../server-restart-sentinel.js";
+import { recordLatestUpdateRestartSentinel } from "../server-update-sentinel.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { resolveUpdateRunNoticeTarget } from "../update-run-notice-target.js";
 import { wakeUpdateRunWatcher } from "../update-run-watcher.js";
@@ -80,6 +78,7 @@ import {
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
+  reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
 import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
@@ -295,6 +294,10 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       });
+      if (installSurface.kind === "immutable") {
+        reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
+        return;
+      }
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
@@ -583,11 +586,13 @@ export const updateHandlers: GatewayRequestHandlers = {
           context?.logGateway?.warn(
             `update.run managed-service handoff failed ${formatControlPlaneActor(actor)} error=${formatErrorMessage(err)}`,
           );
+          const stage = managedHandoffOwner ? "prepared" : "prepare";
           result = recordHandoffFailure(
             runId,
             err,
             refusedUpdate("error", "managed-service-handoff-failed"),
             warn,
+            stage,
           );
         }
       }
@@ -667,7 +672,8 @@ export const updateHandlers: GatewayRequestHandlers = {
       } catch (error) {
         try {
           // Cancellation settles the helper's ledger; persist its cause first.
-          result = recordHandoffFailure(runId, error, result, warn);
+          const stage = sentinelPersisted ? "transfer" : "sentinel";
+          result = recordHandoffFailure(runId, error, result, warn, stage);
         } finally {
           await cancelManagedServiceUpdateHandoff(managedHandoffOwner);
         }

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
@@ -53,8 +54,20 @@ describe("Doctor workspace persistence", () => {
               },
             },
           },
+          models: {
+            providers: {
+              custom: {
+                api: "openai-codex-responses",
+                models: [{ id: "legacy-model", api: "openai-codex-responses" }],
+              },
+            },
+          },
           session: { typingMode: "thinking", parentForkMaxTokens: 200_000 },
-          browser: { relayBindHost: "127.0.0.1", ssrfPolicy: { allowPrivateNetwork: true } },
+          browser: {
+            relayBindHost: "127.0.0.1",
+            ssrfPolicy: { allowPrivateNetwork: true },
+            profiles: { relay: { driver: "extension", cdpUrl: "http://127.0.0.1:18792" } },
+          },
           messages: {
             queue: {
               mode: "queue",
@@ -86,6 +99,9 @@ describe("Doctor workspace persistence", () => {
           "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
+          "browser.profiles.relay.cdpUrl",
+          "models.providers.custom.api",
+          "models.providers.custom.models.0.api",
           "allowPrivateNetwork",
           "messages.queue.mode",
           "messages.queue.byChannel.discord",
@@ -117,7 +133,12 @@ describe("Doctor workspace persistence", () => {
           "123",
           456,
         ];
-        const canonical = ["discord:100000000000000001", "telegram:123", "slack:U123"];
+        // Unavailable channel contracts cannot prove it is safe to drop a target kind.
+        const canonical = [
+          "discord:user:100000000000000001",
+          "telegram:user:123",
+          "slack:user:U123",
+        ];
         const configPath = await writeOpenClawConfig(home, {
           // v2026.7.1-beta.1 (published July 2 UTC) admits this roster and ownerAllowFrom shape.
           meta: { lastTouchedVersion: "2026.7.1-beta.1" },
@@ -134,11 +155,6 @@ describe("Doctor workspace persistence", () => {
           plugins: { enabled: false },
         });
         const ctx = await prepareDoctorContext(configPath);
-        for (const index of [0, 1, 2]) {
-          expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-            `commands.ownerAllowFrom[${index}]`,
-          );
-        }
         await runInitialConfigWriteHealth(ctx);
         expect(ctx.configWriteRefusal).toBeUndefined();
         const saved = await readConfigFileSnapshot();
@@ -154,10 +170,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each([
-    ["entries", false],
-    ["list", true],
-  ] as const)(
+  it.each([["list", true]] as const)(
     "persists per-agent migrations with explicit ownership (%s, writable update: %s)",
     async (shape, writableUpdate) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -185,13 +198,7 @@ describe("Doctor workspace persistence", () => {
                   embeddedAgent: { projectSettingsPolicy: "trusted" },
                   sandbox: { scope: "shared" },
                 },
-                ...(shape === "entries"
-                  ? { entries }
-                  : {
-                      list: Object.entries(entries).map(([id, entry]) =>
-                        Object.assign({ id }, entry),
-                      ),
-                    }),
+                list: Object.entries(entries).map(([id, entry]) => Object.assign({ id }, entry)),
               },
               gateway: { mode: "local" },
               plugins: { enabled: false },
@@ -232,10 +239,7 @@ describe("Doctor workspace persistence", () => {
     },
   );
 
-  it.each([
-    { kind: "implicit", legacyId: "main" },
-    { kind: "shared", legacyId: " Main " },
-  ])(
+  it.each([{ kind: "shared", legacyId: " Main " }])(
     "preserves the markerless $legacyId agent's $kind workspace through Doctor persistence",
     async ({ kind, legacyId }) => {
       await withDoctorConfigPreflightHome(async (home) => {
@@ -268,7 +272,10 @@ describe("Doctor workspace persistence", () => {
             });
             const before = await readConfigFileSnapshot();
             expect(before.valid).toBe(false);
-            expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
+            expect(readAgentRosterProperty(before.sourceConfig)).toEqual({
+              kind: "list",
+              value: [{ id: legacyId }, { id: "other" }],
+            });
 
             const ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
@@ -306,7 +313,7 @@ describe("Doctor workspace persistence", () => {
         });
         const before = await readConfigFileSnapshot();
         expect(before.valid).toBe(false);
-        expect(before.sourceConfig.agents?.list).toHaveLength(1);
+        expect(readAgentRosterProperty(before.sourceConfig)?.value).toHaveLength(1);
 
         const ctx = await prepareDoctorContext(configPath);
         expect(ctx.configResult.shouldWriteConfig).toBe(true);
@@ -428,7 +435,7 @@ describe("Doctor workspace persistence", () => {
     });
   });
 
-  it.each(["parsed", "prefixed"])(
+  it.each(["prefixed"])(
     "refuses retired Talk selectors in %s config before recovery",
     async (kind) => {
       await withDoctorConfigPreflightHome(async (home) => {

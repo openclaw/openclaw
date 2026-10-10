@@ -12,7 +12,7 @@ type NativeCommandSpecMock = {
 };
 
 type ProviderMonitorTestMocks = {
-  clientDeployCommandsMock: Mock<(options?: { mode?: string }) => Promise<void>>;
+  clientDeployCommandsMock: Mock<() => Promise<void>>;
   clientFetchUserMock: Mock<(target: string) => Promise<{ id: string }>>;
   clientGetPluginMock: Mock<(name: string) => unknown>;
   clientConstructorOptionsMock: Mock<(options?: unknown) => void>;
@@ -311,8 +311,8 @@ vi.mock("../internal/discord.js", async () => {
       };
       clientConstructorOptionsMock(options);
     }
-    async deployCommands(options?: { mode?: string }) {
-      return await clientDeployCommandsMock(options);
+    async deployCommands() {
+      return await clientDeployCommandsMock();
     }
     async fetchUser(target: string) {
       return await clientFetchUserMock(target);

@@ -16,6 +16,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
+  type ChannelMessageSendTextContext,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
@@ -234,7 +235,7 @@ function hasLegacyFeishuCardCommandValue(actionValue: unknown): boolean {
 
 function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
   if (Array.isArray(node)) {
-    return node.some((item) => containsLegacyFeishuCardCommandValue(item));
+    return node.some(containsLegacyFeishuCardCommandValue);
   }
   if (!isRecord(node)) {
     return false;
@@ -253,7 +254,7 @@ function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
     return true;
   }
 
-  return Object.values(node).some((value) => containsLegacyFeishuCardCommandValue(value));
+  return Object.values(node).some(containsLegacyFeishuCardCommandValue);
 }
 
 const meta: ChannelMeta = {
@@ -273,37 +274,41 @@ const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
   "feishuChannelRuntime",
 );
 
-async function resolveFeishuMessageSender<TSender>(params: {
-  resolve: (
-    runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>,
-  ) => TSender | null | undefined;
-  unavailableMessage: string;
-}): Promise<TSender> {
+async function resolveFeishuMessageSender(kind: "text" | "media") {
+  const unavailableMessage = `Feishu ${kind} sending is not available.`;
   try {
-    const sender = params.resolve(await loadFeishuChannelRuntime());
+    const runtime = await loadFeishuChannelRuntime();
+    const sender = runtime.feishuOutbound[kind === "text" ? "sendText" : "sendMedia"];
     if (sender) {
       return sender;
     }
-    throw new Error(params.unavailableMessage);
+    throw new Error(unavailableMessage);
   } catch (error) {
     if (error instanceof PlatformMessageNotDispatchedError) {
       throw error;
     }
-    throw new PlatformMessageNotDispatchedError(params.unavailableMessage, { cause: error });
+    throw new PlatformMessageNotDispatchedError(unavailableMessage, { cause: error });
   }
 }
 
-const resolveFeishuTextSender = () =>
-  resolveFeishuMessageSender({
-    resolve: (runtime) => runtime.feishuOutbound.sendText,
-    unavailableMessage: "Feishu text sending is not available.",
+async function sendFeishuAdapterMessage(
+  kind: "text" | "media",
+  ctx: ChannelMessageSendTextContext,
+) {
+  const send = await resolveFeishuMessageSender(kind);
+  const { onDeliveryResult, ...outboundCtx } = ctx;
+  const result = await send({
+    ...outboundCtx,
+    ...(onDeliveryResult
+      ? {
+          onDeliveryResult: async (progress) => {
+            await onDeliveryResult(toFeishuMessageSendResult(progress, kind));
+          },
+        }
+      : {}),
   });
-
-const resolveFeishuMediaSender = () =>
-  resolveFeishuMessageSender({
-    resolve: (runtime) => runtime.feishuOutbound.sendMedia,
-    unavailableMessage: "Feishu media sending is not available.",
-  });
+  return toFeishuMessageSendResult(result, kind);
+}
 
 const feishuMessageAdapter = defineChannelMessageAdapter({
   id: "feishu",
@@ -318,75 +323,19 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
       // Resolve process-stable runtime methods before core records platform-send start.
       // Provider invocation stays below so a lost provider result remains ambiguous.
       beforeSendAttempt: async (ctx) => {
-        if (ctx.kind === "text") {
-          await resolveFeishuTextSender();
-        } else if (ctx.kind === "media") {
-          await resolveFeishuMediaSender();
+        if (ctx.kind === "text" || ctx.kind === "media") {
+          await resolveFeishuMessageSender(ctx.kind);
         }
       },
     },
-    text: async (ctx) => {
-      const sendText = await resolveFeishuTextSender();
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await sendText({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toFeishuMessageSendResult(progress, "text"));
-              },
-            }
-          : {}),
-      });
-      return toFeishuMessageSendResult(result, "text");
-    },
-    media: async (ctx) => {
-      const sendMedia = await resolveFeishuMediaSender();
-      const { onDeliveryResult, ...outboundCtx } = ctx;
-      const result = await sendMedia({
-        ...outboundCtx,
-        ...(onDeliveryResult
-          ? {
-              onDeliveryResult: async (progress) => {
-                await onDeliveryResult(toFeishuMessageSendResult(progress, "media"));
-              },
-            }
-          : {}),
-      });
-      return toFeishuMessageSendResult(result, "media");
-    },
+    text: (ctx) => sendFeishuAdapterMessage("text", ctx),
+    media: (ctx) => sendFeishuAdapterMessage("media", ctx),
   },
 });
 
 async function createFeishuActionClient(account: ResolvedFeishuAccount) {
   const { createFeishuClient } = await import("./client.js");
   return createFeishuClient(account);
-}
-
-async function resolveFeishuChatTypeById(params: {
-  account: ResolvedFeishuAccount;
-  chatId: string;
-  runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>;
-}) {
-  const client = await createFeishuActionClient(params.account);
-  const chat = await params.runtime.getChatInfo(client, params.chatId);
-  return resolveFeishuChatType(chat);
-}
-
-async function resolveFeishuMessageChatType(params: {
-  account: ResolvedFeishuAccount;
-  message: { chatId: string; chatType?: unknown };
-  runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>;
-}) {
-  const knownChatType = normalizeFeishuChatType(params.message.chatType);
-  if (knownChatType) {
-    return knownChatType;
-  }
-  return resolveFeishuChatTypeById({
-    account: params.account,
-    chatId: params.message.chatId,
-    runtime: params.runtime,
-  });
 }
 
 const collectFeishuSecurityWarnings = createAllowlistProviderGroupPolicyWarningCollector<{
@@ -558,13 +507,12 @@ function buildFeishuSendReplyAnchor(
 
 function isSupportedFeishuDirectConversationId(conversationId: string): boolean {
   const trimmed = conversationId.trim();
-  if (!trimmed || trimmed.includes(":")) {
-    return false;
-  }
-  if (trimmed.startsWith("oc_") || trimmed.startsWith("on_")) {
-    return false;
-  }
-  return true;
+  return (
+    Boolean(trimmed) &&
+    !trimmed.includes(":") &&
+    !trimmed.startsWith("oc_") &&
+    !trimmed.startsWith("on_")
+  );
 }
 
 function normalizeFeishuAcpConversationId(conversationId: string) {
@@ -839,32 +787,20 @@ function resolveFeishuMessageReadTarget(ctx: {
   return { chatId: normalizedChatId, chatType: currentChatType };
 }
 
-function assertFeishuMessageMatchesReadTarget(params: {
-  authorizedChatId: string;
-  messageChatId: string;
-}) {
-  const messageChatId = normalizeFeishuTarget(params.messageChatId) ?? params.messageChatId.trim();
-  if (messageChatId !== params.authorizedChatId) {
-    throw new ToolAuthorizationError("Feishu message target is not allowed.");
-  }
-}
-
 async function authorizeFeishuMessageReadTarget(params: {
   ctx: ChannelMessageActionContext;
   account: ResolvedFeishuAccount;
   runtime: Awaited<ReturnType<typeof loadFeishuChannelRuntime>>;
   target: NonNullable<ReturnType<typeof resolveFeishuMessageReadTarget>>;
 }) {
-  const authorize = (chatType?: "p2p" | "group") =>
-    assertFeishuChatReadAllowed({
+  if (params.target.chatType) {
+    return assertFeishuChatReadAllowed({
       cfg: params.ctx.cfg,
       account: params.account,
       chatId: params.target.chatId,
-      chatType,
+      chatType: params.target.chatType,
       ctx: params.ctx,
     });
-  if (params.target.chatType) {
-    return authorize(params.target.chatType);
   }
   const preliminary = resolveFeishuChatReadPreliminaryAuthorization({
     cfg: params.ctx.cfg,
@@ -951,20 +887,24 @@ async function getAuthorizedFeishuMessage(params: {
     return null;
   }
   if (authorizedChatId) {
-    assertFeishuMessageMatchesReadTarget({
-      authorizedChatId,
-      messageChatId: message.chatId,
-    });
+    const messageChatId = normalizeFeishuTarget(message.chatId) ?? message.chatId.trim();
+    if (messageChatId !== authorizedChatId) {
+      throw new ToolAuthorizationError("Feishu message target is not allowed.");
+    }
   }
+  const chatType =
+    normalizeFeishuChatType(message.chatType) ??
+    resolveFeishuChatType(
+      await params.runtime.getChatInfo(
+        await createFeishuActionClient(params.account),
+        message.chatId,
+      ),
+    );
   assertFeishuChatReadAllowed({
     cfg: params.ctx.cfg,
     account: params.account,
     chatId: message.chatId,
-    chatType: await resolveFeishuMessageChatType({
-      account: params.account,
-      message,
-      runtime: params.runtime,
-    }),
+    chatType,
     ctx: params.ctx,
   });
   return message;
@@ -1030,7 +970,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
       id: "feishu",
       meta,
       capabilities: {
-        chatTypes: ["direct", "channel"],
+        chatTypes: ["direct", "group"],
         polls: false,
         threads: true,
         media: true,
@@ -1325,7 +1265,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 });
               } else {
                 const { target, ...delivery } = await (
-                  await resolveFeishuTextSender()
+                  await resolveFeishuMessageSender("text")
                 )(outboundContext);
                 result = { ...delivery, chatId: target?.id };
               }
