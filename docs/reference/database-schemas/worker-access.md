@@ -1959,6 +1959,10 @@ ordinary policy guards compare only their named fields, so unrelated metadata
 changes do not revoke an admitted operation. Public metadata stays a caller-owned
 projection rather than an authorization cache.
 
+Ordinary host-owned session admission captures its initial identity synchronously
+before yielding, so the existing admission check rejects a replacement while work
+is queued. Explicitly bound incognito sessions retain their awaited actor read.
+
 Codex prepares session policy before asynchronous work and rechecks the captured
 session, lifecycle, execution host, and node at native and tool effects. A storage
 refusal never selects default execution policy. Commands and marker-only history
