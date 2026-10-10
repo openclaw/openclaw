@@ -68,10 +68,20 @@ function readSidebarNativeGateway(): NativeGateway | null {
 function renderSidebarAgentCard(host: AppSidebarRenderHost) {
   const {
     activeId: cardAgentId,
-    agent: cardAgent,
+    agent: rosterAgent,
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  const bootstrapIdentity = host.sessionDataContext?.config.current.assistantIdentity;
+  const cardAgent =
+    rosterAgent ??
+    (bootstrapIdentity?.agentId === cardAgentId
+      ? {
+          id: cardAgentId,
+          name: bootstrapIdentity.name,
+          identity: { avatar: bootstrapIdentity.avatar ?? undefined },
+        }
+      : undefined);
   if (!cardAgent) {
     return renderSidebarWorkspaceHeader(host);
   }
@@ -85,7 +95,8 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     gateway &&
     (gateway.snapshot.hello ||
       gateway.connection.token.trim() ||
-      gateway.connection.password.trim()),
+      gateway.connection.password.trim() ||
+      bootstrapIdentity?.agentId === cardAgentId),
   );
   return html`
     <openclaw-sidebar-agent-card

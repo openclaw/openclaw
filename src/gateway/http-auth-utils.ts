@@ -108,6 +108,8 @@ export type AuthorizedControlUiReadRequest = AuthenticatedHttpUserProfile &
 type ControlUiReadAuthParams = Omit<GatewayHttpRequestAuthParams, "auth"> & {
   auth?: ResolvedGatewayAuth;
   allowQueryToken?: boolean;
+  /** A public app shell can omit protected bootstrap data without rejecting navigation. */
+  replyOnFailure?: boolean;
   requiredOperatorMethod?: string;
   onPluginFrameGrants?: (grants: readonly ControlUiPluginFrameGrantAck[]) => void;
 };
@@ -310,7 +312,9 @@ export async function authorizeControlUiReadRequestOrReply(
     authorizeControlUiReadHttpGatewayConnect,
   );
   if (!authResult.ok) {
-    sendGatewayAuthFailure(params.res, authResult);
+    if (params.replyOnFailure !== false) {
+      sendGatewayAuthFailure(params.res, authResult);
+    }
     return null;
   }
   const profileAuth = await checkAuthenticatedHttpUserProfile({
@@ -321,15 +325,25 @@ export async function authorizeControlUiReadRequestOrReply(
     res: params.res,
   });
   if (!profileAuth.ok) {
-    sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
+    if (params.replyOnFailure !== false) {
+      sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
+    }
     return null;
   }
   const authenticatedProfile = profileAuth.profile;
-  if (!bindHttpOperatorAccessAuthority(params.res, authenticatedProfile.operatorAccessAuthority)) {
+  if (
+    !bindHttpOperatorAccessAuthority(
+      params.res,
+      authenticatedProfile.operatorAccessAuthority,
+      params.replyOnFailure,
+    )
+  ) {
     return null;
   }
   if (!hasCurrentClientAuthority()) {
-    sendUnauthorized(params.res);
+    if (params.replyOnFailure !== false) {
+      sendUnauthorized(params.res);
+    }
     return null;
   }
   const authMethod = authResult.method ?? "none";
@@ -339,6 +353,16 @@ export async function authorizeControlUiReadRequestOrReply(
     deviceOperatorScopes,
     authenticatedProfile,
   );
+  const scopeAuth = authorizeOperatorScopesForMethod(
+    params.requiredOperatorMethod ?? "assistant.media.get",
+    operatorScopes,
+  );
+  if (!scopeAuth.allowed) {
+    if (params.replyOnFailure !== false) {
+      sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
+    }
+    return null;
+  }
   params.onPluginFrameGrants?.(
     setControlUiPluginAuthCookieForRequest(
       params.req,
@@ -349,14 +373,6 @@ export async function authorizeControlUiReadRequestOrReply(
       authenticatedProfile.authenticatedUserProfile?.profileId,
     ),
   );
-  const scopeAuth = authorizeOperatorScopesForMethod(
-    params.requiredOperatorMethod ?? "assistant.media.get",
-    operatorScopes,
-  );
-  if (!scopeAuth.allowed) {
-    sendMissingScopeForbidden(params.res, scopeAuth.missingScope);
-    return null;
-  }
   const requestAuth = bindHttpResponseAuthority(
     { authMethod, operatorScopes, ...authenticatedProfile },
     params.res,
