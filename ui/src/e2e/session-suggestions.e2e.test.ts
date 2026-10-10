@@ -171,7 +171,7 @@ suite.define(() => {
       } else {
         // Five explicit line breaks put the terminal caret on the sixth line.
         const lineHeight = await preview.evaluate((element) =>
-          parseFloat(getComputedStyle(element).lineHeight),
+          Number.parseFloat(getComputedStyle(element).lineHeight),
         );
         expect(box!.y - firstLine!.y).toBeCloseTo(5 * lineHeight, 0);
       }
