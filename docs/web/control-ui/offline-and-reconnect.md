@@ -152,7 +152,8 @@ an explicit browser reload or closing the browser tab discards them.
 ## Visualizations during a connection loss
 
 Already-rendered inline visualizations keep their iframe and local interaction
-state when the same Gateway connection temporarily drops. They do not need to
+state when the connection to the same Gateway and account temporarily drops,
+including wake recovery and **Retry now**. They do not need to
 download their contents again just to remain visible. On reconnect, the client
 revalidates the document; changed content or a changed account, Gateway, or
 authorization scope replaces the old view. Server-dependent widget actions

@@ -70,10 +70,24 @@ suite.define(() => {
       expect(await menu.getByText("Pin session", { exact: true }).count()).toBe(
         Number(independent),
       );
-      expect(await menu.getByText("Move to group", { exact: true }).count()).toBe(
-        Number(independent),
+      expect(await menu.getByText("Move to group", { exact: true }).count()).toBe(1);
+      expect(await menu.getByText("Move to top level", { exact: true }).count()).toBe(
+        Number(!independent),
       );
       if (!independent) {
+        await menu.getByText("Move to top level", { exact: true }).click();
+        expect(
+          (await waitForPatch(gateway, (params) => params.sidebarRoot === true)).params,
+        ).toMatchObject({
+          key: sessionKey,
+          sidebarRoot: true,
+          expectedSessionId: session.sessionId,
+        });
+        await header
+          .locator(".chat-pane__parent-session")
+          .getByText("Home parent", { exact: true })
+          .waitFor();
+        await page.getByText("Retained conversation.", { exact: true }).waitFor();
         return;
       }
 

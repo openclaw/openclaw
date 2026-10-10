@@ -139,6 +139,7 @@ export type CreateGatewaySessionParams = {
   spawnToolPolicy?: {
     version: 1;
     completionOwnerSessionKey?: string;
+    delegatedToolPolicy?: SessionEntry["delegatedToolPolicy"];
     allow: string[];
     deny: string[];
   };
