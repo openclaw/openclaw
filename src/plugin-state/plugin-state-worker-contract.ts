@@ -2,6 +2,10 @@ import type { Result } from "@openclaw/normalization-core/result";
 import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type {
+  PluginStateOperationInput,
+  PluginStateOperationResult,
+} from "./plugin-state-operation-contract.js";
+import type {
   PluginStateComparisonLimits,
   PluginStatePreparedComparison,
 } from "./plugin-state-store.comparison.js";
@@ -24,6 +28,10 @@ type Key = Namespace & { key: string };
 type Register = Omit<PluginStateRegisterEntryParams, "createdAtMs">;
 
 export type PluginStateWorkerRequests = {
+  "pluginState.executeOperation": {
+    input: PluginStateOperationInput;
+    output: PluginStateOperationResult;
+  };
   "pluginState.appendJournal": {
     input: PluginStateSequencedJournalParams;
     output: number;
@@ -96,6 +104,11 @@ export type PluginStateWorkerOperations = {
 };
 
 export const pluginStateWorkerOperations = {
+  "pluginState.executeOperation": {
+    operation: "register",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to execute plugin state operation.",
+  },
   "pluginState.appendJournal": {
     operation: "register",
     code: "PLUGIN_STATE_WRITE_FAILED",

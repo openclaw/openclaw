@@ -7,6 +7,7 @@ import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gatewa
 import { isHomePanelAvailable } from "../app/panel-availability.ts";
 import { currentThemeBranding } from "../app/theme-branding.ts";
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -68,10 +69,24 @@ function readSidebarNativeGateway(): NativeGateway | null {
 function renderSidebarAgentCard(host: AppSidebarRenderHost) {
   const {
     activeId: cardAgentId,
-    agent: cardAgent,
+    agent: rosterAgent,
     agents: cardAgents,
     identity: cardIdentity,
   } = host.activeChipAgent();
+  const gateway = host.sessionDataContext?.gateway;
+  const bootstrapIdentity =
+    gateway && hasSameOriginGatewayTransport(gateway.connection.gatewayUrl)
+      ? host.sessionDataContext?.config.current.assistantIdentity
+      : undefined;
+  const cardAgent =
+    rosterAgent ??
+    (bootstrapIdentity?.agentId === cardAgentId
+      ? {
+          id: cardAgentId,
+          name: bootstrapIdentity.name,
+          identity: { avatar: bootstrapIdentity.avatar ?? undefined },
+        }
+      : undefined);
   if (!cardAgent) {
     return renderSidebarWorkspaceHeader(host);
   }
@@ -80,12 +95,12 @@ function renderSidebarAgentCard(host: AppSidebarRenderHost) {
     return agentId !== cardAgentId && host.agentUnreadCount(agentId) > 0;
   });
   const cardName = normalizeAgentLabel(cardAgent, cardIdentity);
-  const gateway = host.sessionDataContext?.gateway;
   const avatarAuthReady = Boolean(
     gateway &&
     (gateway.snapshot.hello ||
       gateway.connection.token.trim() ||
-      gateway.connection.password.trim()),
+      gateway.connection.password.trim() ||
+      bootstrapIdentity?.agentId === cardAgentId),
   );
   return html`
     <openclaw-sidebar-agent-card

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
@@ -254,7 +255,9 @@ export async function drainBrowserSessionTabStore(runtime: BrowserStateRuntime):
   }
 }
 
-export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> {
   const runtime = authority.runtime ?? getBrowserStateRuntime();
   const withCurrent = runtime.sessionTabs.withCurrent;
   if (!withCurrent) {
@@ -266,7 +269,9 @@ export function getBrowserSessionTabStore(authority: BrowserSessionTabAuthority 
   });
 }
 
-export function getOptionalBrowserSessionTabStore(authority: BrowserSessionTabAuthority = {}) {
+export function getOptionalBrowserSessionTabStore(
+  authority: BrowserSessionTabAuthority = {},
+): PluginStateKeyedStore<unknown, 2> | undefined {
   return authority.runtime || getOptionalBrowserStateRuntime()
     ? getBrowserSessionTabStore(authority)
     : undefined;
