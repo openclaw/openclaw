@@ -5,12 +5,12 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  appendTranscriptEvent,
   appendTranscriptMessage,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import { appendPreparedTranscriptEvent } from "../config/sessions/session-transcript-event.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
@@ -130,12 +130,16 @@ it("keeps an exact active-entry claim across unrelated appends and revokes it on
         message: { role: "user", content: "later" },
       });
       expect(() => retained.assertCurrent()).not.toThrow();
-      await appendTranscriptEvent(target, {
-        type: "leaf",
-        id: "anchor-cut",
-        parentId: "anchor-later",
-        targetId: "anchor-input",
-      });
+      await appendPreparedTranscriptEvent(
+        target,
+        {
+          type: "leaf",
+          id: "anchor-cut",
+          parentId: "anchor-later",
+          targetId: "anchor-input",
+        },
+        authority.assertCurrent,
+      );
       expect(() => retained.assertCurrent()).toThrow("no longer current");
     } finally {
       await retained.release();

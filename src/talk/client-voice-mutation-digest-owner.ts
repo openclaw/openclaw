@@ -596,7 +596,7 @@ export function createClientVoiceMutationDigestDeliveryOptions(
       const admitted = createDeferredCore<() => Promise<boolean>>();
       const completion = incognito.actor.sessions.withSharedState(async () => {
         const run = await admitted.promise;
-        return withIncognitoSessionBinding(incognito, run);
+        return settlement.run(() => withIncognitoSessionBinding(incognito, run));
       });
       void completion.catch(() => {});
       return {

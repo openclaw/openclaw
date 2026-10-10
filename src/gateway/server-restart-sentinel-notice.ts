@@ -279,13 +279,22 @@ async function drainFailedRestartSentinelNotice(
   },
   context: DeliveryQueueStateContext,
 ): Promise<void> {
-  const deliver: typeof deliverOutboundPayloadsInternal = (input) => {
-    params.assertCurrent?.();
-    return deliverOutboundPayloadsInternal({
-      ...input,
-      assertDirectAdapterHandoff: params.assertCurrent,
-    });
-  };
+  const assertCurrent = params.assertCurrent;
+  const deliver: typeof deliverOutboundPayloadsInternal = assertCurrent
+    ? (input, stateContext) => {
+        assertCurrent();
+        return deliverOutboundPayloadsInternal(
+          {
+            ...input,
+            assertDirectAdapterHandoff: () => {
+              input.assertDirectAdapterHandoff?.();
+              assertCurrent();
+            },
+          },
+          stateContext,
+        );
+      }
+    : deliverOutboundPayloadsInternal;
   for (let cycle = 1; cycle <= RESTART_NOTICE_RECOVERY_MAX_CYCLES; cycle += 1) {
     params.assertCurrent?.();
     const beforeDrain = await loadPendingDelivery(params.queueId, undefined, context).catch(
