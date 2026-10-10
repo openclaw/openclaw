@@ -525,11 +525,10 @@ vi.mock("./images.js", () => ({
     (hoisted.detectAndLoadPromptImagesMock as (...args: unknown[]) => unknown)(...args),
 }));
 
+// mock-isolation: Workspace tests supply runtime facts without host discovery.
 vi.mock("../../system-prompt-params.js", () => ({
   buildSystemPromptParams: () => ({
     runtimeInfo: {},
-    userTimezone: "UTC",
-    userDate: "2026-01-05",
   }),
 }));
 

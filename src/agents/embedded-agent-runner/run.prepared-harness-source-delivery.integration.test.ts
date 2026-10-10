@@ -91,6 +91,7 @@ describe("prepared harness source delivery", () => {
     const loaded = await loadRunOverflowCompactionHarness();
     const { createOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
     state = await createOpenClawTestState({ label: "prepared-source-delivery" });
+    sessionStoreMocks.resolveSessionStorePathCore.mockReturnValue(state.path("sessions.json"));
     return loaded;
   }
   afterEach(async () => {
@@ -206,8 +207,6 @@ describe("prepared harness source delivery", () => {
           chatType: "direct",
         },
         tools: attemptParams.forceMessageTool ? [{ name: "message" } as never] : [],
-        userTimezone: "UTC",
-        userDate: "2026-08-11",
       });
     };
     mockedBuildEmbeddedRunPayloads.mockReturnValue(

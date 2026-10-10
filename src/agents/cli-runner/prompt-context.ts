@@ -7,6 +7,7 @@ import { labelRuntimeContextText } from "../../llm/types.js";
 import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { buildCliSessionDriftNote } from "../cli-session.js";
+import { buildTemporalContextText } from "../date-time.js";
 import type { ResolvedPromptBuildHookResult } from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
 import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
@@ -27,6 +28,7 @@ async function buildCliTurnAppendContext(
     runtimeContextFragments?: RunCliAgentParams["runtimeContextFragments"];
     thinkLevel?: ThinkLevel;
     requesterProfileId?: string;
+    configuredTimezone?: string;
   },
 ): Promise<string> {
   const { resolveSystemPromptUsage } = await import("./helpers.js");
@@ -47,6 +49,12 @@ async function buildCliTurnAppendContext(
       enabled: params.thinkLevel === "ultra",
       hasSessionsSpawn: params.capabilityToolNames.has("sessions_spawn"),
     }).join("\n"),
+    labelRuntimeContextText(
+      buildTemporalContextText({
+        configuredTimezone: params.configuredTimezone,
+        sessionStatusAvailable: params.capabilityToolNames.has("session_status"),
+      }),
+    ),
     mediaTaskMessage ? labelRuntimeContextText(mediaTaskMessage.content) : undefined,
     // Native-prompt owners and first-only resumes do not receive the current runtime line.
     resolveSystemPromptUsage(params)
