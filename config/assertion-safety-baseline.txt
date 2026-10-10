@@ -595,7 +595,6 @@ extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	3
 extensions/msteams/src/sdk.ts	3
-extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
 extensions/mxc/src/fs-bridge.ts	1
@@ -1054,7 +1053,7 @@ packages/ai/src/providers/tool-result-text.ts	2
 packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
-packages/ai/src/transports/anthropic-payload-policy.ts	6
+packages/ai/src/transports/anthropic-payload-policy.ts	4
 packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
