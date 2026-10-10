@@ -106,7 +106,7 @@ function renderTranscriptShell(
                 : nothing
             }
             ${
-              projection.isEmpty && !projection.searchOpen
+              projection.isEmpty && !projection.showLoadingSkeleton && !projection.searchOpen
                 ? renderWelcomeState({ ...props, onModelSetup: undefined })
                 : nothing
             }

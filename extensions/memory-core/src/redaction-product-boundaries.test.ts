@@ -142,6 +142,7 @@ describe("memory-core redaction product boundaries", () => {
     await expect(
       runDreamingSweepPhases({
         agentId: "main",
+        narrativeTimeoutMs: 180_000,
         workspaceDir,
         cfg,
         pluginConfig: resolveMemoryDreamingPluginConfig(cfg) ?? {},

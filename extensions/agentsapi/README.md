@@ -26,6 +26,18 @@ overrides are covered in the
 
 Multi-user Gateways are not supported by the Agents API MVP.
 
+The opt-in live regression uses an isolated Gateway and synthetic files. Supply
+`OPENAI_API_KEY` and set `OPENCLAW_LIVE_AGENTS_API_MODEL` to a model available to
+your Agents API project, then run:
+
+```bash
+OPENCLAW_LIVE_AGENTS_API=1 pnpm test:live test/gateway-agentsapi.live.test.ts
+```
+
+It verifies native execution, Gateway functions, disabled web search, follow-up
+replies, file transfer, restart, Stop, reset, and deletion. Provider usage is billed;
+the test deletes only the cloud sessions it creates.
+
 Configure native Agents API tools with
 `plugins.entries.agentsapi.config.nativeTools`. Omitting the setting uses live
 web search and programmatic tool calling, without computer use. The default list
@@ -49,7 +61,10 @@ is equivalent to:
 ```
 
 A supplied list replaces the defaults. List every native tool declaration you
-want to send. Each entry requires a `type` string; other tool options are passed
+want to send. The global `tools.web.search.enabled: false` setting and the
+session’s Web search disable override remove native `web_search` declarations
+from new sessions. A change to the effective search setting requires a new or
+reset session before inference can continue. Each entry requires a `type` string; other tool options are passed
 unchanged to the session's `agent.tools`. OpenClaw does not maintain an enum of
 tool types or options; the API validates them and reports unsupported values.
 
