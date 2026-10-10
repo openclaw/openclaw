@@ -69,10 +69,12 @@ export class SessionManagerPersistence extends SessionManagerNativePersistence {
     const { options } = writeAdmission;
     const database = "actor" in writeAdmission ? undefined : writeAdmission.database;
     const { env: _env, ...writeTarget } = withOwnedSessionTranscriptWriterFence(target);
-    const captured = {
+    const captured: SessionMetadataWorkerOperations["session.metadata.append"]["input"]["scope"] & {
+      storePath: string;
+    } = {
       ...writeTarget,
       storePath: database?.path ?? resolveOpenClawAgentSqlitePath(options),
-    } satisfies SessionMetadataWorkerOperations["session.metadata.append"]["input"]["scope"];
+    };
     if (database && "db" in database && database.db.isTransaction) {
       throw new Error("Asynchronous session writes must own their transaction");
     }
