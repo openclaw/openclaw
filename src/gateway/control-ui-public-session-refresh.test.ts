@@ -11,10 +11,13 @@ const html = renderPublicSessionDocument({
   cardUrl: "/chat/main/topic/card",
   assetBasePath: "",
 });
-const entryScript = /<script>([\s\S]*?)<\/script>/u.exec(html)?.[1];
-if (!entryScript) {
-  throw new Error("Expected public reader script in the served document");
-}
+const entryScript = (() => {
+  const script = /<script>([\s\S]*?)<\/script>/u.exec(html)?.[1];
+  if (!script) {
+    throw new Error("Expected public reader script in the served document");
+  }
+  return script;
+})();
 
 afterEach(() => vi.useRealTimers());
 function fixture() {
