@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import {
@@ -276,11 +277,18 @@ export async function callNativeSubagentGateway(
 ) {
   // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
   // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-  return await dispatchSubagentGateway(params, authorization, {
-    agentRunTracking: "native_subagent",
-    gatewayContextResolver,
-    preparedLaunch,
-  });
+  const dispatch = () =>
+    dispatchSubagentGateway(params, authorization, {
+      agentRunTracking: "native_subagent",
+      gatewayContextResolver,
+      preparedLaunch,
+    });
+  // A child agent owns its transcript writer. The embedded parent's attempt context
+  // names a different session, so CLI history preparation rejects the child's first
+  // guarded commit before execution. Drop only that inherited ambient claim.
+  return await (params.method === "agent"
+    ? runWithoutOwnedSessionTranscriptWrites(dispatch)
+    : dispatch());
 }
 
 export function readGatewayRunId(

@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { resolveSubagentRunDurationMs } from "../registry/subagent-run-timeout.js";
@@ -123,5 +128,55 @@ describe("native subagent Gateway transport ownership", () => {
       registrationRequired: false,
     });
     expect(callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("drops the parent transcript writer before native child dispatch", async () => {
+    const parentTarget = {
+      agentId: "main",
+      sessionId: "parent-session",
+      sessionKey: "agent:main:main",
+      storePath: "/isolated/parent.sqlite",
+    };
+    const childTarget = {
+      agentId: "recovery",
+      sessionId: "child-session",
+      sessionKey: "agent:recovery:subagent:child",
+      storePath: "/isolated/child.sqlite",
+    };
+    let capturedChildAssertion: (() => void) | undefined;
+    spawnTesting.setDepsForTest({
+      hasInProcessGatewayContext: () => true,
+      dispatchGatewayMethodInProcess: async () => {
+        await Promise.resolve();
+        const assertOwned = captureOwnedTranscriptWriteAssertion(childTarget);
+        capturedChildAssertion = () => {
+          assertOwned();
+        };
+        assertOwned();
+        return { runId: "child-run", status: "accepted" };
+      },
+    });
+
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionTarget: parentTarget,
+        assertCommitAllowed: () => {},
+        withTranscriptWrite: async (run) => await run(),
+      },
+      async () => {
+        await expect(
+          callNativeSubagentGateway({
+            method: "agent",
+            params: { message: "child", idempotencyKey: "child-run" },
+          }),
+        ).resolves.toMatchObject({ response: { runId: "child-run" } });
+        expect(() => captureOwnedTranscriptWriteAssertion(childTarget)()).toThrow(
+          SessionTranscriptWriterClaimReboundError,
+        );
+        expect(() => captureOwnedTranscriptWriteAssertion(parentTarget)()).not.toThrow();
+      },
+    );
+    expect(capturedChildAssertion).toBeTypeOf("function");
+    expect(capturedChildAssertion).not.toThrow();
   });
 });
