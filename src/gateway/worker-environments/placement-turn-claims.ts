@@ -67,23 +67,36 @@ function releaseTurnQuery(db: DatabaseSync, nowMs: number) {
 
 export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
   const { instanceId, path, now, read, write } = runtime;
-  const publishTurnRelease = (
+  function publishTurnRelease(
     db: DatabaseSync,
-    current: WorkerSessionPlacementRecord,
     claim: WorkerSessionTurnClaim,
     statement: ReturnType<typeof releaseTurnQuery>,
     error: string,
-  ): WorkerSessionPlacementRecord => {
+  ): WorkerSessionPlacementRecord;
+  function publishTurnRelease(
+    db: DatabaseSync,
+    claim: WorkerSessionTurnClaim,
+    statement: ReturnType<typeof releaseTurnQuery>,
+  ): WorkerSessionPlacementRecord | undefined;
+  function publishTurnRelease(
+    db: DatabaseSync,
+    claim: WorkerSessionTurnClaim,
+    statement: ReturnType<typeof releaseTurnQuery>,
+    error?: string,
+  ): WorkerSessionPlacementRecord | undefined {
     const row = executeSqliteQuerySync(db, statement.returningAll()).rows[0];
     if (!row) {
-      throw new Error(error);
+      if (error) {
+        throw new Error(error);
+      }
+      return undefined;
     }
-    sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
     const updated = fromRow(row);
-    publishPlacementTurnClaimState(db, updated, current.state);
+    sessionChanges.emit({ agentId: updated.agentId, sessionKey: updated.sessionKey }, db);
+    publishPlacementTurnClaimState(db, updated, updated.state);
     deferWorkerTurnClaimClosed(db, path, claim);
     return updated;
-  };
+  }
   const claimTurnInDatabase = (
     db: DatabaseSync,
     input: WorkerTurnClaimInput,
@@ -277,8 +290,8 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           ]),
         );
     }
-    const row = executeSqliteQuerySync(db, statement.returningAll()).rows[0];
-    if (!row) {
+    const placement = publishTurnRelease(db, claim, statement);
+    if (!placement) {
       const current = find(db, sessionId);
       if (
         current &&
@@ -294,10 +307,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       assertNoRunningWorkerSessionToolOperations(db, { sessionId, claimId });
       clearWorkerTurnToolState(db, { sessionId, claimId });
     }
-    const placement = fromRow(row);
-    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
-    publishPlacementTurnClaimState(db, placement, placement.state);
-    deferWorkerTurnClaimClosed(db, path, claim);
     return placement;
   };
 
@@ -355,7 +364,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         clearWorkerWorkspacePendingResult(db, sessionId);
         return publishTurnRelease(
           db,
-          current,
           claim,
           statement
             .where("session_id", "=", sessionId)
@@ -423,7 +431,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         clearWorkerWorkspacePendingResult(db, sessionId);
         return publishTurnRelease(
           db,
-          current,
           claim,
           releaseTurnQuery(db, now())
             .where("session_id", "=", sessionId)

@@ -225,9 +225,10 @@ export function createWorkerSessionPlacementStore(
         }
         return result.result;
       };
+      const singleSessionId = ids.length === 1 ? ids[0] : undefined;
       const { projection, conflictSessionIds } =
-        ids.length === 1 && conflicts.size === 0
-          ? await readPlacementProjection(path, ids[0], read)
+        singleSessionId !== undefined && conflicts.size === 0
+          ? await readPlacementProjection(path, singleSessionId, read)
           : await read();
       const placements = new Map(projection.placements);
       for (const [id, captured] of conflicts) {
