@@ -248,6 +248,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   storePath: string;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
+  assertCurrent: () => void;
 }): Promise<SessionEntry> {
   const now = Date.now();
   const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
@@ -314,7 +315,7 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
     }
   }
 
-  patched ??= await params.agentRuntime.session.patchSessionEntry({
+  patched ??= await params.agentRuntime.session.prepareSessionEntryPatch({
     agentId: params.agentId,
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -323,7 +324,8 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       sessionId: "",
       updatedAt: now,
     },
-    update: async (entry) => {
+    authority: { kind: "host", assertCurrent: params.assertCurrent },
+    prepare: (entry) => {
       if (entry.sessionId?.trim()) {
         return { ...deliveryFields, updatedAt: now };
       }
@@ -519,6 +521,12 @@ export async function consultRealtimeVoiceAgent(params: {
         storePath,
         agentRuntime: params.agentRuntime,
         logger: params.logger,
+        assertCurrent: () => {
+          lifecycleAbortController.signal.throwIfAborted();
+          if (!sessionWorkAdmission.isActive()) {
+            throw lifecycleInterruption;
+          }
+        },
       });
       const { deliveryContext: consultDeliveryContext, toolAuthorityOverlay } =
         prepareRealtimeVoiceAgentExecutionContext({ ...params, agentId, storePath, sessionEntry });

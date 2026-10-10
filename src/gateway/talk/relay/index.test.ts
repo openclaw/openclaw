@@ -1272,7 +1272,7 @@ describe("talk realtime gateway relay", () => {
       : undefined;
     void completion?.catch(() => {});
     return {
-      launch,
+      launch: launch?.launch,
       send,
       changing,
       changeId,

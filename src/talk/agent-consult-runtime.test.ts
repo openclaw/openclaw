@@ -79,11 +79,12 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
   const getSessionEntry = vi.fn(
     (params: { sessionKey: string }) => sessionStore[params.sessionKey],
   );
-  const patchSessionEntry = vi.fn(
+  const prepareSessionEntryPatch = vi.fn(
     async (params: {
       sessionKey: string;
       fallbackEntry?: Record<string, unknown>;
-      update: (
+      authority: { kind: "host"; assertCurrent: () => void };
+      prepare: (
         entry: Record<string, unknown>,
       ) => Promise<Record<string, unknown> | null> | Record<string, unknown> | null;
     }) => {
@@ -91,7 +92,8 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       if (!existing) {
         return null;
       }
-      const patch = await params.update({ ...existing });
+      const patch = await params.prepare({ ...existing });
+      params.authority.assertCurrent();
       if (!patch) {
         return existing;
       }
@@ -109,7 +111,7 @@ function createAgentRuntime(payloads: unknown[] = [{ text: "Speak this." }]) {
       session: {
         resolveStorePath: vi.fn(() => testTempPath("sessions.json")),
         getSessionEntry,
-        patchSessionEntry,
+        prepareSessionEntryPatch,
       },
       runEmbeddedAgent,
     },
@@ -427,7 +429,7 @@ describe("realtime voice agent consult runtime", () => {
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -457,7 +459,7 @@ describe("realtime voice agent consult runtime", () => {
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(forkSessionEntryFromParent).not.toHaveBeenCalled();
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -530,7 +532,7 @@ describe("realtime voice agent consult runtime", () => {
       'Session "voice:archive-race" is archived. Restore it before starting new work.',
     );
     expect(runtime.ensureAgentWorkspace).not.toHaveBeenCalled();
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
@@ -689,7 +691,7 @@ describe("realtime voice agent consult runtime", () => {
         sessionKey: "agent:main:subagent:google-meet:meet-1",
       }),
     );
-    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).not.toHaveBeenCalled();
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -765,7 +767,7 @@ describe("realtime voice agent consult runtime", () => {
     expect(warn).toHaveBeenCalledWith(
       "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
     );
-    expect(runtime.session.patchSessionEntry).toHaveBeenCalled();
+    expect(runtime.session.prepareSessionEntryPatch).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expectNonEmptyString(call.sessionId);
     expect(call.sessionFile).toBeUndefined();

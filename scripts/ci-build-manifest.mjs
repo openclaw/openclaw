@@ -675,7 +675,6 @@ if (uiE2eSelection) {
 // Keep its browser-only contracts scoped to their interaction and style owners.
 const uiWebkitOwners = [
   "ui/vitest.config.ts",
-  "ui/test/webkit-expected-failures{,.setup}.ts",
   "ui/src/components/{web-awesome*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*}.{ts,tsx}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
   "ui/src/pages/chat/components/chat-{composer*,picker-overlay*,model-picker*,effort-picker*}.{ts,tsx}",

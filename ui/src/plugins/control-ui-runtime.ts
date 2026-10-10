@@ -66,6 +66,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private connectionId: string | null = null;
   private refreshGeneration = 0;
   private disposed = false;
+  private firstConnection = true;
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -165,11 +166,13 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     this.diagnostics = [];
     this.publish();
     if (client && isGatewayMethodAdvertised(snapshot, "plugins.controlUi.list")) {
-      void this.refresh();
+      const reuseBootstrap = this.firstConnection;
+      this.firstConnection = false;
+      void this.refresh(reuseBootstrap);
     }
   }
 
-  async refresh(): Promise<void> {
+  async refresh(reuseBootstrap = false): Promise<void> {
     const client = this.client;
     if (!client || this.disposed) {
       return;
@@ -216,7 +219,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
           );
           return;
         }
-        const bootstrap = await this.getContext().config.refresh();
+        const bootstrap = await this.getContext().config.refresh({ ifNeeded: reuseBootstrap });
         if (!current()) {
           return;
         }

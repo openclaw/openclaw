@@ -163,6 +163,7 @@ export class UpdateFinalizationLifecycle {
     detail?: string,
     failureFacts?: UpdateFailureFact[],
     exitCode?: number | null,
+    startedAtMs?: number,
   ): void {
     const failureReason = failureFacts?.find(
       (fact) => fact.code.trim() && fact.code !== "finalization-failed",
@@ -175,6 +176,7 @@ export class UpdateFinalizationLifecycle {
       ...(exitCode !== undefined ? { exitCode } : {}),
       ...(status === "failed" ? { reason: failureReason ?? name } : {}),
       ...(status === "in_progress" ? { startedAtMs: at } : { endedAtMs: at }),
+      ...(startedAtMs !== undefined ? { startedAtMs } : {}),
     };
     const message = `[update finalize] ${JSON.stringify(step)}`;
     if (status === "failed") {
@@ -211,6 +213,7 @@ export class UpdateFinalizationLifecycle {
         row.detail,
         row.failureFacts,
         row.exitCode,
+        Math.max(0, endedAtMs - step.durationMs),
       );
     }
   }

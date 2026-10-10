@@ -22,7 +22,6 @@ type CompactionSafeguardTestApi = {
   formatFileOperations: CallableFunction;
   MAX_FILE_OPS_SECTION_CHARS: number;
   budgetCompactionSummary: CallableFunction;
-  readWorkspaceContextForSummary: CallableFunction;
   MAX_COMPACTION_SUMMARY_CHARS: number;
   SUMMARY_TRUNCATED_MARKER: string;
   CONTEXT_TRUNCATED_MARKER: string;

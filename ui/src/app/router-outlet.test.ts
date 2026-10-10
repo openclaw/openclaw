@@ -4,6 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import "./router-outlet.ts";
 import { registerControlUiReloadGuard } from "./document-reload-guard.ts";
 
@@ -19,11 +20,12 @@ type TestModule = {
   ) => string | undefined;
 };
 type TestRouter = Router<RouteId, TestContext, TestModule, TestData>;
-type RouterOutletElement = LitElement & {
-  router?: TestRouter;
-  retryContext?: TestContext;
-  onNotFound?: () => void;
-};
+type RouterOutletElement = LitElement &
+  ControlUiReadinessOutlet & {
+    router?: TestRouter;
+    retryContext?: TestContext;
+    onNotFound?: () => void;
+  };
 
 function createOutlet(router: TestRouter, context: TestContext): RouterOutletElement {
   const outlet = document.createElement("openclaw-router-outlet") as RouterOutletElement;
@@ -153,7 +155,7 @@ describe("openclaw-router-outlet", () => {
     router.stop();
   });
 
-  it("keeps the current route mounted until nested MCP Apps finish teardown", async () => {
+  it.each(["finish", "disconnect"])("settles a retiring MCP route after %s", async (completion) => {
     const teardown = createDeferredCore();
     const teardownView = vi.fn(() => teardown.promise);
     const context = { label: "loaded" };
@@ -196,6 +198,23 @@ describe("openclaw-router-outlet", () => {
     expect(teardownView).toHaveBeenCalledOnce();
     expect(outlet.querySelector('[data-testid="route-page"]')).not.toBeNull();
     expect(outlet.querySelector('[data-testid="route-next"]')).toBeNull();
+
+    if (completion === "disconnect") {
+      let result: boolean | undefined;
+      const settlement = outlet.settlePresentation().then((value) => {
+        result = value;
+      });
+      outlet.remove();
+      try {
+        await settleOutlet(outlet);
+        expect(result).toBe(false);
+      } finally {
+        teardown.resolve();
+        await settlement;
+        router.stop();
+      }
+      return;
+    }
 
     teardown.resolve(undefined);
     await expect.poll(() => outlet.querySelector('[data-testid="route-next"]')).not.toBeNull();

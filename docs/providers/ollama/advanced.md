@@ -247,8 +247,12 @@ sidebarTitle: "Advanced"
     | Property | Value |
     | --- | --- |
     | Default model | `nomic-embed-text` |
-    | Auto-pull | Yes, if not present locally |
+    | Auto-pull | No; pull the model on the Ollama host first |
     | Embedding concurrency | Provider-owned; no memory-search tuning key is required |
+
+    Before indexing memory, run `ollama pull nomic-embed-text` on the configured
+    Ollama host (or pull the model selected by `memory.search.model`). A missing
+    model returns HTTP 404; OpenClaw does not download it automatically.
 
     Query-time embeddings use retrieval prefixes for models that require or
     recommend them: `nomic-embed-text`, `qwen3-embedding`, and

@@ -13,6 +13,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -180,7 +181,10 @@ export async function waitForInitialWorkerPlacement(params: {
     ...identity,
     storePath: params.turn.sessionTarget?.storePath ?? resolveSessionStorePathForScope(identity),
   };
-  const original = loadSessionEntryReadOnly(target);
+  const binding = captureIncognitoSessionBinding(target);
+  const original = binding
+    ? binding.actor.sessions.readSharing(target.sessionKey)?.entry
+    : loadSessionEntryReadOnly(target);
   const refuseSession = (): never => {
     throw createAbortError("Session changed while waiting for worker setup");
   };

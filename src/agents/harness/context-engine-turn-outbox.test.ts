@@ -7,10 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
-  replaceTranscriptEvents,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as transcriptHydration from "../../config/sessions/session-transcript-hydration.js";
 import type {
   TranscriptTurnAdmission,
