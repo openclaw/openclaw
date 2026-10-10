@@ -518,10 +518,15 @@ export function persistDeviceBootstrapTokenRecords(
     const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
     executeSqliteQuerySync(db, kysely.deleteFrom("device_bootstrap_tokens"));
     if (rows.length > 0) {
-      const storedRows = tableHasColumn(db, "device_bootstrap_tokens", "setup_id")
-        ? rows
-        : rows.map(({ setup_id: _setupId, ...row }) => row);
-      executeSqliteQuerySync(db, kysely.insertInto("device_bootstrap_tokens").values(storedRows));
+      if (tableHasColumn(db, "device_bootstrap_tokens", "setup_id")) {
+        executeSqliteQuerySync(db, kysely.insertInto("device_bootstrap_tokens").values(rows));
+      } else {
+        const rowsWithoutSetup = rows.map(({ setup_id: _setupId, ...row }) => row);
+        executeSqliteQuerySync(
+          db,
+          kysely.insertInto("device_bootstrap_tokens").values(rowsWithoutSetup),
+        );
+      }
     }
   }, resolveDevicePairingStateDbOptions(baseDir));
 }
