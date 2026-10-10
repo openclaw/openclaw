@@ -57,30 +57,26 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-// Keep SQLite's real competing writer, rollback, and commit boundaries. Only
-// native busy waits and retry sleeps use a virtual clock, not seconds of CI time.
+// Keep real SQLite contention, but account for its wait only after the ledger
+// attempt returns SQLITE_BUSY. Unrelated native waits must not release this lock.
 function holdWriter(untilMs: number, onRelease?: () => void) {
   blocker.exec("BEGIN IMMEDIATE");
-  vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-  const advance = (ms: number) => {
-    elapsed += ms;
-    if (blocker.isTransaction && elapsed >= untilMs) {
+  const release = () => {
+    if (blocker.isTransaction) {
       blocker.exec("COMMIT");
       onRelease?.();
     }
   };
-  vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
-    writer.assertSettled();
-    advance(timeout ?? 0);
-    return "timed-out";
-  });
   const attempt = <T>(write: () => T, budget = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS): T => {
     try {
       return write();
     } catch (error) {
       if (isSqliteLockError(error)) {
         writer.assertSettled();
-        advance(Math.min(budget, untilMs - elapsed));
+        elapsed += Math.min(budget, untilMs - elapsed);
+        if (elapsed >= untilMs) {
+          release();
+        }
         if (!blocker.isTransaction) {
           return write();
         }
@@ -102,6 +98,7 @@ function holdWriter(untilMs: number, onRelease?: () => void) {
       );
     },
   );
+  return release;
 }
 
 function driverWriteOptions(handedOff = false) {
@@ -159,7 +156,7 @@ it("records retention after a writer outlasts five seconds without skipping reco
 });
 
 it("skips contended bookkeeping without claiming a committed worker receipt", () => {
-  holdWriter(6_000);
+  const release = holdWriter(Infinity);
   expect(
     recordUpdateRunMutationInWorker(retentionCommand(true, true), options, vi.fn(), writer),
   ).toEqual({
@@ -167,6 +164,7 @@ it("skips contended bookkeeping without claiming a committed worker receipt", ()
   });
   expect(elapsed).toBe(1_000);
   expect(blocker.isTransaction).toBe(true);
+  release();
   expect(
     getUpdateRun(runId, options)?.steps.some((step) => step.step === "updater-runtime-retention"),
   ).toBe(false);
@@ -187,6 +185,7 @@ it("warns and continues synchronous bookkeeping, then records the required outco
   ).toBeUndefined();
   expect(elapsed).toBe(1_000);
   expect(warn).toHaveBeenCalledWith(expect.stringContaining("The update will continue"));
+  expect(blocker.isTransaction).toBe(true);
   expect(finishUpdateRun(runId, { status: "succeeded" }, options).status).toBe("succeeded");
   expect(elapsed).toBeGreaterThanOrEqual(6_000);
   expect(getUpdateRun(runId, options)?.status).toBe("succeeded");
