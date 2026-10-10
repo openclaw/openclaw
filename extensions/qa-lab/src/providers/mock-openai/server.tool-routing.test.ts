@@ -925,3 +925,44 @@ describe("subagent-handoff", () => {
     });
   });
 });
+
+it("runs a QA tool plan in order and names each result's media in the reply", async () => {
+  const tools = ["image_generate", "music_generate"].map((name) => ({
+    type: "function",
+    name,
+    parameters: { type: "object", properties: { prompt: { type: "string" } } },
+  }));
+  const plan = {
+    calls: [
+      { name: "image_generate", args: { prompt: "lighthouse" } },
+      { name: "music_generate", args: { prompt: "melody" } },
+    ],
+    reply: "trusted {{media:0}} plugin {{media:1}}",
+  };
+  const turn = await startTurn(`QA tool plan: ${JSON.stringify(plan)}`, { tools });
+
+  const first = outputToolCall(await turn.request(), "image_generate");
+  expect(callArgs(first)).toEqual({ prompt: "lighthouse" });
+  // Shaped like a Tool Search dispatcher result, which wraps the tool's own result.
+  const imageResult = {
+    tool: { id: "openclaw:image_generate", name: "image_generate" },
+    result: { details: { media: { mediaUrls: ["/state/media/generated/a.png"] } } },
+  };
+  const second = outputToolCall(
+    await turn.complete(first, JSON.stringify(imageResult)),
+    "music_generate",
+  );
+  expect(callArgs(second)).toEqual({ prompt: "melody" });
+  const done = await turn.complete(second, "Generated music at /state/media/generated/b.mp3");
+
+  expect(outputText(done)).toBe(
+    "trusted /state/media/generated/a.png plugin /state/media/generated/b.mp3",
+  );
+});
+
+it("refuses a QA tool plan step the request does not declare", async () => {
+  const plan = { calls: [{ name: "music_generate", args: {} }], reply: "unreachable" };
+  const turn = await startTurn(`QA tool plan: ${JSON.stringify(plan)}`, { tools: [shellExec] });
+
+  expect(outputText(await turn.request())).toBe("BUG-QA-TOOL-PLAN-UNDECLARED music_generate");
+});
