@@ -162,6 +162,10 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "transcript-message-presence", ...input }),
     (value) => value.present,
   ),
+  readInactiveIdentity: reader(
+    (input) => ({ kind: "transcript-inactive-identity", ...input }),
+    (value) => value.inactive,
+  ),
   readAnchors: reader(
     (input) => ({ kind: "transcript-anchors", ...input }),
     (value) => value.facts,
