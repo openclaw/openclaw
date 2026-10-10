@@ -47,28 +47,11 @@ function requiresSource(
   if (input.operation === "claim") {
     return kind === "personal";
   }
-  if (
+  return (
     input.operation === "bindWorkspaceSnapshot" ||
     input.operation === "updatePublishingFacts" ||
     input.operation === "checkpoint"
-  ) {
-    return true;
-  }
-  if (
-    input.operation === "updateHead" ||
-    input.operation === "recordEffect" ||
-    input.operation === "interrupt" ||
-    (input.operation === "complete" && kind !== "shared")
-  ) {
-    return githubPublicationEffectFacts(
-      input,
-      kind === "personal" ||
-        ("row" in input && "owner_profile_id" in input.row && input.row.owner_profile_id !== null)
-        ? "needs_confirmation"
-        : "requested",
-    ).requireAction;
-  }
-  return false;
+  );
 }
 
 function mutate(
@@ -189,7 +172,7 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values, requireAction } = githubPublicationEffectFacts(input, "needs_confirmation");
+      const { values } = githubPublicationEffectFacts(input, "needs_confirmation");
       return [
         personal.writePersonalGitHubPublicationInDatabase(
           database,
@@ -197,7 +180,7 @@ function personalMutation(database: OpenClawStateDatabase, input: PersonalPublic
           input.instanceId,
           input.executionId,
           values,
-          requireAction,
+          false,
           admitted,
         ),
       ];
@@ -236,7 +219,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
     case "complete":
     case "recordEffect":
     case "interrupt": {
-      const { values, requireAction } = githubPublicationEffectFacts(
+      const { values } = githubPublicationEffectFacts(
         input,
         input.row.owner_profile_id === null ? "requested" : "needs_confirmation",
       );
@@ -247,7 +230,7 @@ function repositoryMutation(database: OpenClawStateDatabase, input: RepositoryPu
           input.instanceId,
           input.executionId,
           values,
-          requireAction,
+          false,
           authority,
         ),
       ];

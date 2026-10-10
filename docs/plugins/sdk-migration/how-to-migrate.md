@@ -104,12 +104,14 @@ transaction-local callback visibility. A failed or uncertain worker operation
 never retries through the legacy route or replays an accepted external effect.
 
 Await deferral and reporting before dependent reads or shutdown. Accepted
-bookkeeping, including recording an already-observed GitHub effect, can settle
+bookkeeping, including head updates, dispatch markers, observed effects, and completion, can settle
 after action cancellation while the execution owner retains custody. The worker
 applies its request and execution predicates inside its transaction; it does not
 request another host grant for each bookkeeping commit. This grants no authority
 for another push or pull request. New external effects always require current
 caller and source authority at the point of effect.
+An attempted-dispatch marker can remain when that final guard refuses the action;
+only an observed response records the effect as observed.
 
 Checkpoint-preparation failure and stale-request retirement also record outcomes
 without source reservations. A checkpoint becoming available or a session being

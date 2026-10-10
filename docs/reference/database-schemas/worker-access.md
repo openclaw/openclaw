@@ -252,9 +252,11 @@ destination lifecycle owners retain accepted work; ordinary reply loss does not
 release their custody or authorize replay. These typed requesters and source
 capabilities are the reusable boundary for subsequent publication guard migration.
 
-New external effects require live action authority. Recording an effect already
-observed, or settling an interrupted execution, instead requires custody of that
-exact execution. Cancellation cannot authorize another GitHub action, but it must
+New external effects require live action authority. Head updates, dispatch markers,
+observed effects, completion, and interruption require custody of that exact
+execution, without preparing another source reservation. A dispatch marker may
+remain after the final transport guard refuses an action; it does not prove an
+observed effect. Cancellation cannot authorize another GitHub action, but it must
 not discard evidence of a push or pull request that already happened. Committed
 worker receipts install facts before normal completion and preserve the native
 notification decisions, including no-op transitions.

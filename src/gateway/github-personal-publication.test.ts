@@ -565,8 +565,10 @@ describe("personal publication authority and recovery", () => {
   });
 
   it.each(["socket", "scope", "disconnect", "reconnect", "merge", "session"] as const)(
-    "fences %s changes immediately before push",
+    "fences %s changes immediately before a worker-backed push",
     async (race) => {
+      await persistPublicationTestSession();
+      action = await preparePersonalPublicationFixtureV2({ client, context });
       const fallback = mocks.runCommand.getMockImplementation()!;
       mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
         if (argv.includes("ls-remote")) {
