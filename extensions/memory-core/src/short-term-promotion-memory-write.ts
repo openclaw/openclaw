@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -42,6 +43,38 @@ export class MemoryAtomicPublicationError extends Error {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = cause instanceof Error ? cause.name : "Error";
     this.code = extractErrorCode(cause);
+  }
+}
+
+// Promotion and forget rewrite the whole file from decoded text, so admitting
+// bytes that only decode with replacement would persist U+FFFD over content the
+// write never intended to touch (same rule as the edit/apply_patch tools, see
+// src/agents/utf8-file.ts). Refuse before any write instead.
+export class MemoryFileNotUtf8Error extends Error {
+  constructor(filePath: string) {
+    super(
+      `Memory file is not valid UTF-8 and cannot be rewritten safely: ${filePath}. ` +
+        "The file was left unchanged. Keep a byte-for-byte backup, convert a copy to UTF-8 with its original encoding, then retry.",
+    );
+    this.name = "MemoryFileNotUtf8Error";
+  }
+}
+
+/** Read the current bytes of a memory file, tolerating a missing file. */
+async function readMemoryBytesIfPresent(filePath: string): Promise<Buffer | null> {
+  try {
+    return await fs.readFile(filePath);
+  } catch (error) {
+    if (extractErrorCode(error) === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function assertMemoryFileUtf8(filePath: string, bytes: Buffer | null): void {
+  if (bytes && !isUtf8(bytes)) {
+    throw new MemoryFileNotUtf8Error(filePath);
   }
 }
 
@@ -100,7 +133,9 @@ async function writeExistingMemoryInPlace(params: {
   content: string;
   conflictMessage?: string;
 }): Promise<boolean> {
-  if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
+  const existingBytes = await readMemoryBytesIfPresent(params.filePath);
+  assertMemoryFileUtf8(params.filePath, existingBytes);
+  if ((existingBytes ? existingBytes.toString("utf8") : "") !== params.expectedContent) {
     throw new MemoryWriteConflictError(params.conflictMessage);
   }
   let handle: Awaited<ReturnType<typeof fs.open>>;
@@ -173,6 +208,11 @@ export async function commitMemoryContent(
   const memoryDirMode = (await fs.stat(path.dirname(params.filePath))).mode & 0o7777;
   const expectedHash = params.expectedHash;
   const replacementContent = params.content;
+  // The merged content is derived from decoded text; refuse up front when the
+  // bytes on disk do not decode cleanly so the rewrite cannot persist U+FFFD
+  // over unrelated content. beforeRename repeats the admission to close the
+  // window between this check and the rename.
+  assertMemoryFileUtf8(params.filePath, await readMemoryBytesIfPresent(params.filePath));
   const publication: {
     state: "unattempted" | "unchanged-after-rejection" | "uncertain" | "committed";
   } = { state: "unattempted" };
@@ -188,9 +228,12 @@ export async function commitMemoryContent(
       syncParentDir: true,
       throwOnCleanupError: true,
       beforeRename: async () => {
+        const currentBytes = await readMemoryBytesIfPresent(params.filePath);
+        assertMemoryFileUtf8(params.filePath, currentBytes);
         if (
           params.expectedHash &&
-          hashMemoryContent(await readMemoryContent(params.filePath)) !== params.expectedHash
+          hashMemoryContent(currentBytes ? currentBytes.toString("utf8") : "") !==
+            params.expectedHash
         ) {
           throw new MemoryWriteConflictError(params.conflictMessage);
         }
