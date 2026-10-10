@@ -529,12 +529,9 @@ describe("standing-intent admitted operations", () => {
   it("preserves a queued live caller after an expired hook and a cold database reopen", async () => {
     const existing = await seed();
     const { runner } = await registerHooks();
-    // Hold only agent admission: transcript preparation would reopen a history worker
-    // after drainage and race its async close against the live caller. The callback
-    // still cold-closes any host handle captured before admission.
-    const held = await holdWriter(closeOpenClawAgentDatabasesForTest, () =>
-      closeOpenClawAgentDatabasesAsync(stateDir),
-    );
+    // Drain before either caller captures its capability, then hold only admission.
+    // Closing again at release would revoke the live caller's capability too.
+    const held = await holdWriter(undefined, () => closeOpenClawAgentDatabasesAsync(stateDir));
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const hookWork = keep(
