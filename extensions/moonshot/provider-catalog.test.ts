@@ -1,4 +1,4 @@
-import { calculateCost } from "openclaw/plugin-sdk/llm";
+import { calculateCost, type Model } from "openclaw/plugin-sdk/llm";
 import { useProviderCatalogMetadata } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -27,10 +27,11 @@ describe("moonshot provider catalog", () => {
     if (!entry) {
       throw new Error("expected Kimi K3 catalog model");
     }
-    const model = {
+    const model: Model<"openai-completions"> = {
       ...entry,
+      input: ["text"],
       provider: "moonshot",
-      api: "openai-completions" as const,
+      api: "openai-completions",
       baseUrl: provider.baseUrl,
     };
     const usage = {

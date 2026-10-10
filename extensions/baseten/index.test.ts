@@ -1,8 +1,9 @@
 import { createApiRegistry, createNodeLlmRuntime } from "@openclaw/ai";
-import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   createAssistantMessageEventStream,
   getApiProvider,
+  type Context,
+  type Model,
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
 import {

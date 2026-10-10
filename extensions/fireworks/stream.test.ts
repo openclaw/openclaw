@@ -113,7 +113,7 @@ describe("wrapFireworksProviderStream", () => {
           modelId,
           model: originalModel,
         }) ?? originalModel;
-      let payload: unknown;
+      let serializedPayload = "";
       const wrapped = wrapModel(model, streamSimple) ?? streamSimple;
       const result = await (
         await wrapped(
@@ -126,13 +126,14 @@ describe("wrapFireworksProviderStream", () => {
             ...options,
             apiKey: "synthetic-unused-key",
             onPayload(value) {
-              payload = JSON.parse(JSON.stringify(value));
+              serializedPayload = JSON.stringify(value);
               throw new Error("captured before request");
             },
           },
         )
       ).result();
       expect(result.errorMessage).toBe("captured before request");
+      const payload: unknown = JSON.parse(serializedPayload);
       if (affinity === undefined) {
         expect(payload).not.toHaveProperty("prompt_cache_key");
       } else {

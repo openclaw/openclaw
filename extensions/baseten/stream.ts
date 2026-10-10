@@ -19,6 +19,7 @@ export function createBasetenThinkingWrapper(
     }
     const affinity = options?.promptCacheKey ?? options?.sessionId;
     const cacheRetention = options?.cacheRetention ?? ctx.extraParams?.cacheRetention;
+    let streamOptions = options;
     if (
       affinity &&
       cacheRetention !== "none" &&
@@ -27,7 +28,7 @@ export function createBasetenThinkingWrapper(
         (name) => name.toLowerCase() === "x-session-affinity",
       )
     ) {
-      options = {
+      streamOptions = {
         ...options,
         headers: { ...options?.headers, "x-session-affinity": affinity },
       };
@@ -42,7 +43,7 @@ export function createBasetenThinkingWrapper(
       underlying,
       model,
       context,
-      thinkingLevel === undefined ? options : { ...options, reasoning: thinkingLevel },
+      thinkingLevel === undefined ? streamOptions : { ...streamOptions, reasoning: thinkingLevel },
       (payload) => {
         const normalizedModelId = model.id.trim().toLowerCase();
         if (

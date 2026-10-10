@@ -46,8 +46,10 @@ export function wrapFireworksProviderStream(
     const stream = await underlying(model, context, {
       ...options,
       onResponse(response, responseModel) {
-        const prompt = Number(response.headers["fireworks-prompt-tokens"]?.trim() || NaN);
-        const read = Number(response.headers["fireworks-cached-prompt-tokens"]?.trim() || NaN);
+        const prompt = Number(response.headers["fireworks-prompt-tokens"]?.trim() || Number.NaN);
+        const read = Number(
+          response.headers["fireworks-cached-prompt-tokens"]?.trim() || Number.NaN,
+        );
         cache =
           Number.isSafeInteger(prompt) && Number.isSafeInteger(read) && read >= 0 && read <= prompt
             ? { prompt, read }
