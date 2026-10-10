@@ -50,7 +50,7 @@ const model: SidebarSnapshotModel = {
   brand: { name: "Synthetic workspace", avatar: null, icon: "mark", environment: null },
 };
 
-function fixture() {
+function fixture(selectedAgentId = "main") {
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "connecting",
@@ -91,6 +91,7 @@ function fixture() {
   const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: { gateway },
+    expandedAgentId: () => selectedAgentId,
     captureSidebarSnapshot: capture,
     sidebarSnapshotSettled: () => settled,
     restoreSidebarSnapshot(value) {
@@ -116,6 +117,10 @@ function fixture() {
     host,
     controller,
     restored: restored.promise,
+    selectAgent(agentId: string) {
+      selectedAgentId = agentId;
+      controller.synchronize();
+    },
     settle(value = model) {
       captured = value;
       settled = true;
@@ -228,6 +233,56 @@ describe("sidebar snapshot lifecycle", () => {
     await deleteStoredChatSnapshot(sessionKey);
     expect(test.host.sidebarSnapshot).toBeNull();
     expect(sessions.state.result).toBeNull();
+  });
+
+  it.each(["before", "after"] as const)(
+    "rejects another agent's chip snapshot when selection changes %s restoration",
+    async (timing) => {
+      const store = new SessionSnapshotStore();
+      store.connect();
+      disposers.push(() => store.disconnect());
+      const chip: SidebarSnapshotModel = {
+        ...model,
+        mode: "chip",
+        brand: { ...model.brand, agentId: "main" },
+        roster: bootRosterSchema.parse({
+          agentId: "main",
+          result: sessionsResult([{ key: "agent:main:cedar", kind: "direct" }], 1),
+          groups: [],
+          groupSettings: [],
+          sectionOrder: [],
+        }),
+      };
+      await store.writeSidebar(sidebarSnapshotScopeKey(scope), chip, parseSidebarSnapshot);
+      const test = fixture(timing === "before" ? "other" : "main");
+      disposers.push(
+        admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
+        () => test.controller.disconnect(),
+      );
+      test.controller.connect();
+      if (timing === "before") {
+        await new Promise<void>((resolve) => {
+          const stop = test.controller.subscribe(() => {
+            if (!test.controller.pending) {
+              stop();
+              resolve();
+            }
+          });
+        });
+      } else {
+        await test.restored;
+        expect(test.host.sidebarSnapshot).toEqual(chip);
+        test.selectAgent("other");
+      }
+      expect(test.host.sidebarSnapshot).toBeNull();
+      expect(test.controller.saved).toBe(false);
+    },
+  );
+
+  it("keeps the multi-agent roster snapshot across agent selection", async () => {
+    const test = await warmFixture();
+    test.selectAgent("other");
+    expect(test.host.sidebarSnapshot).toEqual(model);
   });
 
   it("releases a stalled boot read when the live sidebar settles", async () => {

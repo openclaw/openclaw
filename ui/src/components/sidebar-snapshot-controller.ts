@@ -16,6 +16,7 @@ import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snaps
 type SidebarSnapshotHost = {
   sidebarSnapshot: SidebarSnapshotModel | null;
   readonly sessionDataContext?: { gateway: ApplicationGateway };
+  expandedAgentId(): string;
   captureSidebarSnapshot(): SidebarSnapshotModel | null;
   sidebarSnapshotSettled(): boolean;
   restoreSidebarSnapshot(model: SidebarSnapshotModel): void;
@@ -96,7 +97,7 @@ export class SidebarSnapshotController {
               return;
             }
             this.pending = false;
-            if (model && !this.host.sidebarSnapshotSettled()) {
+            if (model && this.matchesAgent(model) && !this.host.sidebarSnapshotSettled()) {
               this.host.restoreSidebarSnapshot(model);
               this.serialized = JSON.stringify(model);
               this.saved = true;
@@ -119,6 +120,9 @@ export class SidebarSnapshotController {
       this.replaceScope(null);
     }
     const snapshot = gateway.snapshot;
+    if (this.host.sidebarSnapshot && !this.matchesAgent(this.host.sidebarSnapshot)) {
+      this.clearDisplay();
+    }
     if (this.pending && this.host.sidebarSnapshotSettled()) {
       this.generation += 1;
       this.pending = false;
@@ -190,6 +194,10 @@ export class SidebarSnapshotController {
     this.gateway = undefined;
     this.scope = null;
     this.clearDisplay();
+  }
+
+  private matchesAgent(model: SidebarSnapshotModel): boolean {
+    return model.mode !== "chip" || model.roster?.agentId === this.host.expandedAgentId();
   }
 
   private captureScope(): () => boolean {
