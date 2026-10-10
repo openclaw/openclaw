@@ -184,6 +184,8 @@ To keep the provider dynamic without listing every model, add a wildcard to the 
 
     Provider-native values are case-sensitive. Use `compat.reasoningEffortMap`, such as `{ low: "LOW", high: "HIGH" }`, to map logical choices to a declared native list such as `["LOW", "HIGH"]`. Unmapped native labels are not advertised as effort choices. Missing, empty, or unusable lists keep binary thinking, as does `compat.supportsReasoningEffort: false`.
 
+    The plugin prepares these mappings as model capabilities before session setup, so advanced choices such as `xhigh` and `max` also survive session-level clamping when their native wire labels differ.
+
     The default remains `off`, including after upgrading an existing configured model. An explicit enabled level now sends its declared effort instead of silently using the template's default. Ordinary binary Qwen models keep their existing request shape. Per-model `params.extra_body` remains the final request-body override.
 
   </Accordion>

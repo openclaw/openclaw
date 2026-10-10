@@ -1,6 +1,9 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { resolveOpenAIRequestReasoning, type Model } from "openclaw/plugin-sdk/llm";
-import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  ProviderNormalizeResolvedModelContext,
+  ProviderWrapStreamFnContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
 import {
   composeProviderStreamWrappers,
@@ -22,6 +25,36 @@ function isCompletionsModel(model: Model): model is Model<"openai-completions"> 
 
 function isVllmDeepSeekV4Model(modelId: string): boolean {
   return /deepseek[-_]?v4(?:[-_](?:pro|flash))?\b/i.test(modelId);
+}
+
+export function normalizeVllmResolvedModel({
+  model,
+}: ProviderNormalizeResolvedModelContext):
+  | ProviderNormalizeResolvedModelContext["model"]
+  | undefined {
+  if (
+    model.api !== "openai-completions" ||
+    model.reasoning === false ||
+    !resolveVllmQwenThinkingFormatFromCompat(model.compat)
+  ) {
+    return undefined;
+  }
+  const profile = resolveVllmEffortProfile(model);
+  if (!profile) {
+    return undefined;
+  }
+  // Session setup clamps before stream wrappers run; prepare the same declared choices there.
+  const thinkingLevelMap = { ...model.thinkingLevelMap };
+  for (const { id } of profile.levels) {
+    if (id === "off" || id === "adaptive" || id === "ultra") {
+      continue;
+    }
+    const { effort } = resolveOpenAIRequestReasoning(model, id);
+    if (effort !== undefined) {
+      thinkingLevelMap[id] = effort;
+    }
+  }
+  return { ...model, thinkingLevelMap };
 }
 
 function setChatTemplateDefaults(
