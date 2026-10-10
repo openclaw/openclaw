@@ -167,6 +167,26 @@ describe("chat selection popup", () => {
     expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
   });
 
+  it.each([
+    ["touch", "same", false],
+    ["touch", "moved", true],
+    ["mouse", "same", true],
+  ])("after a %s tap outside, a %s selection keeps the popup: %s", (pointerType, range, kept) => {
+    vi.useFakeTimers();
+    const { thread, textNode } = buildThreadWithBubble("tap outside to clear");
+    selectRange(textNode, 0, 3);
+    pointerUp(thread);
+    const tap = Object.assign(new Event("pointerdown", { bubbles: true }), { pointerType });
+    thread.dispatchEvent(tap);
+    expect(document.body.querySelector(".chat-selection-popup")).toBeNull();
+    if (range === "moved") {
+      selectRange(textNode, 0, 10);
+    }
+    pointerUp(thread);
+    expect(document.body.querySelector(".chat-selection-popup") !== null).toBe(kept);
+    expect(window.getSelection()?.isCollapsed).toBe(!kept);
+  });
+
   it.each(["pending", "mounted"])("keeps a %s selection when another pane retires", (phase) => {
     vi.useFakeTimers();
     const { thread, textNode } = buildThreadWithBubble("Keep this selection");
