@@ -412,7 +412,10 @@ export class SqliteReclamationWorker {
           validationOwner: params.validationOwner,
           readOpeningValidation: params.readOpeningValidation,
           dispatch: () =>
-            worker.postMessage(params.request(operationId, coordination), [...params.transferList]),
+            worker.postMessage(params.request(operationId, coordination), [
+              ...params.transferList,
+              ...(coordination.databaseAdmission ? [coordination.databaseAdmission] : []),
+            ]),
         }).then(
           (value) => ({ value }),
           (error: unknown) => {
@@ -422,6 +425,7 @@ export class SqliteReclamationWorker {
             throw error;
           },
         ),
+      params.assertCurrent,
     )
       .catch((error: unknown) => {
         this.failure ??= toStringifiedError(error);

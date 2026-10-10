@@ -20,6 +20,7 @@ export default defineConfig({
     testTimeout: 120_000,
     include: [
       "src/**/*.node.test.ts",
+      "src/**/*.node.test.tsx",
       "src/pages/chat/chat-responsive.browser.test.ts",
       "src/pages/chat/chat-footer-layout.browser.test.ts",
     ],

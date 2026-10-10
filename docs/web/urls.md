@@ -271,7 +271,9 @@ and you are its creator or a Gateway admin. See
 Public access is separate from teammate visibility and editing permissions.
 The public reader does not open a Gateway WebSocket, subscribe to the session
 roster, send messages, invoke tools, or open private dashboards. It shows user
-messages and assistant final answers with Markdown formatting. Tool output,
+messages and assistant final answers with Markdown formatting in the Control UI's
+chat layout and typeface, offers a copy control on code blocks, and closes with a
+short OpenClaw introduction for readers who are new to it. Tool output,
 reasoning, files, images, executable widgets, internal metadata, and hidden
 messages are omitted. Credential-pattern redaction is best effort, not a
 guarantee that sensitive prose is detected. Review the conversation before

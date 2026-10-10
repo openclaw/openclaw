@@ -118,6 +118,7 @@ import type {
 import { isReadRequest } from "./openclaw-state-read.validation.js";
 import { encodeOpenClawStateWorkerError } from "./openclaw-state-worker-error.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
+import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
@@ -517,6 +518,12 @@ serveOwnedWorkerTasks(
               command.type === "userProfiles.email.resolve"
             ) {
               return readUserProfileCommand(db, command);
+            }
+            if (
+              command.type === "userBackground.snapshot" ||
+              command.type === "userBackground.image"
+            ) {
+              return readUserBackgroundCommand(db, command);
             }
             if (command.type === "userPreferences.values") {
               return {

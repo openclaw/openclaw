@@ -127,6 +127,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   // text per item id is buffered (snapshot producers re-emit the same item)
   // and flushed when the producer moves on, always before the final reply.
   let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
+  const flushedCommentaryItems = new Set<string>();
   const deliverCommentaryProgressMessage = async (text: string) => {
     if (!(await shouldSendToolSummariesAsync()) || (await shouldSuppressProgressDelivery())) {
       return;
@@ -153,10 +154,16 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     if (!text) {
       return;
     }
+    if (pending?.itemId) {
+      flushedCommentaryItems.add(pending.itemId);
+    }
     await deliverCommentaryProgressMessage(text);
   };
   const noteCommentaryProgress = async (payload: { itemId?: string; progressText?: string }) => {
     const itemId = payload.itemId?.trim() || undefined;
+    if (finalReplyDeliveryStarted || (itemId && flushedCommentaryItems.has(itemId))) {
+      return;
+    }
     const text = payload.progressText ?? "";
     const updatesBufferedItem =
       pendingCommentaryProgress !== null &&
