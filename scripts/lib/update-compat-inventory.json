@@ -1085,19 +1085,11 @@
               "importer": "runtime-cleanup-scope-YCx8MSBm.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -1610,27 +1602,11 @@
               "importer": "runtime-cleanup-scope-DLKeuYeM.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -2269,27 +2245,11 @@
               "importer": "runtime-cleanup-scope-DzERrPTV.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -2686,184 +2646,16 @@
               "importer": "status-DQvnowTZ.mjs",
               "owner": "src/cli/update-cli/status.ts",
               "exports": [
-                "GatewayCredentialsRequiredError",
-                "GatewayExplicitAuthRequiredError",
-                "GatewayLocalBackendSharedAuthUnavailableError",
-                "GatewayStoredDeviceAuthUnavailableError",
-                "GatewayTransportError",
-                "buildGatewayConnectionDetails",
-                "buildGatewayProbeConnectionDetails",
-                "callGateway",
-                "callGatewayCli",
-                "callGatewayLeastPrivilege",
-                "ensureExplicitGatewayAuth",
-                "formatGatewayAuthErrorJson",
-                "formatGatewayClientRequestErrorJson",
-                "formatGatewayTransportErrorJson",
-                "isGatewayClientRequestError",
-                "isGatewayCredentialsRequiredError",
-                "isGatewayExplicitAuthRequiredError",
-                "isGatewayTransportError",
-                "isImplicitLocalGatewayTarget",
-                "randomIdempotencyKey",
-                "resolveExplicitGatewayAuth",
-                "resolveGatewayCredentialsWithSecretInputs"
+                "callGateway"
               ]
             }
           ],
           "exports": [
             {
-              "exported": "buildGatewayConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayConnectionDetails"
-              }
-            },
-            {
-              "exported": "buildGatewayProbeConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayProbeConnectionDetails"
-              }
-            },
-            {
               "exported": "callGateway",
               "origin": {
                 "module": "src/gateway/call.ts",
                 "symbol": "callGateway"
-              }
-            },
-            {
-              "exported": "callGatewayCli",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayCli"
-              }
-            },
-            {
-              "exported": "callGatewayLeastPrivilege",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayLeastPrivilege"
-              }
-            },
-            {
-              "exported": "ensureExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "ensureExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "formatGatewayAuthErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayAuthErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayClientRequestErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayClientRequestErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayTransportErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayTransportErrorJson"
-              }
-            },
-            {
-              "exported": "GatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "GatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "GatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayStoredDeviceAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "GatewayStoredDeviceAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "GatewayTransportError"
-              }
-            },
-            {
-              "exported": "isGatewayClientRequestError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayClientRequestError"
-              }
-            },
-            {
-              "exported": "isGatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "isGatewayTransportError"
-              }
-            },
-            {
-              "exported": "isImplicitLocalGatewayTarget",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isImplicitLocalGatewayTarget"
-              }
-            },
-            {
-              "exported": "randomIdempotencyKey",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "randomIdempotencyKey"
-              }
-            },
-            {
-              "exported": "resolveExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/credentials.ts",
-                "symbol": "resolveExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "resolveGatewayCredentialsWithSecretInputs",
-              "origin": {
-                "module": "src/gateway/credentials-secret-inputs.ts",
-                "symbol": "resolveGatewayCredentialsWithSecretInputs"
               }
             }
           ]
@@ -3310,27 +3102,11 @@
               "importer": "runtime-cleanup-scope-C0g6_AIJ.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -3891,46 +3667,11 @@
               "importer": "status-BAxTLg5b.mjs",
               "owner": "src/cli/update-cli/status.ts",
               "exports": [
-                "GatewayCredentialsRequiredError",
-                "GatewayExplicitAuthRequiredError",
-                "GatewayLocalBackendSharedAuthUnavailableError",
-                "GatewayStoredDeviceAuthUnavailableError",
-                "GatewayTransportError",
-                "buildGatewayConnectionDetails",
-                "buildGatewayProbeConnectionDetails",
-                "callGateway",
-                "callGatewayCli",
-                "callGatewayLeastPrivilege",
-                "ensureExplicitGatewayAuth",
-                "formatGatewayAuthErrorJson",
-                "formatGatewayClientRequestErrorJson",
-                "formatGatewayTransportErrorJson",
-                "isGatewayClientRequestError",
-                "isGatewayCredentialsRequiredError",
-                "isGatewayExplicitAuthRequiredError",
-                "isGatewayTransportError",
-                "isImplicitLocalGatewayTarget",
-                "randomIdempotencyKey",
-                "resolveExplicitGatewayAuth",
-                "resolveGatewayCredentialsWithSecretInputs"
+                "callGateway"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "buildGatewayConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayConnectionDetails"
-              }
-            },
-            {
-              "exported": "buildGatewayProbeConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayProbeConnectionDetails"
-              }
-            },
             {
               "exported": "callGateway",
               "origin": {
@@ -3943,132 +3684,6 @@
               "origin": {
                 "module": "src/gateway/call.ts",
                 "symbol": "callGatewayCli"
-              }
-            },
-            {
-              "exported": "callGatewayLeastPrivilege",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayLeastPrivilege"
-              }
-            },
-            {
-              "exported": "ensureExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "ensureExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "formatGatewayAuthErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayAuthErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayClientRequestErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayClientRequestErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayTransportErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayTransportErrorJson"
-              }
-            },
-            {
-              "exported": "GatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "GatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayStoredDeviceAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayStoredDeviceAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "GatewayTransportError"
-              }
-            },
-            {
-              "exported": "isGatewayClientRequestError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayClientRequestError"
-              }
-            },
-            {
-              "exported": "isGatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "isGatewayTransportError"
-              }
-            },
-            {
-              "exported": "isImplicitLocalGatewayTarget",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isImplicitLocalGatewayTarget"
-              }
-            },
-            {
-              "exported": "randomIdempotencyKey",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "randomIdempotencyKey"
-              }
-            },
-            {
-              "exported": "resolveExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/credentials.ts",
-                "symbol": "resolveExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "resolveGatewayCredentialsWithSecretInputs",
-              "origin": {
-                "module": "src/gateway/credentials-secret-inputs.ts",
-                "symbol": "resolveGatewayCredentialsWithSecretInputs"
               }
             }
           ]
@@ -4536,27 +4151,11 @@
               "importer": "runtime-cleanup-scope-Bcfqw4Hq.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -5175,46 +4774,11 @@
               "importer": "status-CuiKa5-6.mjs",
               "owner": "src/cli/update-cli/status.ts",
               "exports": [
-                "GatewayCredentialsRequiredError",
-                "GatewayExplicitAuthRequiredError",
-                "GatewayLocalBackendSharedAuthUnavailableError",
-                "GatewayStoredDeviceAuthUnavailableError",
-                "GatewayTransportError",
-                "buildGatewayConnectionDetails",
-                "buildGatewayProbeConnectionDetails",
-                "callGateway",
-                "callGatewayCli",
-                "callGatewayLeastPrivilege",
-                "ensureExplicitGatewayAuth",
-                "formatGatewayAuthErrorJson",
-                "formatGatewayClientRequestErrorJson",
-                "formatGatewayTransportErrorJson",
-                "isGatewayClientRequestError",
-                "isGatewayCredentialsRequiredError",
-                "isGatewayExplicitAuthRequiredError",
-                "isGatewayTransportError",
-                "isImplicitLocalGatewayTarget",
-                "randomIdempotencyKey",
-                "resolveExplicitGatewayAuth",
-                "resolveGatewayCredentialsWithSecretInputs"
+                "callGateway"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "buildGatewayConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayConnectionDetails"
-              }
-            },
-            {
-              "exported": "buildGatewayProbeConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayProbeConnectionDetails"
-              }
-            },
             {
               "exported": "callGateway",
               "origin": {
@@ -5227,132 +4791,6 @@
               "origin": {
                 "module": "src/gateway/call.ts",
                 "symbol": "callGatewayCli"
-              }
-            },
-            {
-              "exported": "callGatewayLeastPrivilege",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayLeastPrivilege"
-              }
-            },
-            {
-              "exported": "ensureExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "ensureExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "formatGatewayAuthErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayAuthErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayClientRequestErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayClientRequestErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayTransportErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayTransportErrorJson"
-              }
-            },
-            {
-              "exported": "GatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "GatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayStoredDeviceAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayStoredDeviceAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "GatewayTransportError"
-              }
-            },
-            {
-              "exported": "isGatewayClientRequestError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayClientRequestError"
-              }
-            },
-            {
-              "exported": "isGatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "isGatewayTransportError"
-              }
-            },
-            {
-              "exported": "isImplicitLocalGatewayTarget",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isImplicitLocalGatewayTarget"
-              }
-            },
-            {
-              "exported": "randomIdempotencyKey",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "randomIdempotencyKey"
-              }
-            },
-            {
-              "exported": "resolveExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/credentials.ts",
-                "symbol": "resolveExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "resolveGatewayCredentialsWithSecretInputs",
-              "origin": {
-                "module": "src/gateway/credentials-secret-inputs.ts",
-                "symbol": "resolveGatewayCredentialsWithSecretInputs"
               }
             }
           ]
@@ -5820,27 +5258,11 @@
               "importer": "runtime-cleanup-scope-Bcfqw4Hq.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -6459,46 +5881,11 @@
               "importer": "status-B2SgZaJV.mjs",
               "owner": "src/cli/update-cli/status.ts",
               "exports": [
-                "GatewayCredentialsRequiredError",
-                "GatewayExplicitAuthRequiredError",
-                "GatewayLocalBackendSharedAuthUnavailableError",
-                "GatewayStoredDeviceAuthUnavailableError",
-                "GatewayTransportError",
-                "buildGatewayConnectionDetails",
-                "buildGatewayProbeConnectionDetails",
-                "callGateway",
-                "callGatewayCli",
-                "callGatewayLeastPrivilege",
-                "ensureExplicitGatewayAuth",
-                "formatGatewayAuthErrorJson",
-                "formatGatewayClientRequestErrorJson",
-                "formatGatewayTransportErrorJson",
-                "isGatewayClientRequestError",
-                "isGatewayCredentialsRequiredError",
-                "isGatewayExplicitAuthRequiredError",
-                "isGatewayTransportError",
-                "isImplicitLocalGatewayTarget",
-                "randomIdempotencyKey",
-                "resolveExplicitGatewayAuth",
-                "resolveGatewayCredentialsWithSecretInputs"
+                "callGateway"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "buildGatewayConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayConnectionDetails"
-              }
-            },
-            {
-              "exported": "buildGatewayProbeConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayProbeConnectionDetails"
-              }
-            },
             {
               "exported": "callGateway",
               "origin": {
@@ -6511,132 +5898,6 @@
               "origin": {
                 "module": "src/gateway/call.ts",
                 "symbol": "callGatewayCli"
-              }
-            },
-            {
-              "exported": "callGatewayLeastPrivilege",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayLeastPrivilege"
-              }
-            },
-            {
-              "exported": "ensureExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "ensureExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "formatGatewayAuthErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayAuthErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayClientRequestErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayClientRequestErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayTransportErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayTransportErrorJson"
-              }
-            },
-            {
-              "exported": "GatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "GatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayStoredDeviceAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayStoredDeviceAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "GatewayTransportError"
-              }
-            },
-            {
-              "exported": "isGatewayClientRequestError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayClientRequestError"
-              }
-            },
-            {
-              "exported": "isGatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "isGatewayTransportError"
-              }
-            },
-            {
-              "exported": "isImplicitLocalGatewayTarget",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isImplicitLocalGatewayTarget"
-              }
-            },
-            {
-              "exported": "randomIdempotencyKey",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "randomIdempotencyKey"
-              }
-            },
-            {
-              "exported": "resolveExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/credentials.ts",
-                "symbol": "resolveExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "resolveGatewayCredentialsWithSecretInputs",
-              "origin": {
-                "module": "src/gateway/credentials-secret-inputs.ts",
-                "symbol": "resolveGatewayCredentialsWithSecretInputs"
               }
             }
           ]
@@ -7146,27 +6407,11 @@
               "importer": "runtime-cleanup-scope-4M9XlIkT.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -7821,46 +7066,11 @@
               "importer": "status-D0uTN1Wq.mjs",
               "owner": "src/cli/update-cli/status.ts",
               "exports": [
-                "GatewayCredentialsRequiredError",
-                "GatewayExplicitAuthRequiredError",
-                "GatewayLocalBackendSharedAuthUnavailableError",
-                "GatewayStoredDeviceAuthUnavailableError",
-                "GatewayTransportError",
-                "buildGatewayConnectionDetails",
-                "buildGatewayProbeConnectionDetails",
-                "callGateway",
-                "callGatewayCli",
-                "callGatewayLeastPrivilege",
-                "ensureExplicitGatewayAuth",
-                "formatGatewayAuthErrorJson",
-                "formatGatewayClientRequestErrorJson",
-                "formatGatewayTransportErrorJson",
-                "isGatewayClientRequestError",
-                "isGatewayCredentialsRequiredError",
-                "isGatewayExplicitAuthRequiredError",
-                "isGatewayTransportError",
-                "isImplicitLocalGatewayTarget",
-                "randomIdempotencyKey",
-                "resolveExplicitGatewayAuth",
-                "resolveGatewayCredentialsWithSecretInputs"
+                "callGateway"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "buildGatewayConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayConnectionDetails"
-              }
-            },
-            {
-              "exported": "buildGatewayProbeConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayProbeConnectionDetails"
-              }
-            },
             {
               "exported": "callGateway",
               "origin": {
@@ -7873,132 +7083,6 @@
               "origin": {
                 "module": "src/gateway/call.ts",
                 "symbol": "callGatewayCli"
-              }
-            },
-            {
-              "exported": "callGatewayLeastPrivilege",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayLeastPrivilege"
-              }
-            },
-            {
-              "exported": "ensureExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "ensureExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "formatGatewayAuthErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayAuthErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayClientRequestErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayClientRequestErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayTransportErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayTransportErrorJson"
-              }
-            },
-            {
-              "exported": "GatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "GatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayStoredDeviceAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayStoredDeviceAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "GatewayTransportError"
-              }
-            },
-            {
-              "exported": "isGatewayClientRequestError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayClientRequestError"
-              }
-            },
-            {
-              "exported": "isGatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "isGatewayTransportError"
-              }
-            },
-            {
-              "exported": "isImplicitLocalGatewayTarget",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isImplicitLocalGatewayTarget"
-              }
-            },
-            {
-              "exported": "randomIdempotencyKey",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "randomIdempotencyKey"
-              }
-            },
-            {
-              "exported": "resolveExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/credentials.ts",
-                "symbol": "resolveExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "resolveGatewayCredentialsWithSecretInputs",
-              "origin": {
-                "module": "src/gateway/credentials-secret-inputs.ts",
-                "symbol": "resolveGatewayCredentialsWithSecretInputs"
               }
             }
           ]
@@ -8494,27 +7578,11 @@
               "importer": "runtime-cleanup-scope-BBQoKht1.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -8531,19 +7599,11 @@
               "importer": "systemd-service-files-DXiqnu12.mjs",
               "owner": "src/daemon/systemd-service-files.ts",
               "exports": [
-                "withGatewayServiceOperationLock",
                 "withSystemdServiceReadBinding"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "withGatewayServiceOperationLock",
-              "origin": {
-                "module": "src/daemon/service-operation-lock.ts",
-                "symbol": "withGatewayServiceOperationLock"
-              }
-            },
             {
               "exported": "withSystemdServiceReadBinding",
               "origin": {
@@ -9368,46 +8428,11 @@
               "importer": "status-cVZu3w53.mjs",
               "owner": "src/cli/update-cli/status.ts",
               "exports": [
-                "GatewayCredentialsRequiredError",
-                "GatewayExplicitAuthRequiredError",
-                "GatewayLocalBackendSharedAuthUnavailableError",
-                "GatewayStoredDeviceAuthUnavailableError",
-                "GatewayTransportError",
-                "buildGatewayConnectionDetails",
-                "buildGatewayProbeConnectionDetails",
-                "callGateway",
-                "callGatewayCli",
-                "callGatewayLeastPrivilege",
-                "ensureExplicitGatewayAuth",
-                "formatGatewayAuthErrorJson",
-                "formatGatewayClientRequestErrorJson",
-                "formatGatewayTransportErrorJson",
-                "isGatewayClientRequestError",
-                "isGatewayCredentialsRequiredError",
-                "isGatewayExplicitAuthRequiredError",
-                "isGatewayTransportError",
-                "isImplicitLocalGatewayTarget",
-                "randomIdempotencyKey",
-                "resolveExplicitGatewayAuth",
-                "resolveGatewayCredentialsWithSecretInputs"
+                "callGateway"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "buildGatewayConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayConnectionDetails"
-              }
-            },
-            {
-              "exported": "buildGatewayProbeConnectionDetails",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "buildGatewayProbeConnectionDetails"
-              }
-            },
             {
               "exported": "callGateway",
               "origin": {
@@ -9420,132 +8445,6 @@
               "origin": {
                 "module": "src/gateway/call.ts",
                 "symbol": "callGatewayCli"
-              }
-            },
-            {
-              "exported": "callGatewayLeastPrivilege",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "callGatewayLeastPrivilege"
-              }
-            },
-            {
-              "exported": "ensureExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "ensureExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "formatGatewayAuthErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayAuthErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayClientRequestErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayClientRequestErrorJson"
-              }
-            },
-            {
-              "exported": "formatGatewayTransportErrorJson",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "formatGatewayTransportErrorJson"
-              }
-            },
-            {
-              "exported": "GatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/client-bootstrap.ts",
-                "symbol": "GatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "GatewayLocalBackendSharedAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayLocalBackendSharedAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayStoredDeviceAuthUnavailableError",
-              "origin": {
-                "module": "src/gateway/call-device-auth.ts",
-                "symbol": "GatewayStoredDeviceAuthUnavailableError"
-              }
-            },
-            {
-              "exported": "GatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "GatewayTransportError"
-              }
-            },
-            {
-              "exported": "isGatewayClientRequestError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayClientRequestError"
-              }
-            },
-            {
-              "exported": "isGatewayCredentialsRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayCredentialsRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayExplicitAuthRequiredError",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isGatewayExplicitAuthRequiredError"
-              }
-            },
-            {
-              "exported": "isGatewayTransportError",
-              "origin": {
-                "module": "src/gateway/transport-error.ts",
-                "symbol": "isGatewayTransportError"
-              }
-            },
-            {
-              "exported": "isImplicitLocalGatewayTarget",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "isImplicitLocalGatewayTarget"
-              }
-            },
-            {
-              "exported": "randomIdempotencyKey",
-              "origin": {
-                "module": "src/gateway/call.ts",
-                "symbol": "randomIdempotencyKey"
-              }
-            },
-            {
-              "exported": "resolveExplicitGatewayAuth",
-              "origin": {
-                "module": "src/gateway/credentials.ts",
-                "symbol": "resolveExplicitGatewayAuth"
-              }
-            },
-            {
-              "exported": "resolveGatewayCredentialsWithSecretInputs",
-              "origin": {
-                "module": "src/gateway/credentials-secret-inputs.ts",
-                "symbol": "resolveGatewayCredentialsWithSecretInputs"
               }
             }
           ]
@@ -10070,27 +8969,11 @@
               "importer": "runtime-cleanup-scope-Ck-m89lN.mjs",
               "owner": "src/cli/runtime-cleanup-scope.ts",
               "exports": [
-                "bindWindowsProcessJobToOwner",
-                "createWindowsJobBindings",
                 "retainWindowsProcessJobUntilExit"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "bindWindowsProcessJobToOwner",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "bindWindowsProcessJobToOwner"
-              }
-            },
-            {
-              "exported": "createWindowsJobBindings",
-              "origin": {
-                "module": "src/process/supervisor/service-child-windows-job-native.ts",
-                "symbol": "createWindowsJobBindings"
-              }
-            },
             {
               "exported": "retainWindowsProcessJobUntilExit",
               "origin": {
@@ -10107,19 +8990,11 @@
               "importer": "systemd-service-files-CG6jQkqA.mjs",
               "owner": "src/daemon/systemd-service-files.ts",
               "exports": [
-                "withGatewayServiceOperationLock",
                 "withSystemdServiceReadBinding"
               ]
             }
           ],
           "exports": [
-            {
-              "exported": "withGatewayServiceOperationLock",
-              "origin": {
-                "module": "src/daemon/service-operation-lock.ts",
-                "symbol": "withGatewayServiceOperationLock"
-              }
-            },
             {
               "exported": "withSystemdServiceReadBinding",
               "origin": {
