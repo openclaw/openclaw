@@ -65,7 +65,9 @@ export class SidebarSnapshotController implements ReactiveController {
   }
 
   hostUpdate(): void {
-    if (!this.cleanup.length) return;
+    if (!this.cleanup.length) {
+      return;
+    }
     const gateway = this.host.sessionDataContext?.gateway;
     if (gateway !== this.gateway) {
       this.stopGateway?.();
@@ -83,7 +85,9 @@ export class SidebarSnapshotController implements ReactiveController {
             .readSidebar(sidebarSnapshotScopeKey(boot.scope), parseSidebarSnapshot)
             .then((model) => {
               this.hostUpdate();
-              if (!current()) return;
+              if (!current()) {
+                return;
+              }
               this.pending = false;
               if (model && !this.host.sidebarSnapshotSettled()) {
                 this.host.restoreSidebarSnapshot(model);
@@ -99,7 +103,9 @@ export class SidebarSnapshotController implements ReactiveController {
         });
       }
     }
-    if (!gateway) return;
+    if (!gateway) {
+      return;
+    }
     if (gateway.connectionRevision !== this.revision) {
       this.revision = gateway.connectionRevision;
       this.retiredHello = undefined;
@@ -107,7 +113,9 @@ export class SidebarSnapshotController implements ReactiveController {
     }
     const snapshot = gateway.snapshot;
     if (snapshot.client?.offlineRecoveryRetired || snapshot.hello === this.retiredHello) {
-      if (this.scope) this.replaceScope(null);
+      if (this.scope) {
+        this.replaceScope(null);
+      }
     } else if (snapshot.phase === "connected") {
       const recoveryScope = snapshot.hello?.auth?.recoveryScope;
       const next = recoveryScope
@@ -117,13 +125,21 @@ export class SidebarSnapshotController implements ReactiveController {
             profileId: snapshot.selfUser?.id ?? null,
           }
         : null;
-      if (JSON.stringify(next) !== JSON.stringify(this.scope)) this.replaceScope(next);
+      if (JSON.stringify(next) !== JSON.stringify(this.scope)) {
+        this.replaceScope(next);
+      }
     }
   }
 
   hostUpdated(): void {
-    if (!this.cleanup.length || this.pending || !this.scope || !this.host.sidebarSnapshotSettled())
+    if (
+      !this.cleanup.length ||
+      this.pending ||
+      !this.scope ||
+      !this.host.sidebarSnapshotSettled()
+    ) {
       return;
+    }
     if (this.host.sidebarSnapshot) {
       // Capture only after the live renderer has replaced the saved projection.
       this.host.releaseSidebarSnapshot();
@@ -133,7 +149,9 @@ export class SidebarSnapshotController implements ReactiveController {
       return;
     }
     const model = this.host.captureSidebarSnapshot();
-    if (!model) return;
+    if (!model) {
+      return;
+    }
     const serialized = JSON.stringify(model);
     if (serialized === this.serialized) {
       return;
@@ -143,7 +161,9 @@ export class SidebarSnapshotController implements ReactiveController {
     const current = this.captureScope();
     const key = sidebarSnapshotScopeKey(this.scope);
     void this.retirement.then(async () => {
-      if (!current()) return;
+      if (!current()) {
+        return;
+      }
       const written = await this.store.writeSidebar(key, model, parseSidebarSnapshot);
       if (written && current() && serialized === this.serialized) {
         this.saved = true;

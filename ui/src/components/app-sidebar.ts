@@ -86,8 +86,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.sidebarSnapshot = model;
     this.sessionOrganizer.collapsedSessionSections = new Set(model.collapsedSections);
     const rows = [...model.sessions, ...model.sections.flatMap((section) => section.rows)];
-    for (let index = 0; index < rows.length; index += 1) {
-      rows.push(...rows[index]!.children);
+    for (const row of rows) {
+      rows.push(...row.children);
     }
     this.sessionProjection.restoreChildrenDisplay(rows);
     this.people.sortMode = model.peopleSortMode;
@@ -133,7 +133,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     if (this.sidebarAgentsMode === "roster") {
       const roster = rosterActivityStore(context).snapshot;
       return (
-        !!this.rosterRenderer &&
+        Boolean(this.rosterRenderer) &&
         (roster.membershipReady || roster.error !== null) &&
         !roster.loading &&
         roster.involvingMe === this.sidebarSessionOwnerFilter().involvingMe
@@ -141,8 +141,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     }
     return (
       !this.sessionData.sessionsLoading &&
-      (!!(this.sessionData.sessionMutationError ?? context.sessions.state.error) ||
-        (!!this.sessionData.sessionsResult && !context.sessions.presentation.resultCached))
+      (Boolean(this.sessionData.sessionMutationError ?? context.sessions.state.error) ||
+        (Boolean(this.sessionData.sessionsResult) && !context.sessions.presentation.resultCached))
     );
   }
 

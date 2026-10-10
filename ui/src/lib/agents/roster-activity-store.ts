@@ -257,7 +257,6 @@ class RosterActivityStore {
           if (this.isCurrent(binding)) {
             binding.metadataError = formatUiError(error, t("agentsHome.loadFailed"));
           }
-          return;
         } finally {
           binding.metadataLoading = false;
           if (this.isCurrent(binding)) {

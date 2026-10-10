@@ -44,7 +44,13 @@ export function captureSidebarSnapshotModel(
     return null;
   }
   const online = sidebarOnlineOrder(host);
-  const plugins = [...zone.pluginTabs].map(([key, tab]) => ({ key, ...tab }));
+  const plugins = [...zone.pluginTabs].map(([key, tab]) => ({
+    key,
+    pluginId: tab.pluginId,
+    id: tab.id,
+    label: tab.label,
+    icon: tab.icon,
+  }));
   for (const { key, pluginId, value } of host.pluginNavigation()) {
     plugins.push({ key, pluginId, id: value.page.id, label: value.label, icon: value.icon });
   }

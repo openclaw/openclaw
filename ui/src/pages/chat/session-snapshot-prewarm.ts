@@ -88,13 +88,16 @@ export function subscribeSidebarBootRetirement(
 ): () => void {
   return subscribeBootRecordChanges(({ scope, retiredOwner, replacement }) => {
     const current = currentScope();
-    if (!current || (scope !== undefined && scope !== current.gatewayScope)) return;
+    if (!current || (scope !== undefined && scope !== current.gatewayScope)) {
+      return;
+    }
     const owner = { recoveryScope: current.recoveryScope };
     if (
       (!retiredOwner || sameBootRecordOwner(retiredOwner, owner)) &&
       !sameBootRecordOwner(replacement, owner)
-    )
+    ) {
       retire();
+    }
   });
 }
 
@@ -103,7 +106,9 @@ export function admitSidebarBootScope(
   gateway: ApplicationGateway,
   record: Pick<BootRecord, "scope" | "recoveryScope" | "profileId">,
 ): () => void {
-  if (!record.recoveryScope) return () => {};
+  if (!record.recoveryScope) {
+    return () => {};
+  }
   const scope = {
     gatewayScope: record.scope,
     recoveryScope: record.recoveryScope,

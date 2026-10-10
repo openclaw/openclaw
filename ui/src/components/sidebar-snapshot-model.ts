@@ -160,7 +160,7 @@ export function snapshotSessions(
         category: row.category,
         archived: row.archived,
         boardFace: row.boardFace,
-        ...display,
+        childrenDisplayMode: display?.childrenDisplayMode,
         // Parent attention can summarize private descendants even after their rows are omitted.
         snapshotSubtitle: containsIncognito(row.children) ? undefined : display?.snapshotSubtitle,
         children: snapshotSessions(row.children, presentation),
@@ -197,6 +197,20 @@ export function snapshotSections(
     sections,
     collapsedSections: [...collapsedSections].filter((id) => id === "online" || retained.has(id)),
   };
+}
+
+export function restoreSnapshotSections(
+  model: SidebarSnapshotModel,
+  selected: string,
+): SidebarVisibleSections {
+  const sections: SidebarVisibleSections["sections"] = [];
+  for (const section of model.sections) {
+    sections.push({
+      ...section,
+      rows: section.rows.map((row) => restoreSnapshotSession(row, selected)),
+    });
+  }
+  return { sections, visibleRows: sections.flatMap((section) => section.rows) };
 }
 
 export function restoreSnapshotSession(

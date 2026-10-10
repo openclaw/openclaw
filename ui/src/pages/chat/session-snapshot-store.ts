@@ -294,7 +294,7 @@ async function accessSidebarSnapshot<Model>(
     }
     let bytes = 0;
     let result: Model | null = null;
-    for (const [index, record] of retained.sort((a, b) => b.savedAt - a.savedAt).entries()) {
+    for (const [index, record] of retained.toSorted((a, b) => b.savedAt - a.savedAt).entries()) {
       const admitted = validate(record.model);
       if (admitted === null) {
         throw new Error("sidebar projection shape mismatch");

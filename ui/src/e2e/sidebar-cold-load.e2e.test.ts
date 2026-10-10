@@ -109,13 +109,18 @@ async function waitForExpandedSnapshot(sidebar: Locator) {
       new Promise<void>((resolve, reject) => {
         const check = () => {
           const opened = indexedDB.open("openclaw-chat-snapshots");
-          opened.onerror = () => reject(opened.error);
-          opened.onsuccess = () => {
+          opened.addEventListener("error", () =>
+            reject(new Error("Snapshot open failed", { cause: opened.error })),
+          );
+          opened.addEventListener("success", () => {
             const database = opened.result;
             const transaction = database.transaction("sidebarSnapshots", "readonly");
             const rows = transaction.objectStore("sidebarSnapshots").getAll();
-            transaction.onerror = () => reject(transaction.error);
-            transaction.oncomplete = () => {
+            transaction.addEventListener("error", () => {
+              database.close();
+              reject(new Error("Snapshot read failed", { cause: transaction.error }));
+            });
+            transaction.addEventListener("complete", () => {
               database.close();
               const records = rows.result as Array<{
                 model: { onlineExpanded: boolean; footer: { id: string } | null };
@@ -126,8 +131,8 @@ async function waitForExpandedSnapshot(sidebar: Locator) {
                 observer.disconnect();
                 resolve();
               }
-            };
-          };
+            });
+          });
         };
         const observer = new MutationObserver(check);
         observer.observe(element, { attributes: true, attributeFilter: ["data-snapshot-saved"] });

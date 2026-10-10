@@ -119,9 +119,9 @@ it.each(["empty", "catalog-failed", "activation-failed", "activated"] as const)(
   "publishes registry completion only after the %s catalog settles",
   async (outcome) => {
     let catalog = createDeferred<PluginsControlUiCatalog>();
-    const activationStarted = createDeferred<void>();
-    const activation = createDeferred<void>();
-    const completed = createDeferred<void>();
+    const activationStarted = createDeferred();
+    const activation = createDeferred();
+    const completed = createDeferred();
     const context = {
       resourceBasePath: "",
       gateway: {

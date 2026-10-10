@@ -163,12 +163,10 @@ describe("persistent sidebar projections", () => {
       expect(await store.readSidebar(key(scope), validate)).toEqual(expected);
       await store.writeSidebar(key(scope), model, validate);
       let invalidation: Promise<void> | undefined;
-      const original = IDBObjectStore.prototype.getAll;
-      vi.spyOn(IDBObjectStore.prototype, "getAll").mockImplementationOnce(function (
-        this: IDBObjectStore,
-        ...args
-      ) {
-        const request = original.apply(this, args);
+      const getAll = vi.spyOn(IDBObjectStore.prototype, "getAll");
+      getAll.mockImplementationOnce(function (this: IDBObjectStore, ...args) {
+        getAll.mockRestore();
+        const request = this.getAll(...args);
         request.addEventListener("success", () => {
           invalidation = invalidate();
         });

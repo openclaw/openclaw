@@ -82,7 +82,7 @@ describe("roster activity lifecycle", () => {
     const load = vi.fn(async () => page.promise);
     const { store, context, sessions } = createStore(load);
     const agents = createDeferred<typeof context.agents.state.agentsList>();
-    const identity = createDeferred<void>();
+    const identity = createDeferred();
     context.agents.ensureList = () => agents.promise;
     context.agentIdentity.ensure = () => identity.promise;
     const stop = store.subscribe(() => {});

@@ -78,10 +78,11 @@ function fixture() {
     subscribeEvents: () => () => {},
     loadSelfProfile: async () => null,
   } satisfies ApplicationGateway;
-  const restored = createDeferred<void>();
-  let saved = createDeferred<void>();
+  const restored = createDeferred();
+  let saved = createDeferred();
   let settled = false;
   let captured = model;
+  const capture = vi.fn(() => captured);
   const host: ConstructorParameters<typeof SidebarSnapshotController>[0] = {
     sidebarSnapshot: null,
     sessionDataContext: { gateway },
@@ -93,7 +94,7 @@ function fixture() {
         saved.resolve();
       }
     },
-    captureSidebarSnapshot: vi.fn(() => captured),
+    captureSidebarSnapshot: capture,
     sidebarSnapshotSettled: () => settled,
     restoreSidebarSnapshot(value) {
       host.sidebarSnapshot = value;
@@ -109,13 +110,14 @@ function fixture() {
   const controller = new SidebarSnapshotController(host);
   return {
     gateway,
+    capture,
     host,
     controller,
     restored: restored.promise,
     settle(value = model) {
       captured = value;
       settled = true;
-      saved = createDeferred<void>();
+      saved = createDeferred();
       return saved.promise;
     },
     publish(patch: Partial<ApplicationGatewaySnapshot> = {}) {
@@ -179,7 +181,7 @@ describe("sidebar snapshot lifecycle", () => {
     const saved = test.settle(live);
     test.controller.hostUpdated();
     expect(test.host.sidebarSnapshot).toBeNull();
-    expect(test.host.captureSidebarSnapshot).not.toHaveBeenCalled();
+    expect(test.capture).not.toHaveBeenCalled();
     test.controller.hostUpdated();
     await saved;
     expect(
@@ -189,7 +191,7 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("does not report an unchanged model saved while its write is pending", async () => {
     const test = fixture();
-    const issued = createDeferred<void>();
+    const issued = createDeferred();
     const written = createDeferred<boolean>();
     vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
       issued.resolve();
@@ -213,14 +215,14 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("waits for a reverted model to finish writing after a different model was queued", async () => {
     const test = await warmFixture();
-    const issued = createDeferred<void>();
+    const issued = createDeferred();
     const written = createDeferred<boolean>();
     vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar").mockImplementation(() => {
       issued.resolve();
       return written.promise;
     });
     test.publish();
-    test.settle({ ...model, onlineExpanded: false });
+    void test.settle({ ...model, onlineExpanded: false });
     test.controller.hostUpdated();
     test.controller.hostUpdated();
     await issued.promise;
@@ -274,7 +276,7 @@ describe("sidebar snapshot lifecycle", () => {
 
   it("discards the boot scope before an asynchronous session deletion completes", async () => {
     const test = fixture();
-    const deletion = createDeferred<void>();
+    const deletion = createDeferred();
     const stop = subscribeSnapshotInvalidation(() => deletion.promise);
     disposers.push(admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }));
     const clearing = deleteStoredChatSnapshot(sessionKey);
@@ -328,7 +330,7 @@ describe("sidebar snapshot lifecycle", () => {
     const saved = test.settle();
     test.controller.hostUpdate();
     test.controller.hostUpdated();
-    expect(test.host.captureSidebarSnapshot).not.toHaveBeenCalled();
+    expect(test.capture).not.toHaveBeenCalled();
     test.publish();
     test.controller.hostUpdated();
     await saved;
