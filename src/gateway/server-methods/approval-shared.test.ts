@@ -451,6 +451,7 @@ describe("handlePendingApprovalRequest", () => {
     await manager.register(record, 60_000);
     const publishing = createDeferredCore();
     const publication = createDeferredCore<number>();
+    const publishRequested = vi.fn(() => 0);
     const respond = vi.fn();
     const deliverRequest = vi.fn(() => true);
     const requestPromise = handlePendingApprovalRequest({
@@ -460,7 +461,8 @@ describe("handlePendingApprovalRequest", () => {
       context: {
         broadcast: vi.fn(),
         approvalEvents: {
-          publishRequested: () => {
+          publishRequested,
+          publishRequestedAsync: () => {
             publishing.resolve();
             return publication.promise;
           },
@@ -476,6 +478,7 @@ describe("handlePendingApprovalRequest", () => {
     await manager.resolve(record.id, "deny", "control-ui");
     publication.resolve(0);
     await requestPromise;
+    expect(publishRequested).not.toHaveBeenCalled();
     expect(deliverRequest).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledExactlyOnceWith(
       true,
