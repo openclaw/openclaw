@@ -123,11 +123,11 @@ test("maintenance preparation yields to foreground writes and retains commit adm
        if (message.type === "start") {
          parentPort.postMessage({ type: "preparation" });
        } else if (message.type === "prepare") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
        } else if (message.type === "continue") {
-         parentPort.postMessage({ type: "admission-request", operationId: 1, admissionId: 2 });
+         parentPort.postMessage({ type: "admission-request", operationId: 1 });
        } else if (message.type === "admission" && ++admissions === 1) {
-         parentPort.postMessage({ type: "admission-release", operationId: 1, admissionId: 1 });
+         parentPort.postMessage({ type: "admission-release", operationId: 1 });
          parentPort.postMessage({ type: "validation-gap" });
        } else if (message.type === "admission") {
          parentPort.postMessage({ type: "commit-gap" });
