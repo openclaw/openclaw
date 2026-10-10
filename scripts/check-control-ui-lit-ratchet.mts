@@ -146,7 +146,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
             entries: newLitFiles.map(([file]) => file),
           },
         ],
-        "Use Solid; see .agents/skills/control-ui-solid/SKILL.md and defineSolidBridge in ui/src/lit/solid-bridge.ts to mount Solid from Lit.",
+        "Use Solid; see .agents/skills/solid/SKILL.md and defineSolidBridge in ui/src/lit/solid-bridge.ts to mount Solid from Lit.",
       )
     ) {
       return 1;

@@ -46,9 +46,7 @@ describe("Control UI Lit ratchet", () => {
       vi.spyOn(console, "log").mockImplementation(() => {});
       expect(main(root, ["--base", "HEAD"])).toBe(1);
       expect(errors.mock.calls.flat().join("\n")).toContain(`ui/src/${file}`);
-      expect(errors.mock.calls.flat().join("\n")).toContain(
-        ".agents/skills/control-ui-solid/SKILL.md",
-      );
+      expect(errors.mock.calls.flat().join("\n")).toContain(".agents/skills/solid/SKILL.md");
       expect(errors.mock.calls.flat().join("\n")).toContain("defineSolidBridge");
     },
   );

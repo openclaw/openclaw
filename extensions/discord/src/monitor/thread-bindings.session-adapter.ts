@@ -1,14 +1,14 @@
 import {
-  registerSessionBindingAdapter,
+  registerSessionBindingAdapterV2,
   unregisterSessionBindingAdapter,
-  type SessionBindingAdapter,
+  type SessionBindingAdapterV2,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  createAccountScopedBindingAdapter,
+  createAccountScopedBindingAdapterV2,
   projectThreadBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
@@ -33,7 +33,8 @@ export function createThreadBindingSessionAdapter(params: {
   defaults: { idleTimeoutMs: number; maxAgeMs: number };
   resolveCurrentCfg: () => OpenClawConfig;
   resolveCurrentToken: () => string | undefined;
-}): SessionBindingAdapter {
+  assertCurrent: () => void;
+}): SessionBindingAdapterV2 {
   const serializeBinding = (record: ThreadBindingRecord): SessionBindingRecord => {
     const defaults = params.defaults;
     const bindingId = resolveBindingRecordKey(record) ?? `${record.accountId}:${record.threadId}`;
@@ -56,7 +57,8 @@ export function createThreadBindingSessionAdapter(params: {
     });
   };
 
-  return createAccountScopedBindingAdapter({
+  return createAccountScopedBindingAdapterV2({
+    assertCurrent: params.assertCurrent,
     channel: "discord",
     accountId: params.accountId,
     capabilities: {
@@ -109,6 +111,26 @@ export function createThreadBindingSessionAdapter(params: {
       return bound ? serializeBinding(bound) : null;
     },
     project: serializeBinding,
+    // The manager publishes its worker commits into these SQL-free owner projections.
+    listBySessionKeyAsync: async (key) => params.manager.listBySessionKey(key),
+    getByConversationAsync: async (ref) => params.manager.getByThreadId(ref.conversationId),
+    inspectByConversationAsync: async (ref) => params.manager.getByThreadId(ref.conversationId),
+    inspectByConversations: (refs) => {
+      const records = refs.map((ref) => params.manager.getByThreadId(ref.conversationId));
+      return {
+        records,
+        assertCurrent: () => {
+          params.assertCurrent();
+          if (
+            refs.some(
+              (ref, index) => params.manager.getByThreadId(ref.conversationId) !== records[index],
+            )
+          ) {
+            throw new Error("Discord thread binding selection changed");
+          }
+        },
+      };
+    },
     listBySessionKey: params.manager.listBySessionKey,
     getByConversation: (ref) => params.manager.getByThreadId(ref.conversationId),
     touchConversation: (threadId, at) =>
@@ -124,17 +146,32 @@ export function createThreadBindingSessionAdapter(params: {
 /** Disabled bindings have a live empty owner; retirement still makes that owner unavailable. */
 export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBindingManager {
   const accountId = normalizeAccountId(accountIdRaw);
-  const adapter: SessionBindingAdapter = {
+  let stopped = false;
+  const adapter: SessionBindingAdapterV2 = {
+    version: 2,
+    assertCurrent: () => {
+      if (stopped) {
+        throw new Error("Discord thread binding manager was retired");
+      }
+    },
     channel: "discord",
     accountId,
     capabilities: { bindSupported: false, unbindSupported: false, placements: [] },
+    touchAsync: async () => {},
+    listBySessionAsync: async () => [],
+    resolveByConversationAsync: async () => null,
+    inspectByConversationAsync: async () => null,
+    inspectByConversationsAsync: async (refs) => ({
+      bindings: refs.map(() => null),
+      assertCurrent: () => adapter.assertCurrent(),
+    }),
     listBySession: () => [],
     resolveByConversation: () => null,
   };
-  registerSessionBindingAdapter(adapter);
+  registerSessionBindingAdapterV2(adapter);
   return {
     accountId,
-    isStopping: () => false,
+    isStopping: () => stopped,
     getIdleTimeoutMs: () => DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS,
     getMaxAgeMs: () => DEFAULT_THREAD_BINDING_MAX_AGE_MS,
     getByThreadId: () => undefined,
@@ -147,6 +184,9 @@ export function createNoopThreadBindingManager(accountIdRaw?: string): ThreadBin
     unbindThread: async () => null,
     unbindBySessionKey: async () => [],
     notifyUnbound: () => {},
-    stop: async () => unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter }),
+    stop: async () => {
+      stopped = true;
+      unregisterSessionBindingAdapter({ channel: "discord", accountId, adapter });
+    },
   };
 }
