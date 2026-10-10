@@ -115,16 +115,6 @@ function resolveTargetBoundAccountId(params: {
   });
 }
 
-async function resolveResolvedTargetOrThrow(
-  params: Parameters<typeof resolveChannelTarget>[0],
-): Promise<ResolvedMessagingTarget> {
-  const resolved = await resolveChannelTarget(params);
-  if (!resolved.ok) {
-    throw resolved.error;
-  }
-  return resolved.target;
-}
-
 function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   return readTrimmedStringAlias(params, ["target", "to", "channelId"]) !== undefined;
 }
@@ -402,33 +392,30 @@ export async function resolveMessageTarget(params: {
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
   if (!params.deferExternalTargetResolution) {
-    const toRaw = normalizeOptionalString(params.args.to);
-    if (toRaw) {
-      resolvedTarget = await resolveResolvedTargetOrThrow({
-        cfg: params.cfg,
-        channel: params.channel,
-        input: toRaw,
-        accountId: params.accountId ?? undefined,
-        plugin: params.plugin,
-      });
-      params.args.to = resolvedTarget.to;
-    }
-    const channelIdRaw = normalizeOptionalString(params.args.channelId);
-    if (channelIdRaw) {
-      const resolved = await resolveResolvedTargetOrThrow({
-        cfg: params.cfg,
-        channel: params.channel,
-        input: channelIdRaw,
-        accountId: params.accountId ?? undefined,
-        plugin: params.plugin,
-        preferredKind: "group",
-      });
-      if (resolved.kind === "user") {
-        throw invalidMessageActionTargetError(
-          `Channel id "${channelIdRaw}" resolved to a user target.`,
-        );
+    for (const key of ["to", "channelId"] as const) {
+      const input = normalizeOptionalString(params.args[key]);
+      if (!input) {
+        continue;
       }
-      params.args.channelId = resolved.to.replace(/^(channel|group):/i, "");
+      const resolved = await resolveChannelTarget({
+        cfg: params.cfg,
+        channel: params.channel,
+        input,
+        accountId: params.accountId ?? undefined,
+        plugin: params.plugin,
+        ...(key === "channelId" ? { preferredKind: "group" as const } : {}),
+      });
+      if (!resolved.ok) {
+        throw resolved.error;
+      }
+      const target = resolved.target;
+      if (key === "channelId" && target.kind === "user") {
+        throw invalidMessageActionTargetError(`Channel id "${input}" resolved to a user target.`);
+      }
+      if (key === "to") {
+        resolvedTarget = target;
+      }
+      params.args[key] = key === "to" ? target.to : target.to.replace(/^(channel|group):/i, "");
     }
   }
 

@@ -11,6 +11,7 @@ import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
 import {
   claimMainSessionRecoveryOwner,
@@ -139,30 +140,63 @@ describe("main session recovery store", () => {
     return result.transition.reservation;
   }
 
-  it("does not infer recovery authority from an interrupted outcome", async () => {
-    await write({
-      sessionId: "session-1",
-      updatedAt: 100,
-      status: "interrupted",
-      abortedLastRun: true,
-    });
-
-    const result = await commitRecovery(
-      {
-        kind: "observe",
-        cycleId: "cycle-1",
-        lifecycleGeneration,
+  it.each(["interrupted", "killed"] as const)(
+    "does not infer recovery authority from a %s outcome",
+    async (status) => {
+      const entry: SessionEntry = {
+        sessionId: "session-1",
+        updatedAt: 100,
+        status,
+        abortedLastRun: true,
+      };
+      if (status === "killed") {
+        const running = {
+          ...entry,
+          abortedLastRun: false,
+          restartRecoveryRuns: [{ runId: "stopped-run", lifecycleGeneration }],
+        };
+        const stop = projectMainSessionRecoveryLifecycle({
+          entry: running,
+          currentLifecycleGeneration: lifecycleGeneration,
+          event: {
+            runId: "stopped-run",
+            lifecycleGeneration,
+            data: { phase: "end", status: "cancelled", aborted: true, stopReason: "rpc" },
+          },
+          snapshotPatch: { status: "killed", abortedLastRun: true },
+        });
+        expect(stop.action).toBe("apply");
+        if (stop.action !== "apply") {
+          throw new Error("Stop must settle its current owner");
+        }
+        Object.assign(entry, running, stop.patch);
+      }
+      await write(entry);
+      expect(read().restartRecoveryRuns).toBeUndefined();
+      await expect(claimRecovery({ runId: "follow-up" })).resolves.toEqual({
+        kind: "not_required",
+        entry: read(),
         sessionKey,
-      },
-      { requireWriteSuccess: true },
-    );
+      });
+      expect(read()).toMatchObject({ status, abortedLastRun: true });
 
-    expect(result.transition).toMatchObject({
-      kind: "observed",
-      view: { status: "inactive" },
-    });
-    expect(read().mainRestartRecovery).toBeUndefined();
-  });
+      const result = await commitRecovery(
+        {
+          kind: "observe",
+          cycleId: "cycle-1",
+          lifecycleGeneration,
+          sessionKey,
+        },
+        { requireWriteSuccess: true },
+      );
+
+      expect(result.transition).toMatchObject({
+        kind: "observed",
+        view: { status: "inactive" },
+      });
+      expect(read().mainRestartRecovery).toBeUndefined();
+    },
+  );
 
   it("preserves a concurrent foreground claim while cancelling its reservation", async () => {
     await write(interruptedEntry());
@@ -824,6 +858,7 @@ describe("main session recovery store", () => {
           session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
+          prepareRestartRecovery: () => undefined,
           dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,

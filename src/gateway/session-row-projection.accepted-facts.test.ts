@@ -3,10 +3,9 @@ import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
-import * as acpReads from "../acp/runtime/session-meta-readonly.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
@@ -15,7 +14,7 @@ import {
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
-import { setRuntimeConfigSnapshot } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import {
   deleteSessionEntryLifecycle,
@@ -23,13 +22,9 @@ import {
   readSessionTranscriptWatermark,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry-list.read.js";
-import * as canonical from "../config/sessions/session-canonical-key.js";
+import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
-import {
-  addSessionMember,
-  removeSessionMember,
-} from "../config/sessions/session-sharing-store.native.js";
+import { removeSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
@@ -37,318 +32,167 @@ import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
-import * as agentDatabases from "../state/openclaw-agent-db.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   identifiedClient,
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
+import { defaultPersistDigest } from "./session-observer-model.js";
 import * as projectionWork from "./session-projection-work.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as databaseFactsRead from "./session-row-projection-read.js";
-import { ready, type Row } from "./session-row-projection-record.js";
-import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import { ready } from "./session-row-projection-record.js";
+import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-/** Pause after the real read boundary has released Worker, continuation, and native custody. */
-async function withAcceptedSuffix(
-  run: (fixture: {
-    projection: SessionRowProjection;
-    suffix: Row;
-    scope: { agentId: string; sessionKey: string };
-    query: { agentId: string; key: string };
-    entry: InternalSessionEntry;
-    reads: SessionRowDatabaseFacts[][];
-    replacementPath: string;
-    viewerId?: string;
-    resume: () => Promise<void>;
-    failNextRender: () => void;
-  }) => Promise<void>,
-  options: {
-    archived?: boolean;
-    membership?: boolean;
-    replacement?: boolean;
-    acpMeta?: SessionAcpMeta | null;
-  } = {},
-) {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const keys = [
-      "agent:main:accepted-a",
-      options.acpMeta === undefined ? "agent:main:accepted-b" : "agent:main:acp:accepted-b",
-    ];
-    const identities = options.membership
-      ? {
-          owner: ensureProfileForEmail("accepted-owner@example.test"),
-          viewer: ensureProfileForEmail("accepted-viewer@example.test"),
-        }
-      : undefined;
-    const entries = keys.map<InternalSessionEntry>((_, index) => ({
-      sessionId: `accepted-${index}`,
-      updatedAt: 1,
-      label: `initial-${index}`,
-      ...(options.acpMeta !== undefined && index === 1
-        ? { lifecycleRevision: "accepted-lifecycle" }
-        : {}),
-      ...(options.archived && index === 1 ? { archivedAt: 1 } : {}),
-      ...(identities && index === 1
-        ? {
-            visibility: "read-only",
-            createdActor: { type: "human", source: "profile", id: identities.owner.id },
-          }
-        : {}),
-    }));
-    for (const [index, sessionKey] of keys.entries()) {
-      replaceSessionEntrySync({ agentId: "main", sessionKey }, entries[index]!);
-    }
-    if (options.acpMeta) {
-      seedCanonicalAcpSessionMeta({
-        sessionKey: keys[1]!,
-        lifecycleRevision: "accepted-lifecycle",
-        meta: options.acpMeta,
-      });
-    }
-    if (identities) {
-      addSessionMember(
-        { agentId: "main", sessionKey: keys[1]! },
-        {
-          identityId: identities.viewer.id,
-          addedBy: identities.owner.id,
-          addedAt: 1,
-        },
-      );
-    }
-    const replacementPath = state.statePath("imports", "accepted-replacement.sqlite");
-    if (options.replacement) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: keys[1]!, storePath: replacementPath },
-        { ...entries[1]!, updatedAt: 2, label: "replacement store" },
-      );
-      await closeOpenClawAgentDatabaseByPathAsync(replacementPath, "main");
-    }
-    const releaseForeground = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
-      cfg: {
-        agents: {
-          entries: { main: {} },
-          defaults: { utilityModel: "unit-test/small" },
-        },
-      },
-      modelCatalog: [],
-    });
-    const paused = createDeferredCore();
-    const release = createDeferredCore();
-    let reading: Promise<void> | undefined;
-    try {
-      await projection.ensureMaterialized();
-      // Cold projection admission is worker-owned; explicitly admit the native continuation fixture.
-      listSessionEntriesReadOnly({ agentId: "main" });
-      const query = { agentId: "main", key: keys[1]! };
-      const previous = await withReadySessionRows(
-        projection,
-        () => [query],
-        (read) => read.describe(query)!,
-      );
-      const count = projection.materializedCount;
-      const releases: string[] = [];
-      const continuations: SharedArrayBuffer[] = [];
-      let trackingCustody = false;
-      const capture = canonical.captureCanonicalSessionReaderContinuation;
-      vi.spyOn(canonical, "captureCanonicalSessionReaderContinuation").mockImplementation((db) => {
-        const owner = capture(db);
-        if (!owner || !trackingCustody) {
-          return owner;
-        }
-        continuations.push(owner.receipt.live);
-        return {
-          ...owner,
-          release() {
-            owner.release();
-            releases.push("continuation");
-          },
-        };
-      });
-      const retain = agentDatabases.retainOpenClawAgentDatabaseReadCandidates;
-      vi.spyOn(agentDatabases, "retainOpenClawAgentDatabaseReadCandidates").mockImplementation(
-        (...args) => {
-          const owner = retain(...args);
-          if (!trackingCustody) {
-            return owner;
-          }
-          expect(owner.databases).toHaveLength(1);
-          return {
-            ...owner,
-            release() {
-              owner.release();
-              releases.push("native");
-            },
-          };
-        },
-      );
-      const reads: SessionRowDatabaseFacts[][] = [];
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        async (selected, consume) => {
-          const tracked = trackingCustody;
-          const result = await readDatabases(selected, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  const reply = await owner.readRowFacts(input);
-                  reads.push(structuredClone(reply.rows));
-                  return reply;
-                },
-              })),
-            ),
-          );
-          if (tracked) {
-            releases.push("worker");
-          }
-          return result;
-        },
-      );
-      let elapsed = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => elapsed);
-      const readInputs = rowInputs.readSessionRowInputs;
-      const inputs = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation((params) => {
-        const result = readInputs(params);
-        elapsed += 20;
-        return result;
-      });
-      const readFacts = databaseFactsRead.withSessionRowDatabaseFacts;
-      vi.spyOn(databaseFactsRead, "withSessionRowDatabaseFacts").mockImplementationOnce(
-        async (...args) => {
-          trackingCustody = true;
-          try {
-            await readFacts(...args);
-          } finally {
-            trackingCustody = false;
-          }
-          paused.resolve();
-          await release.promise;
-        },
-      );
-      for (const [index, sessionKey] of keys.entries()) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          { ...entries[index]!, updatedAt: 2, label: `accepted-${index}` },
-        );
+it.each([
+  "present",
+  "absent",
+  "ACP publication",
+  "lifecycle reset",
+  "worker receipt",
+  "worker legacy reset",
+  "lifecycle adapter",
+  "observer adapter",
+] as const)("carries complete accepted ACP facts across a yield: %s", async (change) => {
+  const initial: SessionAcpMeta = {
+    backend: "accepted-acp-backend",
+    agent: "main",
+    runtimeSessionName: "accepted-1",
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt: 1,
+  };
+  await withAcceptedSuffix(
+    async ({ projection, suffix, scope, query, entry, reads, resume }) => {
+      const sharing =
+        change === "lifecycle adapter" || change === "observer adapter"
+          ? await prepareSessionMutationFacts({ cfg: getRuntimeConfig(), ...scope })
+          : undefined;
+      if (sharing) {
+        onTestFinished(sharing.release);
       }
-      reading = projection.ensureMaterialized();
-      await Promise.race([
-        paused.promise,
-        reading.then(() => {
-          throw new Error("Drain bypassed the released-custody boundary");
-        }),
-      ]);
-      expect(releases).toEqual(["worker", "continuation", "native"]);
-      expect(continuations).toHaveLength(1);
-      expect(Atomics.load(new Int32Array(continuations[0]!), 0)).toBe(0);
-      const suffix = projection.findBySessionId({
-        agentId: "main",
-        sessionId: entries[1]!.sessionId,
-      })[0]!;
-      expect(suffix.pendingDatabaseFacts?.entry.label).toBe("accepted-1");
-      expect(suffix.pendingDatabaseFacts?.acpMeta).toEqual(options.acpMeta ?? null);
-      expect(suffix.materialized).toBe(previous.materialized);
-      expect(suffix.materializedSequence).toBe(previous.materializedSequence);
-      expect(ready(suffix)).toBe(false);
-      expect(projection.materializedCount).toBe(count + 1);
-      expect(reads).toHaveLength(1);
-      expect(reads[0]?.map((row) => row.sessionKey)).toEqual(keys);
-      await run({
-        projection,
-        suffix,
-        query,
-        reads,
-        replacementPath,
-        viewerId: identities?.viewer.id,
-        scope: { agentId: "main", sessionKey: query.key },
-        entry: { ...entries[1]!, updatedAt: 2, label: "accepted-1" },
-        resume: async () => {
-          release.resolve();
-          await reading;
-        },
-        failNextRender: () => {
-          inputs.mockImplementationOnce(() => {
-            throw new Error("presentation unavailable");
-          });
-        },
-      });
-    } finally {
-      release.resolve();
-      await Promise.allSettled(reading ? [reading] : []);
-      vi.restoreAllMocks();
-      projection.dispose();
-      releaseForeground();
-    }
-  });
-}
-
-it.each(["present", "absent", "ACP publication", "lifecycle reset"] as const)(
-  "carries complete accepted ACP facts across a yield: %s",
-  async (change) => {
-    const initial: SessionAcpMeta = {
-      backend: "accepted-acp-backend",
-      agent: "main",
-      runtimeSessionName: "accepted-1",
-      mode: "persistent",
-      state: "idle",
-      lastActivityAt: 1,
-    };
-    await withAcceptedSuffix(
-      async ({ projection, suffix, scope, query, entry, reads, resume }) => {
-        const pending = suffix.pendingDatabaseFacts;
-        const metadataReads = vi.spyOn(acpReads, "readAcpSessionMetaForEntries");
-        let expected = change === "absent" ? null : initial;
-        const changed = change === "ACP publication" || change === "lifecycle reset";
-        if (change === "ACP publication") {
-          expected = { ...initial, backend: "current-acp-backend", lastActivityAt: 2 };
-          // Only the shared ACP row changes; agent entry and lifecycle stay fixed.
-          seedCanonicalAcpSessionMeta({
-            sessionKey: query.key,
-            lifecycleRevision: entry.lifecycleRevision,
-            meta: expected,
-          });
-        } else if (change === "lifecycle reset") {
-          replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "replacement" });
+      const pending = suffix.pendingDatabaseFacts;
+      const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      let expected = change === "absent" ? null : initial;
+      const workerReceipt =
+        change === "worker receipt" ||
+        change === "worker legacy reset" ||
+        change === "lifecycle adapter" ||
+        change === "observer adapter";
+      const changed = change !== "present" && change !== "absent";
+      if (change === "ACP publication") {
+        expected = { ...initial, backend: "current-acp-backend", lastActivityAt: 2 };
+        // Only the shared ACP row changes; agent entry and lifecycle stay fixed.
+        seedCanonicalAcpSessionMeta({
+          sessionKey: query.key,
+          lifecycleRevision: entry.lifecycleRevision,
+          meta: expected,
+        });
+      } else if (change === "lifecycle reset") {
+        replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "replacement" });
+        expected = null;
+      } else if (change === "lifecycle adapter") {
+        await persistGatewaySessionLifecycleEvent({
+          ...scope,
+          event: {
+            sessionId: entry.sessionId,
+            runId: "receipt-run",
+            ts: 3,
+            data: { phase: "start" },
+          },
+        });
+      } else if (change === "observer adapter") {
+        expect(
+          await defaultPersistDigest({
+            ...scope,
+            storePath: suffix.storeTarget.storePath,
+            sessionId: entry.sessionId,
+            digest: {
+              sessionKey: scope.sessionKey,
+              sessionId: entry.sessionId,
+              lifecycleRevision: entry.lifecycleRevision,
+              runId: "receipt-run",
+              revision: 1,
+              updatedAt: 3,
+              headline: "Checking receipt",
+              health: "on-track",
+            },
+          }),
+        ).toBe(true);
+      } else if (workerReceipt) {
+        await applySessionEntryExactReplacements({
+          agentId: scope.agentId,
+          storePath: suffix.storeTarget.storePath,
+          sessionKeys: [scope.sessionKey],
+          update: ([row]) => ({
+            result: undefined,
+            replacements: [
+              {
+                sessionKey: scope.sessionKey,
+                entry: {
+                  ...row!.entry,
+                  label: "receipt",
+                  ...(change === "worker legacy reset" ? { sessionStartedAt: 2 } : {}),
+                },
+              },
+            ],
+          }),
+        });
+        if (change === "worker legacy reset") {
           expected = null;
         }
-        expect(suffix.pendingDatabaseFacts).toBe(changed ? undefined : pending);
-        const hostReads = observeSqliteReadSql(StatementSync.prototype);
-        try {
-          await resume();
-          const row = projection.snapshot(query).row;
-          expect(reads).toHaveLength(changed ? 2 : 1);
-          expect(metadataReads).toHaveBeenCalledTimes(changed ? 1 : 0);
-          expect(row?.runtimeSelectionLocked).toBe(expected !== null);
-          if (expected) {
-            expect(row?.agentRuntime).toMatchObject({
-              id: expected.backend,
-              source: "session-key",
-            });
-          }
-          expect(
-            projection.describe(query)?.materialized.source.thinkingProjection.acpMeta,
-          ).toEqual(expected ?? undefined);
-          expect(hostReads.queries.filter((sql) => sql.includes("acp_sessions"))).toEqual([]);
-          expect(projection.dirtyRowCount).toBe(0);
-        } finally {
-          hostReads.restore();
+      }
+      if (sharing) {
+        expect(sharing.readCurrent(getRuntimeConfig()).target?.entry).toMatchObject({
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        });
+        sharing.release();
+      }
+      expect(suffix.pendingDatabaseFacts).toBe(changed ? undefined : pending);
+      const hostReads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        await resume();
+        const row = projection.snapshot(query).row;
+        expect(reads).toHaveLength(changed && !workerReceipt ? 2 : 1);
+        expect(
+          metadataReads.mock.calls.filter(
+            ([, command]) => command.type === "sessionRows.sharedFacts",
+          ),
+        ).toHaveLength(changed && (!workerReceipt || change === "worker legacy reset") ? 1 : 0);
+        expect(row?.runtimeSelectionLocked).toBe(expected !== null);
+        if (expected) {
+          expect(row?.agentRuntime).toMatchObject({
+            id: expected.backend,
+            source: "session-key",
+          });
         }
-      },
-      { acpMeta: change === "absent" ? null : initial },
-    );
-  },
-);
+        expect(projection.describe(query)?.materialized.source.thinkingProjection.acpMeta).toEqual(
+          expected ?? undefined,
+        );
+        expect(hostReads.queries.filter((sql) => sql.includes("acp_sessions"))).toEqual([]);
+        expect(projection.dirtyRowCount).toBe(0);
+      } finally {
+        hostReads.restore();
+      }
+    },
+    {
+      acpMeta: change === "absent" ? null : initial,
+      ...(change === "worker legacy reset" ? { legacyAcp: true } : {}),
+    },
+  );
+});
 
 it.each(["projection retirement", "ACP read failure"] as const)(
   "does not accept facts after an awaited %s",
@@ -368,10 +212,15 @@ it.each(["projection retirement", "ACP read failure"] as const)(
         await projection.ensureMaterialized();
         const row = projection.findBySessionId({ agentId: "main", sessionId: "late-facts" })[0]!;
         const count = projection.materializedCount;
-        const read = acpReads.readAcpSessionMetaForEntries;
-        vi.spyOn(acpReads, "readAcpSessionMetaForEntries").mockImplementationOnce(
-          async (params) => {
-            const reply = await read(params);
+        const read = stateReads.executeExistingOpenClawStateRead;
+        let held = false;
+        vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+          async (...args) => {
+            const reply = await read(...args);
+            if (args[1].type !== "sessionRows.sharedFacts" || held) {
+              return reply;
+            }
+            held = true;
             captured.resolve();
             await release.promise;
             if (change === "ACP read failure") {
@@ -728,64 +577,78 @@ it.each([false, true])(
   },
 );
 
-it("replaces the whole accepted entry, board, and watermark snapshot after a commit", async () => {
-  await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
-    expect(suffix.pendingDatabaseFacts?.hasBoard).toBe(false);
-    const board = new SqliteBoardStore({
-      resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
-    });
-    await board.putWidget({
-      sessionKey: query.key,
-      name: "status",
-      content: { kind: "html", html: "<p>current</p>" },
-    });
-    await persistSessionTranscriptTurn(
-      { ...scope, sessionId: entry.sessionId },
-      {
-        config: projection.state.cfg,
-        messages: [{ message: { role: "user", content: "Current transcript" } }],
-        touchSessionEntry: false,
-        updateMode: "none",
-      },
-    );
-    const watermark = readSessionTranscriptWatermark({ ...scope, sessionId: entry.sessionId });
-    replaceSessionEntrySync(scope, {
-      ...entry,
-      label: "committed value",
-      activitySummary: {
-        version: 1,
-        formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
-        text: "Current summary",
-        updatedAt: 3,
-        sessionId: entry.sessionId,
-        generation: watermark.generation,
-        maxSeq: watermark.maxSeq,
-        leafEntryId: null,
-        coveredMessages: 1,
-        totalMessages: 1,
-        omittedContent: false,
-      },
-    });
-    expect(suffix.pendingDatabaseFacts).toBeUndefined();
-    expect(ready(suffix)).toBe(false);
-    await resume();
-    expect(reads).toHaveLength(2);
-    expect(reads[1]).toEqual([
-      expect.objectContaining({
+it.each(["native invalidation", "worker receipt"] as const)(
+  "replaces accepted entry, board, and watermark facts through %s",
+  async (publication) => {
+    await withAcceptedSuffix(async ({ projection, suffix, scope, query, entry, reads, resume }) => {
+      expect(suffix.pendingDatabaseFacts?.hasBoard).toBe(false);
+      const board = new SqliteBoardStore({
+        resolveSession: ({ sessionKey }) => ({ agentId: "main", sessionKey }),
+      });
+      await board.putWidget({
+        sessionKey: query.key,
+        name: "status",
+        content: { kind: "html", html: "<p>current</p>" },
+      });
+      await persistSessionTranscriptTurn(
+        { ...scope, sessionId: entry.sessionId },
+        {
+          config: projection.state.cfg,
+          messages: [{ message: { role: "user", content: "Current transcript" } }],
+          touchSessionEntry: false,
+          updateMode: "none",
+        },
+      );
+      const watermark = readSessionTranscriptWatermark({ ...scope, sessionId: entry.sessionId });
+      const committedEntry: InternalSessionEntry = {
+        ...entry,
+        label: "committed value",
+        activitySummary: {
+          version: 1,
+          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
+          text: "Current summary",
+          updatedAt: 3,
+          sessionId: entry.sessionId,
+          generation: watermark.generation,
+          maxSeq: watermark.maxSeq,
+          leafEntryId: null,
+          coveredMessages: 1,
+          totalMessages: 1,
+          omittedContent: false,
+        },
+      };
+      if (publication === "worker receipt") {
+        await applySessionEntryExactReplacements({
+          agentId: scope.agentId,
+          storePath: suffix.storeTarget.storePath,
+          sessionKeys: [scope.sessionKey],
+          update: () => ({
+            result: undefined,
+            replacements: [{ sessionKey: scope.sessionKey, entry: committedEntry }],
+          }),
+        });
+      } else {
+        replaceSessionEntrySync(scope, committedEntry);
+      }
+      expect(suffix.pendingDatabaseFacts).toBeUndefined();
+      expect(ready(suffix)).toBe(false);
+      await resume();
+      expect(reads).toHaveLength(publication === "worker receipt" ? 1 : 2);
+      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
         sessionKey: query.key,
         entry: expect.objectContaining({ label: "committed value" }),
         hasBoard: true,
         activitySummaryWatermark: watermark,
-      }),
-    ]);
-    expect(projection.describe(query)?.hasBoard).toBe(true);
-    expect(projection.snapshot(query).row).toMatchObject({
-      label: "committed value",
-      activitySummary: { text: "Current summary", state: "current" },
+      });
+      expect(projection.describe(query)?.hasBoard).toBe(true);
+      expect(projection.snapshot(query).row).toMatchObject({
+        label: "committed value",
+        activitySummary: { text: "Current summary", state: "current" },
+      });
+      expect(projection.dirtyRowCount).toBe(0);
     });
-    expect(projection.dirtyRowCount).toBe(0);
-  });
-});
+  },
+);
 
 it.each(["runtime facts", "invalidated presentation facts"] as const)(
   "discards accepted facts for %s after custody release",

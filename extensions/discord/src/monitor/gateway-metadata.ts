@@ -67,34 +67,16 @@ async function materializeGuardedResponse(response: Response): Promise<Response>
   });
 }
 
-function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
-  const numeric = parseStrictPositiveInteger(value);
-  if (numeric === undefined) {
-    return undefined;
-  }
-  return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
-}
-
 export function resolveDiscordGatewayInfoTimeoutMs(params?: { env?: NodeJS.ProcessEnv }): number {
-  return (
-    normalizeGatewayInfoTimeoutMs(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
-    DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS
+  return Math.min(
+    parseStrictPositiveInteger(params?.env?.[DISCORD_GATEWAY_INFO_TIMEOUT_ENV]) ??
+      DEFAULT_DISCORD_GATEWAY_INFO_TIMEOUT_MS,
+    MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS,
   );
 }
 
-function summarizeGatewayResponseBody(body: string): string {
-  return summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
-}
-
-function isDiscordGatewayRateLimitResponse(status: number, body: string): boolean {
-  return status === 429 && isDiscordRateLimitResponseBody(body);
-}
-
 function isTransientDiscordGatewayResponse(status: number, body: string): boolean {
-  if (status >= 500) {
-    return true;
-  }
-  if (isDiscordGatewayRateLimitResponse(status, body)) {
+  if (status >= 500 || (status === 429 && isDiscordRateLimitResponseBody(body))) {
     return true;
   }
   const normalized = body.toLowerCase();
@@ -123,10 +105,6 @@ function createGatewayMetadataError(params: {
     enumerable: false,
   });
   return error;
-}
-
-function isTransientGatewayMetadataError(error: unknown): boolean {
-  return Boolean((error as DiscordGatewayMetadataError | undefined)?.transient);
 }
 
 function createDefaultGatewayInfo(): APIGatewayBotInfo {
@@ -185,7 +163,7 @@ async function fetchDiscordGatewayInfo(params: {
       cause: error,
     });
   }
-  const summary = summarizeGatewayResponseBody(body);
+  const summary = summarizeDiscordResponseBody(body, { emptyText: "<empty>" }) ?? "<empty>";
   const transient = isTransientDiscordGatewayResponse(response.status, body);
 
   if (!response.ok) {
@@ -239,7 +217,7 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
   info: APIGatewayBotInfo;
   usedFallback: boolean;
 } {
-  if (!isTransientGatewayMetadataError(params.error)) {
+  if (!(params.error as DiscordGatewayMetadataError | undefined)?.transient) {
     throw params.error;
   }
   const message = formatErrorMessage(params.error);

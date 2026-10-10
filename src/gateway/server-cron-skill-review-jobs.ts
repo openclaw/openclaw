@@ -7,6 +7,7 @@ import {
 } from "../cron/skill-collection-review-monitor.js";
 import { partitionSystemMonitors } from "../cron/system-monitor-jobs.js";
 import type { CronJob } from "../cron/types.js";
+import { resolveHeartbeatSchedulerSeedAsync } from "../infra/heartbeat-schedule.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
 
 type SkillReviewJobCron = Pick<GatewayCronServiceContract, "add" | "list" | "remove">;
@@ -14,6 +15,7 @@ type SkillReviewJobCron = Pick<GatewayCronServiceContract, "add" | "list" | "rem
 export async function reconcileSkillCollectionReviewJobs(params: {
   cron: SkillReviewJobCron;
   cfg: OpenClawConfig;
+  schedulerSeed?: string;
   logger: { warn: (obj: unknown, msg?: string) => void };
   commitGuard?: () => void;
 }): Promise<{ ok: boolean }> {
@@ -27,7 +29,9 @@ export async function reconcileSkillCollectionReviewJobs(params: {
   }
   params.commitGuard?.();
 
-  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs);
+  const schedulerSeed = await resolveHeartbeatSchedulerSeedAsync(params.schedulerSeed);
+  params.commitGuard?.();
+  const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg, jobs, { schedulerSeed });
   const { retained, duplicates } = partitionSystemMonitors(
     jobs,
     skillCollectionReviewMonitorAgentId,

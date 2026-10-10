@@ -181,80 +181,52 @@ function resolveLlmTimeoutBounds(params?: LlmTimeoutParams) {
 
 const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
 
-/**
- * Resolves the stream-idle watchdog timeout for one embedded run. Explicit
- * provider request timeouts and bounded run/agent timeouts cap the watchdog;
- * local provider base URLs disable the implicit cloud-provider default.
- */
-export function resolveLlmIdleTimeoutMs(
+function resolveLlmTimeoutMs(
+  phase: "idle" | "first-event",
   params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
 ): number {
   const { boundedRunTimeoutMs, agentTimeoutMs, timeoutBounds } = resolveLlmTimeoutBounds(params);
   const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
-
-  // Run/agent budgets bound idle from below the provider-class ceiling; they
-  // must not shrink class tolerance (local has no ceiling, self-hosted 300s).
-  // Clamping every class to the cloud default reopened #85826-style kills for
-  // self-hosted users with explicit budgets above 120s.
-  const clampToClassIdleCeiling = (budgetMs: number): number => {
-    if (isLocalRuntimeModel) {
-      return clampTimeoutMs(budgetMs);
-    }
-    const classIdleTimeoutMs = isSelfHostedRuntimeModel
-      ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
-      : DEFAULT_LLM_IDLE_TIMEOUT_MS;
-    return clampTimeoutMs(Math.min(budgetMs, classIdleTimeoutMs));
-  };
-
-  // Explicit per-model idle timeout (`models.providers.<id>.timeoutSeconds`) wins
-  // over the NO_TIMEOUT_MS sentinel that runTimeoutMs may carry when the caller
-  // declared "run is unlimited". The two are independent: an unlimited run does
-  // not imply opting out of chunk-level hang detection.
   const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
-  if (modelRequestTimeoutMs !== undefined) {
-    // Provider opt-ins may exceed the cloud ceiling; shorter run budgets still win.
-    const boundedTimeoutMs = Math.min(modelRequestTimeoutMs, ...timeoutBounds);
-    return clampTimeoutMs(boundedTimeoutMs);
-  }
-
-  // Unlimited run budget bounds total cost, not stream liveness. Only finite
-  // explicit run budgets cap the idle watchdog.
-  if (boundedRunTimeoutMs !== undefined) {
-    if (params?.trigger === "cron") {
-      if (isLocalRuntimeModel || isSelfHostedRuntimeModel) {
-        return clampTimeoutMs(boundedRunTimeoutMs);
-      }
-      return clampTimeoutMs(Math.min(boundedRunTimeoutMs, CRON_LLM_IDLE_TIMEOUT_MS));
-    }
-    return clampToClassIdleCeiling(boundedRunTimeoutMs);
-  }
-
-  if (agentTimeoutMs !== undefined) {
-    return clampToClassIdleCeiling(agentTimeoutMs);
-  }
-
-  // Local models have no implicit idle cap; proxied Ollama cloud models still do.
-  if (isLocalRuntimeModel) {
-    return 0;
-  }
-
-  return isSelfHostedRuntimeModel ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS : DEFAULT_LLM_IDLE_TIMEOUT_MS;
-}
-
-export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number {
-  const { timeoutBounds } = resolveLlmTimeoutBounds(params);
-  const { isLocalRuntimeModel, isSelfHostedRuntimeModel } = resolveRuntimeModelLocality(params);
-
-  const modelRequestTimeoutMs = asPositiveFiniteNumber(params?.modelRequestTimeoutMs);
+  // Provider opt-ins can exceed class defaults, while finite run/agent budgets still win.
+  // An unlimited run does not disable this independent request-liveness budget.
   if (modelRequestTimeoutMs !== undefined) {
     return clampTimeoutMs(Math.min(modelRequestTimeoutMs, ...timeoutBounds));
   }
+  if (phase === "first-event") {
+    const defaultTimeoutMs =
+      isLocalRuntimeModel || isSelfHostedRuntimeModel
+        ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
+        : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
+    return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));
+  }
 
-  const defaultTimeoutMs =
-    isLocalRuntimeModel || isSelfHostedRuntimeModel
-      ? LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS
-      : CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS;
-  return clampTimeoutMs(Math.min(defaultTimeoutMs, ...timeoutBounds));
+  const classIdleTimeoutMs = isSelfHostedRuntimeModel
+    ? SELF_HOSTED_LLM_IDLE_TIMEOUT_MS
+    : DEFAULT_LLM_IDLE_TIMEOUT_MS;
+  const budgetMs = boundedRunTimeoutMs ?? agentTimeoutMs;
+  if (budgetMs === undefined) {
+    return isLocalRuntimeModel ? 0 : classIdleTimeoutMs;
+  }
+  const boundedCron = boundedRunTimeoutMs !== undefined && params?.trigger === "cron";
+  // Local endpoints have no idle ceiling. Explicit cron budgets also own
+  // self-hosted stalls; ordinary self-hosted runs retain their 300s tolerance.
+  if (isLocalRuntimeModel || (boundedCron && isSelfHostedRuntimeModel)) {
+    return clampTimeoutMs(budgetMs);
+  }
+  return clampTimeoutMs(
+    Math.min(budgetMs, boundedCron ? CRON_LLM_IDLE_TIMEOUT_MS : classIdleTimeoutMs),
+  );
+}
+
+export function resolveLlmIdleTimeoutMs(
+  params?: LlmTimeoutParams & { trigger?: EmbeddedRunTrigger },
+): number {
+  return resolveLlmTimeoutMs("idle", params);
+}
+
+export function resolveLlmFirstEventTimeoutMs(params?: LlmTimeoutParams): number {
+  return resolveLlmTimeoutMs("first-event", params);
 }
 
 /**

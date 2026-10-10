@@ -191,16 +191,19 @@ export function readSessionTranscriptActivePathEntryRelation(
 ): "exact" | "ancestor" | "off-path" {
   return withCurrentProjectionSnapshot(
     scope,
-    (projection) => {
-      if (projection.state.leafEventId === entryId || entryId === null) {
-        return projection.state.leafEventId === entryId ? "exact" : "off-path";
-      }
-      return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId)
-        ? "ancestor"
-        : "off-path";
-    },
+    (projection) => readActivePathEntryRelationFromProjection(projection, entryId),
     options,
   );
+}
+
+export function readActivePathEntryRelationFromProjection(
+  projection: CurrentTranscriptProjection,
+  entryId: string | null,
+): "exact" | "ancestor" | "off-path" {
+  if (projection.state.leafEventId === entryId || entryId === null) {
+    return projection.state.leafEventId === entryId ? "exact" : "off-path";
+  }
+  return readActiveTranscriptEntryIdentityInSnapshot(projection, entryId) ? "ancestor" : "off-path";
 }
 
 /** Reads a bounded context tail, preserving control facts but excluding display-only messages. */

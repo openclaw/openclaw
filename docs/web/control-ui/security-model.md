@@ -30,9 +30,13 @@ In practice:
 
 Page metadata reads stop at the end of the HTML head or after 64 KiB, whichever
 comes first; metadata beyond that limit is omitted. The Gateway streams the head
-without building a page DOM. Anonymous previews share a bounded URL cache for one
-hour when available, or five minutes when unavailable; URL fragments share the
-same entry. Disabling automatic favicons also suppresses cached previews.
+without building a page DOM. Anonymous previews use a bounded cache per requesting
+principal and runtime config revision for one hour when available, or five minutes
+when unavailable; URL fragments share the same entry. Repeated links share pending
+requests, and a page that declares the same social image and favicon downloads it
+once. The 15-second preview deadline includes queue wait, fetching, and image work.
+Disabling automatic favicons or retiring the request's authority suppresses cached
+previews too.
 
 The browser-side CSP restriction itself is always on and not configurable.
 

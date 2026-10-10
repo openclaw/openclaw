@@ -92,10 +92,12 @@ function prepareSessionManagerIncognitoContext(
   const actor = binding.actor;
   const assertOwned = captureOwnedTranscriptWriteAssertion(target);
   const claim = actor.sessions.captureCurrent(target.sessionKey);
+  const entry = actor.sessions.readSharing(target.sessionKey)?.entry;
   const input = {
     sessionKey: target.sessionKey,
     sessionId: target.sessionId,
-    lifecycleRevision: actor.sessions.readSharing(target.sessionKey)?.entry?.lifecycleRevision,
+    lifecycleRevision: entry?.lifecycleRevision,
+    ...(!entry && { allowMissing: true as const }),
     admission: resolveSessionTranscriptReadFence(target),
   };
   const assertCurrent = () => {

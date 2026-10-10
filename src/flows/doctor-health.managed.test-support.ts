@@ -399,7 +399,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
             expect(runtime.log).toHaveBeenCalledWith(
               expect.stringMatching(
-                /Gateway activation skipped.*inconclusive.*gateway status --deep/,
+                /Gateway activation skipped.*inconclusive.*gateway status --deep/s,
               ),
             );
             expectProcessOwnerReleased();

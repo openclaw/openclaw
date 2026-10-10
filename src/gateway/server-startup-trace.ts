@@ -23,6 +23,7 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "config.auth",
   "post-ready.startup-maintenance",
   "startup.maintenance.channels",
+  "startup.maintenance.plugin-registry",
   "state.desktop-approval-admission",
   "sessions.admission",
   "startup.maintenance.sessions",
@@ -56,7 +57,6 @@ export type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
 };
 
-/** Measure a startup step when tracing is active, otherwise run it directly. */
 export async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,

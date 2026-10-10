@@ -168,18 +168,12 @@ export function maybeRepairDiscordNumericIds(
     }
   }
 
-  if (changes.length === 0) {
-    return {
-      config: cfg,
-      changes: [],
-      warnings: collectDiscordNumericIdWarnings({ hits, doctorFixCommand }),
-    };
-  }
+  const repaired = changes.length > 0;
   return {
-    config: next,
+    config: repaired ? next : cfg,
     changes,
     warnings: collectDiscordNumericIdWarnings({
-      hits: hits.filter((hit) => !hit.safe),
+      hits: repaired ? hits.filter((hit) => !hit.safe) : hits,
       doctorFixCommand,
     }),
   };

@@ -308,7 +308,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       });
       expect(facts.present().placement).not.toHaveProperty("workerRuntimeInstall");
       expect(placementReads).toHaveBeenCalledTimes(1);
-      const move = placements.beginPlacementMove({
+      const move = await placements.beginPlacementMove({
         sessionId: identity.sessionId,
         source: {
           generation: placement.generation,
@@ -366,7 +366,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
         const entryReads = vi.spyOn(rowMaterialization, "readSessionRowEntry");
         try {
           expect(
-            placements.recordPlacementMoveError({
+            await placements.recordPlacementMoveError({
               operationId: move.intent.operationId,
               sessionId: identity.sessionId,
               error: "Current move failure",

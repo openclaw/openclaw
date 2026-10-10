@@ -69,6 +69,9 @@ Gateway runtime is stale after Node upgrade: child workers are using <path>, whi
 ```
 
 The check does not restart the Gateway. Run `openclaw gateway restart` after the warning.
+Exec and stdio MCP command relays can use the stable Homebrew Node path when the
+old executable is gone. Workers that require the Gateway's exact runtime still
+need a restart; a failed supervisor or broker launch reports the same warning.
 
 `--deep` and `--all` also show delivery queue warnings for dead-lettered messages
 and pressured inbound lanes. These warnings include pending, claimed, and blocked

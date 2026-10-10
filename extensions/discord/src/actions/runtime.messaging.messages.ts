@@ -12,10 +12,11 @@ import { resolveDiscordChannelId } from "../targets.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
 function parseDiscordMessageLink(link: string) {
-  const normalized = link.trim();
-  const match = normalized.match(
-    /^(?:https?:\/\/)?(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?:\/?|\?.*)$/i,
-  );
+  const match = link
+    .trim()
+    .match(
+      /^(?:https?:\/\/)?(?:ptb\.|canary\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)(?:\/?|\?.*)$/i,
+    );
   if (!match) {
     throw new Error(
       "Invalid Discord message link. Expected https://discord.com/channels/<guildId>/<channelId>/<messageId>.",
@@ -51,10 +52,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       let channelId = readStringParam(ctx.params, "channelId");
       let messageId = readStringParam(ctx.params, "messageId");
       if (messageLink) {
-        const parsed = parseDiscordMessageLink(messageLink);
-        guildId = parsed.guildId;
-        channelId = parsed.channelId;
-        messageId = parsed.messageId;
+        ({ guildId, channelId, messageId } = parseDiscordMessageLink(messageLink));
       }
       if (!guildId || !channelId || !messageId) {
         throw new Error(

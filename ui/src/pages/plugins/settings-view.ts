@@ -36,7 +36,6 @@ import {
   renderPluginRowMessage,
   type PluginRowMessage,
 } from "./plugin-row-message.ts";
-import { matchesPluginQuery } from "./plugin-state-presentation.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import {
   flattenPluginSettingsFields,
@@ -158,8 +157,16 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
     return renderRetryError(props.error, props.onRefresh);
   }
   const refreshError = props.error ? renderRetryError(props.error, props.onRefresh) : nothing;
+  const query = props.query.trim().toLocaleLowerCase();
   const plugins = (props.result?.plugins ?? [])
-    .filter((plugin) => plugin.installed && matchesPluginQuery(plugin, props.query))
+    .filter(
+      (plugin) =>
+        plugin.installed &&
+        (!query ||
+          [plugin.name, plugin.id, plugin.description, plugin.packageName].some((value) =>
+            value?.toLocaleLowerCase().includes(query),
+          )),
+    )
     .toSorted((left, right) => left.name.localeCompare(right.name));
   if (plugins.length === 0) {
     return html`${refreshError}${renderSettingsEmpty(

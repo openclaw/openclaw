@@ -4,7 +4,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
@@ -75,7 +75,7 @@ it("publishes a selected requester wake before an overlapping row mutation plans
           options,
         ),
       );
-    const wake = mutateRequesterSettleWakeBatch({
+    const wake = mutateRequesterCompletionBatch({
       entries: [selected],
       operation: {
         kind: "transition",

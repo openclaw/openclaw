@@ -11,18 +11,11 @@ export type LegacyCronQuarantine = {
   jobs: CronQuarantinedJob[];
 };
 
-/** Resolves the historical sidecar without making it part of the runtime store API. */
-function resolveLegacyCronQuarantinePath(storePath: string): string {
-  return storePath.endsWith(".json")
-    ? storePath.replace(/\.json$/, "-quarantine.json")
-    : `${storePath}-quarantine.json`;
-}
-
 /** Reads and validates a historical quarantine file without modifying its source. */
 export async function loadLegacyCronQuarantineForMigration(
   storePath: string,
 ): Promise<LegacyCronQuarantine | undefined> {
-  const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
+  const quarantinePath = `${storePath.endsWith(".json") ? storePath.slice(0, -5) : storePath}-quarantine.json`;
   let raw: string;
   try {
     raw = await fs.readFile(quarantinePath, "utf-8");

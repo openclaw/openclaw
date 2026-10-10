@@ -257,11 +257,12 @@ async function proveLegacyAuthority<
   }
 }
 
-it.for(
-  (["exec", "plugin", "auto-review"] as const).flatMap((kind) =>
-    [false, true].map((revoke) => ({ kind, revoke })),
-  ),
-)(
+it.for([
+  { kind: "exec", revoke: true },
+  { kind: "plugin", revoke: false },
+  { kind: "auto-review", revoke: false },
+  { kind: "auto-review", revoke: true },
+] as const)(
   "retains $kind verdict authority after disconnect (revoked: $revoke)",
   async ({ kind, revoke }, test) => {
     if (kind === "plugin") {

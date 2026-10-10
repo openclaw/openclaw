@@ -228,22 +228,13 @@ const parseDays = (raw: unknown): number | undefined => {
     : undefined;
 };
 
-const resolveRangeDays = (raw: unknown): number | "all" | undefined => {
-  switch (raw) {
-    case "all":
-      return "all";
-    case "7d":
-      return 7;
-    case "30d":
-      return 30;
-    case "90d":
-      return 90;
-    case "1y":
-      return 365;
-    default:
-      return undefined;
-  }
-};
+const RANGE_DAYS = new Map<unknown, number | "all">([
+  ["all", "all"],
+  ["7d", 7],
+  ["30d", 30],
+  ["90d", 90],
+  ["1y", 365],
+]);
 
 /**
  * Get date range from params (startDate/endDate or days).
@@ -313,7 +304,7 @@ export const resolveDateRange = (
     return { ok: true, value: { startMs, endMs } };
   }
 
-  const rangeDays = resolveRangeDays(params.range);
+  const rangeDays = RANGE_DAYS.get(params.range);
   if (rangeDays === "all") {
     return {
       ok: true,

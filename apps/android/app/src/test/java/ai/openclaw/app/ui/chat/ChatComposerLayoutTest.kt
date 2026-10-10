@@ -11,6 +11,7 @@ import ai.openclaw.app.GatewayTalkSetupIssue
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
 import ai.openclaw.app.GatewayTalkSetupTarget
+import ai.openclaw.app.GatewayTalkSetupTargetIssue
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeRuntime
@@ -1265,7 +1266,7 @@ class ChatComposerLayoutTest {
           readiness.value.copy(
             realtimeTalk =
               GatewayTalkSetupState.NeedsSetup(
-                GatewayTalkSetupIssue.ConfigureProvider(GatewayTalkSetupTarget.REALTIME_TALK),
+                GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, GatewayTalkSetupTarget.REALTIME_TALK),
               ),
           )
       }
@@ -2893,7 +2894,7 @@ class ChatComposerLayoutTest {
     withBranchRequests(hold = "sessions.branches.switch") { _, calls, release ->
       val old = openBranchSheet(calls)
       branchRow(2).performClick()
-      composeRule.waitUntil { calls.any { it.method == "sessions.branches.switch" } }
+      awaitBranchSwitch(calls, BranchSwitchPhase.Admitted)
       composeRule.runOnUiThread {
         runBlocking {
           sheetFeatures.publish(listOf(testFold(Rect(0, 0, 800, 800))))
@@ -2945,15 +2946,23 @@ class ChatComposerLayoutTest {
     return checkNotNull(ShadowDialog.getLatestDialog()) as ComponentDialog
   }
 
+  private enum class BranchSwitchPhase { Admitted, Completed }
+
   /**
-   * Drains the admitted selection until its coroutine completes. Its Room work resumes from the
+   * Waits for selection admission or completion. Its Room work resumes from the
    * database's IO context, which Compose idling cannot see, so a wall-clock poll races slow hosts.
    */
-  private fun awaitBranchSwitch(calls: Collection<BranchRequest>) {
+  private fun awaitBranchSwitch(
+    calls: Collection<BranchRequest>,
+    phase: BranchSwitchPhase = BranchSwitchPhase.Completed,
+  ) {
     val selection =
       object : IdlingResource {
         override val isIdleNow: Boolean
-          get() = calls.lastOrNull { it.method == "sessions.branches.switch" }?.job?.isCompleted == true
+          get() {
+            val request = calls.lastOrNull { it.method == "sessions.branches.switch" } ?: return false
+            return phase == BranchSwitchPhase.Admitted || request.job.isCompleted
+          }
 
         override fun getDiagnosticMessageIfBusy(): String =
           "Branch switch requests=${calls.count { it.method == "sessions.branches.switch" }} " +
@@ -2965,7 +2974,9 @@ class ChatComposerLayoutTest {
     } finally {
       composeRule.unregisterIdlingResource(selection)
     }
-    assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
+    if (phase == BranchSwitchPhase.Completed) {
+      assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
+    }
   }
 
   private fun awaitPostHistoryBranchList(hold: BranchPostHistoryListReplyHold) {
@@ -5324,7 +5335,7 @@ class ChatComposerLayoutTest {
     showChat()
     showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
-    val card = composeRule.onNodeWithTag("chat-progress-card")
+    val card = composeRule.onNodeWithTag("chat-progress-card", useUnmergedTree = true)
     val composer = composeRule.onNodeWithTag("chat-composer-surface")
     val editor = composerEditor()
     val collapsedCard = card.getUnclippedBoundsInRoot()

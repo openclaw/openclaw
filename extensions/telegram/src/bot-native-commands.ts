@@ -311,10 +311,7 @@ export const registerTelegramNativeCommands = ({
       return { handled: false, clearButtons: false };
     }
     const callbackMessage = callbackQuery.message;
-    if (!callbackMessage || callbackMessage.date <= 0) {
-      return { handled: true, clearButtons: false };
-    }
-    if (callbackMessage.chat.type === "channel") {
+    if (!callbackMessage || callbackMessage.date <= 0 || callbackMessage.chat.type === "channel") {
       return { handled: true, clearButtons: false };
     }
     const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();

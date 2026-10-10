@@ -108,16 +108,24 @@ function matchesSubagentCacheAdmission(
   }
 }
 
+function setOrDeleteRun<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
+  runId: string,
+  entry: T | undefined,
+): void {
+  if (entry) {
+    runs.set(runId, entry);
+  } else {
+    runs.delete(runId);
+  }
+}
+
 function applySubagentRunChanges<T extends SubagentRunReadRecord>(
   runs: Map<string, T>,
   changes: Map<string, SubagentRunChange<T>> | undefined,
 ): Map<string, T> {
   for (const [runId, { entry }] of changes ?? []) {
-    if (entry) {
-      runs.set(runId, entry);
-    } else {
-      runs.delete(runId);
-    }
+    setOrDeleteRun(runs, runId, entry);
   }
   return runs;
 }
@@ -183,6 +191,8 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     admission,
     sourceIdentity: admission?.identity.key ?? retiredPublicationIdentity?.key,
     retiredPublicationIdentity,
+    // Publication replaces facts, not custody of an accepted read and its cleanup.
+    pending: previous.pending,
   };
   if (previous.pending?.committedRevision !== undefined) {
     previous.pending.committedRevision += 1;
@@ -192,8 +202,6 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     cache.state = {
       snapshot: new Map([...runs].map(([runId, entry]) => [runId, cache.copy(entry)])),
       ...owner,
-      // Publication replaces facts, not custody of an accepted read and its cleanup.
-      pending: previous.pending,
     };
     return;
   }
@@ -207,7 +215,6 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     cache.state = {
       changes,
       ...owner,
-      pending: previous.pending,
     };
     return;
   }
@@ -216,17 +223,12 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   previous.lookup = undefined;
   for (const runId of new Set(changedRunIds)) {
     const entry = runs.get(runId);
-    if (entry) {
-      snapshot.set(runId, cache.copy(entry));
-    } else {
-      snapshot.delete(runId);
-    }
+    setOrDeleteRun(snapshot, runId, entry ? cache.copy(entry) : undefined);
     lookup?.set(runId, snapshot.get(runId));
   }
   cache.state = {
     snapshot,
     ...owner,
-    pending: previous.pending,
     ...(lookup ? { lookup } : {}),
   };
 }
@@ -313,20 +315,16 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
   if (shouldReadPersistedSubagentRuns()) {
     const state = selectSubagentCacheStateForRead(cache.state, scope?.context);
     for (const [runId, { entry }] of state.changes ?? []) {
-      if (entry && (!scope || scope.matches(entry))) {
-        merged.set(runId, entry);
-      } else {
-        merged.delete(runId);
-      }
+      setOrDeleteRun(merged, runId, entry && (!scope || scope.matches(entry)) ? entry : undefined);
     }
   }
   for (const [runId, entry] of inMemoryRuns) {
-    if (!scope || scope.matches(entry)) {
-      merged.set(runId, cache.project(entry));
-    } else {
-      // Live memory wins even when a run moved out of the persisted scope.
-      merged.delete(runId);
-    }
+    // Live memory wins even when a run moved out of the persisted scope.
+    setOrDeleteRun(
+      merged,
+      runId,
+      !scope || scope.matches(entry) ? cache.project(entry) : undefined,
+    );
   }
   return merged;
 }
@@ -615,19 +613,11 @@ export function mergeSelectedFullRuns(
     matchesSubagentCacheAdmission(state.admission, context.admission)
   ) {
     for (const [runId, { entry }] of state.changes ? selectedEntries(state.changes, runIds) : []) {
-      if (entry && matches(entry)) {
-        merged.set(runId, entry);
-      } else {
-        merged.delete(runId);
-      }
+      setOrDeleteRun(merged, runId, entry && matches(entry) ? entry : undefined);
     }
   }
   for (const [runId, entry] of selectedEntries(inMemoryRuns, runIds)) {
-    if (matches(entry)) {
-      merged.set(runId, entry);
-    } else {
-      merged.delete(runId);
-    }
+    setOrDeleteRun(merged, runId, matches(entry) ? entry : undefined);
   }
   return merged;
 }

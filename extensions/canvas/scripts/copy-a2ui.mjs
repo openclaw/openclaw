@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Copies bundled Canvas A2UI assets into the dist host asset directory.
- */
-
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";

@@ -72,11 +72,15 @@ type ReplyDispatchDeliveryOutcomeTracker = {
 };
 
 /** Invoke immediately without letting observer failures interrupt delivery bookkeeping. */
-function invokeReplyDispatcherObserver(observer: () => unknown): void {
+function invokeReplyDispatcherObserver(
+  observer: () => unknown,
+  onError: (error: unknown) => void = () => undefined,
+): void {
   try {
-    void Promise.resolve(observer()).catch(() => undefined);
-  } catch {
+    void Promise.resolve(observer()).catch(onError);
+  } catch (error) {
     // Error reporting itself can throw synchronously, before returning a promise.
+    onError(error);
   }
 }
 
@@ -121,10 +125,8 @@ export function captureReplyDispatchDeliveryOutcome(payload: ReplyPayload): {
   // it so a later send of the same payload owns a separate settlement.
   let tracker = deliveryOutcomeTrackers.get(payload);
   if (!tracker) {
-    const { promise, resolve } = createDeferredCore<ReplyDispatchDeliveryOutcome>();
     tracker = {
-      promise,
-      resolve,
+      ...createDeferredCore<ReplyDispatchDeliveryOutcome>(),
       tracked: false,
       pending: false,
     };
@@ -293,11 +295,7 @@ export function createReplyDispatcher(
   };
 
   const buildReceipt = (): ReplyDispatchReceipt => ({
-    counts: {
-      tool: { ...settledCounts.tool },
-      block: { ...settledCounts.block },
-      final: { ...settledCounts.final },
-    },
+    counts: mapReplyDispatchCounts(settledCounts, (counts) => ({ ...counts })),
     anyVisibleDelivered: Object.values(settledCounts).some(
       (counts) => counts.delivered > 0 || counts.failedAfterSend > 0,
     ),
@@ -602,15 +600,10 @@ export function createReplyDispatcher(
             deliveryOutcome === "delivered" ? attempt?.payload : undefined;
           deliveryOutcomeTracker.resolve(deliveryOutcome);
         }
-        try {
-          if (options.onDeliverySettled) {
-            void Promise.resolve(options.onDeliverySettled(dispatchInfo)).catch((err: unknown) => {
-              reportObserverError(err, dispatchInfo);
-            });
-          }
-        } catch (err: unknown) {
-          reportObserverError(err, dispatchInfo);
-        }
+        invokeReplyDispatcherObserver(
+          () => options.onDeliverySettled?.(dispatchInfo),
+          (error) => reportObserverError(error, dispatchInfo),
+        );
         releasePending();
       }
     });
@@ -699,16 +692,13 @@ export async function waitForReplyDispatcherIdle(
   if (abortSignal.aborted) {
     return undefined;
   }
-  let removeAbortListener: (() => void) | undefined;
-  const aborted = new Promise<undefined>((resolve) => {
-    const onAbort = () => resolve(undefined);
-    abortSignal.addEventListener("abort", onAbort, { once: true });
-    removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
-  });
+  const aborted = createDeferredCore<undefined>();
+  const onAbort = () => aborted.resolve(undefined);
+  abortSignal.addEventListener("abort", onAbort, { once: true });
   try {
-    return (await Promise.race([dispatcher.waitForIdle(), aborted])) || undefined;
+    return (await Promise.race([dispatcher.waitForIdle(), aborted.promise])) || undefined;
   } finally {
-    removeAbortListener?.();
+    abortSignal.removeEventListener("abort", onAbort);
   }
 }
 

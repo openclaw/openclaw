@@ -207,14 +207,12 @@ export abstract class AgentSessionModels extends AgentSessionPrompting {
     const sessionId = manager.getSessionId();
     const runner = this.currentExtensionRunner;
     const assertAmbient = target ? captureOwnedTranscriptWriteAssertion(target) : undefined;
-    const isBound = () => {
-      const current = manager.getSessionTarget();
-      return (
-        manager.getSessionId() === sessionId && sameSessionTranscriptTargetBinding(target, current)
-      );
-    };
     const assertCurrent = () => {
-      if (!isBound()) {
+      const current = manager.getSessionTarget();
+      if (
+        manager.getSessionId() !== sessionId ||
+        !sameSessionTranscriptTargetBinding(target, current)
+      ) {
         throw new Error("Session manager identity changed before transcript write admission");
       }
       if (

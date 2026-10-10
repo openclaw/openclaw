@@ -468,8 +468,6 @@ function applyToolReviewEvent(
     retainedReviews,
     nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
   );
-  entry.message = buildToolStreamMessage(entry);
-  scheduleToolStreamSync(host, true);
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
@@ -497,19 +495,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
   }
 
-  if (handleUsageEvent(host, payload)) {
-    return true;
-  }
-
-  if (handleNoticeEvent(host, payload)) {
-    return true;
-  }
-
-  if (handleStreamStatus(host, payload)) {
-    return true;
-  }
-
-  if (handlePreambleProgress(host, payload)) {
+  if (
+    handleUsageEvent(host, payload) ||
+    handleNoticeEvent(host, payload) ||
+    handleStreamStatus(host, payload) ||
+    handlePreambleProgress(host, payload)
+  ) {
     return true;
   }
 
@@ -654,12 +645,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
   }
 
   if (approvalReview) {
-    trimToolStream(host);
     applyToolReviewEvent(host, payload, entry, approvalReview);
-    return true;
   }
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
-  scheduleToolStreamSync(host, phase === "result");
+  scheduleToolStreamSync(host, phase === "result" || approvalReview !== null);
   return true;
 }

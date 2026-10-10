@@ -311,8 +311,11 @@ describe("session transcript reconcile worker lifecycle", () => {
         hostLeases.toSorted(),
       );
       const idleLeases = retainedLeases.filter((lease) => !hostLeases.includes(lease));
-      expect(idleLeases).toHaveLength(1);
-      expect([...canonical.leases.values()]).toContain(idleLeases[0]);
+      // Planner leases are released while the four most recent canonical executors stay idle.
+      expect(idleLeases).toHaveLength(4);
+      for (const lease of idleLeases) {
+        expect([...canonical.leases.values()]).toContain(lease);
+      }
     } finally {
       operationSpy.mockRestore();
       canonical.restore();
@@ -462,11 +465,13 @@ describe("session transcript reconcile worker lifecycle", () => {
         expect(changes).toHaveBeenCalledExactlyOnceWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
+          scope: "transcript",
         });
         expect(changes.mock.results[0]?.value).toBe(false);
         expect(facts).toHaveBeenCalledWith({
           storePath: database.path,
           sessionKey: scope.sessionKey,
+          scope: "transcript",
           facts: { kind: "unchanged" },
         });
         await vi.waitFor(() => expect(targetOutcome).toEqual({ ready: true }));
@@ -488,8 +493,8 @@ describe("session transcript reconcile worker lifecycle", () => {
         }
       }
       expect(changes.mock.calls).toEqual([
-        [{ storePath: database.path, sessionKey: scope.sessionKey }],
-        [{ storePath: database.path, sessionKey: secondScope.sessionKey }],
+        [{ storePath: database.path, sessionKey: scope.sessionKey, scope: "transcript" }],
+        [{ storePath: database.path, sessionKey: secondScope.sessionKey, scope: "transcript" }],
       ]);
     } finally {
       await closeOpenClawAgentDatabasesAsync();

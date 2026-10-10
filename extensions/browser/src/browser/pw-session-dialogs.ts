@@ -66,16 +66,9 @@ function abortActionsBlockedByDialog(state: PageState, reason?: unknown): void {
   }
   const err = reason ?? new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
   for (const controller of state.dialogAbortControllers) {
-    if (!controller.signal.aborted) {
-      controller.abort(err);
-    }
+    controller.abort(err);
   }
   state.dialogAbortControllers.clear();
-}
-
-function isNoDialogShowingError(err: unknown): boolean {
-  const message = err instanceof Error ? err.message : String(err);
-  return message.toLowerCase().includes("no dialog is showing");
 }
 
 export async function settleObservedDialog(params: {
@@ -96,7 +89,8 @@ export async function settleObservedDialog(params: {
       await pending.dialog.dismiss();
     }
   } catch (err) {
-    if (!isNoDialogShowingError(err)) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.toLowerCase().includes("no dialog is showing")) {
       throw err;
     }
     closedBy = "remote";

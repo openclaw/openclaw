@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import {
   createWorkerOperationRegistry,
   type WorkerOperationContext,
+  type WorkerWriteOperationContext,
 } from "./worker-operation-registry.js";
 
 const { loaded, read } = vi.hoisted(() => ({
@@ -29,9 +30,12 @@ vi.mock("../fleet/registry.worker.js", () => {
 import { stateWorkerRegistry } from "./openclaw-state-worker-registry.js";
 
 it("loads only the requested domain and routes exact operation names after preparation", async () => {
-  const context: WorkerOperationContext = {
+  const context: WorkerWriteOperationContext = {
     open: () => {
       throw new Error("The registry must leave database opening to its handler");
+    },
+    write: () => {
+      throw new Error("The registry must leave transactions to its handler");
     },
     stateOptions: () => ({ path: "synthetic-state.sqlite", env: {} }),
   };

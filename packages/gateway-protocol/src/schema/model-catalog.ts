@@ -133,6 +133,8 @@ export const ModelCatalogProviderOutcomeSchema = closedObject({
 
 export const ModelsListResultSchema = closedObject({
   models: Type.Array(ModelChoiceSchema),
+  /** Matches the authorized session row's saved model-selection inputs. */
+  sessionModelRevision: Type.Optional(NonEmptyString),
   /** The Gateway owns role restrictions and the effective permitted reset target. */
   modelSelectionPolicy: Type.Optional(
     closedObject({

@@ -17,6 +17,7 @@ import type {
 } from "../../plugins/capability-provider.types.js";
 import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
 import type { WorkerEnvironmentPreparation } from "./environment-record.js";
+import type { WorkerPlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerPlacementMoveSource,
   WorkerPlacementMoveTarget,
@@ -206,7 +207,7 @@ export type WorkerPlacementDispatchRequest = WorkerSessionPlacementDispatchIdent
 
 export type WorkerPlacementDispatchAdmission = <T>(
   request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
-  run: (signal?: AbortSignal) => Promise<T>,
+  run: (signal?: AbortSignal, assertSessionCurrent?: () => void) => Promise<T>,
   authorize?: () => void,
   signal?: AbortSignal,
 ) => Promise<T>;
@@ -238,7 +239,7 @@ export type WorkerPlacementMoveRequest = WorkerSessionPlacementIdentity & {
 };
 
 /** Closure-bound request authority; in-process only and never part of durable placement intent. */
-export type WorkerPlacementAuthorization = () => void;
+export type { WorkerPlacementAuthorization } from "./placement-authorization.js";
 
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
 export type WorkerPlacementReclaimSourceCheck = ((
@@ -252,7 +253,11 @@ export type WorkerPlacementReclaimSourceCheck = ((
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
   getPendingDeviceDispatchCount?(deviceId: string, excludeSessionId?: string): number;
+  /** @deprecated Await getAdmittedDeviceSessionCountsAsync; retained through the next Plugin SDK major. */
   getAdmittedDeviceSessionCounts?(excludeSessionId?: string): ReadonlyMap<string, number>;
+  getAdmittedDeviceSessionCountsAsync?(
+    excludeSessionId?: string,
+  ): Promise<ReadonlyMap<string, number>>;
   dispatch(
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerSessionPlacementRecord) => void,

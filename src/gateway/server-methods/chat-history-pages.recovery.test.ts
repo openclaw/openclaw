@@ -538,7 +538,13 @@ describe("historical page recovery context", () => {
               rawPageMessages: 2,
             });
           } else {
-            expect(Object.keys(page)).toEqual(["messages"]);
+            expect(page.pagination).toBeUndefined();
+            expect(page.anchor).toMatchObject({
+              oldestMessageId: "failed",
+              newestMessageId: "failed",
+              hasOlder: true,
+              hasNewer: true,
+            });
           }
           expect(await raw()).toEqual(original);
           expect(renderedMessages).toBeLessThanOrEqual(original.length * 5);

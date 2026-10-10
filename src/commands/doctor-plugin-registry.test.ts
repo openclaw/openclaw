@@ -27,6 +27,7 @@ import {
   createCurrentIndexWithPathRecord,
   expectedPluginIndexRecord,
 } from "./doctor-plugin-registry.test-support.js";
+import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   detectConfiguredPluginInstallHealthIssues,
   repairMissingPluginInstallsForIds,
@@ -195,13 +196,17 @@ describe("maybeRepairPluginRegistryState", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
     const candidate = createCandidate(pluginDir);
+    const prompter = createDoctorPrompter({
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { repair: true, nonInteractive: true },
+    });
 
     const nextConfig = await maybeRepairPluginRegistryState({
       stateDir,
       candidates: [candidate],
       env: hermeticEnv(),
       config: {},
-      prompter: { shouldRepair: true },
+      prompter,
     });
 
     expect(nextConfig).toStrictEqual({ config: {}, pluginInventoryChanged: true });
@@ -220,7 +225,7 @@ describe("maybeRepairPluginRegistryState", () => {
         candidates: [candidate],
         env: hermeticEnv(),
         config: {},
-        prompter: { shouldRepair: true },
+        prompter,
       }),
     ).resolves.toStrictEqual({ config: {} });
   });

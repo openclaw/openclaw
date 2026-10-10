@@ -145,6 +145,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         : undefined,
     );
   }
+  const scope = () => ({ agentId: options.agentId, config: options.config, env: options.env });
   const workshopConfig = resolveSkillWorkshopConfig(options.config);
   const projectionBudgets = resolveSkillWorkshopProjectionBudgets(options.modelContextWindowTokens);
   const readSkillHashes =
@@ -189,7 +190,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         const skill = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, agentId: options.agentId, env: options.env },
+          scope(),
         );
         const readMaxChars = projectionBudgets.artifactChars;
         const truncated = skill.content.length > readMaxChars;
@@ -223,9 +224,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           throw new ToolInputError("this Skill Workshop session cannot prepare live skill patches");
         }
         return await executePrepareSkillPatch({
-          config: options.config,
-          agentId: options.agentId,
-          env: options.env,
+          ...scope(),
           toolParams: params,
           preparedSkillPatches,
           proposalMutationBudgetRemaining: options.proposalMutationBudget?.remaining,
@@ -238,13 +237,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const query = readToolStringParam(params, "query");
         const limit = readPositiveIntegerParam(params, "limit") ?? 20;
         const proposals = listProposalEntries({
-          proposals: (
-            await listSkillProposals({
-              agentId: options.agentId,
-              config: options.config,
-              env: options.env,
-            })
-          ).proposals,
+          proposals: (await listSkillProposals(scope())).proposals,
           status,
           query,
           limit,
@@ -253,13 +246,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       }
 
       if (action === "inspect") {
-        const proposal = await readProposalForInspect(
-          params,
-          options.workspaceDir,
-          options.config,
-          options.env,
-          options.agentId,
-        );
+        const proposal = await readProposalForInspect(params, options.workspaceDir, scope());
         const artifactPath = readToolStringParam(params, "artifact_path", {
           label: "artifact_path",
         });
@@ -294,10 +281,8 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
 
       const proposalContext = {
         workspaceDir: options.workspaceDir,
-        agentId: options.agentId,
+        ...scope(),
         eventActor: { type: "agent" as const, ...(options.agentId ? { id: options.agentId } : {}) },
-        config: options.config,
-        env: options.env,
       };
       const lifecycleParams = () => ({
         ...proposalContext,
@@ -367,7 +352,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         // redeem one exact span prepared from the authoritative full skill.
         const target = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, agentId: options.agentId, env: options.env },
+          scope(),
         );
         const readHash = readSkillHashes.get(target.skillKey);
         const contentHash = sha256Hex(target.content);
@@ -505,9 +490,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
               }),
               name: readToolStringParam(params, "name"),
               workspaceDir: options.workspaceDir,
-              config: options.config,
-              agentId: options.agentId,
-              env: options.env,
+              ...scope(),
             });
             proposalId = pendingProposal.record.id;
             expectedRevisionHash =

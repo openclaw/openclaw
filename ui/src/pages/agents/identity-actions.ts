@@ -19,16 +19,10 @@ type AgentIdentityEditorHost = {
   identityError: string | null;
 };
 
-const avatarSelectionEpochs = new WeakMap<AgentIdentityEditorHost, number>();
-
-function advanceAvatarSelectionEpoch(host: AgentIdentityEditorHost): number {
-  const epoch = (avatarSelectionEpochs.get(host) ?? 0) + 1;
-  avatarSelectionEpochs.set(host, epoch);
-  return epoch;
-}
+const avatarSelections = new WeakMap<AgentIdentityEditorHost, symbol>();
 
 export function resetIdentityDraft(host: AgentIdentityEditorHost) {
-  advanceAvatarSelectionEpoch(host);
+  avatarSelections.delete(host);
   host.identityDraft = { name: null, emoji: null, avatar: null };
   host.identitySaving = false;
   host.identityError = null;
@@ -48,14 +42,15 @@ export function selectIdentityAvatar(
   file: File,
   config?: ApplicationConfigCapability,
 ) {
-  const epoch = advanceAvatarSelectionEpoch(host);
+  const selection = Symbol("avatar-selection");
+  avatarSelections.set(host, selection);
   if (!uploadsEnabled(config)) {
     host.identityError = uploadsDisabledMessage();
     return;
   }
   void fileToAvatarDataUrl(file, config)
     .then((result) => {
-      if (avatarSelectionEpochs.get(host) !== epoch) {
+      if (avatarSelections.get(host) !== selection) {
         return;
       }
       if (!uploadsEnabled(config)) {
@@ -70,7 +65,7 @@ export function selectIdentityAvatar(
       }
     })
     .catch((error: unknown) => {
-      if (avatarSelectionEpochs.get(host) === epoch) {
+      if (avatarSelections.get(host) === selection) {
         host.identityError = formatUiError(error);
       }
     });

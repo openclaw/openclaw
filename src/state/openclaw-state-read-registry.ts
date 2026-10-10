@@ -33,6 +33,7 @@ export function readStateRegistryCommand(
         | "agentDeletionJournal.status"
         | "agentDeletionJournal.authority"
         | "worktrees.cleanupState"
+        | "worktrees.list"
         | "fleet.list"
         | "fleet.get"
         | "sandboxRegistry.list"
@@ -95,6 +96,9 @@ export function readStateRegistryCommand(
       records: listRegistryWorktreesInDatabase(db),
       leases: readWorktreeRunLeaseStateInDatabase(db),
     };
+  }
+  if (command.type === "worktrees.list") {
+    return { type: command.type, records: listRegistryWorktreesInDatabase(db) };
   }
   return command.type === "fleet.list"
     ? { type: command.type, cells: listFleetCellsInDatabase(db) }

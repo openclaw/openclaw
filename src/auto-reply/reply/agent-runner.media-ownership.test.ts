@@ -27,6 +27,8 @@ describe("runReplyAgent media delivery ownership", () => {
     async ({ sessionKey, provider, gateway }) => {
       const { normalizeWebchatReplyMediaPathsForDisplay } =
         await import("../../gateway/server-methods/chat-reply-media.js");
+      const { seedWebchatReplyMediaScope } =
+        await import("../../gateway/server-methods/chat-reply-media.test-support.js");
       const { drainGlobalSingletonLifecycleState } =
         await import("../../shared/global-singleton.js");
       const { withOpenClawTestState } = await import("../../test-utils/openclaw-test-state.js");
@@ -93,7 +95,7 @@ describe("runReplyAgent media delivery ownership", () => {
             }
             if (gateway) {
               expect(result.mediaUrls).toEqual(sources);
-              const [display] = await normalizeWebchatReplyMediaPathsForDisplay({
+              const scope = await seedWebchatReplyMediaScope({
                 cfg: config,
                 agentId: "qa",
                 sessionKey,
@@ -103,6 +105,9 @@ describe("runReplyAgent media delivery ownership", () => {
                   permissionMode: "workspace",
                   sessionRoot: selected,
                 },
+              });
+              const [display] = await normalizeWebchatReplyMediaPathsForDisplay({
+                ...scope,
                 payloads: [result],
               });
               expect(display?.mediaUrls).toHaveLength(1);
@@ -116,7 +121,8 @@ describe("runReplyAgent media delivery ownership", () => {
               }
             }
             expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-            expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
+            // The shared spy includes initial preparation; execution must reuse that context.
+            expect(createReplyMediaContextRuntimeMock).toHaveBeenCalledOnce();
           } finally {
             await drainGlobalSingletonLifecycleState();
           }

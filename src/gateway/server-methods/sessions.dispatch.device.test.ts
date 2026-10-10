@@ -106,6 +106,7 @@ function connectedNode(deviceId: string, available: number): NodeWorkerSuperviso
       enabled: true,
       capacity: { total: Math.max(2, available), available },
       capturedExecPolicy: true,
+      promptContext: 1,
     },
     commands: ["system.run"],
   } satisfies NodeWorkerSupervisorNodeProof;
@@ -157,7 +158,6 @@ describe("sessions.dispatch device targets", () => {
   });
 
   registerNativeDeviceDispatchTests({
-    makeTempDir: (prefix) => tempDirs.make(prefix),
     connectedNode,
     pairedNode,
     useDeviceSession,

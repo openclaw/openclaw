@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
@@ -150,13 +151,17 @@ describe("chat metadata ownership", () => {
       getRuntimeConfig: () => config,
       readChatMetadata: harness.runtime.read,
     });
-    const request = async (includeModels?: boolean) => {
+    const request = async (includeModels?: boolean, ifRevision?: string) => {
       const respond = vi.fn<RespondFn>();
       await expectDefined(
         chatHistoryHandlers["chat.metadata"],
         "metadata handler",
       )({
-        params: { agentId: "main", ...(includeModels === false ? { includeModels } : {}) },
+        params: {
+          agentId: "main",
+          ...(includeModels === false ? { includeModels } : {}),
+          ...(ifRevision ? { ifRevision } : {}),
+        },
         context,
         client: null,
         respond,
@@ -171,6 +176,23 @@ describe("chat metadata ownership", () => {
       expect(compact).toHaveBeenCalledWith(true, {
         commands: [{ name: "command-1-1" }],
         swarmEnabled: true,
+        revision: expect.any(String),
+      });
+      const payload = compact.mock.calls[0]?.[1];
+      assert(payload && typeof payload === "object" && "revision" in payload);
+      const { revision } = payload;
+      assert(typeof revision === "string");
+      expect(await request(false, revision)).toHaveBeenCalledWith(true, {
+        revision,
+        unchanged: true,
+        swarmEnabled: true,
+      });
+      harness.setSkillsVersion(2);
+      await harness.runtime.refresh();
+      expect(await request(false, revision)).toHaveBeenCalledWith(true, {
+        commands: [{ name: "command-2-1" }],
+        swarmEnabled: true,
+        revision: expect.not.stringContaining(revision),
       });
       expect(harness.buildProjection).not.toHaveBeenCalled();
       const legacy = await request();
@@ -178,7 +200,7 @@ describe("chat metadata ownership", () => {
         true,
         expect.objectContaining({
           models: [expect.objectContaining({ id: "first" })],
-          commands: [{ name: "command-1-1" }],
+          commands: [{ name: "command-2-1" }],
         }),
       );
     } finally {

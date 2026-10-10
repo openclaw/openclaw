@@ -170,8 +170,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
-  /** Resolved model context window in tokens for assemble/compact budgeting. */
-  contextTokenBudget?: number;
   /** Native model context window before session or operator caps are applied. */
   modelContextWindow?: number;
   /** Per-model contextTokens cap authored by the operator; absent when none was authored. */
@@ -196,8 +194,6 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
-  /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
-  agentHarnessId?: string;
   /** Actual embedded harness declaration, supplied by its invocation owner. */
   supportsTurnScopedToolRestrictions?: boolean;
   /** Non-authorizing expectation; the harness must verify its current private binding. */

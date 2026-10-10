@@ -8,6 +8,7 @@ import {
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-store.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import type { TrajectoryRuntimeRetentionLease } from "../../trajectory/runtime-retention.contract.js";
 import {
   authorizeSessionFacts,
   incognitoEntryPublication,
@@ -178,6 +179,7 @@ export function createIncognitoSessionFacts(
         restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
         onCommitted?: (value: IncognitoSessionOperations[Key]["output"]) => void,
         onCommittedWithoutReply?: (facts: readonly IncognitoSessionFacts[]) => void,
+        attachment?: TrajectoryRuntimeRetentionLease,
       ) => {
         const authority = cleanup
           ? requestAuthority
@@ -304,7 +306,10 @@ export function createIncognitoSessionFacts(
           (retained) => {
             let phase: "prepare" | "transaction" | "commit" = "prepare";
             let entryGuarded: unknown;
-            const admission = createSqliteWorkerOperationAdmission((requested, grant) =>
+            const authorize: Parameters<typeof createSqliteWorkerOperationAdmission>[0] = (
+              requested,
+              grant,
+            ) =>
               withCommandGrant(() => {
                 const request = restrict ? restrict(requested) : requested;
                 authority.assertCurrent();
@@ -409,8 +414,8 @@ export function createIncognitoSessionFacts(
                   throw new Error("Incognito session authority expired");
                 }
                 commitGranted ||= request.stage === "commit";
-              }),
-            );
+              });
+            const admission = createSqliteWorkerOperationAdmission(authorize, attachment);
             native = { retained, admission };
             return { nativeLocations: [], admission };
           },
@@ -546,20 +551,10 @@ export function createIncognitoSessionFacts(
             authority,
             { type: "session.row.read", input: { sessionKey } },
             false,
-            (result) => {
-              const observed = snapshotRevision;
-              return {
-                value: result.value,
-                snapshot: {
-                  assertCurrent(this: void) {
-                    assertBorrowed();
-                    if (snapshotRevision !== observed || pending.size || unavailable.size) {
-                      throw new Error("Incognito session snapshot changed; prepare it again");
-                    }
-                  },
-                },
-              };
-            },
+            (result) => ({
+              value: result.value,
+              snapshot: captureStoreSnapshot(assertBorrowed, authority),
+            }),
           );
         },
         acpSource(authority: IncognitoSessionAuthority, sessionKey: string) {
@@ -579,6 +574,7 @@ export function createIncognitoSessionFacts(
           signal?: AbortSignal,
           publish?: (value: IncognitoSideDataOperations[Key]["output"]) => void,
           invalidate?: (facts: readonly IncognitoSessionFacts[]) => void,
+          attachment?: TrajectoryRuntimeRetentionLease,
         ): Promise<IncognitoSideDataOperations[Key]["output"]> =>
           perform(
             authority,
@@ -592,6 +588,7 @@ export function createIncognitoSessionFacts(
             undefined,
             publish ? (result) => publish(result.value) : undefined,
             invalidate,
+            attachment,
           ),
         history: <Key extends keyof IncognitoHistoryOperations>(
           authority: IncognitoSessionAuthority,

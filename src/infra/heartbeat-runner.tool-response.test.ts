@@ -413,40 +413,51 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     },
   );
 
-  it("retains failed work and dedupe state until a later successful notification", async () => {
-    await withHeartbeat(
-      async ({ sessionKey, storePath, replySpy, sendTelegram, run, expectSend }) => {
-        enqueueSystemEvent("exec finished: retryable deployment check", { sessionKey });
-        const inspectedEvents = peekSystemEventEntries(sessionKey);
-        replySpy.mockImplementationOnce(async (_ctx, options) => {
-          setHeartbeatAgentTurnStatus(options, "failed");
-          return [quietReply(), { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }];
-        });
-        expect(await run({ reason: "exec-event" })).toEqual({
-          status: "failed",
-          reason: "agent-runner-failure",
-        });
-        expectSend(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
-        expect(replySpy.mock.calls[0]?.[1]?.useHeartbeatFailureCopy).toBe(false);
-        expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
-        expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject(previousHeartbeat);
-        replySpy.mockImplementationOnce(async (_ctx, options) => {
-          setHeartbeatAgentTurnStatus(options, "ok");
-          return createHeartbeatToolResponsePayload({
-            outcome: "progress",
-            notify: true,
-            summary: "Queued work completed.",
-            notificationText: "Queued work completed successfully.",
+  it.each([false, true])(
+    "retains failed work and dedupe state until a later successful notification (captured=%s)",
+    async (captured) => {
+      await withHeartbeat(
+        async ({ sessionKey, storePath, replySpy, sendTelegram, run, expectSend }) => {
+          enqueueSystemEvent("exec finished: retryable deployment check", {
+            sessionKey,
+            ...(captured
+              ? {
+                  contextKey: "exec:deployment-check",
+                  deliveryContext: { channel: "telegram", to: TELEGRAM_GROUP },
+                }
+              : {}),
           });
-        });
-        sendTelegram.mockClear();
-        expect((await run({ reason: "exec-event" })).status).toBe("ran");
-        expectSend("Queued work completed successfully.");
-        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-      },
-      { session: previousHeartbeat },
-    );
-  });
+          const inspectedEvents = peekSystemEventEntries(sessionKey);
+          replySpy.mockImplementationOnce(async (_ctx, options) => {
+            setHeartbeatAgentTurnStatus(options, "failed");
+            return [quietReply(), { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }];
+          });
+          expect(await run({ reason: "exec-event" })).toEqual({
+            status: "failed",
+            reason: "agent-runner-failure",
+          });
+          expectSend(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+          expect(replySpy.mock.calls[0]?.[1]?.useHeartbeatFailureCopy).toBe(false);
+          expect(peekSystemEventEntries(sessionKey)).toEqual(inspectedEvents);
+          expect(readSessionStoreForTest(storePath)[sessionKey]).toMatchObject(previousHeartbeat);
+          replySpy.mockImplementationOnce(async (_ctx, options) => {
+            setHeartbeatAgentTurnStatus(options, "ok");
+            return createHeartbeatToolResponsePayload({
+              outcome: "progress",
+              notify: true,
+              summary: "Queued work completed.",
+              notificationText: "Queued work completed successfully.",
+            });
+          });
+          sendTelegram.mockClear();
+          expect((await run({ reason: "exec-event" })).status).toBe("ran");
+          expectSend("Queued work completed successfully.");
+          expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+        },
+        { session: previousHeartbeat },
+      );
+    },
+  );
 
   it("keeps an unmarked failed run private while retaining inspected work", async () => {
     await withHeartbeat(

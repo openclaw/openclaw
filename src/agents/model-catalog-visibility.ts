@@ -243,11 +243,15 @@ export async function prepareLogicalVisibleModelCatalog(
     if (params.view === "all") {
       return publish(projectEntries(params.catalog));
     }
+    // Authored refs stay listed, unavailable, until their login or key returns.
     const defaultVisibleCatalog = wildcard
       ? sortModelCatalogEntries(
           dedupeModelCatalogEntries([
             ...configuredCatalog,
-            ...params.catalog.filter((entry) => getEntryState(entry).authBacked),
+            ...params.catalog.filter(
+              (entry) =>
+                configuredKeys.has(publicationKeyOf(entry)) || getEntryState(entry).authBacked,
+            ),
           ]),
         )
       : [];

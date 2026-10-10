@@ -187,10 +187,7 @@ function resolveProviderlessConfiguredImageModelRef(params: {
   }
 
   const matches = findConfiguredImageModelMatches({ cfg: params.cfg, ref });
-  if (matches.length === 0) {
-    return ref;
-  }
-  if (matches.length === 1) {
+  if (matches.length <= 1) {
     return matches.at(0) ?? ref;
   }
   throw new Error(

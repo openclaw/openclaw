@@ -40,28 +40,15 @@ async function loadRawAuthProfileStore(authPath: string): Promise<Record<string,
 }
 
 function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId: string): boolean {
-  if (!raw || !isRecord(raw.profiles)) {
-    return false;
-  }
-  const profile = raw.profiles[profileId];
-  if (!isRecord(profile)) {
-    return false;
-  }
+  const profile = raw && isRecord(raw.profiles) ? raw.profiles[profileId] : undefined;
   // Removal-only guard for #79006 sidecar OAuth profiles. Do not add OS-level
   // keychain integrations; doctor must migrate these profiles, not delete them.
   return (
+    isRecord(profile) &&
     profile.type === "oauth" &&
     profile.provider === LEGACY_OAUTH_REF_PROVIDER &&
     isLegacyOAuthRef(profile.oauthRef)
   );
-}
-
-async function collectStateAgentDirs(env: NodeJS.ProcessEnv): Promise<string[]> {
-  const agentsRoot = path.join(resolveStateDir(env), "agents");
-  const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
-  return entries
-    .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
-    .map((entry) => path.join(agentsRoot, entry.name, "agent"));
 }
 
 async function collectCandidateAgentDirs(
@@ -75,8 +62,12 @@ async function collectCandidateAgentDirs(
       dirs.add(path.resolve(resolveAgentDir(cfg, id, env)));
     }
   }
-  for (const agentDir of await collectStateAgentDirs(env)) {
-    dirs.add(path.resolve(agentDir));
+  const agentsRoot = path.join(resolveStateDir(env), "agents");
+  const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (entry.isDirectory() || entry.isSymbolicLink()) {
+      dirs.add(path.resolve(agentsRoot, entry.name, "agent"));
+    }
   }
   return [...dirs].toSorted((left, right) => left.localeCompare(right));
 }
@@ -175,9 +166,7 @@ function removeStaleProfilesFromStore(params: {
       continue;
     }
     delete profiles[profileId];
-    if (usageStats) {
-      delete usageStats[profileId];
-    }
+    delete usageStats?.[profileId];
     if (lastGood) {
       for (const [provider, lastGoodProfileId] of Object.entries(lastGood)) {
         if (lastGoodProfileId === profileId) {
@@ -284,13 +273,8 @@ export async function repairStaleOAuthProfileShadows(params: {
   return { changes, warnings };
 }
 
-const testing = {
-  removeStaleProfilesFromStore,
-  repairStaleOAuthProfilesForAgent,
-};
-
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.staleOAuthProfileShadowsTestApi")
-  ] = testing;
+  ] = { removeStaleProfilesFromStore, repairStaleOAuthProfilesForAgent };
 }

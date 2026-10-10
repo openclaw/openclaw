@@ -546,35 +546,30 @@ function prepareChatSessionAbort(
     }
     const endedAt = Date.now();
     const stopReason = params.stopReason ?? "rpc";
-    for (const { runId, sessionKey, payload } of pendingAgent.authorizedRuns) {
-      params.assertCurrent?.();
-      if (
-        writePreRegisteredAgentAbort({
-          context: params.context,
-          runId,
-          sessionKey,
-          payload,
-          expectedPayload: payload,
-          stopReason,
-          endedAt,
-        })
-      ) {
-        recordRun(runId);
-      }
-    }
-    for (const { runId, payload } of pendingChat.authorizedRuns) {
-      params.assertCurrent?.();
-      if (
-        writePreRegisteredChatAbort({
+    for (const [kind, plan] of [
+      ["agent", pendingAgent],
+      ["chat", pendingChat],
+    ] as const) {
+      for (const run of plan.authorizedRuns) {
+        const { runId, sessionKey, payload } = run;
+        params.assertCurrent?.();
+        const abort = {
           context: params.context,
           runId,
           stopReason,
           endedAt,
-          attemptId: normalizeOptionalString(payload.attemptId),
           expectedPayload: payload,
-        })
-      ) {
-        recordRun(runId);
+        };
+        const written =
+          kind === "agent"
+            ? writePreRegisteredAgentAbort({ ...abort, sessionKey, payload })
+            : writePreRegisteredChatAbort({
+                ...abort,
+                attemptId: normalizeOptionalString(payload.attemptId),
+              });
+        if (written) {
+          recordRun(runId);
+        }
       }
     }
     if (params.requester.isAdmin && canCancelWorkerSession) {

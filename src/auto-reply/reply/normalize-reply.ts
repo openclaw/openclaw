@@ -15,11 +15,9 @@ import {
   isSilentReplyPayloadText,
   isSilentReplyText,
   SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-  stripSilentToken,
 } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
+import { stripMixedSilentReplyTokens } from "./mixed-silent-reply-tokens.js";
 import type {
   NormalizeReplyOutcome as PayloadNormalizationOutcome,
   NormalizeReplySkipReason,
@@ -102,12 +100,9 @@ export function normalizeReplyPayloadOutcome(
     // token never leaks to end users.  If stripping leaves nothing, treat it as
     // silent just like the exact-match path above.  (#30916, #30955)
     if (text && !isSilentReplyText(text, silentToken)) {
-      const hasLeadingSilentToken = startsWithSilentToken(text, silentToken);
-      if (hasLeadingSilentToken) {
-        text = stripLeadingSilentToken(text, silentToken);
-      }
-      if (hasLeadingSilentToken || text.toLowerCase().includes(silentToken.toLowerCase())) {
-        text = stripSilentToken(text, silentToken);
+      const stripped = stripMixedSilentReplyTokens(text, silentToken);
+      if (stripped !== null) {
+        text = stripped;
         if (!hasContent(text)) {
           return suppress("silent");
         }

@@ -35,7 +35,6 @@ import {
 } from "../../agents/tools-effective-mcp-inventory.js";
 import { resolveReplyToMode } from "../../auto-reply/reply/reply-threading.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { logDebug, logWarn } from "../../logger.js";
@@ -147,12 +146,6 @@ function resolveCachedSessionMcpConfigSummary(params: {
   return summary;
 }
 
-function cacheToolsEffectiveResult(key: string, value: EffectiveToolInventoryResult): void {
-  toolsEffectiveCache.delete(key);
-  toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
-  pruneMapToMaxSize(toolsEffectiveCache, TOOLS_EFFECTIVE_CACHE_LIMIT);
-}
-
 // Base inventory resolution is pure CPU work, but it can still fan through
 // config/model policy. Coalesce identical refreshes so UI polling does not
 // recompute the same session inventory in parallel.
@@ -169,7 +162,9 @@ function scheduleBaseToolsEffectiveRefresh(
     setImmediate(() => {
       void resolveBaseToolsEffectiveInventory(context)
         .then((value) => {
-          cacheToolsEffectiveResult(key, value);
+          toolsEffectiveCache.delete(key);
+          toolsEffectiveCache.set(key, { value, createdAtMs: nowForToolsEffectiveCache() });
+          pruneMapToMaxSize(toolsEffectiveCache, TOOLS_EFFECTIVE_CACHE_LIMIT);
           const durationMs = nowForToolsEffectiveCache() - startedAt;
           if (durationMs >= TOOLS_EFFECTIVE_SLOW_LOG_MS) {
             logDebug(
@@ -207,27 +202,6 @@ async function resolveCachedBaseToolsEffective(
     }
   }
   return scheduleBaseToolsEffectiveRefresh(key, context);
-}
-
-function resolveRequestedAgentIdOrRespondError(params: {
-  rawAgentId: unknown;
-  cfg: OpenClawConfig;
-  respond: RespondFn;
-}) {
-  const knownAgents = listAgentIds(params.cfg);
-  const requestedAgentId = normalizeOptionalString(params.rawAgentId) ?? "";
-  if (!requestedAgentId) {
-    return undefined;
-  }
-  if (!knownAgents.includes(requestedAgentId)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
-    );
-    return null;
-  }
-  return requestedAgentId;
 }
 
 function formatMcpServerNames(names: readonly string[]): string {
@@ -503,20 +477,16 @@ function resolveTrustedToolsEffectiveContext(params: {
   const workspaceDir =
     normalizeOptionalString(loaded.entry.spawnedWorkspaceDir) ??
     resolveAgentWorkspaceDir(loaded.cfg, sessionAgentId);
-  const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
-  const pluginRegistryVersion = getActivePluginRegistryVersion();
-  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
-  const nodePluginToolsVersion = getConnectedNodePluginToolsVersion();
   const context = {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     sessionId: loaded.entry.sessionId,
     workspaceDir,
-    runtimeConfigCacheKey,
-    pluginRegistryVersion,
-    channelRegistryVersion,
-    nodePluginToolsVersion,
+    runtimeConfigCacheKey: resolveRuntimeConfigCacheKey(loaded.cfg),
+    pluginRegistryVersion: getActivePluginRegistryVersion(),
+    channelRegistryVersion: getActivePluginChannelRegistryVersion(),
+    nodePluginToolsVersion: getConnectedNodePluginToolsVersion(),
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider: delivery?.channel ?? origin?.provider,
@@ -566,12 +536,14 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
     validateToolsEffectiveParams,
     async ({ params, respond, context }) => {
       const cfg = context.getRuntimeConfig();
-      const requestedAgentId = resolveRequestedAgentIdOrRespondError({
-        rawAgentId: params.agentId,
-        cfg,
-        respond,
-      });
-      if (requestedAgentId === null) {
+      const knownAgents = listAgentIds(cfg);
+      const requestedAgentId = normalizeOptionalString(params.agentId);
+      if (requestedAgentId && !knownAgents.includes(requestedAgentId)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${requestedAgentId}"`),
+        );
         return;
       }
       const sessionOwner = resolveRequestedSessionAgentId(cfg, params.sessionKey, requestedAgentId);

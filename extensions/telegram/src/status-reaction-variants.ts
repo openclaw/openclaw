@@ -159,7 +159,7 @@ function extractTelegramAllowedReactions(
     return undefined;
   }
   if (availableReactions == null) {
-    // Explicitly omitted/null => all emoji reactions are allowed in this chat.
+    // Explicit null means all emoji reactions are allowed in this chat.
     return null;
   }
   if (!Array.isArray(availableReactions)) {
@@ -199,15 +199,10 @@ export async function resolveTelegramAllowedReactions(params: {
     return fromMessage;
   }
 
-  if (params.getChat) {
-    const fromLookup = extractTelegramAllowedReactions(await params.getChat(params.chatId));
-    if (fromLookup !== undefined) {
-      return fromLookup;
-    }
-  }
-
   // If unavailable, assume no explicit restriction.
-  return null;
+  return params.getChat
+    ? (extractTelegramAllowedReactions(await params.getChat(params.chatId)) ?? null)
+    : null;
 }
 
 export function resolveTelegramReactionVariant(params: {

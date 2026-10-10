@@ -267,7 +267,7 @@ describe("deferred plugin session receipt retirement", () => {
   });
 
   it.each(["completed", "disabled", "uninstalled", "globally-disabled"] as const)(
-    "retires a %s plugin's receipt and imports later history without replaying old sessions",
+    "requires migration completion before retiring a %s plugin's retained inputs",
     async (completion) => {
       await withOpenClawTestState({ label: "deferred-plugin-receipt-lifecycle" }, async (state) => {
         const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(state, "default");
@@ -327,23 +327,29 @@ describe("deferred plugin session receipt retirement", () => {
                 }
               : {}),
           };
+          await run();
+          expect(readDeferredPluginMigrations({ env: state.env })).toContainEqual(
+            expect.objectContaining({ pluginId: "fixture-plugin" }),
+          );
+          expect(receipt()).toBeDefined();
+          expect(fs.readFileSync(transcript, "utf8")).toBe(contents);
+          expectCanonicalSessions(scope, "current SQLite metadata");
+          return;
         }
         await run();
         expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         expect(receipt()).toBeUndefined();
         expect(fs.readFileSync(transcript, "utf8")).toBe(contents);
-        if (completion === "completed") {
-          // Published versions left archived receipts active indefinitely.
-          runOpenClawStateWriteTransaction(
-            ({ db }) => {
-              db.prepare(
-                "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
-              ).run();
-            },
-            { env: state.env },
-          );
-          expect(receipt()).toBeDefined();
-        }
+        // Published versions left archived receipts active indefinitely.
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            db.prepare(
+              "UPDATE migration_sources SET removed_source = 0 WHERE migration_kind = 'deferred-plugin-session-import'",
+            ).run();
+          },
+          { env: state.env },
+        );
+        expect(receipt()).toBeDefined();
         const later = await run();
         expect(later.totals.importedEntries).toBe(1);
         expect(later.totals.importedTranscriptEvents).toBe(2);

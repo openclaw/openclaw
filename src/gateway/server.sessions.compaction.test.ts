@@ -17,6 +17,7 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import * as transcriptTargets from "../config/sessions/session-accessor.transcript-target.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
@@ -186,6 +187,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   await rpcReq(ws, "sessions.subscribe", {});
   const signalVersion = await getSessionStateVersion(sessionScope.sessionKey, "main");
   const signal = loseSessionSignalAcknowledgement();
+  using resolveTarget = vi.spyOn(transcriptTargets, "resolveSessionTranscriptRuntimeTarget");
   const [startEvent, endEvent, compacted] = await Promise.all([
     onceMessage(ws, (message) => isCompactOperationEvent(message, "start")),
     onceMessage(ws, (message) => isCompactOperationEvent(message, "end")),
@@ -193,6 +195,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   ]).finally(signal.restore);
 
   expectMainCompactionResult(compacted, true);
+  expect(resolveTarget).not.toHaveBeenCalled();
   expect(signal.attempts()).toBe(1);
   expect(
     (await listSessionStateEventsSince(sessionScope.sessionKey, "main", signalVersion)).events,

@@ -1,9 +1,5 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
   normalizeDiscordHandleKey,
   normalizeDiscordSnowflake,
   resolveDiscordDirectoryUserId,
@@ -73,29 +69,25 @@ function rewritePlainTextMentions(
     mentionAliases?: DiscordMentionAliasesConfig | null;
   },
 ): string {
-  if (!text.includes("@")) {
-    return text;
-  }
-  return text.replace(MENTION_CANDIDATE_PATTERN, (match, prefix, rawHandle) => {
-    const handle = normalizeOptionalString(rawHandle) ?? "";
-    if (!handle) {
-      return match;
-    }
-    const lookup = normalizeLowercaseStringOrEmpty(handle);
-    if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
-      return match;
-    }
-    const userId =
-      resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
-      resolveDiscordDirectoryUserId({
-        accountId: params.accountId,
-        handle,
-      });
-    if (!userId) {
-      return match;
-    }
-    return `${String(prefix ?? "")}${formatMention({ userId })}`;
-  });
+  return text.replace(
+    MENTION_CANDIDATE_PATTERN,
+    (match: string, prefix: string, handle: string) => {
+      const lookup = handle.toLowerCase();
+      if (DISCORD_RESERVED_MENTIONS.has(lookup)) {
+        return match;
+      }
+      const userId =
+        resolveConfiguredMentionAlias(handle, params.mentionAliases) ??
+        resolveDiscordDirectoryUserId({
+          accountId: params.accountId,
+          handle,
+        });
+      if (!userId) {
+        return match;
+      }
+      return `${prefix}${formatMention({ userId })}`;
+    },
+  );
 }
 
 function countBacktickRun(text: string, index: number): number {

@@ -25,6 +25,20 @@ import { createUpdateIdentityWarningReporter } from "./update-command-identity-w
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
+function memoizeSuccessfulLeaseCheck<T>(check: (lease: T) => boolean) {
+  const checked: T[] = [];
+  return (lease: T) => {
+    if (checked.some((previous) => isDeepStrictEqual(previous, lease))) {
+      return true;
+    }
+    if (!check(lease)) {
+      return false;
+    }
+    checked.push(lease);
+    return true;
+  };
+}
+
 /** A delegated executor retains both its original root and immediate spawner.
  * Neither the transported grant nor a lease row without live identity grants effects. */
 export async function withDelegatedUpdateCommandExecutor<T>(
@@ -60,11 +74,21 @@ export async function withDelegatedUpdateCommandExecutor<T>(
       let active = true;
       const isLive = (identity: ManagedHandoffLease["executor"]) =>
         store.isProcessIdentityCurrent(identity);
+      const receivers = [
+        originalChild,
+        child,
+        ...(slotChild ? [slotChild] : []),
+        ...(retainedChild ? [retainedChild] : []),
+      ];
+      // Windows launcher ancestry can differ from the recorded spawner. The live
+      // lease must still bind this PID and start identity; only an immediate
+      // parent may supply the existing fallback for an unreadable self identity.
       if (
-        !store.acceptParentBoundExecutor(originalChild) ||
-        !store.acceptParentBoundExecutor(child) ||
-        (slotChild && !store.acceptParentBoundExecutor(slotChild)) ||
-        (retainedChild && !store.acceptParentBoundExecutor(retainedChild))
+        !receivers.every(
+          (lease) =>
+            (process.platform === "win32" && store.owns(lease, "executor")) ||
+            store.acceptParentBoundExecutor(lease),
+        )
       ) {
         throw new UpdateCommandRecoveryPendingError(
           "The update process no longer has permission to continue.",
@@ -76,28 +100,13 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         }
         // Several lineage roles can name the same full lease. Share only this
         // assertion's successful checks; every later assertion reads live state.
-        const checkedParents: ManagedHandoffParent[] = [];
-        const checkedReceivers: ManagedHandoffLease[] = [];
-        const parentIsCurrent = (lease: ManagedHandoffParent) => {
-          if (checkedParents.some((checked) => isDeepStrictEqual(checked, lease))) {
-            return true;
-          }
-          if (!store.current(lease) || !isLive(lease.helper) || !isLive(lease.executor)) {
-            return false;
-          }
-          checkedParents.push(lease);
-          return true;
-        };
-        const receiverIsCurrent = (lease: ManagedHandoffLease) => {
-          if (checkedReceivers.some((checked) => isDeepStrictEqual(checked, lease))) {
-            return true;
-          }
-          if (!store.owns(lease, "executor")) {
-            return false;
-          }
-          checkedReceivers.push(lease);
-          return true;
-        };
+        const parentIsCurrent = memoizeSuccessfulLeaseCheck(
+          (lease: ManagedHandoffParent) =>
+            store.current(lease) && isLive(lease.helper) && isLive(lease.executor),
+        );
+        const receiverIsCurrent = memoizeSuccessfulLeaseCheck((lease: ManagedHandoffLease) =>
+          store.owns(lease, "executor"),
+        );
         if (
           !active ||
           !parentIsCurrent(original) ||

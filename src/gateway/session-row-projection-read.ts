@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import { rowToAcpSessionMeta } from "../acp/runtime/session-meta-readonly.js";
 import { resolveSharedAuthStoreOwnershipAsync } from "../agents/auth-profiles/path-resolve.js";
 import { listSubagentSessionListRunsForControllers } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
@@ -17,6 +18,7 @@ import {
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
+import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
@@ -36,6 +38,7 @@ import {
 } from "../state/openclaw-agent-db.paths.js";
 import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { findSessionRepositoryWorkspaces } from "../state/session-repository-workspaces.js";
@@ -44,6 +47,8 @@ import {
   createIncognitoSessionRow,
   identity,
   isCurrentGeneration,
+  isPreparedSessionRowDatabaseFacts,
+  type RetainedSessionRowDatabaseFacts,
   type PreparedSessionRowDatabaseFacts,
   type Row,
 } from "./session-row-projection-record.js";
@@ -83,7 +88,7 @@ export async function withSessionRowDatabaseFacts(
   const retained = new Map<string, PreparedSessionRowDatabaseFacts>();
   for (const id of ids) {
     const facts = owner.rows.get(id)?.retainedDatabaseFacts;
-    if (facts) {
+    if (facts && isPreparedSessionRowDatabaseFacts(facts)) {
       retained.set(id, facts);
     }
   }
@@ -95,6 +100,10 @@ export async function withSessionRowDatabaseFacts(
   const rows = ids.flatMap((id) => owner.rows.get(id) ?? []);
   const rowRevisions = new Map(rows.map((row) => [identity(row), row.databaseFactsRevision]));
   const env = owner.env;
+  const shared = captureOpenClawStateReadWorkerContext({
+    env,
+    path: resolveOpenClawStateSqlitePath(env),
+  });
   const groups = new Map<
     string,
     {
@@ -121,9 +130,12 @@ export async function withSessionRowDatabaseFacts(
       };
       groups.set(key, group);
     }
-    group.rows.push(row);
+    if (!row.retainedDatabaseFacts) {
+      group.rows.push(row);
+    }
   }
   const selected = [...groups.values()];
+  const readGroups = selected.filter((group) => group.rows.length > 0);
   const native = retainOpenClawAgentDatabaseReadCandidates(
     selected.flatMap(({ candidate }) => [
       candidate,
@@ -157,11 +169,15 @@ export async function withSessionRowDatabaseFacts(
     }
     assertCurrent();
     await withSessionHistoryWorkerDatabases(
-      selected.map(({ database }) => database),
+      readGroups.map(({ database }) => database),
       async (owners) => {
-        const facts = new Map<string, PreparedSessionRowDatabaseFacts>();
+        const facts = new Map<string, RetainedSessionRowDatabaseFacts>(
+          rows.flatMap((row) =>
+            row.retainedDatabaseFacts ? [[identity(row), { ...row.retainedDatabaseFacts }]] : [],
+          ),
+        );
         // Finish each accepted read before releasing any captured database owner on failure.
-        for (const [index, group] of selected.entries()) {
+        for (const [index, group] of readGroups.entries()) {
           const databaseOwner = expectDefined(owners[index], "captured session row database");
           const continuation = continuations.find(
             (item) => item.agentId === group.database.agentId && item.path === group.database.path,
@@ -176,47 +192,77 @@ export async function withSessionRowDatabaseFacts(
           for (const row of group.rows) {
             const prepared = byKey.get(row.key);
             if (prepared) {
-              facts.set(identity(row), {
-                ...prepared,
-                acpMeta: null,
-                repositoryWorkspace: null,
-              });
+              facts.set(identity(row), { ...prepared });
             }
           }
         }
-        const acpRows = rows.flatMap((row) => {
+        const sharedRows = rows.flatMap((row) => {
           const prepared = facts.get(identity(row));
-          return prepared?.entry ? [{ row, prepared, entry: prepared.entry }] : [];
+          if (!prepared) {
+            return [];
+          }
+          if (!prepared.entry) {
+            prepared.acpMeta = null;
+          }
+          if (!prepared.entry?.repositoryWorkspaceId) {
+            prepared.repositoryWorkspace = null;
+          }
+          return isPreparedSessionRowDatabaseFacts(prepared) ? [] : [{ row, prepared }];
         });
-        const acpMetadata = acpRows.length
-          ? await readAcpSessionMetaForEntries({
-              env,
-              cfg: owner.cfg,
-              entries: acpRows.map(({ row, entry }) => ({
-                agentId: row.agentId,
-                sessionKey: row.key,
-                entry,
+        if (sharedRows.length) {
+          const reply = await executeExistingOpenClawStateRead(
+            { env, path: resolveOpenClawStateSqlitePath(env) },
+            {
+              type: "sessionRows.sharedFacts",
+              entries: sharedRows.map(({ row, prepared }) => ({
+                ...(prepared.acpMeta === undefined
+                  ? {
+                      acp: {
+                        keys: [
+                          buildAcpDatabaseSessionKey(
+                            normalizeStoreSessionKey(row.key),
+                            row.agentId,
+                          ),
+                        ],
+                        entry: {
+                          sessionId: prepared.entry?.sessionId,
+                          lifecycleRevision: prepared.entry?.lifecycleRevision,
+                          sessionStartedAt: prepared.entry?.sessionStartedAt,
+                        },
+                      },
+                    }
+                  : {}),
+                ...(prepared.repositoryWorkspace === undefined &&
+                prepared.entry?.repositoryWorkspaceId
+                  ? {
+                      repositoryWorkspace: {
+                        agentId: row.agentId,
+                        sessionKey: row.key,
+                        workspaceId: prepared.entry.repositoryWorkspaceId,
+                      },
+                    }
+                  : {}),
               })),
-            })
-          : [];
-        for (const [index, { prepared }] of acpRows.entries()) {
-          prepared.acpMeta = acpMetadata[index] ?? null;
+            },
+            { context: shared },
+          );
+          if (reply && (!reply.ok || reply.type !== "sessionRows.sharedFacts")) {
+            throw new Error("Unexpected session row shared-state facts");
+          }
+          for (const [index, { prepared }] of sharedRows.entries()) {
+            const sharedFacts = reply?.rows[index];
+            if (prepared.acpMeta === undefined) {
+              prepared.acpMeta = sharedFacts?.acp ? rowToAcpSessionMeta(sharedFacts.acp) : null;
+            }
+            if (prepared.repositoryWorkspace === undefined) {
+              prepared.repositoryWorkspace = sharedFacts?.repositoryWorkspace ?? null;
+            }
+          }
         }
-        const repositoryRows = rows.flatMap((row) => {
-          const prepared = facts.get(identity(row));
-          return prepared?.entry?.repositoryWorkspaceId ? [{ row, prepared }] : [];
-        });
-        if (repositoryRows.length) {
-          const workspaces = await findSessionRepositoryWorkspaces(
-            repositoryRows.map(({ row }) => ({ agentId: row.agentId, sessionKey: row.key })),
-            { path: resolveOpenClawStateSqlitePath(env), env },
-          );
-          const byWorkspace = new Map(
-            workspaces.map((workspace) => [workspace.workspaceId, workspace]),
-          );
-          for (const { prepared } of repositoryRows) {
-            prepared.repositoryWorkspace =
-              byWorkspace.get(prepared.entry!.repositoryWorkspaceId!) ?? null;
+        const preparedFacts = new Map<string, PreparedSessionRowDatabaseFacts>();
+        for (const [id, row] of facts) {
+          if (isPreparedSessionRowDatabaseFacts(row)) {
+            preparedFacts.set(id, row);
           }
         }
         // Registry renewal changes presentation, not the captured SQLite facts.
@@ -231,6 +277,9 @@ export async function withSessionRowDatabaseFacts(
         for (const databaseOwner of owners) {
           databaseOwner.assertCurrent();
         }
+        if (sharedRows.length) {
+          shared.admission.assertCurrent();
+        }
         assertCurrent();
         if (revision !== undefined && owner.revision() === revision) {
           const currentIds = rows
@@ -244,7 +293,7 @@ export async function withSessionRowDatabaseFacts(
                   rowRevisions.get(identity(row)),
             )
             .map(identity);
-          consume.accept(currentIds, facts);
+          consume.accept(currentIds, preparedFacts);
           assertCurrent();
         }
       },

@@ -1,18 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
+import * as prefilters from "./redact-prefilter.js";
 import { redactLogRecordForTransport, redactModelVisibleSecrets, redactSecrets } from "./redact.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
-function observePrefilterProbes(text: string) {
-  const probe = vi.spyOn(RegExp.prototype, "test");
+function observePrefilterProbes(text: string, log: boolean) {
+  const probe = vi.spyOn(
+    prefilters,
+    log ? "couldMatchDefaultFullContextPatterns" : "couldMatchDefaultRedactPatterns",
+  );
   return {
-    count: () =>
-      probe.mock.contexts.filter(
-        (pattern, index) =>
-          pattern instanceof RegExp &&
-          pattern.source.startsWith("(?:KEY|TOKEN|SECRET|") &&
-          probe.mock.calls[index]?.[0] === text,
-      ).length,
+    count: () => probe.mock.calls.filter(([input]) => input === text).length,
     restore: () => probe.mockRestore(),
   };
 }
@@ -23,7 +21,7 @@ it.each([redactSecrets, redactModelVisibleSecrets, redactLogRecordForTransport])
     const log = redact === redactLogRecordForTransport;
     const text = log ? "ordinary repeated log fixture 🦞" : "ordinary repeated fixture 🦞";
     const record = { detail: text, nested: { detail: text }, ...(log ? {} : { token: text }) };
-    const probe = observePrefilterProbes(text);
+    const probe = observePrefilterProbes(text, log);
     try {
       expect(redact(record)).toEqual({ ...record, ...(log ? {} : { token: "ordina…e 🦞" }) });
       expect(probe.count()).toBe(1);

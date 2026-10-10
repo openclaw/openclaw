@@ -22,15 +22,15 @@ import {
   readLiveRegistryWorktreeByOwner,
   readLiveRegistryWorktreeIds,
   readRegistryWorktrees,
+  readSessionWorktreeBinding,
 } from "./registry-read.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
-  listRegistryWorktrees,
   updateRegistryWorktree,
 } from "./registry.js";
+import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { resolveWorktreeForPath } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
@@ -458,6 +458,14 @@ describe("managed worktree registry worker reads", () => {
     expect(
       await readLiveRegistryWorktreeByOwner(context, "manual", older.ownerId!),
     ).toBeUndefined();
+    for (const [boundId, expected] of [
+      [older.id, older],
+      [removed.id, newer],
+      ["missing", newer],
+      [undefined, newer],
+    ] as const) {
+      expect(await readSessionWorktreeBinding(context, boundId, older.ownerId!)).toEqual(expected);
+    }
     sql.expectIdle();
 
     env.OPENCLAW_STATE_DIR = stateDir;

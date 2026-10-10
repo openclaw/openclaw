@@ -98,11 +98,7 @@ export function clearPaneSessionHandoff(
 
 export function clearPaneSessionHandoffs(context: ApplicationContext, paneId: string): void {
   const byPane = paneSessionHandoffs.get(context);
-  if (!byPane) {
-    return;
-  }
-  const pending = byPane.get(paneId);
-  if (!pending) {
+  if (!byPane?.get(paneId)) {
     return;
   }
   byPane.delete(paneId);
@@ -144,12 +140,8 @@ export function catalogRawString(raw: unknown, keys: readonly string[]): string 
 }
 export function catalogRawResult(raw: unknown): string | null {
   const result = catalogRawRecord(raw)?.result;
-  if (result === undefined) {
-    return null;
-  }
   try {
-    const text = JSON.stringify(result);
-    return text || null;
+    return JSON.stringify(result) || null;
   } catch {
     return null;
   }

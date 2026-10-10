@@ -34,6 +34,7 @@ import {
   getRequestInputText,
   getRequestInputTextAt,
   makeThreadBootstrapBinding,
+  requestMethodsExcludingSkillDiscovery,
   requireRecord,
   runCodexAppServerAttempt,
   writeCodexAppServerBinding,
@@ -462,7 +463,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       2,
     );
 
-    expect(firstHarness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(firstHarness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -556,7 +557,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      expect(harness.requests.map(({ method }) => method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "configRequirements/read",
         ...(resumed ? ["thread/read", "thread/resume", "thread/inject_items"] : ["thread/start"]),
@@ -613,7 +614,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    expect(harness.requests.map((request) => request.method)).toEqual([
+    expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
       "config/read",
       "configRequirements/read",
       "thread/start",
@@ -677,7 +678,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
 
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
-      expect(harness.requests.map((request) => request.method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "configRequirements/read",
         "thread/start",
@@ -775,7 +776,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         }),
       ]);
 
-      expect(harness.requests.map((request) => request.method)).toEqual([
+      expect(requestMethodsExcludingSkillDiscovery(harness)).toEqual([
         "config/read",
         "thread/start",
         "turn/start",

@@ -45,11 +45,14 @@ export async function synthesizeVoiceReplyAudio(params: {
   if (!speakText) {
     return { status: "empty" as const };
   }
-  const streamResult = await runtime.tts.textToSpeechStream?.({
+  const request = {
     text: speakText,
     cfg: prepared.cfg,
     channel: "discord",
     overrides: directive.overrides,
+  };
+  const streamResult = await runtime.tts.textToSpeechStream?.({
+    ...request,
     disableFallback: true,
   });
   if (streamResult?.success && streamResult.audioStream) {
@@ -66,12 +69,7 @@ export async function synthesizeVoiceReplyAudio(params: {
       ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
       : undefined;
 
-  const result = await runtime.tts.textToSpeech({
-    text: speakText,
-    cfg: prepared.cfg,
-    channel: "discord",
-    overrides: directive.overrides,
-  });
+  const result = await runtime.tts.textToSpeech(request);
   if (!result.success || !result.audioPath) {
     return { status: "failed" as const, error: result.error ?? "unknown error" };
   }

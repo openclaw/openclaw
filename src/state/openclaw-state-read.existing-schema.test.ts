@@ -1,17 +1,24 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  buildAcpDatabaseSessionKey,
+  upsertAcpSessionMetaRow,
+} from "../acp/runtime/session-meta-keys.js";
+import { bindAcpSessionMeta } from "../acp/runtime/session-meta-write.kernel.js";
 import { listFleetCells, reserveFleetCell } from "../fleet/registry.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
+  executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { createSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 
@@ -45,6 +52,80 @@ async function withoutHostSql(run: () => Promise<void>) {
     vi.restoreAllMocks();
   }
 }
+
+it("prepares ACP and workspace facets together and observes foreign changes at each new phase", async () => {
+  const root = tempDirs.make("row-shared-facts-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  const database = openOpenClawStateDatabase({ env });
+  const owner = { agentId: "main", sessionKey: "agent:main:shared-facts" };
+  const workspace = createSessionRepositoryWorkspaceInDatabase(
+    database.db,
+    {
+      ...owner,
+      url: "https://example.test/fixture.git",
+      runSetupScript: false,
+    },
+    1,
+  ).workspace!;
+  const command = {
+    type: "sessionRows.sharedFacts" as const,
+    entries: [
+      {
+        acp: {
+          keys: [buildAcpDatabaseSessionKey(owner.sessionKey, owner.agentId)],
+          entry: { sessionId: "original", lifecycleRevision: "generation" },
+        },
+        repositoryWorkspace: { ...owner, workspaceId: workspace.workspaceId },
+      },
+    ],
+  };
+  const read = async () => {
+    const result = await executeExistingOpenClawStateRead({ env, path: database.path }, command);
+    if (!result?.ok || result.type !== command.type) {
+      throw new Error("Expected the row shared-state cohort");
+    }
+    return result.rows;
+  };
+  await withoutHostSql(async () => {
+    expect(await read()).toEqual([{ acp: null, repositoryWorkspace: workspace }]);
+  });
+  const { DatabaseSync } = requireNodeSqlite();
+  const foreign = new DatabaseSync(database.path);
+  try {
+    upsertAcpSessionMetaRow(
+      foreign,
+      bindAcpSessionMeta({
+        sessionKey: command.entries[0]!.acp.keys[0]!,
+        lifecycleRevision: "generation",
+        updatedAt: 2,
+        meta: {
+          backend: "fixture",
+          agent: "main",
+          runtimeSessionName: "foreign",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 2,
+        },
+      }),
+    );
+    foreign.prepare("UPDATE session_repository_workspaces SET branch = 'foreign'").run();
+    await withoutHostSql(async () => {
+      expect(await read()).toEqual([
+        {
+          acp: expect.objectContaining({ runtime_session_name: "foreign" }),
+          repositoryWorkspace: { ...workspace, branch: "foreign" },
+        },
+      ]);
+    });
+    foreign.prepare("DELETE FROM acp_sessions").run();
+    foreign.prepare("DELETE FROM session_repository_workspaces").run();
+    await withoutHostSql(async () => {
+      expect(await read()).toEqual([{ acp: null, repositoryWorkspace: null }]);
+    });
+  } finally {
+    foreign.close();
+  }
+});
 
 it.each(["fresh", "cached", "artifact"] as const)(
   "validates existing runtime shape on %s fixed reads without host SQL or schema repair",

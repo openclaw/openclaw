@@ -1,7 +1,7 @@
 // Covers agent-command reply normalization and outbound delivery status.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import type { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import type {
   ChannelOutboundAdapter,
   ChannelThreadingAdapter,
@@ -27,7 +27,8 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
 const createReplyMediaPathNormalizerMock = vi.hoisted(() =>
   vi.fn<typeof createReplyMediaPathNormalizer>(),
 );
-vi.mock("../../auto-reply/reply/reply-media-paths.runtime.js", () => ({
+vi.mock("../../auto-reply/reply/reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/reply/reply-media-paths.js")>()),
   createReplyMediaPathNormalizer: createReplyMediaPathNormalizerMock,
 }));
 

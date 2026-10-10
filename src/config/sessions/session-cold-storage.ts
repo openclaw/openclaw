@@ -59,7 +59,10 @@ import type {
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
+import {
+  projectionLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
@@ -371,6 +374,13 @@ export class SessionColdTurnReboundError extends Error {
   }
 }
 
+export class SessionColdSourceReboundError extends Error {
+  constructor(readonly refusal: NonNullable<SessionColdMutationResult["refusedSource"]>) {
+    super("Session source changed before cold transcript restoration");
+    this.name = "SessionColdSourceReboundError";
+  }
+}
+
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
@@ -428,32 +438,36 @@ export async function restoreSessionColdTranscript(
       }
       const source = createOpenClawAgentDatabasePathMatcher();
       source(target.path, target.path);
-      return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-        const assertAllowed = () => {
-          assertPreparedCurrent();
-          owner.assertCurrent();
-          if (!source.isCurrent()) {
-            throw new Error(
-              "Session store changed while preparing its metadata. Retry the request.",
-            );
-          }
-        };
-        return await restoreSessionColdTranscript(
-          captured,
-          assertAllowed,
-          {
-            target,
-            readMetadata: async () => {
-              const metadata = await owner.readColdMetadata({
-                sessionId: target.sessionId,
-                env: captured.env,
-              });
-              return metadata.archive;
+      return await withSessionHistoryWorkerDatabase(
+        options,
+        async (owner) => {
+          const assertAllowed = () => {
+            assertPreparedCurrent();
+            owner.assertCurrent();
+            if (!source.isCurrent()) {
+              throw new Error(
+                "Session store changed while preparing its metadata. Retry the request.",
+              );
+            }
+          };
+          return await restoreSessionColdTranscript(
+            captured,
+            assertAllowed,
+            {
+              target,
+              readMetadata: async () => {
+                const metadata = await owner.readColdMetadata({
+                  sessionId: target.sessionId,
+                  env: captured.env,
+                });
+                return metadata.archive;
+              },
             },
-          },
-          turnGuard,
-        );
-      });
+            turnGuard,
+          );
+        },
+        projectionLane,
+      );
     }
   }
   const options = toDatabaseOptions(resolved);
@@ -495,6 +509,9 @@ export async function restoreSessionColdTranscript(
     );
     if (result.turnRebound) {
       throw new SessionColdTurnReboundError(result.turnRebound);
+    }
+    if (result.refusedSource) {
+      throw new SessionColdSourceReboundError(result.refusedSource);
     }
     assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.

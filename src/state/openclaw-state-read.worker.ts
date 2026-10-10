@@ -33,6 +33,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
@@ -428,6 +429,9 @@ serveOwnedWorkerTasks(
                   : undefined,
               };
             }
+            if (command.type === "operatorApprovals.placementGrant") {
+              return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
+            }
             if (command.type === "operatorApprovals.history") {
               return {
                 type: command.type,
@@ -577,6 +581,40 @@ serveOwnedWorkerTasks(
                   }),
                 ),
               };
+            }
+            if (command.type === "sessionRows.sharedFacts") {
+              const readSharedFacts = () => {
+                const acp = readAcpSessionCommand(db, {
+                  type: "acpSessions.metadata",
+                  entries: command.entries.flatMap((entry) => entry.acp ?? []),
+                });
+                if (acp.type !== "acpSessions.metadata") {
+                  throw new Error("Unexpected ACP session metadata cohort");
+                }
+                let acpIndex = 0;
+                return {
+                  type: command.type,
+                  rows: command.entries.map((entry) => {
+                    const workspace = entry.repositoryWorkspace
+                      ? findSessionRepositoryWorkspaceInDatabase(db, entry.repositoryWorkspace)
+                      : undefined;
+                    return {
+                      ...(entry.acp ? { acp: acp.rows[acpIndex++] ?? null } : {}),
+                      ...(entry.repositoryWorkspace
+                        ? {
+                            repositoryWorkspace:
+                              workspace?.workspaceId === entry.repositoryWorkspace.workspaceId
+                                ? workspace
+                                : null,
+                          }
+                        : {}),
+                    };
+                  }),
+                };
+              };
+              return command.entries.some((entry) => entry.repositoryWorkspace)
+                ? runSqliteDeferredTransactionSync(db, readSharedFacts)
+                : readSharedFacts();
             }
             if (command.type === "workerPlacements.changeSnapshot") {
               return {

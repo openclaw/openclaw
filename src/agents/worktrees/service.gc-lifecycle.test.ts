@@ -22,7 +22,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { requireGit } from "./git.js";
 import { createManagedWorktreeOwnerPolicy } from "./owner-protection.js";
-import { getRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import * as removal from "./removal-git.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";

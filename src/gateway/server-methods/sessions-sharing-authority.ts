@@ -1,30 +1,17 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
-import {
-  assertSessionStoreReadCandidate,
-  captureSessionStoreReadCandidate,
-} from "../../config/sessions/session-store-read-candidates.js";
-import { isConfiguredSessionStoreAgentId } from "../../config/sessions/targets-configured-agents.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
   getSessionRowProjection,
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
-import {
-  canManageSessionSharing,
-  type PreparedSessionMutationFacts,
-  type SessionSharingTarget,
-} from "../session-sharing-policy.js";
-import {
-  captureSessionMutationRouting,
-  prepareSessionMutationFacts,
-  SessionMutationFactsUnavailableError,
-  type SessionFactsRead,
-} from "../session-sharing-preparation.js";
+import { canManageSessionSharing, type SessionSharingTarget } from "../session-sharing-policy.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import { prepareProjectedSessionSharing } from "../session-sharing-read.js";
-import { readProjectedSessionMutationTarget } from "../session-sharing-target-read.js";
+import {
+  isSameSessionSharingTarget,
+  prepareSessionSharingRead,
+} from "../session-sharing-target-read.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "./types.js";
 
@@ -69,25 +56,6 @@ export function prepareCurrentSessionSharing(
   return { currentCfg, policyConfig, sharing };
 }
 
-export function isSameSessionSharingTarget(
-  target: SessionSharingTarget | null,
-  selected: SessionSharingTarget,
-): boolean {
-  return Boolean(
-    target &&
-    target.agentId === selected.agentId &&
-    target.canonicalKey === selected.canonicalKey &&
-    target.storeKey === selected.storeKey &&
-    target.storePath === selected.storePath &&
-    target.entry.sessionId === selected.entry.sessionId &&
-    target.entry.lifecycleRevision === selected.entry.lifecycleRevision &&
-    target.readSource?.path === selected.readSource?.path &&
-    target.readSource?.agentId === selected.readSource?.agentId &&
-    target.readSource?.databaseIdentity === selected.readSource?.databaseIdentity &&
-    target.readSource?.databaseBirthtime === selected.readSource?.databaseBirthtime,
-  );
-}
-
 /** Retain one facts owner through management reads, writer grants, and publication. */
 export async function prepareManagedSessionAccess(
   params: Pick<
@@ -106,7 +74,6 @@ export async function prepareManagedSessionAccess(
 ) {
   const { client, context, respond } = params;
   const cfg = context.getRuntimeConfig();
-  const assertRouting = captureSessionMutationRouting(cfg);
   const requestedAgent = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
   if (!requestedAgent.ok) {
     respond(false, undefined, requestedAgent.error);
@@ -130,70 +97,27 @@ export async function prepareManagedSessionAccess(
       throw new Error(`session ownership changed before sharing ${operation}`);
     }
   };
-  let retained: SessionFactsRead<PreparedSessionMutationFacts> | undefined;
+  let facts: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
   try {
     assertCaller();
-    const query = { key: targetRef.sessionKey, agentId: targetRef.agentId };
-    const resident = projection.sharingTarget(query);
-    const source = resident && projection.readSource({ ...query, storePath: resident.storePath });
-    const configuredStorePath = resolveSessionStorePathCore(cfg.session?.store, {
-      agentId: requestedAgent.agentId,
-    });
-    const configuredSource = captureSessionStoreReadCandidate(
-      resolveUnsuffixedSqliteTargetFromSessionStorePath(configuredStorePath).path,
-    );
-    // Readiness may yield across a reset or store replacement. Capture the locator first;
-    // membership is not authority until the same projection reports it ready below.
-    const captured =
-      resident &&
-      source?.path === resident.storePath &&
-      typeof source.databaseIdentity === "string" &&
-      isConfiguredSessionStoreAgentId(cfg, resident.agentId) &&
-      source.path === configuredSource.physicalPath
-        ? { ...resident, readSource: source }
-        : undefined;
-    if (!captured) {
-      retained = await prepareSessionMutationFacts({ cfg, ...targetRef, allowMissing: true });
-    } else {
-      while (projection.needsMembershipPreparation()) {
-        await projection.prepareMembership();
-        assertCaller();
-      }
-    }
+    facts = await prepareSessionSharingRead({ cfg, ...targetRef, projection });
     const readCurrent = (selected?: SessionSharingTarget) => {
       assertCaller();
-      let membership: ReadonlySet<string> | undefined;
       const { currentCfg, sharing } = prepareCurrentSessionSharing({
         client,
         context,
         projection,
         actorId,
         runAuthority,
-        isMember: (target, identityId) =>
-          retained
-            ? membership!.has(identityId)
-            : projection.hasMembership(target.storePath, target.storeKey, identityId),
+        isMember: (_target, identityId) => membership.has(identityId),
       });
-      assertRouting(currentCfg);
-      let target: SessionSharingTarget | null;
-      if (retained) {
-        const facts = retained.readCurrent(currentCfg);
-        target = facts.target;
-        membership = facts.membership;
-      } else {
-        assertSessionStoreReadCandidate(configuredSource.path, [configuredSource]);
-        const current = readProjectedSessionMutationTarget(targetRef, currentCfg, projection);
-        if (current.status !== "ready") {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        target = current.target;
-      }
+      const { target, membership } = facts!.readCurrent(currentCfg);
       if (selected && !isSameSessionSharingTarget(target, selected)) {
         throw new Error(`session changed before sharing ${operation}`);
       }
       return { target, sharing };
     };
-    const initial = readCurrent(captured);
+    const initial = readCurrent();
     const selected = initial.target;
     if (!selected || !canManageSessionSharing(initial.sharing.roleForTarget(selected))) {
       respond(
@@ -208,7 +132,7 @@ export async function prepareManagedSessionAccess(
               },
             }),
       );
-      retained?.release();
+      facts?.release();
       return null;
     }
     const current = (entry?: SessionSharingTarget["entry"]) => {
@@ -232,7 +156,7 @@ export async function prepareManagedSessionAccess(
     return {
       target: selected,
       // Lifecycle peers still fence the logical locator; worker I/O retains the physical source.
-      lifecycleStorePath: retained?.storageTarget.storePath ?? configuredStorePath,
+      lifecycleStorePath: facts.storageTarget.storePath,
       current,
       assertCurrent: () => {
         current();
@@ -240,10 +164,10 @@ export async function prepareManagedSessionAccess(
       assertEntryManageable: (entry: SessionSharingTarget["entry"]) => {
         current(entry);
       },
-      [Symbol.dispose]: () => retained?.release(),
+      [Symbol.dispose]: () => facts?.release(),
     };
   } catch (error) {
-    retained?.release();
+    facts?.release();
     throw error;
   }
 }

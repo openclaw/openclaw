@@ -141,7 +141,7 @@ test.for([
         clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
       }
       ws.close();
-      const owned = managedWorktrees.findLiveByOwner("session", key);
+      const owned = await managedWorktrees.findLiveByOwner("session", key);
       if (owned) {
         await managedWorktrees.remove({
           id: owned.id,

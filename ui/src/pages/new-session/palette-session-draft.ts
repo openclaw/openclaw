@@ -272,7 +272,7 @@ export class PaletteSessionDraft implements ReactiveController {
       !submission.submissionOutcomeUnknown &&
       !submission.error
     ) {
-      submission.attachmentDraft.reset({ release: true });
+      submission.attachmentDraft.reset();
     } else {
       submission?.attachmentDraft.reads.abortReads();
     }

@@ -108,6 +108,30 @@ describe("models.list CLI runtime availability", () => {
     },
   );
 
+  it("keeps every Claude CLI model listed as needing login before the full catalog arrives", async () => {
+    const pinned = ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"];
+    const result = await listModels({
+      catalog: [...pinned, "claude-haiku-4-5"].map((id) => providerCatalogEntry("anthropic", id)),
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-5" },
+            models: Object.fromEntries(
+              pinned.map((id) => [`anthropic/${id}`, { agentRuntime: { id: "claude-cli" } }]),
+            ),
+          },
+        },
+      },
+      view: "configured",
+      includeDefaultModels: false,
+    });
+    expect(
+      result.models
+        .map(({ id, available, unavailableReason }) => ({ id, available, unavailableReason }))
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    ).toEqual(pinned.map((id) => ({ id, available: false, unavailableReason: "missing-auth" })));
+  });
+
   it.each([
     { selection: "default", expired: false, sharedOrder: false },
     { selection: "draft", expired: false, sharedOrder: true },

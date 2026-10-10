@@ -125,6 +125,23 @@ PTY sessions and their scrollback are not recovered after the new process starts
 
 The main terminal page at `/terminal` is also available as a [focus presentation](/web/urls#focus-presentation-routes). The iOS and Android apps embed this page in their Terminal screens, reusing the stored gateway credentials; availability follows the same `gateway.terminal.enabled` and `operator.admin` gate, and the page shows a notice when the connected Gateway does not offer the terminal. Focus presentation removes the application chrome; it does not invoke browser fullscreen.
 
+### Terminal fonts
+
+The terminal bundles **JetBrains Mono** with **Symbols Nerd Font Mono** for
+Powerline separators and standard Nerd Font icons. No font installation or
+third-party font service is required for the default.
+
+In **Settings → Appearance → Typography → Terminal font**, enter a local
+monospace family name such as `FiraCode Nerd Font Mono` or choose **Use default**. Clear the field to
+reset it. The font must be installed on the computer running your browser,
+not the remote Gateway or shell host. The setting stays in this browser for
+this Gateway; missing fonts fall back to the bundled default. Changes apply
+to open terminals without restarting their shells, including the full-page
+and focused terminal views.
+
+Programming ligatures (such as a joined arrow for `=>`) are not currently
+supported by the terminal renderer, even with a ligature-capable font.
+
 ## Browser panel
 
 Ask your agent to "open the browser sidebar" or "show the browser side panel"

@@ -37,6 +37,18 @@ export type PreparedSessionRowDatabaseFacts = SessionRowDatabaseFacts & {
   repositoryWorkspace: SessionRepositoryWorkspaceRecord | null;
 };
 
+/** Undefined shared facets await their owner; null is acknowledged absence. */
+export type RetainedSessionRowDatabaseFacts = SessionRowDatabaseFacts &
+  Partial<Pick<PreparedSessionRowDatabaseFacts, "acpMeta" | "repositoryWorkspace">>;
+
+export function isPreparedSessionRowDatabaseFacts(
+  facts: RetainedSessionRowDatabaseFacts | undefined,
+): facts is PreparedSessionRowDatabaseFacts {
+  return (
+    facts !== undefined && facts.acpMeta !== undefined && facts.repositoryWorkspace !== undefined
+  );
+}
+
 export type SessionRowStore = {
   target: SessionStoreTarget;
   agentId: string;
@@ -54,8 +66,8 @@ export type Row = {
   storedEntry?: SessionEntry;
   /** Accepted under retained database custody; presentation consumes the whole snapshot. */
   pendingDatabaseFacts?: PreparedSessionRowDatabaseFacts;
-  /** Catalog changes reuse the accepted snapshot until a data publication or demotion. */
-  retainedDatabaseFacts?: PreparedSessionRowDatabaseFacts;
+  /** Presentation retains certified facets until their owner publishes or the row is demoted. */
+  retainedDatabaseFacts?: RetainedSessionRowDatabaseFacts;
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
@@ -659,7 +671,8 @@ export function acquireSessionRowEntry(params: {
     ...row,
     storedEntry,
     pendingDatabaseFacts: undefined,
-    retainedDatabaseFacts: undefined,
+    retainedDatabaseFacts:
+      row.retainedDatabaseFacts?.entry === storedEntry ? row.retainedDatabaseFacts : undefined,
     databaseFactsRevision: row.databaseFactsRevision + 1,
     ...lineage,
     sharingEntry: storedEntry,

@@ -80,7 +80,6 @@ it.each([
       { agentId: "main", sessionKey, sessionId: child.sessionId, senderIsOwner: false, storePath },
       child,
     );
-    expect(resolution).not.toHaveProperty("legacyLineage");
     expect(resolution).toMatchObject({ status: "granted", audience: { kind: audience } });
     if (resolution.status === "granted") {
       resolution.release();

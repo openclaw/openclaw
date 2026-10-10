@@ -37,12 +37,7 @@ import {
   type WikiPagePreview,
 } from "./dreaming.ts";
 import { renderDreamingToggleConfirmation } from "./toggle-confirmation.ts";
-import {
-  createDreamingViewState,
-  renderDreaming,
-  resetWikiPreview,
-  type DreamingViewState,
-} from "./view.ts";
+import { createDreamingViewState, renderDreaming, type DreamingViewState } from "./view.ts";
 
 registerDreamingEnglish();
 
@@ -63,8 +58,6 @@ function resolveDreamingNextCycle(status: DreamingState["dreamingStatus"]): stri
 
 function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
   const payload = asOptionalObjectRecord(value);
-  const title = normalizeOptionalString(payload?.title) ?? lookup;
-  const path = normalizeOptionalString(payload?.path) ?? lookup;
   const content =
     typeof payload?.content === "string" && payload.content.length > 0
       ? payload.content
@@ -75,8 +68,8 @@ function readWikiPagePreview(value: unknown, lookup: string): WikiPagePreview {
       ? Math.max(0, Math.floor(payload.totalLines))
       : undefined;
   return {
-    title,
-    path,
+    title: normalizeOptionalString(payload?.title) ?? lookup,
+    path: normalizeOptionalString(payload?.path) ?? lookup,
     content,
     ...(totalLines === undefined ? {} : { totalLines }),
     ...(payload?.truncated === true ? { truncated: true } : {}),
@@ -91,7 +84,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) agentId = "";
 
   @state() private dreaming = createDreamingState();
-  @state() private toggleConfirmOpen = false;
   @state() private toggleConfirmLoading = false;
   @state() private pendingEnabled: boolean | null = null;
 
@@ -148,8 +140,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   }
 
   private resetTransientState() {
-    resetWikiPreview(this.viewState);
-    this.toggleConfirmOpen = false;
+    this.viewState.wikiPreview = null;
     this.toggleConfirmLoading = false;
     this.pendingEnabled = null;
   }
@@ -234,17 +225,17 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     await this.runDreamingTask((current) => runDreamDiaryAction(current, method), scope);
   }
 
+  private runDiaryAction(method: DreamDiaryActionMethod) {
+    return this.runDreamingTask((current) => runDreamDiaryAction(current, method));
+  }
+
   private async loadAll(refreshConfig = false) {
     const scope = this.captureTaskScope();
     if (!scope || !scope.state.client || !scope.state.connected || !scope.state.selectedAgentId) {
       return;
     }
     const runtimeConfig = this.context.runtimeConfig;
-    if (refreshConfig) {
-      await runtimeConfig.refresh();
-    } else {
-      await runtimeConfig.ensureLoaded();
-    }
+    await (refreshConfig ? runtimeConfig.refresh() : runtimeConfig.ensureLoaded());
     if (!this.isTaskScopeCurrent(scope) || this.context.runtimeConfig !== runtimeConfig) {
       return;
     }
@@ -256,18 +247,16 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     );
   }
 
-  private setEnabled(enabled: boolean, dreamingOn: boolean) {
+  private setEnabled(enabled: boolean) {
     if (
       !canCallDreamingMethod(this.dreaming, "config.patch", "operator.admin") ||
       this.dreaming.dreamingModeSaving ||
       this.toggleConfirmLoading ||
-      this.toggleConfirmOpen ||
-      dreamingOn === enabled
+      this.pendingEnabled !== null
     ) {
       return;
     }
     this.pendingEnabled = enabled;
-    this.toggleConfirmOpen = true;
     this.dreaming.dreamingStatusError = null;
   }
 
@@ -275,7 +264,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     if (this.toggleConfirmLoading) {
       return;
     }
-    this.toggleConfirmOpen = false;
     this.pendingEnabled = null;
     this.dreaming.dreamingStatusError = null;
   }
@@ -326,7 +314,6 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
       if (!this.isTaskScopeCurrent(scope)) {
         return;
       }
-      this.toggleConfirmOpen = false;
       this.pendingEnabled = null;
     } finally {
       if (this.isTaskScopeCurrent(scope)) {
@@ -378,6 +365,8 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
     const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
+    const canRunAction = (method: DreamDiaryActionMethod) =>
+      canCallDreamingMethod(dreaming, method, "operator.write");
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
     const selectedAgentId = dreaming.selectedAgentId ?? "";
 
@@ -408,7 +397,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             <button
               class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"
               ?disabled=${!canUpdateConfig || loading || configuredDreaming.engineOff}
-              @click=${() => this.setEnabled(!dreamingOn, dreamingOn)}
+              @click=${() => this.setEnabled(!dreamingOn)}
             >
               <span class="dreams__phase-toggle-dot"></span>
               <span class="dreams__phase-toggle-label">
@@ -423,31 +412,11 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
           canOpenConfig: canCallDreamingMethod(dreaming, "config.openFile", "operator.admin", {
             requireAdvertisement: false,
           }),
-          canBackfillDiary: canCallDreamingMethod(
-            dreaming,
-            "doctor.memory.backfillDreamDiary",
-            "operator.write",
-          ),
-          canDedupeDreamDiary: canCallDreamingMethod(
-            dreaming,
-            "doctor.memory.dedupeDreamDiary",
-            "operator.write",
-          ),
-          canResetDiary: canCallDreamingMethod(
-            dreaming,
-            "doctor.memory.resetDreamDiary",
-            "operator.write",
-          ),
-          canResetGroundedShortTerm: canCallDreamingMethod(
-            dreaming,
-            "doctor.memory.resetGroundedShortTerm",
-            "operator.write",
-          ),
-          canRepairDreamingArtifacts: canCallDreamingMethod(
-            dreaming,
-            "doctor.memory.repairDreamingArtifacts",
-            "operator.write",
-          ),
+          canBackfillDiary: canRunAction("doctor.memory.backfillDreamDiary"),
+          canDedupeDreamDiary: canRunAction("doctor.memory.dedupeDreamDiary"),
+          canResetDiary: canRunAction("doctor.memory.resetDreamDiary"),
+          canResetGroundedShortTerm: canRunAction("doctor.memory.resetGroundedShortTerm"),
+          canRepairDreamingArtifacts: canRunAction("doctor.memory.repairDreamingArtifacts"),
         },
         viewState: this.viewState,
         active: dreamingOn,
@@ -484,10 +453,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         onRefreshWikiOverview: () => void this.refreshWikiData("wikiOverview"),
         onOpenConfig: () => void this.context.runtimeConfig.openFile(),
         onOpenWikiPage: (lookup) => this.openWikiPage(lookup),
-        onBackfillDiary: () =>
-          void this.runDreamingTask((current) =>
-            runDreamDiaryAction(current, "doctor.memory.backfillDreamDiary"),
-          ),
+        onBackfillDiary: () => void this.runDiaryAction("doctor.memory.backfillDreamDiary"),
         onCopyDreamingArchivePath: () => void this.runDreamingTask(copyDreamingArchivePath),
         onDedupeDreamDiary: () =>
           void this.confirmDreamingTask("doctor.memory.dedupeDreamDiary", {
@@ -496,14 +462,9 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             confirmLabel: t("dreaming.scene.dedupeDiary"),
             danger: true,
           }),
-        onResetDiary: () =>
-          void this.runDreamingTask((current) =>
-            runDreamDiaryAction(current, "doctor.memory.resetDreamDiary"),
-          ),
+        onResetDiary: () => void this.runDiaryAction("doctor.memory.resetDreamDiary"),
         onResetGroundedShortTerm: () =>
-          void this.runDreamingTask((current) =>
-            runDreamDiaryAction(current, "doctor.memory.resetGroundedShortTerm"),
-          ),
+          void this.runDiaryAction("doctor.memory.resetGroundedShortTerm"),
         onRepairDreamingArtifacts: () =>
           void this.confirmDreamingTask("doctor.memory.repairDreamingArtifacts", {
             title: t("dreaming.scene.repairCache"),
@@ -513,7 +474,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
         onViewStateChange: () => this.requestUpdate(),
       })}
       ${renderDreamingToggleConfirmation({
-        open: this.toggleConfirmOpen,
+        open: this.pendingEnabled !== null,
         enabling: this.pendingEnabled === true,
         loading: this.toggleConfirmLoading,
         onConfirm: () => void this.confirmToggle(),

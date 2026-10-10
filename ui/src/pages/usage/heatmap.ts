@@ -26,10 +26,6 @@ function dateToUtcNoon(date: string): number {
   return new Date(`${date}T12:00:00Z`).getTime();
 }
 
-function utcNoonToDate(ms: number): string {
-  return new Date(ms).toISOString().slice(0, 10);
-}
-
 function levelThresholds(values: number[]): [number, number, number] {
   const sorted = values.toSorted((a, b) => a - b);
   const pick = (ratio: number) =>
@@ -91,7 +87,7 @@ export function buildUsageHeatmap(
         days.push(null);
         continue;
       }
-      const date = utcNoonToDate(dayMs);
+      const date = new Date(dayMs).toISOString().slice(0, 10);
       const tokens = tokensByDate.get(date) ?? 0;
       days.push({ date, tokens, level: levelFor(tokens, thresholds) });
     }

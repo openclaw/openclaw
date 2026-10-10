@@ -86,10 +86,9 @@ export async function resolveHookModelSelection(params: {
   hookRunner?: HookRunnerLike | null;
   hookContext: HookContext;
 }) {
-  let provider = params.provider;
-  let modelId = params.modelId;
+  const selection = { provider: params.provider, modelId: params.modelId };
   if (params.modelSelectionLocked === true) {
-    return { provider, modelId };
+    return selection;
   }
   let modelResolveOverride: Awaited<ReturnType<HookRunnerLike["runBeforeModelResolve"]>>;
   const hookRunner = params.hookRunner;
@@ -114,18 +113,15 @@ export async function resolveHookModelSelection(params: {
   }
 
   if (modelResolveOverride?.providerOverride) {
-    provider = modelResolveOverride.providerOverride;
-    log.info(`[hooks] provider overridden to ${provider}`);
+    selection.provider = modelResolveOverride.providerOverride;
+    log.info(`[hooks] provider overridden to ${selection.provider}`);
   }
   if (modelResolveOverride?.modelOverride) {
-    modelId = modelResolveOverride.modelOverride;
-    log.info(`[hooks] model overridden to ${modelId}`);
+    selection.modelId = modelResolveOverride.modelOverride;
+    log.info(`[hooks] model overridden to ${selection.modelId}`);
   }
 
-  return {
-    provider,
-    modelId,
-  };
+  return selection;
 }
 
 /**

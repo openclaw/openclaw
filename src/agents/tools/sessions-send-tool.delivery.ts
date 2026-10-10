@@ -296,21 +296,18 @@ export async function trySessionsSendActiveRunDelivery(
 function resolveSendMutationGuards(
   params: Pick<SessionsSendDeliveryParams, "assertDispatchCurrent" | "assertSendCurrent">,
 ) {
-  if (!params.assertSendCurrent) {
-    return { assertDispatchCurrent: params.assertDispatchCurrent };
-  }
-  if (hasInProcessGatewayToolContext()) {
+  if (params.assertSendCurrent && !hasInProcessGatewayToolContext()) {
+    // Standalone operator clients can fence wire submission, not attach a host-only commit callback.
     return {
-      assertDispatchCurrent: params.assertDispatchCurrent,
-      sessionMutationCommitGuard: params.assertSendCurrent,
+      assertDispatchCurrent: () => {
+        params.assertDispatchCurrent?.();
+        params.assertSendCurrent?.();
+      },
     };
   }
-  // Standalone operator clients can fence wire submission, not attach a host-only commit callback.
   return {
-    assertDispatchCurrent: () => {
-      params.assertDispatchCurrent?.();
-      params.assertSendCurrent?.();
-    },
+    assertDispatchCurrent: params.assertDispatchCurrent,
+    ...(params.assertSendCurrent ? { sessionMutationCommitGuard: params.assertSendCurrent } : {}),
   };
 }
 

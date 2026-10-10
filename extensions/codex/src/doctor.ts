@@ -29,22 +29,24 @@ type CodexManagedDoctorRegistrationHost = {
   readonly pluginRoot: string;
 };
 
-function managedCodexFinding(params: {
+function managedCodexFindings(params: {
   message: string;
   severity?: HealthFinding["severity"];
   path?: string;
   requirement?: string;
   fixHint?: string;
-}): HealthFinding {
-  return {
-    checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
-    severity: params.severity ?? "error",
-    source: "codex",
-    message: params.message,
-    ...(params.path ? { path: params.path } : {}),
-    ...(params.requirement ? { requirement: params.requirement } : {}),
-    ...(params.fixHint ? { fixHint: params.fixHint } : {}),
-  };
+}): HealthFinding[] {
+  return [
+    {
+      checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
+      severity: params.severity ?? "error",
+      source: "codex",
+      message: params.message,
+      ...(params.path ? { path: params.path } : {}),
+      ...(params.requirement ? { requirement: params.requirement } : {}),
+      ...(params.fixHint ? { fixHint: params.fixHint } : {}),
+    },
+  ];
 }
 
 function parseCodexVersion(output: string): string | undefined {
@@ -110,15 +112,13 @@ function createCodexManagedAppServerHealthCheck(params: {
           deps: params.deps,
         });
       } catch (error) {
-        return [
-          managedCodexFinding({
-            message: `Managed Codex app-server could not be resolved: ${coerceErrorMessage(error)}`,
-            path: params.pluginRoot,
-            requirement: `an executable Codex ${CODEX_APP_SERVER_VERSION} managed artifact`,
-            fixHint:
-              "Reinstall the staged OpenClaw package with its @openai/codex platform dependency, then rerun the candidate check.",
-          }),
-        ];
+        return managedCodexFindings({
+          message: `Managed Codex app-server could not be resolved: ${coerceErrorMessage(error)}`,
+          path: params.pluginRoot,
+          requirement: `an executable Codex ${CODEX_APP_SERVER_VERSION} managed artifact`,
+          fixHint:
+            "Reinstall the staged OpenClaw package with its @openai/codex platform dependency, then rerun the candidate check.",
+        });
       }
       if (selection.status === "skipped") {
         return [];
@@ -127,15 +127,13 @@ function createCodexManagedAppServerHealthCheck(params: {
 
       const nativeCommand = resolveNativeCommand(resolved.command);
       if (!nativeCommand) {
-        return [
-          managedCodexFinding({
-            message: "Managed Codex app-server resolved a launcher without a native artifact.",
-            path: resolved.command,
-            requirement: `the platform-native Codex ${CODEX_APP_SERVER_VERSION} executable`,
-            fixHint:
-              "Reinstall the staged OpenClaw package with the matching @openai/codex platform package, then rerun the candidate check.",
-          }),
-        ];
+        return managedCodexFindings({
+          message: "Managed Codex app-server resolved a launcher without a native artifact.",
+          path: resolved.command,
+          requirement: `the platform-native Codex ${CODEX_APP_SERVER_VERSION} executable`,
+          fixHint:
+            "Reinstall the staged OpenClaw package with the matching @openai/codex platform package, then rerun the candidate check.",
+        });
       }
 
       let output: VersionCommandResult;
@@ -147,39 +145,35 @@ function createCodexManagedAppServerHealthCheck(params: {
         const spawnFailure = findCodexAppServerSpawnError(
           describeCodexSpawnError(error, nativeCommand),
         );
-        return [
-          managedCodexFinding({
-            message:
-              spawnFailure?.message ??
-              `Managed Codex app-server version check failed: ${coerceErrorMessage(error)}`,
-            severity:
-              spawnFailure && resolved.managedCommandOrder === "package-only"
-                ? "warning"
-                : versionFailureSeverity,
-            path: nativeCommand,
-            requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within ${CODEX_VERSION_TIMEOUT_MS} ms`,
-            fixHint:
-              versionFailureHint ??
-              "Repair or reinstall the staged OpenClaw package, then rerun the candidate check before cutover.",
-          }),
-        ];
+        return managedCodexFindings({
+          message:
+            spawnFailure?.message ??
+            `Managed Codex app-server version check failed: ${coerceErrorMessage(error)}`,
+          severity:
+            spawnFailure && resolved.managedCommandOrder === "package-only"
+              ? "warning"
+              : versionFailureSeverity,
+          path: nativeCommand,
+          requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within ${CODEX_VERSION_TIMEOUT_MS} ms`,
+          fixHint:
+            versionFailureHint ??
+            "Repair or reinstall the staged OpenClaw package, then rerun the candidate check before cutover.",
+        });
       }
 
       const detectedVersion = parseCodexVersion(`${output.stdout}\n${output.stderr}`);
       if (detectedVersion !== CODEX_APP_SERVER_VERSION) {
-        return [
-          managedCodexFinding({
-            severity: versionFailureSeverity,
-            message: detectedVersion
-              ? `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected ${detectedVersion}.`
-              : `Managed Codex app-server did not report a parseable version; expected ${CODEX_APP_SERVER_VERSION}.`,
-            path: nativeCommand,
-            requirement: `the exact OpenClaw-pinned Codex version ${CODEX_APP_SERVER_VERSION}`,
-            fixHint:
-              versionFailureHint ??
-              "Reinstall the staged OpenClaw package so its managed @openai/codex dependency matches the pinned version, then rerun the candidate check.",
-          }),
-        ];
+        return managedCodexFindings({
+          severity: versionFailureSeverity,
+          message: detectedVersion
+            ? `Managed Codex app-server version mismatch: expected ${CODEX_APP_SERVER_VERSION}, detected ${detectedVersion}.`
+            : `Managed Codex app-server did not report a parseable version; expected ${CODEX_APP_SERVER_VERSION}.`,
+          path: nativeCommand,
+          requirement: `the exact OpenClaw-pinned Codex version ${CODEX_APP_SERVER_VERSION}`,
+          fixHint:
+            versionFailureHint ??
+            "Reinstall the staged OpenClaw package so its managed @openai/codex dependency matches the pinned version, then rerun the candidate check.",
+        });
       }
       return [];
     },

@@ -60,13 +60,6 @@ export function captureSessionControlAuthority(prepared?: AdmittedRunOperatorAut
   };
 }
 
-/** Resolve the original host-issued source without upgrading an insufficient scope. */
-export function readSessionControlAuthority(
-  prepared?: AdmittedRunOperatorAuthority,
-): AdmittedRunOperatorAuthority | undefined {
-  return captureSessionControlAuthority(prepared)?.authority;
-}
-
 /** Availability only; the target guard and underlying Gateway policy still apply. */
 export function hasSessionControlAuthority(prepared?: AdmittedRunOperatorAuthority): boolean {
   return captureSessionControlAuthority(prepared)?.allows("operator.write") ?? false;

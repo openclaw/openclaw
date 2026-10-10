@@ -119,15 +119,13 @@ export function enqueueFollowupRun(
   if (!markFollowupRunEnqueued(run)) {
     return false;
   }
-  if (deferOverflow) {
-    if (options.steerCandidate) {
-      const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-      run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
-      // A canceled waiter can settle before its predecessor. Its successors
-      // must still wait for every earlier attempt to settle.
-      queue.steerAcceptanceTail = queue.steerAcceptanceTail.then(() => acceptance);
-    }
-  } else if (!applyFollowupQueueOverflow(queue, run)) {
+  if (options.steerCandidate) {
+    const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
+    run.steerPending = { phase: "waiting", predecessor: queue.steerAcceptanceTail, settle };
+    // A canceled waiter can settle before its predecessor. Its successors
+    // must still wait for every earlier attempt to settle.
+    queue.steerAcceptanceTail = queue.steerAcceptanceTail.then(() => acceptance);
+  } else if (!deferOverflow && !applyFollowupQueueOverflow(queue, run)) {
     return false;
   }
   const front = options.position === "front" && (!deferOverflow || options.steerCandidate === true);
@@ -204,42 +202,39 @@ function applyFollowupQueueOverflow(
     isProtected: (item) => item.protectFromQueueOverflow === true,
   });
   if (queue.dropPolicy === "summarize") {
-    const overflow = queue.summarySources.length - queue.summaryLines.length;
-    if (overflow > 0) {
-      const removed = queue.summarySources.splice(0, overflow);
-      for (const [index, item] of removed.entries()) {
-        const summaryLine = elidedSummaryLines[index];
-        if (summaryLine === undefined) {
-          throw new Error("followup queue summary source lost its elided line");
-        }
-        const contextKey = resolveFollowupDeliveryStorageKey(item);
-        const lastElision = queue.summaryElisions.at(-1);
-        const compactSource = createOverflowSummaryRetrySource(item);
-        if (lastElision?.contextKey === contextKey) {
-          lastElision.sources.push(compactSource);
-          lastElision.summaryLines.push(summaryLine);
-          lastElision.sourceRefs.set(item, compactSource);
-        } else {
-          queue.summaryElisions.push({
-            contextKey,
-            sources: [compactSource],
-            summaryLines: [summaryLine],
-            sourceRefs: new WeakMap([[item, compactSource]]),
-          });
-        }
-        if (queue.activeSummarySources.has(item)) {
-          queue.activeSummarySources.add(compactSource);
-        }
-        trimSummaryElisionsToCap(queue);
+    const overflow = Math.max(0, queue.summarySources.length - queue.summaryLines.length);
+    const removed = queue.summarySources.splice(0, overflow);
+    for (const [index, item] of removed.entries()) {
+      const summaryLine = elidedSummaryLines[index];
+      if (summaryLine === undefined) {
+        throw new Error("followup queue summary source lost its elided line");
       }
+      const contextKey = resolveFollowupDeliveryStorageKey(item);
+      const lastElision = queue.summaryElisions.at(-1);
+      const compactSource = createOverflowSummaryRetrySource(item);
+      if (lastElision?.contextKey === contextKey) {
+        lastElision.sources.push(compactSource);
+        lastElision.summaryLines.push(summaryLine);
+        lastElision.sourceRefs.set(item, compactSource);
+      } else {
+        queue.summaryElisions.push({
+          contextKey,
+          sources: [compactSource],
+          summaryLines: [summaryLine],
+          sourceRefs: new WeakMap([[item, compactSource]]),
+        });
+      }
+      if (queue.activeSummarySources.has(item)) {
+        queue.activeSummarySources.add(compactSource);
+      }
+      trimSummaryElisionsToCap(queue);
     }
   }
   if (!shouldEnqueue) {
     run.onQueueDisposition?.(queue.dropPolicy === "new" ? "queue-cap-new" : "queue-cap");
     completeFollowupRunLifecycle(run);
-    return false;
   }
-  return true;
+  return shouldEnqueue;
 }
 
 export function getFollowupQueueDepth(key: string): number {

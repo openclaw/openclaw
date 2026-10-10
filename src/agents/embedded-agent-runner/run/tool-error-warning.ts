@@ -105,11 +105,8 @@ function splitExecLikeFailureMeta(meta: string): { flags: string[]; body: string
     .split(" · ")
     .map((candidate) => candidate.trim())
     .filter(Boolean)) {
-    if (part === "elevated" || part === "pty") {
-      flags.push(part);
-      continue;
-    }
-    bodyParts.push(part);
+    const target = part === "elevated" || part === "pty" ? flags : bodyParts;
+    target.push(part);
   }
   return { flags, body: bodyParts.join(" · ") };
 }
@@ -177,14 +174,11 @@ function extractTrailingMarkdownCodeSpan(
   body: string,
 ): { prefix: string | undefined; value: string } | undefined {
   const trimmed = body.trimEnd();
-  if (!trimmed.endsWith("`")) {
+  const delimiter = trimmed.match(/`+$/u)?.[0];
+  if (!delimiter) {
     return undefined;
   }
-  let delimiterLength = 0;
-  for (let index = trimmed.length - 1; index >= 0 && trimmed[index] === "`"; index -= 1) {
-    delimiterLength += 1;
-  }
-  const delimiter = "`".repeat(delimiterLength);
+  const delimiterLength = delimiter.length;
   const valueEnd = trimmed.length - delimiterLength;
   let searchIndex = 0;
   while (searchIndex < valueEnd) {
@@ -276,10 +270,7 @@ function isKnownLiteralRunSummary(subject: string): boolean {
 }
 function splitDisplayContextSuffix(value: string): { text: string; suffix: string } {
   const match = /^(.*?)( \((?:agent|repo|workspace|sandbox)\))$/u.exec(value);
-  if (!match) {
-    return { text: value, suffix: "" };
-  }
-  return { text: match[1] ?? value, suffix: match[2] ?? "" };
+  return { text: match?.[1] ?? value, suffix: match?.[2] ?? "" };
 }
 function formatConciseExecExitSuffix(error: string | undefined): string {
   const normalized = normalizeOptionalString(error);

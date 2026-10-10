@@ -36,7 +36,7 @@ describe("isHeartbeatEnabledForSessionAgent", () => {
     expect(isHeartbeatEnabledForSessionAgent({ cfg, sessionKey: "global" })).toBe(true);
   });
 
-  it("uses the prepared requester owner for a bare key in an ownerless fleet", () => {
+  it("uses the prepared requester owner for a bare key in an ownerless fleet", async () => {
     const cfg = {
       agents: {
         ownership: "explicit",
@@ -56,13 +56,15 @@ describe("isHeartbeatEnabledForSessionAgent", () => {
     ).toBe(true);
 
     expect(
-      resolveAcpSpawnRequesterState({
-        cfg,
-        parentSessionKey: "global",
-        requesterAgentId: "research",
-        targetAgentId: "ops",
-        ctx: {},
-      }).heartbeatEnabled,
+      (
+        await resolveAcpSpawnRequesterState({
+          cfg,
+          parentSessionKey: "global",
+          requesterAgentId: "research",
+          targetAgentId: "ops",
+          ctx: {},
+        })
+      ).heartbeatEnabled,
     ).toBe(true);
   });
 });

@@ -37,7 +37,6 @@ export function runRespawnChildWithSignalBridge(params: {
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;
   let signalHardExitTimer: NodeJS.Timeout | undefined;
-  let parentSignalReceived = false;
   let firstForwardedSignal: NodeJS.Signals | undefined;
   let hardKillBackstopStarted = false;
   const clearSignalTimers = (): void => {
@@ -79,7 +78,6 @@ export function runRespawnChildWithSignalBridge(params: {
     signalForceKillTimer.unref?.();
   };
   const scheduleParentExit = (signal: NodeJS.Signals): void => {
-    parentSignalReceived = true;
     firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
@@ -95,7 +93,7 @@ export function runRespawnChildWithSignalBridge(params: {
   });
 
   child.once("exit", (code, signal) => {
-    if (parentSignalReceived && detachForProcessTree) {
+    if (firstForwardedSignal && detachForProcessTree) {
       forceKillChild();
     }
     clearSignalTimers();

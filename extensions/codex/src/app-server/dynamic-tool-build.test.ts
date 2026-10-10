@@ -42,7 +42,6 @@ import {
 import type { RuntimeDynamicToolForTest } from "./dynamic-tool-build.test-support.js";
 import {
   filterCodexDynamicTools,
-  filterCodexDynamicToolsForDisabledNativeSurface,
   resolveCodexDynamicToolsLoading,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
@@ -381,12 +380,13 @@ describe("Codex app-server dynamic tool build", () => {
     const env = testCase.privateQa
       ? { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "codex" }
       : undefined;
-    const filtered =
-      testCase.preserveShell === undefined
-        ? filterCodexDynamicTools(tools, config, env)
-        : filterCodexDynamicToolsForDisabledNativeSurface(tools, config, {
-            preserveShell: testCase.preserveShell,
-          });
+    const filtered = filterCodexDynamicTools(tools, config, {
+      env,
+      disabledNativeSurface:
+        testCase.preserveShell === undefined
+          ? undefined
+          : { preserveShell: testCase.preserveShell },
+    });
     expect(filtered.map((tool) => tool.name)).toEqual(testCase.expected);
     if (testCase.privateQa) {
       expect(resolveCodexDynamicToolsLoading({}, env)).toBe("direct");

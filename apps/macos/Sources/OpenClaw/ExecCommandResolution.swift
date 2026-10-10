@@ -300,6 +300,7 @@ struct ExecCommandResolution {
             return
         }
 
+        let unwrapped: [String]?
         if let token0 = command.first?.trimmingCharacters(in: .whitespacesAndNewlines),
            ExecCommandToken.basenameLower(token0) == "env",
            let envUnwrapped = ExecEnvInvocationUnwrapper.unwrapWithMetadata(command),
@@ -311,20 +312,14 @@ struct ExecCommandResolution {
             {
                 return
             }
-            self.collectAllowAlwaysPatterns(
-                command: envUnwrapped.command,
-                cwd: cwd,
-                env: env,
-                rawCommand: rawCommand,
-                depth: depth + 1,
-                patterns: &patterns,
-                seen: &seen)
-            return
+            unwrapped = envUnwrapped.command
+        } else {
+            unwrapped = self.unwrapShellMultiplexerInvocation(command)
         }
 
-        if let shellMultiplexer = unwrapShellMultiplexerInvocation(command) {
+        if let unwrapped {
             self.collectAllowAlwaysPatterns(
-                command: shellMultiplexer,
+                command: unwrapped,
                 cwd: cwd,
                 env: env,
                 rawCommand: rawCommand,

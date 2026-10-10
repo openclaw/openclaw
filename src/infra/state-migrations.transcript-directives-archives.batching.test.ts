@@ -72,6 +72,7 @@ function fixture(count = 3) {
       }
     },
     assertOwnedInTransaction() {},
+    renew() {},
   };
   const archiveDirectory = resolveSqliteTranscriptArchiveDirectory({
     agentId: "main",
@@ -343,7 +344,10 @@ describe("canonical transcript archive batch transactions", () => {
       ).toBe(3);
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
       expect(
-        transcriptDirectiveArchivesNeedMigration(f.database, { generation: "", sessionId: "" }),
+        await transcriptDirectiveArchivesNeedMigration(f.database, {
+          generation: "",
+          sessionId: "",
+        }),
       ).toBe(true);
 
       expect(
@@ -450,7 +454,7 @@ describe("canonical transcript archive batch transactions", () => {
       rename.mockRestore();
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
       expect(
-        transcriptDirectiveArchivesNeedMigration(f.database, {
+        await transcriptDirectiveArchivesNeedMigration(f.database, {
           generation: "g",
           sessionId: "s99999",
         }),
@@ -468,7 +472,7 @@ describe("canonical transcript archive batch transactions", () => {
       ).toBe(0);
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
       expect(
-        transcriptDirectiveArchivesNeedMigration(f.database, {
+        await transcriptDirectiveArchivesNeedMigration(f.database, {
           generation: "g",
           sessionId: "s99999",
         }),
@@ -556,7 +560,7 @@ describe("canonical transcript archive batch transactions", () => {
       expect(retry.warnings[0]).toContain("Missing 1 canonical transcript archive file(s)");
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(1);
       expect(
-        transcriptDirectiveArchivesNeedMigration(f.database, {
+        await transcriptDirectiveArchivesNeedMigration(f.database, {
           generation: "g",
           sessionId: "s99999",
         }),
@@ -581,7 +585,7 @@ describe("canonical transcript archive batch transactions", () => {
       expect(recovered.rewrittenArchives).toBe(0);
       expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
       expect(
-        transcriptDirectiveArchivesNeedMigration(f.database, {
+        await transcriptDirectiveArchivesNeedMigration(f.database, {
           generation: "g",
           sessionId: "s99999",
         }),
