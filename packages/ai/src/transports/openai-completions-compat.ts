@@ -62,6 +62,31 @@ function isDefaultRouteProvider(provider: string | undefined, ...ids: string[]) 
   return provider !== undefined && ids.includes(provider);
 }
 
+/**
+ * Model Studio's OpenAI-compatible chat reference documents `max_tokens` on
+ * `/compatible-mode/v1`. Coding Plan uses the same provider family and endpoint
+ * class, but its `/v1` hosts are not that surface.
+ */
+function isAlibabaModelStudioCompatibleModeBaseUrl(baseUrl: string | undefined): boolean {
+  const trimmed = baseUrl?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const endpoint = URL.parse(trimmed);
+  if (!endpoint || (endpoint.protocol !== "https:" && endpoint.protocol !== "http:")) {
+    return false;
+  }
+  const hostname = endpoint.hostname.toLowerCase().replace(/\.+$/u, "");
+  const isAlibabaHost =
+    /(?:^|\.)dashscope(?:-[^.]+)?\.aliyuncs\.com$/u.test(hostname) ||
+    hostname.endsWith(".maas.aliyuncs.com");
+  if (!isAlibabaHost) {
+    return false;
+  }
+  const pathname = endpoint.pathname.replace(/\/+$/u, "").toLowerCase();
+  return pathname === "/compatible-mode" || pathname.startsWith("/compatible-mode/");
+}
+
 /** Native OpenAI defaults never apply to a configured proxy endpoint. */
 export function isNativeOpenAIEndpoint(model: { provider?: string; baseUrl?: string }): boolean {
   const baseUrl = model.baseUrl?.trim();
@@ -191,6 +216,7 @@ function resolveOpenAICompletionsCompatDefaults(
     isCloudflareAiGateway ||
     isZai ||
     isTogether ||
+    (isModelStudioLike && isAlibabaModelStudioCompatibleModeBaseUrl(input.baseUrl)) ||
     (isDefaultRoute && isDefaultRouteProvider(provider, "chutes"));
   return {
     supportsStore: !isNonStandard && !isMistral && !usesExplicitProxyLikeEndpoint,
