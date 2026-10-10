@@ -59,12 +59,10 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 function selectSegmented(control: HTMLElement) {
-  const group = expectElement(
-    control.closest<HTMLElement & { value: string }>("wa-radio-group"),
-    "segmented radio group",
-  );
-  group.value = control.getAttribute("value") ?? "";
-  group.dispatchEvent(new Event("change", { bubbles: true }));
+  expectElement(
+    control.querySelector<HTMLInputElement>('.settings-segmented__input[type="radio"]'),
+    "segmented radio input",
+  ).click();
 }
 
 afterEach(async () => {
@@ -298,11 +296,10 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "enabled switch",
     );
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(["enabled"], true);
 
     const addButton = expectElement(
@@ -438,24 +435,25 @@ describe("config form renderer", () => {
       onPatch,
     });
     const checkbox = expectElement(
-      container.querySelector<HTMLElement & { checked: boolean }>("wa-switch.settings-toggle"),
+      container.querySelector<HTMLInputElement>('.settings-toggle__input[role="switch"]'),
       "named toggle",
     );
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
     const label = wildcard ? "Plugin Enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
     expect(row.querySelector(".settings-row__title")?.textContent?.trim()).toBe(label);
-    expect(checkbox.textContent?.trim()).toBe(label);
+    expect(
+      container.querySelector(`#${checkbox.getAttribute("aria-labelledby")}`)?.textContent?.trim(),
+    ).toBe(label);
     if (!wildcard) {
       expect(row.querySelector(".settings-row__desc")?.textContent?.trim()).toBe(
         "Enable beta features",
       );
     }
-    checkbox.checked = true;
-    checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+    checkbox.click();
     expect(onPatch).toHaveBeenCalledWith(
       wildcard ? ["plugins", "entries", "voice-call", "enabled"] : ["features", "beta"],
-      true,
+      !wildcard,
     );
   });
 
@@ -508,7 +506,7 @@ describe("config form renderer", () => {
       container,
     );
 
-    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
     const select = expectElement(
       container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
       "automations enabled select",

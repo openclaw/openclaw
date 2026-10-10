@@ -285,9 +285,9 @@ describe("renderUpdates", () => {
     render(renderUpdates(props), container);
     expect(container.textContent).toContain("This Mac");
     expect(row("App version").textContent).toContain("2026.9.3 (build 42)");
-    const automatic = row("Check for updates automatically").querySelector<
-      HTMLElement & { checked: boolean }
-    >("wa-switch")!;
+    const automatic = row("Check for updates automatically").querySelector<HTMLInputElement>(
+      ".settings-toggle__input",
+    )!;
     expect(automatic.hasAttribute("disabled")).toBe(false);
     automatic.checked = false;
     automatic.dispatchEvent(new Event("change"));
@@ -322,23 +322,23 @@ describe("renderUpdates", () => {
     );
     expect(row("Install type").textContent).toContain("Package");
     expect(
-      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
+        option.textContent?.trim(),
+      ),
     ).toEqual(["Stable", "Beta", "Dev"]);
     expect(row("Status").textContent).toContain("Update available v2026.8.2");
 
-    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
-      "wa-radio-group",
+    const channel = row("Release channel").querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="beta"]',
     );
     if (!channel) {
       throw new Error("Missing release channel control");
     }
-    channel.value = "beta";
-    channel.dispatchEvent(new Event("change"));
+    channel.click();
     expect(onChannelChange).toHaveBeenCalledWith("beta", expect.any(HTMLElement));
 
-    const automatic = row("Automatic updates").querySelector<HTMLElement & { checked: boolean }>(
-      "wa-switch",
-    );
+    const automatic =
+      row("Automatic updates").querySelector<HTMLInputElement>(".settings-toggle__input");
     if (!automatic) {
       throw new Error("Missing automatic updates control");
     }
@@ -367,11 +367,15 @@ describe("renderUpdates", () => {
     );
 
     expect(
-      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
+        option.textContent?.trim(),
+      ),
     ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
-    expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+    expect(automaticRow.querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled).toBe(
+      true,
+    );
   });
 
   it("reports a configless extended-stable package install by the Gateway channel and gates auto-apply", () => {
@@ -394,15 +398,17 @@ describe("renderUpdates", () => {
       container,
     );
 
-    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
-      "wa-radio-group",
+    const channel = row("Release channel").querySelector<HTMLInputElement>(
+      ".settings-segmented__input:checked",
     );
     expect(channel?.value).toBe("extended-stable");
     expect(
-      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
+        option.textContent?.trim(),
+      ),
     ).toEqual(["Stable", "Beta", "Dev", "Extended stable"]);
-    const selected = channel?.querySelector<HTMLElement & { checked: boolean }>(
-      'wa-radio[value="extended-stable"]',
+    const selected = row("Release channel").querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="extended-stable"]',
     );
     expect(selected?.checked).toBe(true);
     const automatic = automaticUpdatesControl().toggle;
@@ -428,12 +434,14 @@ describe("renderUpdates", () => {
       container,
     );
 
-    const channel = row("Release channel").querySelector<HTMLElement & { value: string }>(
-      "wa-radio-group",
+    const channel = row("Release channel").querySelector<HTMLInputElement>(
+      ".settings-segmented__input:checked",
     );
     expect(channel?.value).toBe("beta");
     expect(
-      [...container.querySelectorAll("wa-radio")].map((option) => option.textContent?.trim()),
+      [...container.querySelectorAll(".settings-segmented__btn")].map((option) =>
+        option.textContent?.trim(),
+      ),
     ).toEqual(["Stable", "Beta", "Dev"]);
     expect(automaticUpdatesControl().toggle.hasAttribute("disabled")).toBe(false);
   });
@@ -453,9 +461,8 @@ describe("renderUpdates", () => {
       container,
     );
 
-    const checks = row("Check for updates").querySelector<HTMLElement & { checked: boolean }>(
-      "wa-switch",
-    );
+    const checks =
+      row("Check for updates").querySelector<HTMLInputElement>(".settings-toggle__input");
     if (!checks) {
       throw new Error("Missing update checks control");
     }
@@ -988,15 +995,16 @@ describe("renderUpdates", () => {
     expect(container.querySelector("[role='note']")?.textContent).toContain(
       "Administrator access is required",
     );
-    expect(row("Release channel").querySelector("wa-radio-group")?.hasAttribute("disabled")).toBe(
-      true,
-    );
-    expect(row("Automatic updates").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
-      true,
-    );
-    expect(row("Check for updates").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(
+      row("Release channel").querySelector<HTMLInputElement>(".settings-segmented__input")
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      row("Automatic updates").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(true);
+    expect(
+      row("Check for updates").querySelector<HTMLInputElement>(".settings-toggle__input")?.disabled,
+    ).toBe(true);
     expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);
     expect(row("Status").querySelector("button")).toBeNull();
     expect(row("Gateway version").textContent).toContain("2026.8.1");
