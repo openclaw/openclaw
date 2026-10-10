@@ -2,7 +2,10 @@ import {
   matchesAgentWorkAdmission,
   type AgentWorkAdmissionIdentity,
 } from "./session-agent-work-admission.js";
-import { normalizeSessionIdentities } from "./session-lifecycle-identity.js";
+import {
+  collectSessionIdentityTargets,
+  normalizeSessionIdentities,
+} from "./session-lifecycle-identity.js";
 
 type ReleasableSessionWorkAdmission = {
   agent?: AgentWorkAdmissionIdentity;
@@ -35,6 +38,28 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
       }
     }
     return matching;
+  }
+
+  /** Active session identities grouped by their authoritative store/lifecycle scope. */
+  function collectActiveSessionWorkAdmissions(
+    owners?: ReadonlySet<object>,
+  ): Map<string, Set<string>> {
+    const identities = [...admissionsByIdentity]
+      .filter(([, admissions]) =>
+        [...admissions].some(
+          (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
+        ),
+      )
+      .map(([identity]) => identity);
+    return collectSessionIdentityTargets(identities);
+  }
+
+  /** Unique admitted turns; one lease can be indexed under several identities. */
+  function getActiveSessionWorkAdmissionCount(): number {
+    return collectSessionWorkAdmissions(
+      admissionsByIdentity.keys(),
+      (admission) => admission.phase === "acquired",
+    ).size;
   }
 
   function isSessionWorkAdmissionActive(
@@ -133,6 +158,8 @@ export function createSessionWorkAdmissionQueries<T extends ReleasableSessionWor
 
   return {
     collectSessionWorkAdmissions,
+    collectActiveSessionWorkAdmissions,
+    getActiveSessionWorkAdmissionCount,
     isSessionWorkAdmissionActive,
     isCompetingSessionWorkAdmissionActive,
     getSessionWorkAdmissionRelease,

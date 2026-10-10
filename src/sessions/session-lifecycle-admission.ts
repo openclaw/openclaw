@@ -121,6 +121,8 @@ const {
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
 const {
   collectSessionWorkAdmissions,
+  collectActiveSessionWorkAdmissions,
+  getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
@@ -131,6 +133,8 @@ const {
   CURRENT_SESSION_WORK_ADMISSIONS.getStore(),
 );
 export {
+  collectActiveSessionWorkAdmissions,
+  getActiveSessionWorkAdmissionCount,
   getSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
   getCompetingSessionWorkAdmissionRelease,
@@ -431,20 +435,6 @@ function isSessionWorkAdmissionTargetActive(params: {
   );
 }
 
-/** Active session identities grouped by their authoritative store/lifecycle scope. */
-export function collectActiveSessionWorkAdmissions(
-  owners?: ReadonlySet<object>,
-): Map<string, Set<string>> {
-  const identities = [...ACTIVE_SESSION_WORK_ADMISSIONS]
-    .filter(([, admissions]) =>
-      [...admissions].some(
-        (admission) => admission.phase === "acquired" && (!owners || owners.has(admission)),
-      ),
-    )
-    .map(([identity]) => identity);
-  return collectSessionIdentityTargets(identities);
-}
-
 /** Capture exact host-owned admissions; replacements after an await cannot inherit the snapshot. */
 export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: GatewayContextResolver) {
   const owners = collectSessionWorkAdmissions(
@@ -459,14 +449,6 @@ export function captureGatewaySessionWorkAdmissions(resolveGatewayContext: Gatew
     isActive: (target: { scope: string; sessionKey: string; sessionId: string }) =>
       isSessionWorkAdmissionTargetActive({ ...target, owners }),
   };
-}
-
-/** Unique admitted turns; one lease can be indexed under several identities. */
-export function getActiveSessionWorkAdmissionCount(): number {
-  return collectSessionWorkAdmissions(
-    ACTIVE_SESSION_WORK_ADMISSIONS.keys(),
-    (admission) => admission.phase === "acquired",
-  ).size;
 }
 
 /** Unique active lifecycle mutations; one run can be indexed under several identities. */
