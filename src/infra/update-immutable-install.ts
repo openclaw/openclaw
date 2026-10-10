@@ -492,6 +492,7 @@ export async function prepareImmutableUpdate(params: {
           steps,
         });
         assertCurrent();
+        await fs.chmod(stage, 0o700);
         // Copy only after the build cgroup is extinct. Root owns the materialized release,
         // including files that pnpm linked to its unprivileged package store.
         const candidate = path.join(stage, "sealed");

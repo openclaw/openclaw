@@ -113,7 +113,7 @@ async function build(): Promise<void> {
   });
   if (preflight.status !== "ok") {
     const failed = steps.findLast(
-      (step) => step.exitCode !== 0 || (step.termination && step.termination !== "exit"),
+      (entry) => entry.exitCode !== 0 || (entry.termination && entry.termination !== "exit"),
     );
     throw new Error(
       `${preflight.reason}${failed ? `: ${failed.name}: ${failed.stderrTail ?? ""}` : ""}`,

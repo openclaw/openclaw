@@ -21,13 +21,19 @@ type GenerationEntry = { file: string; stat: Stats };
 
 /** Call only after the build cgroup is extinct; the private copy becomes root-owned. */
 export async function copyImmutableGeneration(source: string, destination: string): Promise<void> {
+  const parent = await fs.lstat(path.dirname(destination));
+  if (!parent.isDirectory() || parent.uid !== 0 || (parent.mode & 0o077) !== 0) {
+    throw new Error("Immutable materialization requires a root-private parent directory.");
+  }
   await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
   const pending = [destination];
   for (const file of pending) {
     const stat = await fs.lstat(file);
     await fs.lchown(file, 0, 0);
     if (stat.isDirectory()) {
-      for (const entry of await fs.readdir(file)) pending.push(path.join(file, entry));
+      for (const entry of await fs.readdir(file)) {
+        pending.push(path.join(file, entry));
+      }
     }
   }
 }
@@ -39,7 +45,9 @@ async function assertImmutableGitConfig(root: string): Promise<void> {
   const commonDirectory = await fs
     .lstat(path.join(metadata, "commondir"))
     .catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) return null;
+      if (hasErrnoCode(error, "ENOENT")) {
+        return null;
+      }
       throw error;
     });
   if (!(await fs.lstat(metadata)).isDirectory() || commonDirectory) {
@@ -60,7 +68,9 @@ async function assertImmutableGitConfig(root: string): Promise<void> {
     branch: ["remote", "merge"],
   };
   for (const line of config.split(/\r?\n/u)) {
-    if (/^\s*(?:[#;].*)?$/u.test(line)) continue;
+    if (/^\s*(?:[#;].*)?$/u.test(line)) {
+      continue;
+    }
     const header = /^\s*\[(core|remote|branch)(?:\s+"[^"\\]*")?\]\s*$/iu.exec(line);
     if (header) {
       section = header[1]!.toLowerCase();

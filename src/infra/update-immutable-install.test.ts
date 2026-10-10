@@ -124,6 +124,7 @@ beforeEach(async () => {
   }));
   mocks.seal.mockResolvedValue(undefined);
   mocks.copy.mockImplementation(async (source, destination) => {
+    expect((await fs.stat(path.dirname(destination))).mode & 0o077).toBe(0);
     await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
   });
   mocks.command.mockImplementation(async (argv) => {

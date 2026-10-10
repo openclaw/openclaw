@@ -92,7 +92,9 @@ export async function runImmutableBuild(params: {
   // The toolchain is installation-owned, not a writable bin directory from the calling shell.
   for (let parent = build.toolchainPath; ; parent = path.dirname(parent)) {
     directoryIdentity(parent);
-    if (parent === path.dirname(parent)) break;
+    if (parent === path.dirname(parent)) {
+      break;
+    }
   }
   const capacity = await fs.statfs(stage, { bigint: true });
   if (capacity.bavail * capacity.bsize < BigInt(build.resources.buildFreeBytes)) {
@@ -160,7 +162,6 @@ export async function runImmutableBuild(params: {
     `MemoryMax=${build.resources.memoryMaxBytes}`,
     `TasksMax=${build.resources.tasksMax}`,
   ];
-  let stopped = false;
   const settle = async () => {
     const outcome = await run(["/usr/bin/systemctl", "stop", unit], {
       cwd: stage,
@@ -171,10 +172,13 @@ export async function runImmutableBuild(params: {
         ["/usr/bin/systemctl", "show", "--property=LoadState", "--value", unit],
         stage,
       );
-      if (load !== "not-found") throw new CommandProcessCleanupError();
+      if (load !== "not-found") {
+        throw new CommandProcessCleanupError();
+      }
     }
     return isSystemdControlGroupEmpty(controlGroup);
   };
+  let attempt: { result: UpdateStepResult } | { error: unknown };
   try {
     assertCurrent();
     const result = await runStep({
@@ -211,23 +215,26 @@ export async function runImmutableBuild(params: {
       stepIndex: params.steps?.length ?? 0,
       totalSteps: 0,
     });
-    // Stopping is synchronous and joins KillMode=control-group, including detached descendants.
-    stopped = await settle();
-    if (!stopped) throw new CommandProcessCleanupError();
-    assertCurrent();
-    if (result.exitCode !== 0 || (result.termination && result.termination !== "exit")) {
-      throw new Error(
-        `Immutable build failed; current remains running. ${result.stderrTail ?? ""}`,
-      );
+    attempt = { result };
+  } catch (error) {
+    attempt = { error };
+  }
+  // Join the native cgroup before reporting either success or the original failure.
+  try {
+    if (!(await settle())) {
+      throw new CommandProcessCleanupError();
     }
-  } finally {
-    if (!stopped) {
-      try {
-        stopped = await settle();
-      } catch {
-        /* Retain the stage when native settlement cannot be established. */
-      }
-    }
-    if (!stopped) throw new CommandProcessCleanupError();
+  } catch (error) {
+    throw new CommandProcessCleanupError({
+      cause: "error" in attempt ? new AggregateError([attempt.error, error]) : error,
+    });
+  }
+  if ("error" in attempt) {
+    throw attempt.error;
+  }
+  assertCurrent();
+  const { result } = attempt;
+  if (result.exitCode !== 0 || (result.termination && result.termination !== "exit")) {
+    throw new Error(`Immutable build failed; current remains running. ${result.stderrTail ?? ""}`);
   }
 }
