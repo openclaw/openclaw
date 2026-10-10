@@ -2,7 +2,7 @@ import type { ChannelsPairingRequest, NostrProfile } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
 import type { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
-import type { NostrProfileFormState } from "./view.nostr-profile-form.ts";
+import type { NostrProfileFormState } from "./view.nostr-profile-form.tsx";
 import type { ChannelWizardHost } from "./wizard-host.ts";
 
 export type ChannelPairingPrompt = {

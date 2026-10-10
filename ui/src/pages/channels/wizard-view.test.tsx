@@ -1,11 +1,10 @@
-/* @vitest-environment jsdom */
-
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import { i18n } from "../../i18n/index.ts";
-import { renderChannelWizard } from "./wizard-view.ts";
+import { renderChannelView, disposeChannelViews } from "./view.test-support.ts";
+import { ChannelWizard } from "./wizard-view.tsx";
 
-type WizardProps = Parameters<typeof renderChannelWizard>[0];
+type WizardProps = Parameters<typeof ChannelWizard>[0];
 
 function wizardProps(
   wizard: WizardProps["wizard"],
@@ -32,16 +31,14 @@ function wizardProps(
   };
 }
 
-describe("renderChannelWizard", () => {
+describe("ChannelWizard", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
 
   afterEach(async () => {
     await i18n.setLocale("en");
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
+    disposeChannelViews();
     document.body.replaceChildren();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -56,21 +53,20 @@ describe("renderChannelWizard", () => {
       const container = document.createElement("div");
       document.body.append(container);
       const renderStep = (validationError: string | null) =>
-        render(
-          renderChannelWizard(
-            wizardProps({
-              phase: "step",
-              channel: "matrix",
-              step: {
-                id: "account-id",
-                type: "text",
-                message: "New Matrix account id",
-                sensitive,
-              },
-              busy: false,
-              validationError,
-            }),
-          ),
+        renderChannelView(
+          ChannelWizard,
+          wizardProps({
+            phase: "step",
+            channel: "matrix",
+            step: {
+              id: "account-id",
+              type: "text",
+              message: "New Matrix account id",
+              sensitive,
+            },
+            busy: false,
+            validationError,
+          }),
           container,
         );
       renderStep(null);
@@ -105,23 +101,22 @@ describe("renderChannelWizard", () => {
     const onToggleSecretVisibility = vi.fn();
     document.body.append(container);
     const renderSensitiveStep = (secretVisible: boolean, textValue: string) =>
-      render(
-        renderChannelWizard(
-          wizardProps(
-            {
-              phase: "step",
-              channel: "twitch",
-              step: {
-                id: "client-secret",
-                type: "text",
-                message: "Twitch Client Secret",
-                sensitive: true,
-              },
-              busy: false,
-              validationError: null,
+      renderChannelView(
+        ChannelWizard,
+        wizardProps(
+          {
+            phase: "step",
+            channel: "twitch",
+            step: {
+              id: "client-secret",
+              type: "text",
+              message: "Twitch Client Secret",
+              sensitive: true,
             },
-            { textValue, secretVisible, onTextInput, onToggleSecretVisibility },
-          ),
+            busy: false,
+            validationError: null,
+          },
+          { textValue, secretVisible, onTextInput, onToggleSecretVisibility },
         ),
         container,
       );
@@ -154,23 +149,22 @@ describe("renderChannelWizard", () => {
   it("renders informational setup output as unpadded plain text", () => {
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderChannelWizard(
-        wizardProps(
-          {
-            phase: "step",
-            channel: "imessage",
-            step: {
-              id: "selected-channels",
-              type: "note",
-              title: "Selected channels",
-              message: "iMessage — Local iMessage/SMS through the imsg bridge.",
-            },
-            busy: false,
-            validationError: null,
+    renderChannelView(
+      ChannelWizard,
+      wizardProps(
+        {
+          phase: "step",
+          channel: "imessage",
+          step: {
+            id: "selected-channels",
+            type: "note",
+            title: "Selected channels",
+            message: "iMessage — Local iMessage/SMS through the imsg bridge.",
           },
-          { channelLabel: () => "iMessage" },
-        ),
+          busy: false,
+          validationError: null,
+        },
+        { channelLabel: () => "iMessage" },
       ),
       container,
     );
@@ -184,16 +178,15 @@ describe("renderChannelWizard", () => {
   it("links channel docs from the setup subtitle without static helper links", () => {
     const container = document.createElement("div");
     document.body.append(container);
-    render(
-      renderChannelWizard(
-        wizardProps(
-          {
-            phase: "error",
-            channel: "slack",
-            message: "Setup failed",
-          },
-          { channelLabel: () => "Slack" },
-        ),
+    renderChannelView(
+      ChannelWizard,
+      wizardProps(
+        {
+          phase: "error",
+          channel: "slack",
+          message: "Setup failed",
+        },
+        { channelLabel: () => "Slack" },
       ),
       container,
     );

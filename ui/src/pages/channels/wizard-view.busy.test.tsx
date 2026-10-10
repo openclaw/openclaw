@@ -1,13 +1,12 @@
-/* @vitest-environment jsdom */
-
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import type { WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
 import { updatePickers } from "../../test-helpers/select-picker.ts";
-import { renderChannelWizard } from "./wizard-view.ts";
+import { renderChannelView, disposeChannelViews } from "./view.test-support.ts";
+import { ChannelWizard } from "./wizard-view.tsx";
 
-type WizardProps = Parameters<typeof renderChannelWizard>[0];
+type WizardProps = Parameters<typeof ChannelWizard>[0];
 
 function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardProps> = {}) {
   const container = document.createElement("div");
@@ -15,8 +14,9 @@ function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardPr
   const onClose = vi.fn();
   const onToggleMultiselect = vi.fn();
   document.body.append(container);
-  render(
-    renderChannelWizard({
+  renderChannelView(
+    ChannelWizard,
+    {
       wizard,
       channelLabel: (channelId) => channelId,
       multiselectValues: ["alpha"],
@@ -34,7 +34,7 @@ function renderWizard(wizard: WizardProps["wizard"], overrides: Partial<WizardPr
       onWhatsAppStart: vi.fn(),
       onWhatsAppWait: vi.fn(),
       ...overrides,
-    }),
+    },
     container,
   );
   return { container, onAnswer, onClose, onToggleMultiselect };
@@ -57,15 +57,13 @@ function renderStep(
   );
 }
 
-describe("renderChannelWizard busy controls", () => {
+describe("ChannelWizard busy controls", () => {
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
 
   afterEach(() => {
-    for (const container of document.body.querySelectorAll("div")) {
-      render(nothing, container);
-    }
+    disposeChannelViews();
     document.body.replaceChildren();
   });
 

@@ -1,15 +1,19 @@
-/* @vitest-environment jsdom */
-
-import { render } from "lit";
+import type { JSX } from "@solidjs/web";
 import { afterEach, describe, expect, it, vi } from "vitest";
+/* @vitest-environment jsdom */
 import type { SelectPicker } from "../../components/select-picker.ts";
 import { updatePickers, choosePickerValue } from "../../test-helpers/select-picker.ts";
 import {
   renderChannelPairingDetail,
   renderChannelPairingPrompt,
   renderChannelPairingQueue,
-} from "./view.pairing.ts";
-import { createChannelsViewProps, type ChannelsViewTestOverrides } from "./view.test-support.ts";
+} from "./view.pairing.tsx";
+import {
+  renderChannelView,
+  disposeChannelViews,
+  createChannelsViewProps,
+  type ChannelsViewTestOverrides,
+} from "./view.test-support.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
 const request = {
@@ -54,16 +58,20 @@ function createProps(overrides: ChannelsViewTestOverrides = {}): ChannelsProps {
 const renderedContainers: HTMLDivElement[] = [];
 
 afterEach(() => {
+  disposeChannelViews();
   for (const container of renderedContainers.splice(0)) {
     container.remove();
   }
 });
 
-function renderInto(template: unknown): HTMLDivElement {
+function renderInto<T extends object>(
+  component: (props: T) => JSX.Element,
+  props: T,
+): HTMLDivElement {
   const container = document.createElement("div");
   document.body.append(container);
   renderedContainers.push(container);
-  render(template as never, container);
+  renderChannelView(component, props, container);
   return container;
 }
 
@@ -78,9 +86,8 @@ describe("channel DM access request views", () => {
     const onApprove = vi.fn();
     const onDismiss = vi.fn();
     const container = renderInto(
-      renderChannelPairingQueue(
-        createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss }),
-      ),
+      renderChannelPairingQueue,
+      createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss }),
     );
 
     expect(container.textContent).toContain("+15551234567");
@@ -95,7 +102,8 @@ describe("channel DM access request views", () => {
 
   it("hides cached sender data without pairing access", () => {
     const container = renderInto(
-      renderChannelPairingQueue(createProps({ canManagePairing: false })),
+      renderChannelPairingQueue,
+      createProps({ canManagePairing: false }),
     );
 
     expect(container.textContent).toContain("operator.pairing access");
@@ -109,7 +117,8 @@ describe("channel DM access request views", () => {
 
   it("renders notice and error feedback as status rows without nested callouts", () => {
     const noticeContainer = renderInto(
-      renderChannelPairingQueue(createProps({ pairingNotice: "Request approved" })),
+      renderChannelPairingQueue,
+      createProps({ pairingNotice: "Request approved" }),
     );
     const notice = noticeContainer.querySelector('[role="status"]');
 
@@ -117,7 +126,8 @@ describe("channel DM access request views", () => {
     expect(noticeContainer.querySelector(".callout")).toBeNull();
 
     const errorContainer = renderInto(
-      renderChannelPairingQueue(createProps({ channels: { pairingError: "Approval failed" } })),
+      renderChannelPairingQueue,
+      createProps({ channels: { pairingError: "Approval failed" } }),
     );
     const error = errorContainer.querySelector('[role="alert"]');
 
@@ -129,28 +139,27 @@ describe("channel DM access request views", () => {
     const onPairingFilterChange = vi.fn();
     const base = createProps();
     const container = renderInto(
-      renderChannelPairingQueue(
-        createProps({
-          pairingChannelFilter: "whatsapp",
-          pairingAccountFilter: "personal",
-          channels: {
-            pairingSnapshot: {
-              ...base.channels.pairingSnapshot!,
-              accounts: [
-                ...base.channels.pairingSnapshot!.accounts,
-                {
-                  channel: "telegram",
-                  channelLabel: "Telegram",
-                  accountId: "work",
-                  accountLabel: "Work",
-                  notifySupported: true,
-                },
-              ],
-            },
+      renderChannelPairingQueue,
+      createProps({
+        pairingChannelFilter: "whatsapp",
+        pairingAccountFilter: "personal",
+        channels: {
+          pairingSnapshot: {
+            ...base.channels.pairingSnapshot!,
+            accounts: [
+              ...base.channels.pairingSnapshot!.accounts,
+              {
+                channel: "telegram",
+                channelLabel: "Telegram",
+                accountId: "work",
+                accountLabel: "Work",
+                notifySupported: true,
+              },
+            ],
           },
-          onPairingFilterChange,
-        }),
-      ),
+        },
+        onPairingFilterChange,
+      }),
     );
 
     await updatePickers(container);
@@ -181,7 +190,7 @@ describe("channel DM access request views", () => {
         },
       },
     });
-    const container = renderInto(renderChannelPairingQueue(props));
+    const container = renderInto(renderChannelPairingQueue, props);
     const actionButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("button"),
     ).filter((button) => /^(Approve|Dismiss) /u.test(button.getAttribute("aria-label") ?? ""));
@@ -192,16 +201,15 @@ describe("channel DM access request views", () => {
 
   it("shows explicit notification and first-owner choices for an admin", () => {
     const container = renderInto(
-      renderChannelPairingPrompt(
-        createProps({
-          pairingPrompt: {
-            kind: "approve",
-            request,
-            notify: false,
-            bootstrapCommandOwner: false,
-          },
-        }),
-      ),
+      renderChannelPairingPrompt,
+      createProps({
+        pairingPrompt: {
+          kind: "approve",
+          request,
+          notify: false,
+          bootstrapCommandOwner: false,
+        },
+      }),
     );
 
     expect(container.textContent).toContain("Notify the requester after approval");
@@ -211,9 +219,9 @@ describe("channel DM access request views", () => {
 
   it("links a channel account detail back to the filtered request queue", () => {
     const review = vi.fn();
-    const container = renderInto(
-      renderChannelPairingDetail("whatsapp", createProps({ onPairingReviewAccount: review })),
-    );
+    const props = createProps({ onPairingReviewAccount: review });
+    const detail = (current: ChannelsProps) => renderChannelPairingDetail("whatsapp", current);
+    const container = renderInto(detail, props);
 
     expect(container.textContent).toContain("1 pending");
     const button = Array.from(container.querySelectorAll("button")).find(
@@ -221,5 +229,15 @@ describe("channel DM access request views", () => {
     );
     button?.click();
     expect(review).toHaveBeenCalledWith("whatsapp", "personal");
+
+    props.channels.pairingSnapshot = {
+      ...props.channels.pairingSnapshot!,
+      accounts: structuredClone(props.channels.pairingSnapshot!.accounts),
+      requests: [],
+    };
+    renderChannelView(detail, props, container);
+    expect(container.querySelector("button")).toBe(button);
+    expect(container.textContent).toContain("No pending requests");
+    expect(container.textContent).not.toContain("1 pending");
   });
 });

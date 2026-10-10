@@ -343,9 +343,9 @@ describe("cron view editor", () => {
     expect(everyContainer.querySelector("#cron-cron-expr")).toBeNull();
     const activeEvery = getElement(
       everyContainer,
-      '[data-test-id="cron-schedule-kind-every"]',
-      HTMLElement,
-    ) as HTMLElement & { checked: boolean };
+      '[data-test-id="cron-schedule-kind-every"] input',
+      HTMLInputElement,
+    );
     expect(activeEvery.checked).toBe(true);
     selectSegmented(
       getElement(everyContainer, '[data-test-id="cron-schedule-kind-cron"]', HTMLElement),

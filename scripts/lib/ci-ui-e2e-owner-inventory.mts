@@ -1020,7 +1020,8 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
       "ui/src/components/agent-select-registration.ts",
       "ui/src/components/select-picker.ts",
       "ui/src/lib/cron/types.ts",
-      "ui/src/pages/cron/cron-page.ts",
+      "ui/src/pages/cron/cron-page.tsx",
+      "ui/src/pages/cron/cron-page-controller.ts",
     ],
     ["ui/src/styles/select-picker.css"],
   ),
@@ -1039,7 +1040,11 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   pageWatch(
     "ui/src/e2e/cron-history-recovery.e2e.test.ts",
     ["cron"],
-    ["ui/src/lib/cron/types.ts", "ui/src/pages/cron/cron-page.ts"],
+    [
+      "ui/src/lib/cron/types.ts",
+      "ui/src/pages/cron/cron-page.tsx",
+      "ui/src/pages/cron/cron-page-controller.ts",
+    ],
   ),
   pageWatch("ui/src/e2e/cron-job-link.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   pageWatch("ui/src/e2e/cron-pacing.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),

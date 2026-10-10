@@ -1,19 +1,21 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import { html, nothing } from "lit";
+import type { JSX } from "@solidjs/web";
+import { createMemo, For, Show } from "solid-js";
 import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
-import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
-import { t } from "../../i18n/index.ts";
+import { SettingsRow, SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/lit-content.tsx";
 import type { ChannelsProps } from "./view.types.ts";
 
 type ChannelStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
 type ChannelStatusRow = {
   label: string;
-  value: unknown;
+  value: JSX.Element;
   /** Renders the value as a status dot + text instead of plain text. */
   kind?: ChannelStatusKind;
 };
@@ -63,50 +65,64 @@ export function boolStatusKind(value: boolean | null | undefined): ChannelStatus
 }
 
 export function renderChannelFacts(rows: readonly ChannelStatusRow[]) {
-  return html`
+  return (
     <dl class="settings-kv">
-      ${rows.map(
-        (row) => html`
-          <dt>${row.label}</dt>
-          <dd>
-            ${
-              row.kind !== undefined
-                ? renderSettingsStatus({ kind: row.kind, label: row.value })
-                : row.value
-            }
-          </dd>
-        `,
-      )}
+      {
+        <For each={rows}>
+          {(row) => (
+            <>
+              <dt>{row.label}</dt>
+              <dd>
+                <Show when={row.kind} fallback={row.value}>
+                  {(kind) => <SettingsStatus kind={kind()} label={row.value} />}
+                </Show>
+              </dd>
+            </>
+          )}
+        </For>
+      }
     </dl>
-  `;
+  );
 }
 
 export function renderChannelErrorRow(message: unknown) {
-  return renderSettingsRow({
-    title: renderSettingsStatus({ kind: "danger", label: t("channels.lastError") }),
-    description: html`${formatUiError(message)}`,
-  });
+  return (
+    <SettingsRow
+      {...{
+        title: <SettingsStatus {...{ kind: "danger", label: t("channels.lastError") }} />,
+        description: <>{formatUiError(message)}</>,
+      }}
+    />
+  );
 }
 
 export function renderChannelProbeRow(probe: NonNullable<ChannelStatus["probe"]>) {
-  const detail = formatUiExternalText(
-    [probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" "),
+  const detail = createMemo(() =>
+    formatUiExternalText([probe.status ?? "", probe.error ?? ""].filter(Boolean).join(" ")),
   );
-  return renderSettingsRow({
-    title: renderSettingsStatus({
-      kind: probe.ok ? "ok" : "danger",
-      label: probe.ok ? t("common.probeOk") : t("common.probeFailed"),
-    }),
-    description: detail,
-  });
+  return (
+    <SettingsRow
+      {...{
+        title: (
+          <SettingsStatus
+            {...{
+              kind: probe.ok ? "ok" : "danger",
+              label: probe.ok ? t("common.probeOk") : t("common.probeFailed"),
+            }}
+          />
+        ),
+        description: detail(),
+      }}
+    />
+  );
 }
 
-export function renderChannelActionRow(actions: unknown) {
-  return html`
+export function renderChannelActionRow(actions: JSX.Element) {
+  return (
     <div class="settings-row settings-row--actions">
-      <div class="settings-row__control">${actions}</div>
+      <div class="settings-row__control">{actions}</div>
     </div>
-  `;
+  );
 }
 
 export function renderChannelRefreshAction(params: {
@@ -114,54 +130,52 @@ export function renderChannelRefreshAction(params: {
   disabled: boolean;
   onRefresh: () => void;
 }) {
-  const updatedLabel = params.updatedAt
-    ? t("channels.hub.updatedAgo", { ago: formatRelativeTimestamp(params.updatedAt) })
-    : t("common.na");
-  return html`<openclaw-tooltip .content=${updatedLabel}>
-    <button
-      type="button"
-      class="btn btn--xs btn--icon"
-      aria-label=${t("common.refresh")}
-      ?disabled=${params.disabled}
-      @click=${params.onRefresh}
-    >
-      ${icons.refresh}
-    </button>
-  </openclaw-tooltip>`;
+  const updatedLabel = createMemo(() =>
+    params.updatedAt
+      ? t("channels.hub.updatedAgo", { ago: formatRelativeTimestamp(params.updatedAt) })
+      : t("common.na"),
+  );
+  return (
+    <openclaw-tooltip prop:content={updatedLabel()}>
+      <button
+        type="button"
+        class="btn btn--xs btn--icon"
+        aria-label={t("common.refresh")}
+        disabled={params.disabled}
+        onClick={params.onRefresh}
+      >
+        {<LitContent value={icons.refresh} />}
+      </button>
+    </openclaw-tooltip>
+  );
 }
 
 export function renderChannelAccountRow(params: {
-  title: unknown;
+  title: JSX.Element;
   accountId: string;
   facts?: readonly string[];
-  status: { kind: ChannelStatusKind; label: unknown };
+  status: { kind: ChannelStatusKind; label: JSX.Element };
   lastInboundAt?: number | null;
   lastError?: string | null;
 }) {
-  const factLine = [params.accountId, ...(params.facts ?? [])].join(" · ");
-  return html`
+  const factLine = createMemo(() => [params.accountId, ...(params.facts ?? [])].join(" · "));
+  return (
     <div class="settings-row">
       <div class="settings-row__text">
-        <span class="settings-row__title">${params.title}</span>
-        <span class="settings-row__desc">${factLine}</span>
-        ${
-          params.lastError
-            ? html`<span class="settings-row__desc"
-                >${formatUiExternalText(params.lastError)}</span
-              >`
-            : nothing
-        }
+        <span class="settings-row__title">{params.title}</span>
+        <span class="settings-row__desc">{factLine()}</span>
+        {params.lastError ? (
+          <span class="settings-row__desc">{formatUiExternalText(params.lastError)}</span>
+        ) : undefined}
       </div>
       <div class="settings-row__control">
-        ${renderSettingsStatus(params.status)}
-        <span class="settings-row__value"
-          >${
-            params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")
-          }</span
-        >
+        {<SettingsStatus {...params.status} />}
+        <span class="settings-row__value">
+          {params.lastInboundAt ? formatRelativeTimestamp(params.lastInboundAt) : t("common.na")}
+        </span>
       </div>
     </div>
-  `;
+  );
 }
 
 /** Multi-account channels surface the account count next to the heading. */

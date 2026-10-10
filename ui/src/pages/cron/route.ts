@@ -5,5 +5,5 @@ export const page = definePage({
   ...routePageSpec("cron"),
   loaderDeps: (_context, { search }) => search,
   loader: (_context, { deps }) => deps,
-  component: () => import("./cron-page.ts").then((module) => module.cronPageComponent),
+  component: () => import("./cron-page.tsx").then((module) => module.cronPageComponent),
 });

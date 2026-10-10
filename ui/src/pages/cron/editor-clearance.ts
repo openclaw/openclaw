@@ -1,23 +1,19 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
-
 /** The sticky actions obscure part of the page's existing scrollport. */
-export class CronEditorClearance implements ReactiveController {
+export class CronEditorClearance {
   private footer: HTMLElement | null = null;
   private scroller: HTMLElement | null = null;
   private observer: ResizeObserver | null = null;
   private previousPadding = "";
 
-  constructor(private readonly host: HTMLElement & ReactiveControllerHost) {
-    host.addController(this);
-  }
+  constructor(private readonly host: HTMLElement) {}
 
-  hostUpdated() {
+  update() {
     const footer = this.host.querySelector<HTMLElement>(".cron-editor-actions");
     const scroller = this.host.closest<HTMLElement>(".content");
     if (footer === this.footer && scroller === this.scroller) {
       return;
     }
-    this.hostDisconnected();
+    this.dispose();
     if (!footer || !scroller) {
       return;
     }
@@ -36,7 +32,7 @@ export class CronEditorClearance implements ReactiveController {
     }
   }
 
-  hostDisconnected() {
+  dispose() {
     this.observer?.disconnect();
     this.observer = null;
     if (this.scroller) {
