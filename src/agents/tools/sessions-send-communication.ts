@@ -122,6 +122,16 @@ export async function prepareSessionsSendCommunication(params: {
       return;
     }
     if ("all" in change) {
+      // Creating the selected target can register its first physical store.
+      // The post-creation refresh still verifies every endpoint binding.
+      if (
+        creatingTarget &&
+        typeof change.scope === "object" &&
+        change.scope.topology === true &&
+        change.scope.agentId === targetAgentId
+      ) {
+        return;
+      }
       dirty = true;
       return;
     }
@@ -250,7 +260,7 @@ export async function prepareSessionsSendCommunication(params: {
   };
   try {
     assertSource();
-    const source = await lineage(params.source);
+    let source = await lineage(params.source);
     let target = await lineage(params.target);
     endpoints = [...source, ...target];
     let bindings = endpoints.map(communicationEndpointBinding);
@@ -400,6 +410,15 @@ export async function prepareSessionsSendCommunication(params: {
         throw new Error("Created target differs from the approved communication operation.");
       }
       target = await lineage(created);
+      // An initially absent main alias can name both sides of this creation.
+      if (
+        !source[0]!.entry &&
+        source[0]!.agentId === created.agentId &&
+        source[0]!.sessionKey === created.sessionKey &&
+        source[0]!.storePath === created.storePath
+      ) {
+        source = target;
+      }
       endpoints = [...source, ...target];
       bindings = endpoints.map(communicationEndpointBinding);
       // Receiver consent belongs to the created exact incarnation, not a substitute source session.

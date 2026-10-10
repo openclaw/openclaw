@@ -1,4 +1,4 @@
-// Tests dispatch-from-config runtime selection, hooks, and provider handoff.
+// Shared fixtures for dispatch runtime selection, hooks, and provider handoff.
 import { vi, type Mock } from "vitest";
 import type {
   AcpSessionResolution,

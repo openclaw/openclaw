@@ -3,6 +3,10 @@ import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
+  isValidAgentHarnessSessionStoreEntry,
+  MODEL_SELECTION_LOCK_REMOVAL_MESSAGE,
+} from "../../sessions/agent-harness-session-key.js";
+import {
   assertModelSelectionUnlocked,
   MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE,
 } from "../../sessions/model-overrides.js";
@@ -169,8 +173,21 @@ export function createIncognitoLifecycleWorker(
             keys,
           };
         case "session.lifecycle.delete": {
-          const { target, reason, admissionIdentities, expectedPluginOwnerId } = command.input;
+          const {
+            target,
+            reason,
+            admissionIdentities,
+            expectedPluginOwnerId,
+            expectedAgentHarnessId,
+          } = command.input;
           assertEntry(target);
+          if (
+            expectedAgentHarnessId &&
+            (target.entry.agentHarnessId !== expectedAgentHarnessId ||
+              !isValidAgentHarnessSessionStoreEntry(target.sessionKey, target.entry))
+          ) {
+            throw new Error(MODEL_SELECTION_LOCK_REMOVAL_MESSAGE);
+          }
           const deleteParams = {
             storePath: database.path,
             target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
@@ -185,7 +202,7 @@ export function createIncognitoLifecycleWorker(
               deleteParams,
               archiveDirectory: "",
               admissionIdentities,
-              allowLockedEntryRemoval: Boolean(expectedPluginOwnerId),
+              allowLockedEntryRemoval: Boolean(expectedPluginOwnerId || expectedAgentHarnessId),
               expectedPluginOwnerId,
             },
           });

@@ -10,7 +10,11 @@ import {
   readConfigHealthStateFromStore,
   patchConfigHealthEntryToStore,
 } from "../config/io.health-state.js";
-import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import {
+  openNodeSqliteDatabase,
+  requireNodeSqlite,
+  resolveImmutableSqliteFileUri,
+} from "../infra/node-sqlite.js";
 import {
   OpenClawStateOwnershipError,
   OpenClawStateOwnershipMetadataError,
@@ -850,7 +854,7 @@ describe("external shared-state ownership", () => {
     expect(claimInjected).toBe(true);
   });
 
-  it("fences cached and injected handles after another connection commits an owner", () => {
+  it("fences cached and injected handles after an in-process writer commits an owner", () => {
     const externalEnv = createEnv(true);
     const unmarkedEnv = withoutExternalMarker(externalEnv);
     const opened = openOpenClawStateDatabase({ env: unmarkedEnv });
@@ -863,10 +867,7 @@ describe("external shared-state ownership", () => {
       expect(reads.queries).toEqual([indexedOwnershipSql]);
       reads.queries.length = 0;
       runOpenClawStateWriteTransaction(() => undefined, { env: unmarkedEnv, database: opened });
-      expect(reads.queries).toEqual([
-        expect.stringMatching(/^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu),
-        indexedOwnershipSql,
-      ]);
+      expect(reads.queries).toEqual([indexedOwnershipSql]);
     } finally {
       reads.restore();
     }
@@ -884,8 +885,7 @@ describe("external shared-state ownership", () => {
       managerId: "late-supervisor",
       claimedAt: 1,
     };
-    const { DatabaseSync } = requireNodeSqlite();
-    const claimant = new DatabaseSync(opened.path);
+    const claimant = openNodeSqliteDatabase(opened.path);
     const originalExec = opened.db.exec.bind(opened.db);
     let claimedBeforeBegin = false;
     const begin = vi.spyOn(opened.db, "exec").mockImplementation((sql) => {
