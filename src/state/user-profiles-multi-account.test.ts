@@ -15,6 +15,7 @@ import { setCanonicalUserPreferences } from "./user-preferences.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import {
   prepareUserProfileGitHubAttribution,
+  readUserProfileGitHubCommand,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
@@ -185,19 +186,25 @@ describe("multi-account people", () => {
       "INSERT INTO user_profile_identities (provider, subject, profile_id, created_at) VALUES ('github', '70', ?, 1)",
     ).run("legacy-person");
     const version = db.prepare("PRAGMA user_version").get()?.user_version;
+    // Decode the legacy shape before the schema owner makes it admissible for reopen.
     expect(
-      (await resolveUserProfileGitHubAttribution(["legacy-person"], options)).get("legacy-person"),
-    ).toBeNull();
-    // Raw migration edits happen after the live owner and its cached facts have closed.
-    await closeOpenClawStateDatabaseAsync();
-    db = openOpenClawStateDatabase(options).db;
+      readUserProfileGitHubCommand(db, {
+        type: "userProfiles.githubAttribution.resolve",
+        profileIds: ["legacy-person"],
+      }),
+    ).toMatchObject({ identities: new Map([["legacy-person", null]]) });
     db.exec("ALTER TABLE user_profile_identities ADD COLUMN canonical_login TEXT");
     db.prepare(
       "UPDATE user_profile_identities SET canonical_login = 'legacy' WHERE subject = '70'",
     ).run();
     expect(
-      (await resolveUserProfileGitHubAttribution(["legacy-person"], options)).get("legacy-person"),
-    ).toEqual({ accountId: 70, login: "legacy" });
+      readUserProfileGitHubCommand(db, {
+        type: "userProfiles.githubAttribution.resolve",
+        profileIds: ["legacy-person"],
+      }),
+    ).toMatchObject({
+      identities: new Map([["legacy-person", { accountId: 70, login: "legacy" }]]),
+    });
     expect(db.prepare("PRAGMA table_info(user_profiles)").all()).not.toContainEqual(
       expect.objectContaining({ name: "primary_github_account_id" }),
     );
