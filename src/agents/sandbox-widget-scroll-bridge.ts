@@ -17,6 +17,11 @@ export function buildSandboxWidgetScrollBridgeHtml(): string {
   const deltaModeGetter=getter(WheelEvent.prototype,"deltaMode");
   const stop=Event.prototype.stopImmediatePropagation;
   const prevent=Event.prototype.preventDefault;
+  const later=setTimeout.bind(window);
+  const createElement=Document.prototype.createElement;
+  const headGetter=getter(Document.prototype,"head");
+  const textSetter=Object.getOwnPropertyDescriptor(Node.prototype,"textContent").set;
+  const prepend=Element.prototype.prepend;
   let nonce="";
   listen("message",event=>{
     if(!event.isTrusted||apply(sourceGetter,event,[])!==parent)return;
@@ -27,9 +32,14 @@ export function buildSandboxWidgetScrollBridgeHtml(): string {
     apply(stop,event,[]);
     if(firstHost){
       // Contain margins in saved widget documents without rewriting their approved bytes.
-      const style=document.createElement("style");
-      style.textContent=":where(body){display:flow-root}";
-      document.head.prepend(style);
+      // Mutate after dispatch: authored observers must never run while window.event holds the nonce.
+      later(()=>{
+        const head=apply(headGetter,document,[]);
+        if(!head)return;
+        const style=apply(createElement,document,["style"]);
+        apply(textSetter,style,[":where(body){display:flow-root}"]);
+        apply(prepend,head,[style]);
+      },0);
     }
   },true);
   const remainder=(target,delta)=>{

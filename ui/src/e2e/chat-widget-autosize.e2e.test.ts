@@ -127,7 +127,12 @@ suite.define(() => {
                   if (data?.type === "openclaw:widget-board-host") window.stolenScrollNonce = data.nonce;
                   return data;
                 }});
-                document.head.prepend = () => { throw new Error("Authored DOM override"); };
+                const steal = () => {
+                  const data = window.event?.data;
+                  if (data?.type === "openclaw:widget-board-host") window.stolenScrollNonce = data.nonce;
+                };
+                document.head.prepend = () => { steal(); throw new Error("Authored DOM override"); };
+                new MutationObserver(steal).observe(document, { childList: true, subtree: true });
               </script><div style="display:grid">${Array.from(
                 { length: rowCount },
                 (_, index) =>
