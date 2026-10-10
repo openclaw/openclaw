@@ -63,7 +63,7 @@ it.each([
   ["direct", "content_filter"],
 ] as const)("keeps unfinished reasoning private before tools (%s, %s)", async (mode, terminal) => {
   finishReason = terminal;
-  const stream = (
+  const stream = await (
     mode === "managed" ? createOpenAICompletionsTransportStreamFn() : streamSimpleOpenAICompletions
   )(
     makeCompletionsModel({ baseUrl, reasoning: false }),
